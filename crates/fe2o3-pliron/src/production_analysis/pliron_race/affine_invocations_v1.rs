@@ -33,6 +33,48 @@ fn invocation_upper_bounds_by_block(
     function: &FuncOp,
     inventory: &crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
 ) -> Option<Vec<[Option<u64>; MAX_RANKED_MEMORY_RANK]>> {
+    invocation_upper_bounds_by_block_impl(
+        context,
+        function,
+        inventory,
+        #[cfg(test)]
+        None,
+    )
+}
+
+#[cfg(test)]
+#[derive(Default, Debug)]
+struct RaceCfgStatsV1 {
+    pops: usize,
+    edges: usize,
+    peak: usize,
+    capacity: usize,
+    backing: usize,
+}
+
+#[cfg(test)]
+impl RaceCfgStatsV1 {
+    fn queue(&mut self, queue: &VecDeque<usize>, old_capacity: usize) {
+        let capacity = queue.capacity();
+        self.peak = self.peak.max(queue.len());
+        self.capacity = self.capacity.max(capacity);
+        self.backing = self.backing.max(
+            capacity
+                + if capacity > old_capacity {
+                    old_capacity
+                } else {
+                    0
+                },
+        );
+    }
+}
+
+fn invocation_upper_bounds_by_block_impl(
+    context: &Context,
+    function: &FuncOp,
+    inventory: &crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+    #[cfg(test)] mut stats: Option<&mut RaceCfgStatsV1>,
+) -> Option<Vec<[Option<u64>; MAX_RANKED_MEMORY_RANK]>> {
     let blocks = inventory.blocks();
     let indices = blocks
         .iter()
@@ -44,9 +86,17 @@ fn invocation_upper_bounds_by_block(
     let mut inputs = vec![None; blocks.len()];
     inputs[entry] = Some(empty);
     let mut worklist = VecDeque::from([entry]);
+    #[cfg(test)]
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.queue(&worklist, 0);
+    }
     let mut work = 0_usize;
 
     while let Some(block_index) = worklist.pop_front() {
+        #[cfg(test)]
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.pops += 1;
+        }
         work = work.checked_add(1)?;
         if work > MAX_PLIRON_RACE_EFFECT_INSTANCES_V1 {
             return None;
@@ -57,6 +107,10 @@ fn invocation_upper_bounds_by_block(
         let guard = invocation_upper_bound_guard(operation.as_ref(), context);
         let raw = terminator.deref(context);
         for (successor_index, successor) in raw.successors().enumerate() {
+            #[cfg(test)]
+            if let Some(stats) = stats.as_deref_mut() {
+                stats.edges += 1;
+            }
             let target = *indices.get(&successor)?;
             if target == entry {
                 continue;
@@ -79,7 +133,13 @@ fn invocation_upper_bounds_by_block(
             };
             if inputs[target] != Some(merged) {
                 inputs[target] = Some(merged);
+                #[cfg(test)]
+                let old_capacity = worklist.capacity();
                 worklist.push_back(target);
+                #[cfg(test)]
+                if let Some(stats) = stats.as_deref_mut() {
+                    stats.queue(&worklist, old_capacity);
+                }
             }
         }
     }

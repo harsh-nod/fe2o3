@@ -580,12 +580,49 @@ fn write_race_resource_preflight_v1(
     );
 }
 
+fn race_cfg_resource_bound_v1(
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<(usize, usize), ProductionAnalysisResourceLimitV1> {
+    if census.blocks == 0 {
+        return Ok((0, 0));
+    }
+    const R: usize = MAX_RANKED_MEMORY_RANK;
+    // A guard introduces one finite bound. Each coordinate can only weaken
+    // after initialization; together they change at most once per guard.
+    let height = checked_race_sum_v1(&[census.blocks.min(census.successors / 2), 1])?;
+    let visits = checked_race_sum_v1(&[checked_race_mul_v1(census.blocks - 1, height)?, 1])?;
+    let edges = checked_race_mul_v1(height, census.successors)?
+        .min(checked_race_mul_v1(visits, census.max_successor_arity)?);
+    let queued = if census.max_successor_arity == 0 {
+        1
+    } else {
+        visits - (visits - 1).div_ceil(census.max_successor_arity)
+    };
+    // The queue term covers capacity growth and overlapping old/new backing.
+    // Map operations use the existing fixed-cost logical-unit convention;
+    // this is not a bound on hash probes, allocator internals or RSS.
+    Ok((
+        checked_race_sum_v1(&[
+            checked_race_mul_v1(8 * R + 32, census.blocks)?,
+            checked_race_mul_v1(2 * R + 32, visits)?,
+            checked_race_mul_v1(8 * R + 16, edges)?,
+            32,
+        ])?,
+        checked_race_sum_v1(&[
+            checked_race_mul_v1(6 * R + 12, census.blocks)?,
+            checked_race_mul_v1(4, queued)?,
+            8 * R + 32,
+        ])?,
+    ))
+}
+
 fn calculate_race_resource_upper_bound_for_shape_v1(
     census: ProductionAnalysisInputCensusV1,
     names: RaceNameCensusV1,
     invocation_shape: Option<(usize, usize)>,
     presburger_shape: Option<(usize, usize)>,
 ) -> Result<RaceResourcePreflightNumbersV1, ProductionAnalysisResourceLimitV1> {
+    let (cfg_work, cfg_storage) = race_cfg_resource_bound_v1(census)?;
     let effects = checked_race_sum_v1(&[census.ranked_accesses, census.allocation_effects])?;
     let effect_pairs = effects
         .checked_add(1)
@@ -643,7 +680,7 @@ fn calculate_race_resource_upper_bound_for_shape_v1(
             ])?,
         )?,
         checked_race_mul_v1(census.operations, 32)?,
-        checked_race_mul_v1(census.successors, MAX_RANKED_MEMORY_RANK + 4)?,
+        cfg_work,
         symbolic_work,
         // Both checked-layout recognizers together perform at most twelve
         // owner-bound root queries (four fixed operations each) and three
@@ -703,7 +740,7 @@ fn calculate_race_resource_upper_bound_for_shape_v1(
         address_state,
         attempted_finding,
         conflict_class_storage,
-        checked_race_mul_v1(census.blocks, MAX_RANKED_MEMORY_RANK + 3)?,
+        cfg_storage,
         checked_race_mul_v1(effects, 8)?,
         raw_evaluation_temporary,
         presburger_temporary,
