@@ -10561,13 +10561,7 @@ Flags: interval pow2\n";
         fs::create_dir(&root).unwrap();
         let publication = root.join("descendant.identity");
         let release = root.join("descendant.release");
-        let monitor = monitor_test_process_publication_v1(
-            publication.clone(),
-            release.clone(),
-            ExpectedTestTopologyV1::EscapedSession {
-                expected_leader_session: current_test_session_v1(),
-            },
-        );
+        // Complete prerequisite preparation before starting the publication budget.
         let python_path =
             test_python::configured_python().expect("test requires the reviewed native Python");
         let python = FilePin::open(
@@ -10577,6 +10571,13 @@ Flags: interval pow2\n";
             true,
         )
         .unwrap();
+        let monitor = monitor_test_process_publication_v1(
+            publication.clone(),
+            release.clone(),
+            ExpectedTestTopologyV1::EscapedSession {
+                expected_leader_session: current_test_session_v1(),
+            },
+        );
         let mut child = Command::new(python.execution_path())
             .arg0(&python.canonical_path)
             .args([
