@@ -6,7 +6,7 @@ use std::path::Component;
 
 const MANIFEST: &str = "config/tutorial-kernel-manifest-v1.json";
 const REPORT: &str = "FE2O3_TEST_CHECKED_OUTPUT_CORPUS_REPORT_V1";
-const CONFIGURATIONS: usize = 48;
+const CONFIGURATIONS: usize = 50;
 const ROOTS: usize = 34;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -180,10 +180,10 @@ fn fixtures(bytes: &[u8]) -> Result<Vec<Fixture>, SourceFailure> {
         }
         roots.extend(input.kernel_symbols.iter().cloned());
     }
-    if fixtures.len() != CONFIGURATIONS || roots.len() != ROOTS || profiles != [11, 37] {
+    if fixtures.len() != CONFIGURATIONS || roots.len() != ROOTS || profiles != [11, 39] {
         return Err(fail(
             SourceStage::Manifest,
-            "complete 48-configuration/34-root roster changed; review coverage rather than silently shrinking it",
+            "complete 50-configuration/34-root roster changed; review coverage rather than silently shrinking it",
         ));
     }
     Ok(fixtures)
@@ -408,7 +408,7 @@ fn run_case_with_simulation(
 }
 
 #[test]
-#[ignore = "full 48-case real Cargo/rustc P4 extraction gate; blocked cases fail, requires pinned rust-src and dependencies"]
+#[ignore = "full 50-case real Cargo/rustc P4 extraction gate; blocked cases fail, requires pinned rust-src and dependencies"]
 fn ordinary_tutorial_corpus_requires_every_checked_policy4_output() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -451,7 +451,7 @@ fn ordinary_tutorial_corpus_requires_every_checked_policy4_output() {
     eprintln!("P4 CORPUS REPORT\n{}", String::from_utf8(encoded).unwrap());
     assert!(
         all_checked_output_passed,
-        "not qualified: at least one of all 48 ordinary-source configurations is blocked; see exact stage refusals"
+        "not qualified: at least one of all 50 ordinary-source configurations is blocked; see exact stage refusals"
     );
 }
 
@@ -502,7 +502,7 @@ fn manifest_retains_all_feature_configurations_and_distinct_roots() {
         "config/tutorial-kernel-manifest-v1.json"
     ));
     let fixtures = fixtures(bytes).unwrap();
-    assert_eq!(fixtures.len(), 48);
+    assert_eq!(fixtures.len(), 50);
     assert_eq!(
         fixtures
             .iter()
@@ -518,6 +518,28 @@ fn manifest_retains_all_feature_configurations_and_distinct_roots() {
                 == rows[1].compiler_input.kernel_symbols
                 && rows[0].compiler_input.features != rows[1].compiler_input.features)
     );
+    for (id, feature, source) in [
+        (
+            "gfx950-gpt-oss-pipelined-attention",
+            "kernel-gpt-oss-decode-pipelined-attention",
+            "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention.rs",
+        ),
+        (
+            "gfx950-gpt-oss-scalar-attention",
+            "kernel-gpt-oss-decode-scalar-attention",
+            "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention.rs",
+        ),
+    ] {
+        let fixture = fixtures.iter().find(|row| row.fixture_id == id).unwrap();
+        assert_eq!(fixture.target, "gfx950");
+        assert!(!fixture.compiler_input.default_features);
+        assert_eq!(fixture.compiler_input.features, [feature]);
+        assert_eq!(fixture.compiler_input.source_paths, [source]);
+        assert_eq!(
+            fixture.compiler_input.kernel_symbols,
+            ["gfx950_gpt_oss_120b_decode_megakernel_v1"]
+        );
+    }
     let mut modified: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     modified["compilerFixtures"].as_array_mut().unwrap().pop();
     assert!(super::corpus::fixtures(&serde_json::to_vec(&modified).unwrap()).is_err());
