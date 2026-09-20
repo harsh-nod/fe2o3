@@ -68,6 +68,7 @@ fn check_scoped_defined_call_phases_v29(
                     return Err(mismatch());
                 }
                 let values = CallFunctionIndexV1::new(&lowered.function, budget)?;
+                check_scoped_call_census_v29(lowered, emitted, budget)?;
                 check_call_signature_v1(
                     instances.owner().source_semantic(),
                     source.declaration(),
@@ -233,6 +234,60 @@ fn check_scoped_defined_call_phases_v29(
         }
         Ok(())
     })
+}
+
+fn check_scoped_call_census_v29(
+    lowered: &LoweredFunctionResultV1,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
+    let body = lowered.function.body.as_ref().ok_or_else(mismatch)?;
+    for block in &body.blocks {
+        budget.charge_work(argument_sum_v1(&[1, block.operations.len()])?)?;
+        for (ordinal, operation) in block.operations.iter().enumerate() {
+            let OperationKind::Call { callee, .. } = &operation.kind else {
+                continue;
+            };
+            let mut internal = false;
+            for candidate in emitted {
+                budget.charge_work(1)?;
+                let candidate = candidate.as_ref().ok_or_else(mismatch)?;
+                budget.charge_work(argument_sum_v1(&[
+                    callee.as_str().len(),
+                    candidate.function.id.as_str().len(),
+                ])?)?;
+                if candidate.function.role == fe2o3_kernel_ir::FunctionRole::InternalHelper
+                    && candidate.function.id == *callee
+                {
+                    internal = true;
+                    break;
+                }
+            }
+            if !internal {
+                continue;
+            }
+            budget.charge_work(lowered.blocks.len())?;
+            let origin = lowered
+                .blocks
+                .iter()
+                .find(|row| row.kernel_ir_block == block.id)
+                .ok_or_else(mismatch)?;
+            let rows = &lowered.call_returns.sites.rows;
+            budget.charge_work(scoped_initialization_search_work_v29(rows.len()))?;
+            let anchor = rows
+                .binary_search_by_key(&origin.semantic_block, |row| row.semantic_block)
+                .ok()
+                .map(|index| &rows[index])
+                .ok_or_else(mismatch)?;
+            if !matches!(anchor.kind, SemanticKirCallReturnKindV1::Call { call_operation, .. }
+                if call_operation as usize == ordinal)
+            {
+                return Err(mismatch());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn scoped_call_block_v29(

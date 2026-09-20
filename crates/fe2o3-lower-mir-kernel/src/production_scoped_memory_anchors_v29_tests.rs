@@ -649,20 +649,37 @@ fn source_census_rejects_missing_duplicate_foreign_or_displaced_anchors() {
             LIMIT,
             LIMIT,
         );
-        assert!(
-            matches!(
+        let expected = match mutation {
+            3 | 4 | 11 => matches!(
                 result,
-                Err(ProductionSemanticKirErrorV1::Unsupported {
-                    detail: "scoped memory anchors differ from their source instance",
-                    ..
-                }) | Err(
+                Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+            ),
+            5 => matches!(
+                result,
+                Err(
                     ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
                         ArgumentResourceV1::Accounting
                     )
                 )
             ),
-            "{mutation}: {result:?}"
-        );
+            9 | 10 => matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    function: 0,
+                    block: None,
+                    statement: None,
+                    detail: "execution call parameters differ from their source instance",
+                })
+            ),
+            _ => matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "scoped memory anchors differ from their source instance",
+                    ..
+                })
+            ),
+        };
+        assert!(expected, "{mutation}: {result:?}");
         assert_eq!(OBSERVED.get(), 1);
     }
 }
