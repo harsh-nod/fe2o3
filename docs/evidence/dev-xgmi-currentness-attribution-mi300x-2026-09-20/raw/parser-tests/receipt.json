@@ -1,0 +1,20 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-currentness-attribution-mi300x-2026-09-20/test_results.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789937892314132170,
+  "group_absent": true,
+  "pid": 689938,
+  "started_ns": 1789937892042356802,
+  "stderr_sha256": "97be623b4d6028e8344f7e6334accc0e53abca2d1fbdee20c221c9de86a6f27d",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 60
+}

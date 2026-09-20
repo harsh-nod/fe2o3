@@ -1,0 +1,1 @@
+{"verified": true, "commands": 22, "tests": {"gnu": {"runtime": 58, "example": 13}, "musl": {"runtime": 58, "example": 13}, "feature-off": {"runtime": 33, "example": 12}}, "native_execution": false, "performance_acceptance": false, "formal_refinement": false}

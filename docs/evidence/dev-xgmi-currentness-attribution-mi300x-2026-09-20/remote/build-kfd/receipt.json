@@ -1,0 +1,38 @@
+{
+  "command": [
+    "cargo",
+    "build",
+    "--frozen",
+    "--release",
+    "-p",
+    "fe2o3-runtime",
+    "--features",
+    "hardware-diagnostic",
+    "--example",
+    "gfx942-runtime-xgmi-peer-benchmark"
+  ],
+  "cwd": "/home/harsh/fe2o3-xgmi-currentness-attribution-20260920.d5615a8c865476a6/source",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/fe2o3-xgmi-currentness-attribution-20260920.d5615a8c865476a6/target",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/opt/rocm/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "TMPDIR": "/home/harsh/fe2o3-xgmi-currentness-attribution-20260920.d5615a8c865476a6/tmp",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789938008737561414,
+  "group_absent": true,
+  "pid": 3454175,
+  "started_ns": 1789937915842578515,
+  "stderr_sha256": "0ff080ac86e958ecadcec018d01238998a3be015f58c9c1dcd2672b3d9133d34",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 1200
+}

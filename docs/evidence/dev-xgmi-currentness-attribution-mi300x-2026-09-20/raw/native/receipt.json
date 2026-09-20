@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I -B /home/harsh/fe2o3-xgmi-currentness-attribution-20260920.d5615a8c865476a6/native.py run '{\"binding_sha256\":\"0fb867aab7816f8bf650989b71250297a55e41c9940c4aaae747ffe323e0e059\",\"commit\":\"0ec05ee146e9c852727135e56f77d8b96168b857\",\"path\":\"/home/harsh/fe2o3-xgmi-currentness-attribution-20260920.d5615a8c865476a6\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789938167979889119,
+  "group_absent": true,
+  "pid": 691113,
+  "started_ns": 1789937913441064910,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "29dac07495343e06bd892855a318336fa95b4a80514afcd760effd65c7f09c33",
+  "timeout_seconds": 6000
+}

@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I - create '{\"binding_sha256\":\"0fb867aab7816f8bf650989b71250297a55e41c9940c4aaae747ffe323e0e059\",\"commit\":\"0ec05ee146e9c852727135e56f77d8b96168b857\",\"path\":\"/home/harsh/fe2o3-xgmi-currentness-attribution-20260920.d5615a8c865476a6\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789937910088738222,
+  "group_absent": true,
+  "pid": 690842,
+  "started_ns": 1789937908808165515,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": "6e1e51a3fe2d18484de4af786f36e56676b93e9b62a0d390e8be2c54dc0e2118",
+  "stdout_sha256": "e1de2db23dac3c58c527aefd55abdde883f0be93f353e3b5d76d8f0da5471ebf",
+  "timeout_seconds": 45
+}

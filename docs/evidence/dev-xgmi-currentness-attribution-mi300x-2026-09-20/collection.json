@@ -1,0 +1,10 @@
+{
+  "cpu_seal_sha256": "2c38eb0f384e51fe787a4507a632ced74af3d0475ab29b1742a28d422b1214b7",
+  "exclusive_reservation": false,
+  "formal_refinement": false,
+  "local_payload_removed": true,
+  "native_execution": true,
+  "performance_acceptance": false,
+  "remote_removed": true,
+  "source_commit": "0ec05ee146e9c852727135e56f77d8b96168b857"
+}
