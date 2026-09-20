@@ -1,5 +1,8 @@
 # M0 / V0 / U0 linked decision, capability, fixture and budget packet
 
+See the [2026-09-20 evidence and decision refresh](assembly-authoring-contract-review-20260920.md)
+for subsequent qualifications; the original acceptance requirements below remain.
+
 **Proposal for explicit owner review; not accepted and not a new wire contract.**
 This supplement awaits owner acceptance. It updates the evidence and
 decision requests of [the existing integration proposal](https://github.com/harsh-nod/fe2o3/blob/7f355e4b748887495122fb0a06927b66613272d0/docs/assembly-authoring-integration-contract-v1.md);
