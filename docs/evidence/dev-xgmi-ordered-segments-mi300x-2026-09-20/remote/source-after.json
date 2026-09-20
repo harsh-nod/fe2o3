@@ -1,0 +1,8 @@
+{
+  "benchmarks/runtime_gfx942/copy-host-observe.py": "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51",
+  "benchmarks/runtime_gfx942/native_benchmark_args.hpp": "768106b4942e67fec45d7b2b4179b7886e8b8cad5a3c3f4abc97eaee59604937",
+  "benchmarks/runtime_gfx942/xgmi_peer_benchmark_common.hpp": "959ff0418bffd85de2c0a85e034e1287579893f07c24ddde59e4bcefe7bf6d64",
+  "benchmarks/runtime_gfx942/xgmi_peer_hip.cpp": "b183a53f355fedea8049cb24285d3d73a9e3752bc1631fc51512fbf4c02cc1e3",
+  "benchmarks/runtime_gfx942/xgmi_peer_hsa.cpp": "735ce035eac70eb384ba6fbdb824e0b568f8b329fe93334e65a94feeb2bcfe1c",
+  "benchmarks/runtime_gfx942/xgmi_peer_segments_common.hpp": "893d767e0cc446ca9ddf4ee6d4f4a3962907e58b8a7622631502a4128566a1af"
+}

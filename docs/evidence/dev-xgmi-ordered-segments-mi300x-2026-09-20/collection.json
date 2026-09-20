@@ -1,0 +1,7 @@
+{
+  "exclusive_reservation": false,
+  "failures": [],
+  "owned_cleanup": true,
+  "performance_acceptance": false,
+  "source_commit": "b7fd95cfb007fb8406649849459fa1de8cbc2088"
+}

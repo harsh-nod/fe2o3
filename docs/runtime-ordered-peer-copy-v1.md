@@ -185,10 +185,21 @@ removes only its private remote tree after successful collection. It is not an
 exclusive reservation or general performance acceptance. A collection failure
 retains the owned path for recovery instead of deleting its evidence.
 
+### First Native Comparison
+
+The [source-bound MI300X packet](evidence/dev-xgmi-ordered-segments-mi300x-2026-09-20/README.md)
+passed all six trials, 120 timed samples, 36 endpoint observations, explicit
+teardown and owned cleanup. For 64 KiB through 65 descriptors, the ranges of
+per-trial/per-direction medians were 25.279-25.433 ms for KFD, 0.922-0.924 ms
+for HSA, and 0.344-0.350 ms for HIP. These are whole-list host latencies, not
+confidence intervals or link bandwidth. KFD is not at performance parity on
+this workload; the full-currentness and serial publication costs remain in scope.
+
 ## Remaining Work
 
-- Matched useful-segment workloads against HIP/HSA, including admission and
-  completion costs. No new speedup or parity claim follows from this API.
+- Expand matched useful-segment testing to the remaining seven payload/count
+  geometries, and attribute the 65-segment cost before optimization. No speedup
+  or parity claim follows from the completed first comparison.
 - Owner-engine convenience wrappers with descriptor budget accounting, graph
   sequence nodes, and explicit negotiated Worker transport support.
 - More permissive scheduling-domain coexistence and native multi-packet

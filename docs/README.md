@@ -112,6 +112,8 @@ replacement for the support matrix.
   evidence](evidence/mi300x-r57-n3-qualification-2026-09-08.md)
 - [MI300X ordered peer-copy correctness
   evidence](evidence/dev-ordered-peer-copy-mi300x-2026-09-20/README.md)
+- [MI300X ordered XGMI list comparison
+  evidence](evidence/dev-xgmi-ordered-segments-mi300x-2026-09-20/README.md)
 
 Evidence documents describe exact qualified observations. They do not silently
 upgrade an experimental target or path into a supported public interface.
