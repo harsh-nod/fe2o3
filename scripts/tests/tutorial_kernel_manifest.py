@@ -391,7 +391,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
 
 
     def test_matrix_records_are_stable_and_do_not_execute(self):
-        for target, count in (("gfx942", 11), ("gfx950", 37)):
+        for target, count in (("gfx942", 11), ("gfx950", 39)):
             result = subprocess.run(
                 [sys.executable, str(CHECKER), "--emit-matrix", target],
                 check=True, text=True, capture_output=True,
