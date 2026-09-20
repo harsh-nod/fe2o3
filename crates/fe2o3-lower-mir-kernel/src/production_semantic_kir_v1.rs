@@ -22177,14 +22177,28 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 clone_execution_cfg_binding_v29(binding, &mut 0, budget)
             })?
         } else {
-            self.locals[index].clone().ok_or(
+            let binding = self.locals[index].as_ref().ok_or(
                 ProductionSemanticKirErrorV1::MissingLocalDefinition {
                     function: self.semantic_function.index(),
                     block: block.index(),
                     statement,
                     local: place.local().index(),
                 },
-            )?
+            )?;
+            match self.emission_work.as_deref_mut() {
+                Some(budget) => emission_clone_binding_v1(binding, budget)?,
+                #[cfg(test)]
+                None => binding.clone(),
+                #[cfg(not(test))]
+                None => {
+                    return Err(unsupported(
+                        self.semantic_function.index(),
+                        None,
+                        None,
+                        "semantic emission has no shared resource ledger",
+                    ));
+                }
+            }
         };
         let mut current_type = self.function.locals()[index].ty();
         let mut projection_index = 0;
@@ -22408,8 +22422,22 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     },
                     SemanticProjectionKindV1::Field(field),
                 ) => {
+                    match self.emission_work.as_deref_mut() {
+                        Some(budget) => emission_prepay_enum_projection_v1(&payloads, budget)?,
+                        #[cfg(test)]
+                        None => {}
+                        #[cfg(not(test))]
+                        None => {
+                            return Err(unsupported(
+                                self.semantic_function.index(),
+                                None,
+                                None,
+                                "semantic emission has no shared resource ledger",
+                            ));
+                        }
+                    }
                     let available_fields = payloads.get(&variant).map_or(0, Vec::len);
-                    let projected = project_enum_payload_field(variant, &payloads, field);
+                    let projected = project_enum_payload_field(variant, payloads, field);
                     if matches!(
                         projected,
                         Ok(SemanticValueBindingV1::Unmaterialized) | Err(_)
@@ -29830,20 +29858,20 @@ mod resource_tests {
         let payloads = BTreeMap::from([(0, vec![ok_view]), (1, vec![error])]);
 
         assert!(matches!(
-            project_enum_payload_field(0, &payloads, 0),
+            project_enum_payload_field(0, payloads.clone(), 0),
             Ok(SemanticValueBindingV1::Value {
                 id: ValueId(17),
                 ..
             })
         ));
         assert!(matches!(
-            project_enum_payload_field(1, &payloads, 0),
+            project_enum_payload_field(1, payloads.clone(), 0),
             Ok(SemanticValueBindingV1::Value {
                 id: ValueId(18),
                 ..
             })
         ));
-        let unavailable = project_enum_payload_field(2, &payloads, 0).unwrap();
+        let unavailable = project_enum_payload_field(2, payloads, 0).unwrap();
         assert!(matches!(
             unavailable,
             SemanticValueBindingV1::Unmaterialized
