@@ -716,8 +716,7 @@ fn observe_returns(
                     budget,
                     Refusal::Correspondence,
                     |lowered| {
-                        let parameter =
-                            lowered.function.body.as_ref().unwrap().blocks[0].parameters[0].id;
+                        let parameter = lowered.function.body.as_ref().unwrap().parameters[0];
                         let CallResultComponentV1::Return { input, .. } =
                             &mut lowered.call_returns.components.rows[components.first as usize]
                         else {
