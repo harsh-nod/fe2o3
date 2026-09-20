@@ -463,6 +463,26 @@ CI. It requires an operator-selected target, a new private output path, the
 plan-bound collection authorization, and for PC sampling the separate exact
 beta/freeze-risk acknowledgement on a protected GPU runner.
 
+The host-only profiler unit tests need a real native Python 3.12 or 3.13 and
+its matching standard library. Their default discovery remains the literal
+`/usr/bin/python3.12`, then `/usr/bin/python3.13`; it does not search `PATH`.
+For a reviewed interpreter installed elsewhere, configure the test process:
+
+```sh
+FE2O3_TEST_NATIVE_PYTHON=/absolute/install/bin/python3.12 \
+  cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 profile_command::
+```
+
+This runtime setting is compiled only into the test harness and is inherited
+by its existing self-reexecuting SIGCHLD/capture-worker tests. The selector
+uses the unchanged absolute versioned-name, non-symlink regular executable,
+64-MiB file-pin and native-ELF checks. Missing prerequisites or an invalid
+explicit value fail the tests; they never skip a test or fall back after an
+invalid override. The selected interpreter must also work from its sealed
+execution image; a launcher script or symlink is not an interpreter substitute.
+Production discovery, the public `--python` option and production pinning are
+unchanged. This test setting grants no profiling or hardware authority.
+
 Deletion guards are structural accident and substitution defenses, not
 authentication. Their random tokens correlate an interrupted creation with
 the directory completed by that operation, but every record is stored inside
