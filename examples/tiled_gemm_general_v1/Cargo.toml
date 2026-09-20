@@ -11,6 +11,9 @@ publish = false
 members = []
 resolver = "3"
 
+[features]
+kernel-simt-gemm-general = []
+
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
 
