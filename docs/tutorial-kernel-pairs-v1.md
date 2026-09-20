@@ -101,11 +101,16 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   Qualified attribute paths and name-value forms such as `#[doc = "..."]` are
   unsupported and reject claimed bindings.
 
-Six GPT-OSS occurrences in tabs 1-4 now retain these expected fixture/source
+Eight GPT-OSS occurrences in tabs 1-6 now retain these expected fixture/source
 contracts: serial-router, held-fragments, interleaved-stores, and the three
-materialized components. Their existing source/feature identities remain
-distinct, including the repeated megakernel symbol. This leaves 58 pending
-display bindings; the two named lesson-level source gaps remain unresolved.
+materialized components, plus pipelined-attention and scalar-attention. Their
+existing source/feature identities remain distinct, including the repeated
+megakernel symbol. This leaves 56 pending display bindings and the historical
+GEMM lesson's source gap unresolved. The two attention variants are required
+positive compile obligations with separate pending-design simulation requests;
+neither inherits another variant's retained KIR or execution evidence. These
+registrations bring known kernel identities to 60, not completed pairs or a
+proven final curriculum denominator.
 Other source/display joins remain `pending`; a fixture's lesson scope is not
 an exact displayed-source binding.
 

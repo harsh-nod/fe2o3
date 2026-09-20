@@ -154,6 +154,12 @@ case "${1:-}" in
             kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores)
               symbol=gfx950_gpt_oss_120b_decode_megakernel_v1
               fp4_mfma=4; bf16_mfma=4; ocml_calls=1 ;;
+            kernel-gpt-oss-decode-scalar-attention)
+              symbol=gfx950_gpt_oss_120b_decode_megakernel_v1
+              fp4_mfma=4; ocml_calls=1 ;;
+            kernel-gpt-oss-decode-pipelined-attention)
+              symbol=gfx950_gpt_oss_120b_decode_megakernel_v1
+              fp4_mfma=4; bf16_mfma=4; ocml_calls=1; lds=8192 ;;
             kernel-gpt-oss-router-component)
               symbol=gfx950_gpt_oss_120b_router_v1 ;;
             kernel-gpt-oss-attention-component)
@@ -317,8 +323,10 @@ case "$key" in
     symbol=gfx950_stage_gradient_shard_v1; kernarg=32 ;;
   kernel-muon-update)
     symbol=gfx950_muon_update_4x4_v1; kernarg=48 ;;
-  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores)
+  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores | kernel-gpt-oss-decode-scalar-attention)
     symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kernarg=208 ;;
+  kernel-gpt-oss-decode-pipelined-attention)
+    symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kernarg=208; lds=8192 ;;
   kernel-gpt-oss-router-component)
     symbol=gfx950_gpt_oss_120b_router_v1; kernarg=48 ;;
   kernel-gpt-oss-attention-component)
@@ -392,8 +400,10 @@ case "$key" in
   kernel-qwen-ngram-gather) symbol=gfx950_qwen_ngram_gather_v1 ;;
   kernel-stage-gradient-shard) symbol=gfx950_stage_gradient_shard_v1 ;;
   kernel-muon-update) symbol=gfx950_muon_update_4x4_v1 ;;
-  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores)
+  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores | kernel-gpt-oss-decode-pipelined-attention)
     symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kind=gpt_oss ;;
+  kernel-gpt-oss-decode-scalar-attention)
+    symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kind=gpt_oss_expert ;;
   kernel-gpt-oss-router-component)
     symbol=gfx950_gpt_oss_120b_router_v1 ;;
   kernel-gpt-oss-attention-component)
@@ -591,13 +601,13 @@ KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
   }
 
 grep -F -- \
-  'kernel compile matrix: target=gfx950 mode=compile-only kernels=37 hardware_observed=false' \
+  'kernel compile matrix: target=gfx950 mode=compile-only kernels=39 hardware_observed=false' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX PASS target=gfx950 compiled=37 hardware_executed=0 artifacts=temporary' \
+  'MATRIX PASS target=gfx950 compiled=39 hardware_executed=0 artifacts=temporary' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX LIMITATION remaining gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered' \
@@ -636,6 +646,8 @@ for name in \
   gpt-oss-decode \
   gpt-oss-serial-router \
   gpt-oss-held-fragments \
+  gpt-oss-scalar-attention \
+  gpt-oss-pipelined-attention \
   gpt-oss-interleaved-stores \
   gpt-oss-materialized-router \
   gpt-oss-materialized-attention \
@@ -643,7 +655,7 @@ for name in \
   [[ "$(grep -Fc -- "CASE ${name} target=gfx950 status=PASS hardware_observed=false" \
     "${gfx950_output}")" -eq 1 ]]
 done
-[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 37 ]]
+[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 39 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
 for features in \
   kernel-moe-route \
@@ -652,6 +664,8 @@ for features in \
   kernel-speculative-transaction \
   kernel-qwen-ngram-gather \
   kernel-stage-gradient-shard \
+  kernel-gpt-oss-decode-scalar-attention \
+  kernel-gpt-oss-decode-pipelined-attention \
   kernel-muon-update; do
   [[ "$(grep -Fc -- "--features ${features} --lib" "${LOG}")" -eq 1 ]]
 done
