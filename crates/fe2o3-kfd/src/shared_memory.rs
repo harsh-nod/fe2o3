@@ -5413,11 +5413,23 @@ impl SharedGttMemorySessionV1 {
         peer: &mut Self,
         route: crate::topology::Gfx942XgmiRouteV1,
     ) -> Result<(), MemorySessionError> {
+        self.validate_gfx942_xgmi_route_with_peer_timed::<crate::currentness_diagnostic::Disabled>(
+            peer, route,
+        )
+    }
+
+    pub(crate) fn validate_gfx942_xgmi_route_with_peer_timed<
+        M: crate::currentness_diagnostic::Mode,
+    >(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<M::Pair, MemorySessionError> {
         self.validate_gfx942_xgmi_pair_binding(peer, route)?;
         pair_currentness::with_terminal_pair(&mut self.engine.phase, &mut peer.engine.phase, || {
             self.engine
                 .backend
-                .check_xgmi_pair_currentness(&mut peer.engine.backend, route)
+                .check_xgmi_pair_currentness::<M>(&mut peer.engine.backend, route)
         })
     }
 

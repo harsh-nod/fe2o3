@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::currentness_diagnostic::{Disabled, Mode, Timing};
 use crate::device::{DeviceBindingError, validate_apertures};
 use crate::topology::{Gfx942XgmiRouteV1, HostTopologySnapshot};
 use crate::{CheckedGfx942XnackMinusDevice, KfdUapiVersion};
@@ -29,7 +30,7 @@ trait Observation {
     fn observe_drm(&mut self) -> Result<Self::Drm, DeviceBindingError>;
     fn observe_xnack(&mut self) -> Result<i32, DeviceBindingError>;
     fn observe_apertures(&mut self) -> Result<Self::Apertures, DeviceBindingError>;
-    fn discover(&mut self) -> Result<Self::Topology, DeviceBindingError>;
+    fn discover<M: Mode>(&mut self) -> Result<(Self::Topology, M::Topology), DeviceBindingError>;
     fn validate_route(
         &mut self,
         snapshot: &Self::Topology,
@@ -97,7 +98,7 @@ fn after<O: Observation>(
 
 fn single<O: Observation>(observation: &mut O) -> Result<u32, DeviceBindingError> {
     let opening = before(observation)?;
-    if &observation.discover()? != observation.retained_topology() {
+    if &observation.discover::<Disabled>()?.0 != observation.retained_topology() {
         return Err(DeviceBindingError::TopologySnapshotChanged);
     }
     after(observation, opening)
@@ -115,11 +116,11 @@ fn exact_route(
     Ok(())
 }
 
-fn pair<O: Observation>(
+fn pair<M: Mode, O: Observation>(
     source: &mut O,
     peer: &mut O,
     route: Gfx942XgmiRouteV1,
-) -> Result<(), DeviceBindingError> {
+) -> Result<M::Pair, DeviceBindingError> {
     let already_poisoned = source.poisoned() || peer.poisoned();
     // The only production implementation uses infallible field assignments.
     // Pre-latching retains both failures and unwinds without a cleanup callback.
@@ -128,18 +129,23 @@ fn pair<O: Observation>(
     if already_poisoned {
         return Err(DeviceBindingError::CurrentnessFencePoisoned);
     }
-    let source_before = before(source)?;
-    let peer_before = before(peer)?;
-    let snapshot = source.discover()?;
-    source.validate_route(&snapshot, route)?;
-    if &snapshot != source.retained_topology() || &snapshot != peer.retained_topology() {
-        return Err(DeviceBindingError::TopologySnapshotChanged);
-    }
-    after(source, source_before)?;
-    after(peer, peer_before)?;
+    let mut timer = M::Timer::<6>::new();
+    let source_before = timer.measure(0, || before(source))?;
+    let peer_before = timer.measure(1, || before(peer))?;
+    let (snapshot, topology) = timer.measure(2, || source.discover::<M>())?;
+    timer.measure(3, || {
+        source.validate_route(&snapshot, route)?;
+        if &snapshot != source.retained_topology() || &snapshot != peer.retained_topology() {
+            return Err(DeviceBindingError::TopologySnapshotChanged);
+        }
+        Ok(())
+    })?;
+    timer.measure(4, || after(source, source_before))?;
+    timer.measure(5, || after(peer, peer_before))?;
+    let diagnostic = M::pair(timer, topology);
     source.set_poisoned(false);
     peer.set_poisoned(false);
-    Ok(())
+    Ok(diagnostic)
 }
 
 pub(super) fn check_single(
@@ -149,12 +155,12 @@ pub(super) fn check_single(
         .map(|vram_lost_counter| super::ObservableDeviceCurrentnessV1 { vram_lost_counter })
 }
 
-pub(super) fn check_pair(
+pub(super) fn check_pair<M: Mode>(
     source: &mut CheckedGfx942XnackMinusDevice,
     peer: &mut CheckedGfx942XnackMinusDevice,
     route: Gfx942XgmiRouteV1,
-) -> Result<(), DeviceBindingError> {
-    pair(source, peer, route)
+) -> Result<M::Pair, DeviceBindingError> {
+    pair::<M, _>(source, peer, route)
 }
 
 impl Observation for CheckedGfx942XnackMinusDevice {
@@ -248,8 +254,8 @@ impl Observation for CheckedGfx942XnackMinusDevice {
         )
     }
 
-    fn discover(&mut self) -> Result<Self::Topology, DeviceBindingError> {
-        crate::topology::discover_default_topology().map_err(DeviceBindingError::Topology)
+    fn discover<M: Mode>(&mut self) -> Result<(Self::Topology, M::Topology), DeviceBindingError> {
+        crate::topology::discover_default_topology_with::<M>().map_err(DeviceBindingError::Topology)
     }
 
     fn validate_route(

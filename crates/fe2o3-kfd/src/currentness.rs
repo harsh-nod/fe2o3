@@ -545,12 +545,12 @@ impl CheckedGfx942XnackMinusDevice {
 
     /// The shared-memory caller first authenticates both selected devices and
     /// their retained routes. This private observation grants no queue authority.
-    pub(crate) fn check_gfx942_xgmi_pair_currentness(
+    pub(crate) fn check_gfx942_xgmi_pair_currentness<M: crate::currentness_diagnostic::Mode>(
         &mut self,
         peer: &mut Self,
         route: crate::topology::Gfx942XgmiRouteV1,
-    ) -> Result<(), DeviceBindingError> {
-        full::check_pair(self, peer, route)
+    ) -> Result<M::Pair, DeviceBindingError> {
+        full::check_pair::<M>(self, peer, route)
     }
 }
 

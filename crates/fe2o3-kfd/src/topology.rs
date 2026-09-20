@@ -910,7 +910,13 @@ impl HostTopologySnapshot {
 /// Discovers the default KFD topology without opening a device or granting
 /// runtime authority.
 pub fn discover_default_topology() -> Result<HostTopologySnapshot, TopologyError> {
-    discover_host_topology(&DiscoveryPaths {
+    discover_default_topology_with::<crate::currentness_diagnostic::Disabled>()
+        .map(|(snapshot, ())| snapshot)
+}
+
+pub(crate) fn discover_default_topology_with<M: crate::currentness_diagnostic::Mode>()
+-> Result<(HostTopologySnapshot, M::Topology), TopologyError> {
+    discover_host_topology_with::<M>(&DiscoveryPaths {
         topology_root: Path::new(DEFAULT_TOPOLOGY_ROOT),
         boot_id: Path::new(DEFAULT_BOOT_ID_PATH),
         os_release: Path::new(DEFAULT_OS_RELEASE_PATH),
@@ -1304,6 +1310,8 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> Topology
 
 fn inspect(path: &Path) -> Result<Metadata, TopologyError> {
     #[cfg(test)]
+    tests::host_diagnostics::io("inspect", path, 0);
+    #[cfg(test)]
     tests::prechecked_reads::record_inspect(path);
     fs::symlink_metadata(path).map_err(|source| io_error("inspect", path, source))
 }
@@ -1345,6 +1353,8 @@ fn inspect_regular(path: &Path) -> Result<RegularFileObservation<'_>, TopologyEr
 }
 
 fn open_observed_regular(path: &Path) -> Result<File, TopologyError> {
+    #[cfg(test)]
+    tests::host_diagnostics::io("open", path, 0);
     // A replacement must neither redirect the final component nor block on a FIFO.
     OpenOptions::new()
         .read(true)
@@ -1365,6 +1375,8 @@ fn read_bounded_regular(
 ) -> Result<Vec<u8>, TopologyError> {
     let RegularFileObservation { path, identity } = before;
     let mut file = open_observed_regular(path)?;
+    #[cfg(test)]
+    tests::host_diagnostics::io("opened metadata", path, 0);
     let opened = file
         .metadata()
         .map_err(|source| io_error("inspect opened file", path, source))?;
@@ -1372,6 +1384,8 @@ fn read_bounded_regular(
         return Err(TopologyError::ChangedDuringRead(path.to_path_buf()));
     }
     let mut bytes = Vec::with_capacity(maximum.min(1024));
+    #[cfg(test)]
+    tests::host_diagnostics::io("bounded read", path, maximum + 1);
     (&mut file)
         .take((maximum + 1) as u64)
         .read_to_end(&mut bytes)
@@ -1384,6 +1398,8 @@ fn read_bounded_regular(
             maximum,
         });
     }
+    #[cfg(test)]
+    tests::host_diagnostics::io("closing metadata", path, 0);
     let after = file
         .metadata()
         .map_err(|source| io_error("reinspect opened file", path, source))?;
@@ -1486,6 +1502,8 @@ fn read_optional_module_field(
     path: &Path,
     predicate: impl Fn(u8) -> bool,
 ) -> Result<Option<String>, TopologyError> {
+    #[cfg(test)]
+    tests::host_diagnostics::io("optional inspect", path, 0);
     match fs::symlink_metadata(path) {
         Ok(_) => {}
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -1907,6 +1925,8 @@ fn parse_named_properties_prechecked(
 
 fn read_directory(path: &Path, maximum: usize) -> Result<Vec<(String, PathBuf)>, TopologyError> {
     ensure_directory(path)?;
+    #[cfg(test)]
+    tests::host_diagnostics::io("read directory", path, maximum);
     let entries = fs::read_dir(path).map_err(|source| io_error("list", path, source))?;
     let mut result = Vec::new();
     for entry in entries {
@@ -2227,6 +2247,8 @@ struct DiscoveryPaths<'a> {
 }
 
 fn canonicalize(path: &Path) -> Result<PathBuf, TopologyError> {
+    #[cfg(test)]
+    tests::host_diagnostics::io("canonicalize", path, 0);
     fs::canonicalize(path).map_err(|source| io_error("canonicalize", path, source))
 }
 
@@ -2365,49 +2387,63 @@ fn correlate_render_node(
     })
 }
 
-fn discover_host_topology(
+fn discover_host_topology_with<M: crate::currentness_diagnostic::Mode>(
     paths: &DiscoveryPaths<'_>,
-) -> Result<HostTopologySnapshot, TopologyError> {
-    let topology = discover_topology_at(paths.topology_root)?;
-    let boot_id = read_boot_id(paths.boot_id)?;
-    let kernel_release = read_kernel_release(paths.os_release)?;
-    let amdgpu_module = observe_amdgpu_module(paths.amdgpu_module_root)?;
-    ensure_directory(paths.device_character_root)?;
-    ensure_directory(paths.sysfs_devices_root)?;
-    let sysfs_devices_root = canonicalize(paths.sysfs_devices_root)?;
-    let mut render_nodes = Vec::with_capacity(topology.gpu_nodes.len());
-    for gpu in &topology.gpu_nodes {
-        render_nodes.push(correlate_render_node(gpu, paths, &sysfs_devices_root)?);
-    }
-    let generation_after = read_scalar(&paths.topology_root.join("generation_id"))?;
-    if generation_after != topology.provenance.generation {
-        return Err(TopologyError::TopologyChanged {
-            before: topology.provenance.generation,
-            after: generation_after,
-        });
-    }
-    if read_boot_id(paths.boot_id)? != boot_id {
-        return Err(TopologyError::ChangedDuringRead(
-            paths.boot_id.to_path_buf(),
-        ));
-    }
-    if read_kernel_release(paths.os_release)? != kernel_release {
-        return Err(TopologyError::ChangedDuringRead(
-            paths.os_release.to_path_buf(),
-        ));
-    }
-    if observe_amdgpu_module(paths.amdgpu_module_root)? != amdgpu_module {
-        return Err(TopologyError::ChangedDuringRead(
-            paths.amdgpu_module_root.to_path_buf(),
-        ));
-    }
-    Ok(HostTopologySnapshot {
-        topology,
-        boot_id,
-        kernel_release,
-        amdgpu_module,
-        render_nodes,
-    })
+) -> Result<(HostTopologySnapshot, M::Topology), TopologyError> {
+    use crate::currentness_diagnostic::Timing;
+    let mut timer = M::Timer::<4>::new();
+    let topology = timer.measure(0, || discover_topology_at(paths.topology_root))?;
+    let (boot_id, kernel_release, amdgpu_module) = timer.measure(1, || {
+        let boot_id = read_boot_id(paths.boot_id)?;
+        let kernel_release = read_kernel_release(paths.os_release)?;
+        let amdgpu_module = observe_amdgpu_module(paths.amdgpu_module_root)?;
+        Ok::<_, TopologyError>((boot_id, kernel_release, amdgpu_module))
+    })?;
+    let render_nodes = timer.measure(2, || {
+        ensure_directory(paths.device_character_root)?;
+        ensure_directory(paths.sysfs_devices_root)?;
+        let sysfs_devices_root = canonicalize(paths.sysfs_devices_root)?;
+        let mut render_nodes = Vec::with_capacity(topology.gpu_nodes.len());
+        for gpu in &topology.gpu_nodes {
+            render_nodes.push(correlate_render_node(gpu, paths, &sysfs_devices_root)?);
+        }
+        Ok::<_, TopologyError>(render_nodes)
+    })?;
+    timer.measure(3, || {
+        let generation_after = read_scalar(&paths.topology_root.join("generation_id"))?;
+        if generation_after != topology.provenance.generation {
+            return Err(TopologyError::TopologyChanged {
+                before: topology.provenance.generation,
+                after: generation_after,
+            });
+        }
+        if read_boot_id(paths.boot_id)? != boot_id {
+            return Err(TopologyError::ChangedDuringRead(
+                paths.boot_id.to_path_buf(),
+            ));
+        }
+        if read_kernel_release(paths.os_release)? != kernel_release {
+            return Err(TopologyError::ChangedDuringRead(
+                paths.os_release.to_path_buf(),
+            ));
+        }
+        if observe_amdgpu_module(paths.amdgpu_module_root)? != amdgpu_module {
+            return Err(TopologyError::ChangedDuringRead(
+                paths.amdgpu_module_root.to_path_buf(),
+            ));
+        }
+        Ok(())
+    })?;
+    Ok((
+        HostTopologySnapshot {
+            topology,
+            boot_id,
+            kernel_release,
+            amdgpu_module,
+            render_nodes,
+        },
+        M::topology(timer),
+    ))
 }
 
 fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> {
@@ -2540,6 +2576,7 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
 
 #[cfg(test)]
 pub(crate) mod tests {
+    pub(super) mod host_diagnostics;
     mod link_properties;
     pub(super) mod prechecked_reads;
 

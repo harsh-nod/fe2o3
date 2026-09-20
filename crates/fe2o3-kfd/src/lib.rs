@@ -17,6 +17,8 @@ mod linux;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod currentness;
+#[cfg(target_os = "linux")]
+mod currentness_diagnostic;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod device;
@@ -235,6 +237,14 @@ pub use target_debug_telemetry_v2::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use currentness::{KfdClockCorrelationObservationV1, ObservableDeviceCurrentnessV1};
+#[cfg(all(
+    target_os = "linux",
+    target_arch = "x86_64",
+    feature = "hardware-diagnostic"
+))]
+pub use currentness_diagnostic::{
+    Gfx942TopologyDiscoveryDiagnosticsV1, Gfx942XgmiPairCurrentnessDiagnosticsV1,
+};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use device::*;

@@ -3,6 +3,8 @@ use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
+mod diagnostic;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Snapshot {
     unrelated_identity: u32,
@@ -17,6 +19,7 @@ enum Fault {
 #[derive(Default)]
 struct Trace {
     calls: Vec<(usize, &'static str)>,
+    latches: Vec<(usize, bool, usize)>,
     failure: Option<(usize, Fault)>,
 }
 
@@ -76,6 +79,9 @@ impl Observation for Scripted {
         self.poisoned
     }
     fn set_poisoned(&mut self, value: bool) {
+        let mut trace = self.trace.borrow_mut();
+        let calls = trace.calls.len();
+        trace.latches.push((self.endpoint, value, calls));
         self.poisoned = value;
     }
     fn retained_process(&self) -> u32 {
@@ -145,9 +151,13 @@ impl Observation for Scripted {
         self.step("apertures")?;
         Ok(u32::from(self.mismatch == Some("apertures")))
     }
-    fn discover(&mut self) -> Result<Snapshot, DeviceBindingError> {
+    fn discover<M: Mode>(&mut self) -> Result<(Snapshot, M::Topology), DeviceBindingError> {
         self.step("discover")?;
-        Ok(self.observed.clone())
+        let mut timer = M::Timer::<4>::new();
+        for phase in 0..4 {
+            timer.measure(phase, || ());
+        }
+        Ok((self.observed.clone(), M::topology(timer)))
     }
     fn validate_route(
         &mut self,
@@ -226,7 +236,7 @@ fn composed_pair(
     let mut source_phase = SharedMemorySessionPhaseV1::Active;
     let mut peer_phase = SharedMemorySessionPhaseV1::Active;
     let result = test_xgmi_pair_terminal(&mut source_phase, &mut peer_phase, || {
-        pair(source, peer, route).map_err(MemorySessionError::Device)
+        pair::<Disabled, _>(source, peer, route).map_err(MemorySessionError::Device)
     });
     let expected = if result.is_ok() {
         SharedMemorySessionPhaseV1::Active
@@ -305,7 +315,8 @@ fn every_pair_callback_error_and_panic_retains_devices_sessions_and_original_cau
                 trace.borrow_mut().failure = Some((index, fault));
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     test_xgmi_pair_terminal(&mut source_phase, &mut peer_phase, || {
-                        pair(&mut source, &mut peer, route).map_err(MemorySessionError::Device)
+                        pair::<Disabled, _>(&mut source, &mut peer, route)
+                            .map_err(MemorySessionError::Device)
                     })
                 }));
                 if panic {

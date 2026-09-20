@@ -9,13 +9,13 @@ fn pair_sessions_reactivate_only_after_complete_success() {
     assert_eq!(source, SharedMemorySessionPhaseV1::Active);
     assert_eq!(peer, SharedMemorySessionPhaseV1::Active);
     let result = with_terminal_pair(&mut source, &mut peer, || {
-        Err(MemorySessionError::ProcessChanged)
+        Err::<(), _>(MemorySessionError::ProcessChanged)
     });
     assert!(matches!(result, Err(MemorySessionError::ProcessChanged)));
     assert_eq!(source, SharedMemorySessionPhaseV1::Quarantined);
     assert_eq!(peer, SharedMemorySessionPhaseV1::Quarantined);
     assert!(matches!(
-        with_terminal_pair(&mut source, &mut peer, || panic!("terminal reentry")),
+        with_terminal_pair::<()>(&mut source, &mut peer, || panic!("terminal reentry")),
         Err(MemorySessionError::SharedSessionQuarantined)
     ));
 }
@@ -27,7 +27,7 @@ fn pair_session_unwind_preserves_original_payload_and_both_phases() {
     let payload = Box::new(19_u64);
     let identity = (&*payload) as *const u64;
     let result = catch_unwind(AssertUnwindSafe(|| {
-        with_terminal_pair(&mut source, &mut peer, || std::panic::panic_any(payload))
+        with_terminal_pair::<()>(&mut source, &mut peer, || std::panic::panic_any(payload))
     }));
     let payload = result.unwrap_err().downcast::<Box<u64>>().unwrap();
     assert!(std::ptr::eq(&**payload, identity));
@@ -53,7 +53,7 @@ fn inactive_pair_is_not_reactivated_and_has_no_observation_effects() {
     ] {
         let [mut source, mut peer] = initial;
         assert!(matches!(
-            with_terminal_pair(&mut source, &mut peer, || panic!("inactive observation")),
+            with_terminal_pair::<()>(&mut source, &mut peer, || panic!("inactive observation")),
             Err(MemorySessionError::SharedSessionQuarantined)
         ));
         assert_eq!([source, peer], initial);

@@ -4123,18 +4123,50 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         source: &'a mut SharedGttMemorySessionV1,
         destination: &'a mut SharedGttMemorySessionV1,
     ) -> Result<Gfx942NativeXgmiSdmaBatchV1<'a>, Gfx942SdmaErrorV1> {
+        self.begin_batch_timed::<crate::currentness_diagnostic::Disabled>(source, destination)
+            .map(|(batch, ())| batch)
+    }
+
+    /// Begins the same scope, additionally returning opening host intervals.
+    ///
+    /// This owner-free observation is not a completion result or a complete
+    /// batch bracket. Diagnostic unavailability does not change queue custody.
+    #[cfg(feature = "hardware-diagnostic")]
+    pub fn begin_batch_currentness_diagnostic_v1<'a>(
+        &'a mut self,
+        source: &'a mut SharedGttMemorySessionV1,
+        destination: &'a mut SharedGttMemorySessionV1,
+    ) -> Result<
+        (
+            Gfx942NativeXgmiSdmaBatchV1<'a>,
+            crate::Gfx942XgmiPairCurrentnessDiagnosticsV1,
+        ),
+        Gfx942SdmaErrorV1,
+    > {
+        self.begin_batch_timed::<crate::currentness_diagnostic::Enabled>(source, destination)
+    }
+
+    fn begin_batch_timed<'a, M: crate::currentness_diagnostic::Mode>(
+        &'a mut self,
+        source: &'a mut SharedGttMemorySessionV1,
+        destination: &'a mut SharedGttMemorySessionV1,
+    ) -> Result<(Gfx942NativeXgmiSdmaBatchV1<'a>, M::Pair), Gfx942SdmaErrorV1> {
         self.require_live_queue_state_v1()?;
-        source.validate_gfx942_xgmi_route_with_peer(destination, self.route)?;
+        let diagnostic =
+            source.validate_gfx942_xgmi_route_with_peer_timed::<M>(destination, self.route)?;
         self.owner
             .as_ref()
             .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner"))?
             .require_live()?;
-        Ok(Gfx942NativeXgmiSdmaBatchV1 {
-            queue: self,
-            source,
-            destination,
-            finished: false,
-        })
+        Ok((
+            Gfx942NativeXgmiSdmaBatchV1 {
+                queue: self,
+                source,
+                destination,
+                finished: false,
+            },
+            diagnostic,
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4789,7 +4821,7 @@ impl Gfx942NativeXgmiSdmaBatchV1<'_> {
 
     /// Closes the scope with a fresh full directional-topology observation.
     pub fn finish(self) -> Result<(), Gfx942SdmaErrorV1> {
-        self.close(false)
+        self.close::<crate::currentness_diagnostic::Disabled>(false)
     }
 
     /// Performs the closing observation, then quarantines both endpoint owners.
@@ -4797,13 +4829,34 @@ impl Gfx942NativeXgmiSdmaBatchV1<'_> {
     /// Use this when an inner operation has become indeterminate. A successful
     /// closing observation does not rehabilitate that operation or its queue.
     pub fn finish_terminal(self) -> Result<(), Gfx942SdmaErrorV1> {
-        self.close(true)
+        self.close::<crate::currentness_diagnostic::Disabled>(true)
     }
 
-    fn close(mut self, terminal: bool) -> Result<(), Gfx942SdmaErrorV1> {
+    /// Closes the same scope and returns phase-local closing host intervals.
+    /// No opening observation is implied; this result grants no authority.
+    #[cfg(feature = "hardware-diagnostic")]
+    pub fn finish_currentness_diagnostic_v1(
+        self,
+    ) -> Result<crate::Gfx942XgmiPairCurrentnessDiagnosticsV1, Gfx942SdmaErrorV1> {
+        self.close::<crate::currentness_diagnostic::Enabled>(false)
+    }
+
+    /// Closes with host intervals, then quarantines both endpoint owners even
+    /// when the closing observation succeeds. This cannot rehabilitate a queue.
+    #[cfg(feature = "hardware-diagnostic")]
+    pub fn finish_terminal_currentness_diagnostic_v1(
+        self,
+    ) -> Result<crate::Gfx942XgmiPairCurrentnessDiagnosticsV1, Gfx942SdmaErrorV1> {
+        self.close::<crate::currentness_diagnostic::Enabled>(true)
+    }
+
+    fn close<M: crate::currentness_diagnostic::Mode>(
+        mut self,
+        terminal: bool,
+    ) -> Result<M::Pair, Gfx942SdmaErrorV1> {
         let result = self
             .source
-            .validate_gfx942_xgmi_route_with_peer(self.destination, self.queue.route)
+            .validate_gfx942_xgmi_route_with_peer_timed::<M>(self.destination, self.queue.route)
             .map_err(Into::into);
         if terminal || result.is_err() {
             self.queue

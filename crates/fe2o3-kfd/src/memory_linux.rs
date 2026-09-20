@@ -145,13 +145,13 @@ impl LinuxMemoryBackend {
         Ok(())
     }
 
-    pub(super) fn check_xgmi_pair_currentness(
+    pub(super) fn check_xgmi_pair_currentness<M: crate::currentness_diagnostic::Mode>(
         &mut self,
         peer: &mut Self,
         route: crate::topology::Gfx942XgmiRouteV1,
-    ) -> Result<(), MemorySessionError> {
+    ) -> Result<M::Pair, MemorySessionError> {
         self.device
-            .check_gfx942_xgmi_pair_currentness(&mut peer.device, route)
+            .check_gfx942_xgmi_pair_currentness::<M>(&mut peer.device, route)
             .map_err(MemorySessionError::Device)
     }
 
