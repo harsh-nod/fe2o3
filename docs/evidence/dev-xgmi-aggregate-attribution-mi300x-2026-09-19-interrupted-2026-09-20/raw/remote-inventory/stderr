@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "<stdin>", line 7, in <module>
+  File "owned_control", line 586, in main
+  File "owned_control", line 563, in assert_no_owned_processes
+  File "owned_control", line 28, in need
+RuntimeError: owned processes still present: [3440710]

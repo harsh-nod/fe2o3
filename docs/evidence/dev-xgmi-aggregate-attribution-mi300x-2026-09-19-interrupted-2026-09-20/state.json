@@ -1,0 +1,24 @@
+{
+  "absence_attempted": false,
+  "cleaned": false,
+  "cleanup_attempted": false,
+  "collected": false,
+  "create_attempted": true,
+  "created": true,
+  "failure": {
+    "error": "RuntimeError: native failed",
+    "stage": "native"
+  },
+  "local_payload_absent": false,
+  "native_attempted": true,
+  "native_succeeded": false,
+  "remote_absent": false,
+  "schema": "fe2o3.xgmi-peer-hot-controller-state.v1",
+  "secondary_failures": [
+    {
+      "error": "RuntimeError: remote-inventory failed",
+      "stage": "collection"
+    }
+  ],
+  "uploaded": true
+}

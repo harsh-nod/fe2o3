@@ -1,0 +1,1 @@
+{"commands": 21, "schema": "fe2o3.xgmi-aggregate-attribution-cpu.v1", "tests": {"batch_each_target": 38, "diagnostic_each_target": 9, "example_each_configuration": 10, "safety_ignored": 1, "safety_passed": 5, "verifier": 7}, "verified": true}

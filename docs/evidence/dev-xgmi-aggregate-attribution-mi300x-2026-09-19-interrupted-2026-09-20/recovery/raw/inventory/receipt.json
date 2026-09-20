@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I - inventory '{\"binding_sha256\":\"e700ce9b6e9efd6ee3f47d90d3bff5f52d5091ebf602bf6851f3f2c5654fbd2d\",\"commit\":\"f1fb5f4877bf888b3346318cb9d53e2757e7930b\",\"path\":\"/home/harsh/fe2o3-xgmi-aggregate-attribution-20260919.dbead0bf0008cee9\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789929758942190660,
+  "group_absent": true,
+  "pid": 25974,
+  "started_ns": 1789929757513991786,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": "1955a9072be150b0924d6115fe998b4715ad89e237b799753feb48e3caa28842",
+  "stdout_sha256": "3f5819f331ee903aa1b589618a66ef2b483d056f72041b1ad358ce505204807b",
+  "timeout_seconds": 120
+}

@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I -B /home/harsh/fe2o3-xgmi-aggregate-attribution-20260919.dbead0bf0008cee9/native.py run '{\"binding_sha256\":\"e700ce9b6e9efd6ee3f47d90d3bff5f52d5091ebf602bf6851f3f2c5654fbd2d\",\"commit\":\"f1fb5f4877bf888b3346318cb9d53e2757e7930b\",\"path\":\"/home/harsh/fe2o3-xgmi-aggregate-attribution-20260919.dbead0bf0008cee9\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": "RuntimeError: interrupted by signal 15",
+  "exit": 255,
+  "finished_ns": 1789810477156878636,
+  "group_absent": true,
+  "pid": 749557,
+  "started_ns": 1789810259489547865,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "4a8419d2287cdf1c90d8ea18259f0da1ebea84eb176a50500f1cf6bac707458a",
+  "timeout_seconds": 6000
+}

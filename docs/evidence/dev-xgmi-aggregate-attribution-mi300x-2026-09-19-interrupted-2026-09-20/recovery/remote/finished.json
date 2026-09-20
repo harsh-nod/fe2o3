@@ -1,0 +1,23 @@
+{
+  "commit": "f1fb5f4877bf888b3346318cb9d53e2757e7930b",
+  "exclusive_reservation": false,
+  "exit": 1,
+  "failure": "BrokenPipeError: [Errno 32] Broken pipe",
+  "formal_refinement": false,
+  "native_execution": false,
+  "performance_acceptance": false,
+  "secondary_failures": [
+    {
+      "error": "BrokenPipeError: [Errno 32] Broken pipe",
+      "stage": "after-rustc"
+    },
+    {
+      "error": "BrokenPipeError: [Errno 32] Broken pipe",
+      "stage": "after-cargo"
+    },
+    {
+      "error": "BrokenPipeError: [Errno 32] Broken pipe",
+      "stage": "after-rocm"
+    }
+  ]
+}

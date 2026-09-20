@@ -1,0 +1,13 @@
+{
+  "error": "RuntimeError: native failed",
+  "primary": {
+    "error": "RuntimeError: native failed",
+    "stage": "native"
+  },
+  "secondary_failures": [
+    {
+      "error": "RuntimeError: remote-inventory failed",
+      "stage": "collection"
+    }
+  ]
+}
