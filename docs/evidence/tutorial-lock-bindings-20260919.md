@@ -66,3 +66,20 @@ initial capped-output attempt remains a failed setup run.
 These results do not authenticate old execution receipts against new input
 contracts. Source or lock changes introduced later require fresh input
 binding checks and applicable qualification.
+
+## Source-candidate integration follow-up
+
+Integrating the source-candidate tests adds one backend development-dependency
+edge to the existing source-observation crate. The root lock digest changes
+from `de1ab22edc34ba8acb9a4f5163b4bff7beb1ee38007670680d3dc99eb049b985`
+to `bdb17f836e4b699d14fba7912cffbe9efdb6c5670486ce59665c93fc32204d5a`.
+No external dependency version, source or checksum changes.
+
+This requires four root-lock bindings and their four dependent contracts to
+change: fill simulation, scalar GEMM, typed vecadd and the CPU semantic source
+tab. The other 45 lock bindings and all twelve standalone locks are unchanged.
+The curriculum golden becomes
+`54e71833269dfba2c659929fd35fa64729fc0636b1ce0f4d3ef0c8908768f713`.
+The existing strict validator first rejected the stale fill binding at the
+integrated source head. Fresh post-integration qualification is separate from
+the original repair's results above.

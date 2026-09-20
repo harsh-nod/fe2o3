@@ -1,5 +1,9 @@
 # Assembly authoring integration contract: owner-review proposal v1
 
+Subsequent implementation status is recorded in the
+[2026-09-20 review refresh](assembly-authoring-contract-review-20260920.md).
+The historical assessment below retains its original scope and acceptance criteria.
+
 Status: **proposed, not accepted**. Tracking: [#280](https://github.com/harsh-nod/fe2o3/issues/280)
 M0, [#281](https://github.com/harsh-nod/fe2o3/issues/281) V0 and
 [#282](https://github.com/harsh-nod/fe2o3/issues/282) U0. Assessment base:

@@ -284,6 +284,23 @@ pub enum SimulationDebugSinkControlV1 {
 pub trait SimulationDebugSinkV1 {
     fn record(&mut self, record: SimulationDebugRecordV1) -> SimulationDebugSinkControlV1;
 
+    /// Opt in once per run to fixed-size, in-process operation-origin contexts.
+    /// No legacy record layout or serialized debugger grammar changes.
+    fn wants_operation_origin_v1(&self) -> bool {
+        false
+    }
+
+    /// Context and record refer to the same delivery attempt/ordinal.
+    /// Default adaptation preserves the old callback and stop/drop behavior.
+    /// Sinks retaining contexts must separately bound their metadata storage.
+    fn record_with_operation_origin_v1(
+        &mut self,
+        record: SimulationDebugRecordV1,
+        _origin: crate::SimulationDebugOriginContextV1,
+    ) -> SimulationDebugSinkControlV1 {
+        self.record(record)
+    }
+
     /// Retains debugger-only ABI-view evidence without changing the public V1 error shape.
     fn terminal_out_of_bounds_v2(&mut self, _detail: crate::SimulationOutOfBoundsV2) {}
 

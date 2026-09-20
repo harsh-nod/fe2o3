@@ -12,6 +12,19 @@ pub(crate) struct OrderedProgramObservationOwnerV32 {
 }
 
 impl OrderedProgramObservationOwnerV32 {
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn diagnostic_source_projection_v17(
+        &self,
+    ) -> Result<ExactDebugSourceProjectionV1, String> {
+        let borrowed = ExactDebugSourceOwnerV1::Ordered(&self.materialized);
+        super::source_candidate_debug_join_v17_tests::preflight_projection(
+            borrowed,
+            &self.bindings.debug_source_files,
+        )?;
+        compiler_debug_source_projection_v1(borrowed, &self.bindings.debug_source_files)
+            .map_err(|error| format!("source-candidate debug projection: {error}"))
+    }
+
     pub(crate) fn materialized(
         &self,
     ) -> &fe2o3_lower_mir_kernel::ProductionOrderedProgramPreRankedKirOwnerV17 {
