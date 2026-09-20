@@ -1,9 +1,64 @@
 # Aggregate XGMI Host Attribution
 
-Status: protocol prepared; no native result is claimed until collection and
-replay succeed. This packet follows the matched persistent-hot comparison in
+Status: all four native trials completed, collection replay passed, and owned
+remote/local cleanup was confirmed. This packet follows the persistent-hot comparison in
 `dev-xgmi-peer-hot-mi300x-2026-09-19`, which measured roughly 14.3 ms KFD versus
 30 us HSA and 37 us HIP for a one-MiB peer copy.
+
+## Results
+
+Source commit: `b44409e2fe94c547c887b64db9dedd3d90b2c5f5`, signed and published
+to both remotes before execution. The KFD ELF SHA-256 was
+`8d0ab80661955fad30a5b1a8cbbb00197affc08ef81def53a19149482dfbaaa7`, unchanged
+through all four trials. The CPU seal SHA-256 is
+`e3e7cdded8dd13525430f7eaa2f3fff1025d278bfdda87580ea30ddac1e3199a`.
+
+One MiB, depth one, ten warmups and thirty measured samples per direction:
+
+| Trial | Diagnostic | Forward Facade p50 (ms) | Reverse Facade p50 (ms) |
+| --- | --- | ---: | ---: |
+| 1 | off | 14.325887 | 14.306048 |
+| 2 | on | 14.265117 | 14.285578 |
+| 3 | on | 14.287971 | 14.308881 |
+| 4 | off | 14.321481 | 14.287489 |
+
+Both instrumented trials contain the exact 82-record roster. The table below
+uses only their 120 measured calls, with both directions equally represented.
+Each mean is the arithmetic mean of raw nanoseconds; each share is the sum of
+that phase divided by the sum of backend totals over the same calls.
+
+| Host Phase | Mean (us) | Share of Backend Total |
+| --- | ---: | ---: |
+| Admission/validation | 2.134 | 0.015% |
+| Preparation | 0.355 | 0.002% |
+| Full opening currentness | 7067.333 | 49.423% |
+| Submission | 84.137 | 0.588% |
+| Waiting | 81.154 | 0.568% |
+| Full closing currentness | 7062.030 | 49.386% |
+| Settlement | 1.672 | 0.012% |
+| Unattributed gaps/clock overhead | 0.932 | 0.007% |
+| Backend total | 14299.747 | 100% |
+
+Opening plus closing account for 98.8085% of measured backend time. Submission
+plus waiting is about 165.291 us and includes its own validation; it is not an
+SDMA/device-duration measurement. The four priming calls took 278.995-279.958 ms
+and are excluded, as are all forty warmup calls. On/off facade medians remain
+near 14.3 ms in this small shared-host sample; no causal instrumentation-speedup
+or zero-overhead claim follows from that observation.
+
+The next performance target is the full fresh-currentness implementation, not
+additional depth-one admission tuning. Fixed-schema parsing can remove redundant
+allocations without eliding observations, but these measurements do not attribute
+time to individual syscalls or parsers and do not predict a specific speedup.
+
+The accepted packet contains 35 native command receipts, 24 endpoint observations
+(72 raw sysfs snapshots), and 15 local controller receipts. Complete collection
+preceded removal of
+`/home/harsh/fe2o3-xgmi-aggregate-attribution-20260919.d38d1d6699f4f3d9`;
+owned process/path absence and local payload removal are recorded. The earlier
+interrupted attempt is preserved separately in
+`dev-xgmi-aggregate-attribution-mi300x-2026-09-19-interrupted-2026-09-20` and is not
+included in these results.
 
 ## Protocol
 

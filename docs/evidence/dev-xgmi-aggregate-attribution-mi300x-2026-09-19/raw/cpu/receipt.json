@@ -1,0 +1,21 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-aggregate-attribution-cpu-2026-09-19/cpu.py",
+    "--live"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789929902886320594,
+  "group_absent": true,
+  "pid": 37167,
+  "started_ns": 1789929901911558490,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e6e4eb0e9be7d521431d8cd77b50c60c311ebe067ef491a59b7771b2b56162d8",
+  "timeout_seconds": 120
+}

@@ -66,5 +66,7 @@ It is not native fault injection. Dedicated executable tests of dual-recorder
 enable ordering and mixed ordinary/aggregate invalidation remain absent.
 The [MI300X protocol](evidence/dev-xgmi-aggregate-attribution-mi300x-2026-09-19/README.md)
 binds off/on/on/off trials to one signed source and ELF with fresh shared-host
-admission and owned cleanup. Until that packet completes, no native phase result
-or measured instrumentation-overhead conclusion is established.
+admission and owned cleanup. The completed packet attributes 98.8085% of measured
+hot backend time to full opening/closing
+currentness. Its on/off facade medians remain near 14.3 ms; this small shared-host
+sample does not establish causal instrumentation overhead or HIP/HSA parity.

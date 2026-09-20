@@ -1,0 +1,20 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-aggregate-attribution-mi300x-2026-09-19/test_native.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789929903207519101,
+  "group_absent": true,
+  "pid": 37218,
+  "started_ns": 1789929902887723386,
+  "stderr_sha256": "117fc4bdb296bd556625a81f37d10c4467b0be0b0c0d32ada08ebf919a64c424",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 60
+}

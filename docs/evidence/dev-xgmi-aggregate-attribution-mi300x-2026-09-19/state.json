@@ -1,0 +1,16 @@
+{
+  "absence_attempted": true,
+  "cleaned": true,
+  "cleanup_attempted": true,
+  "collected": true,
+  "create_attempted": true,
+  "created": true,
+  "failure": null,
+  "local_payload_absent": true,
+  "native_attempted": true,
+  "native_succeeded": true,
+  "remote_absent": true,
+  "schema": "fe2o3.xgmi-peer-hot-controller-state.v1",
+  "secondary_failures": [],
+  "uploaded": true
+}
