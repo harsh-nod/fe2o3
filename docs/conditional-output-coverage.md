@@ -144,9 +144,27 @@ output argument, one leading `usize` point coordinate, and one unconditional
 constant output store in a normally returning CPU block. The checker compares
 the original signature preimage, derived relations, CPU effect IR and selected
 write, source-root identities and bound proof subjects. It also checks the
-contract's coordinate, domain, precondition, value and numeric model. Signature
+contract's reference and GPU coordinates, domains, preconditions, values and
+numeric models in one charged operand scan. Both values must be the same checked
+CPU `u32` constant, both coordinates unsigned-64 point axis zero, and both
+domains and preconditions true under exact bitvector semantics. The exact GPU
+write must be value-bearing and agree with the selected view, index and value;
+a value-less access or a matching write at another occurrence cannot substitute.
+The existing source replay must match exactly one memory effect and one value.
+Those counts constrain the fragment; they are not a value-equivalence proof.
+Signature
 replay is separate from the effect-IR hash: changing the signature without
 changing that hash must not preserve acceptance. Unsupported shapes refuse.
+
+The shared interpretation is output `O`, its checked length `N`, and global-X
+index `i`. Under the retained premises, canonical coverage and ranked coverage
+each select one same-value store followed by normal return when `i < N`, and
+no store followed by normal return otherwise. The CPU point function is lifted
+only over `i < N`; its own store remains unconditional. Ranked views do not
+contain physical pointer or stride fields. Interpreting the store address as
+`base(O) + 4*i` comes from the checked canonical address relation, not comparison
+against invented ranked byte-address metadata. Concrete packed arguments,
+launch values and memory validity remain unjoined at this observer boundary.
 
 For the fill example, the four checked positions are:
 
@@ -276,3 +294,12 @@ both target profiles, tampered-reference refusals and inherited-budget limits,
 but always stops before a clean output stage. Runtime absence is a refusal,
 not an alternative positive result. Those compiler tests also do not execute
 on a GPU or qualify a tutorial kernel end to end.
+
+Separate inert operand tests reject changed GPU values, widths, signedness,
+numerical models, non-leaf/duplicate definitions and selected-write operands.
+Their matching subjects are only a request, never a fabricated signed proof:
+even the otherwise matching fixture must refuse. Some malformed graphs cannot
+reach this observer because earlier source/proof checks reject them. These
+tests therefore make no claim of a real-prover semantic counterexample or an
+admitted canonical/ranked mismatch. Actual protected positives and the original
+reference-input negatives remain separate tests.

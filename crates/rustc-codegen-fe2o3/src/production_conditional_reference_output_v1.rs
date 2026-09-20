@@ -43,7 +43,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use fe2o3_pliron::{
     ProductionConditionalOwnershipSiteV1, ProductionConditionalRankedAnalysisV1,
-    ProductionNumericalContractV2 as Numerical, ProductionRankedOperationV1 as Op,
+    ProductionEffectRefinementContractV2 as Contract, ProductionNumericalContractV2 as Numerical,
+    ProductionRankedBlockV1 as Block, ProductionRankedOperationV1 as Op,
     ProductionRankedValueV1 as Value, ProductionSemanticExpressionV2 as Expr,
     ProductionSemanticScalarTypeV2 as Ty,
 };
@@ -190,6 +191,12 @@ pub(crate) fn with_conditional_reference_output_v1<R>(
         .map_err(Error::Coverage)?;
     let ownership = checked_ownership_site(pending, coverage.output(), budget)?;
     let reference = check_cpu_reference(references, coverage.output(), logical_name, budget)?;
+    // Replay establishes the value relation; these counts restrict its cardinality.
+    budget.charge_work(4)?;
+    cpu_require(
+        translation.memory_effects() == 1 && translation.value_expressions() == 1,
+        "source effect/value count",
+    )?;
     use_join(ConditionalReferenceOutputV1 {
         translation: &translation,
         coverage: &coverage,
@@ -354,12 +361,45 @@ fn check_cpu_reference<'a>(
         DigestV1::from_untrusted_bytes(k.rustc_mir_body_sha256),
     )
     .map_err(|_| Error::Reference("subjects"))?;
+    check_constant_u32_operands_v1(
+        output.candidate().kernel().blocks(),
+        contract,
+        subjects,
+        bits as u32,
+        budget,
+    )?;
+    Ok(reference)
+}
+
+fn check_constant_u32_operands_v1(
+    blocks: &[Block],
+    contract: &Contract,
+    subjects: FunctionalRefinementSubjectsV2,
+    bits: u32,
+    budget: &mut Budget<'_>,
+) -> Result<(), Error> {
     let [coordinate] = contract.reference_coordinates() else {
         return Err(Error::Reference("reference rank"));
     };
+    budget.charge_work(16)?;
+    let [gpu_coordinate] = contract.gpu_coordinates() else {
+        return Err(Error::Reference("GPU rank"));
+    };
+    let gpu = contract.gpu_write_site();
+    let operation = blocks
+        .get(gpu.block() as usize)
+        .and_then(|block| block.operations().get(gpu.operation() as usize));
+    cpu_require(
+        matches!(operation, Some(Op::ValueAccess {
+            kind: dialect_kernel::AccessKindAttr::Write, view, indices, value,
+        }) if *view == contract.view()
+            && matches!(indices.as_slice(), [index] if contract.indices() == [*index])
+            && *value == contract.gpu_value()),
+        "GPU write",
+    )?;
     let expected = [
         (
-            *coordinate,
+            [*coordinate, *gpu_coordinate],
             Expr::Symbol {
                 symbol: 0,
                 scalar: Ty::Integer {
@@ -369,36 +409,39 @@ fn check_cpu_reference<'a>(
             },
         ),
         (
-            contract.reference_domain(),
+            [contract.reference_domain(), contract.gpu_domain()],
             Expr::Constant {
                 scalar: Ty::Bool,
                 bits: 1,
             },
         ),
         (
-            contract.reference_precondition(),
+            [
+                contract.reference_precondition(),
+                contract.gpu_precondition(),
+            ],
             Expr::Constant {
                 scalar: Ty::Bool,
                 bits: 1,
             },
         ),
         (
-            contract.reference_value(),
+            [contract.reference_value(), contract.gpu_value()],
             Expr::Constant {
                 scalar: Ty::Integer {
                     signed: false,
                     bits: 32,
                 },
-                bits: bits as u64,
+                bits: u64::from(bits),
             },
         ),
     ];
-    let (mut selected, mut seen) = (false, [false; 4]);
-    for block in output.candidate().kernel().blocks() {
+    let (mut selected, mut seen) = (false, [false; 8]);
+    for block in blocks {
         budget.charge_work(1)?;
         for op in block.operations() {
-            // Covers four fixed operand checks and any fixed-size subject comparison.
-            budget.charge_work(512)?;
+            // Covers eight fixed operand checks and the fixed-size subject comparison.
+            budget.charge_work(1024)?;
             let actual_subjects = match op {
                 Op::RequireEffectRefinement {
                     contract: row,
@@ -416,19 +459,25 @@ fn check_cpu_reference<'a>(
                 numerical_contract,
             } = op
             {
-                for (i, (operand, wanted)) in expected.iter().enumerate() {
+                for (i, (operand, wanted)) in expected
+                    .iter()
+                    .flat_map(|(operands, wanted)| {
+                        operands.iter().map(move |operand| (operand, wanted))
+                    })
+                    .enumerate()
+                {
                     if *operand != Value::Local(*result) {
                         continue;
                     }
                     cpu_require(
                         !seen[i]
                             && matches!(expression, Expr::Constant { .. } | Expr::Symbol { .. }),
-                        "reference definition",
+                        ["reference definition", "GPU definition"][i % 2],
                     )?;
                     cpu_require(
                         *numerical_contract == Numerical::ExactBitVectorOperatorCongruence
                             && expression == wanted,
-                        "reference expression",
+                        ["reference expression", "GPU expression"][i % 2],
                     )?;
                     seen[i] = true;
                 }
@@ -436,12 +485,12 @@ fn check_cpu_reference<'a>(
         }
     }
     // Terminal debit makes a one-short successful-path budget fail with Resource::Work.
-    budget.charge_work(8)?;
+    budget.charge_work(16)?;
     cpu_require(
         selected && seen.into_iter().all(|found| found),
         "missing contract operand",
     )?;
-    Ok(reference)
+    Ok(())
 }
 
 fn check_constant_point_effect<'a>(

@@ -424,7 +424,8 @@ fn inspect(
                     .any(|reference| { std::ptr::eq(reference, joined.reference_binding()) })
             );
             assert_eq!(joined.reference_write().argument, binding.source_argument());
-            assert!(report.memory_effects() > 0 && report.value_expressions() > 0);
+            assert_eq!(report.memory_effects(), 1);
+            assert_eq!(report.value_expressions(), 1);
             Ok((
                 report.memory_effects(),
                 report.value_expressions(),

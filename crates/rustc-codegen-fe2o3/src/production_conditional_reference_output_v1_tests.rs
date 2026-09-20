@@ -1,4 +1,7 @@
 //! Inert CPU IR tests only; no source, proof, runtime or launch authority.
+#[path = "production_conditional_reference_composition_v1_tests.rs"]
+mod composition;
+
 use super::*;
 use crate::reference_effect_v1::{
     ReferenceAssignmentV1, ReferenceBlockV1, ReferenceEffectIrV1, ReferenceFunctionIdentityV1,
