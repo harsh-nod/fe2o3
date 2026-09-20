@@ -471,6 +471,8 @@ For a reviewed interpreter installed elsewhere, configure the test process:
 ```sh
 FE2O3_TEST_NATIVE_PYTHON=/absolute/install/bin/python3.12 \
   cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 profile_command::
+FE2O3_TEST_NATIVE_PYTHON=/absolute/install/bin/python3.12 \
+  cargo test --locked -p cargo-fe2o3 --test profile_cli
 ```
 
 This runtime setting is compiled only into the test harness and is inherited
@@ -482,6 +484,15 @@ invalid override. The selected interpreter must also work from its sealed
 execution image; a launcher script or symlink is not an interpreter substitute.
 Production discovery, the public `--python` option and production pinning are
 unchanged. This test setting grants no profiling or hardware authority.
+
+The `profile_cli` integration fixtures capture this optional setting once per
+test process and forward it unchanged through the existing `--python` option
+for both plans and collections. Their first fixture requires a successful inert
+production plan before any test can interpret a command refusal as expected.
+An absent setting retains production default discovery; an invalid or missing
+interpreter fails fixture setup. Only the selected optional argument is cached:
+each real CLI invocation still performs its full production validation. The
+installed-ROCm qualification test retains its separate fixed prerequisites.
 
 Deletion guards are structural accident and substitution defenses, not
 authentication. Their random tokens correlate an interrupted creation with
