@@ -1,0 +1,21 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-currentness-capture-cpu-2026-09-20/test_cpu.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789937722060675644,
+  "group_absent": true,
+  "pid": 676436,
+  "started_ns": 1789937721890894915,
+  "stderr_sha256": "962a83f657707b9e13817170f8c3b3f28a47f971a7b367c3305cd4719891d22f",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}

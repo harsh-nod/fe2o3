@@ -1,0 +1,10 @@
+test_commands (__main__.Calibration.test_commands) ... ok
+test_inventory (__main__.Calibration.test_inventory) ... ok
+test_rosters (__main__.Calibration.test_rosters) ... ok
+test_test_output (__main__.Calibration.test_test_output) ... ok
+test_typed_binding (__main__.Calibration.test_typed_binding) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.049s
+
+OK

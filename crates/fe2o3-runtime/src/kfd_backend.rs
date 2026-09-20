@@ -104,6 +104,7 @@ pub(crate) use drain_capture::tests::counted as counted_allocations_for_test_v1;
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_batch_diagnostic::{
     KfdRuntimeXgmiAggregateCallDiagnosticsV1, KfdRuntimeXgmiAggregateCallObservationV1,
+    KfdRuntimeXgmiAggregateCurrentnessObservationV1,
 };
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_diagnostic::{KfdRuntimeXgmiCallObservationV1, KfdRuntimeXgmiDiagnosticCallV1};

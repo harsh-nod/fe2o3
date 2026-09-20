@@ -47,6 +47,8 @@ struct ProfileScript {
     close_error: bool,
     panic_at: Option<PanicStage>,
     panic_payload: Option<Box<PanicPayload>>,
+    #[cfg(feature = "hardware-diagnostic")]
+    detail_available: bool,
 }
 
 impl ProfileScript {
@@ -57,6 +59,8 @@ impl ProfileScript {
             close_error,
             panic_at: None,
             panic_payload: None,
+            #[cfg(feature = "hardware-diagnostic")]
+            detail_available: true,
         }
     }
 
@@ -129,6 +133,39 @@ impl Scope for ProfileScript {
     }
 }
 
+#[cfg(feature = "hardware-diagnostic")]
+impl CurrentnessFinish for ProfileScript {
+    type Detail = Option<(usize, bool)>;
+
+    fn finish_currentness(self, terminal: bool) -> Result<Self::Detail, Self::Error> {
+        let detail = self.detail_available.then_some((self.case, terminal));
+        self.finish(terminal)?;
+        Ok(detail)
+    }
+}
+
+fn execute_script<const PROFILE: bool, const CURRENTNESS: bool>(
+    scope: ProfileScript,
+    input: Input<Box<u64>, Box<u64>>,
+    deadline: Instant,
+    closing: &mut Option<Option<(usize, bool)>>,
+) -> (ScopedOperation<ProfileScript>, Result<(), ProfileError>) {
+    #[cfg(feature = "hardware-diagnostic")]
+    if CURRENTNESS {
+        return execute_profiled::<_, PROFILE>(
+            CurrentnessScope {
+                inner: scope,
+                closing,
+            },
+            input,
+            deadline,
+            &mut CallTimer::<PROFILE>::new(),
+        );
+    }
+    let _ = closing;
+    execute_profiled::<_, PROFILE>(scope, input, deadline, &mut CallTimer::<PROFILE>::new())
+}
+
 fn values(custody: &[Box<u64>]) -> Vec<u64> {
     custody.iter().map(|value| **value).collect()
 }
@@ -146,7 +183,7 @@ struct Outcome {
     calls: Vec<Call>,
 }
 
-fn run_case<const PROFILE: bool>(
+fn run_case<const PROFILE: bool, const CURRENTNESS: bool>(
     case: usize,
     close_error: bool,
     published: bool,
@@ -162,11 +199,12 @@ fn run_case<const PROFILE: bool>(
     } else {
         Input::Ready(custody)
     };
-    let (operation, closing) = execute_profiled::<_, PROFILE>(
+    let mut detail = None;
+    let (operation, closing) = execute_script::<PROFILE, CURRENTNESS>(
         ProfileScript::new(&transcript, case, close_error),
         input,
         deadline,
-        &mut CallTimer::<PROFILE>::new(),
+        &mut detail,
     );
     let (classification, error, custody) = match operation {
         Operation::Unpublished { error, requests } => ("unpublished", Some(error), requests),
@@ -208,6 +246,11 @@ fn run_case<const PROFILE: bool>(
         expected_calls.push(Call::Wait(expected_values, deadline));
     }
     expected_calls.push(Call::Close(matches!(effective_case, 1 | 2 | 4 | 5)));
+    assert_eq!(
+        detail,
+        (CURRENTNESS && !close_error)
+            .then_some(Some((case, matches!(effective_case, 1 | 2 | 4 | 5))))
+    );
     let transcript = transcript.borrow();
     assert_eq!(transcript.calls, expected_calls);
     assert!(
@@ -233,8 +276,8 @@ fn profiling_preserves_every_typed_outcome_close_error_and_custody_order() {
             for close_error in [false, true] {
                 for published in [false, true] {
                     assert_eq!(
-                        run_case::<false>(case, close_error, published, count, deadline),
-                        run_case::<true>(case, close_error, published, count, deadline),
+                        run_case::<false, false>(case, close_error, published, count, deadline),
+                        run_case::<true, false>(case, close_error, published, count, deadline),
                         "case={case} close_error={close_error} published={published} count={count}"
                     );
                 }
@@ -243,17 +286,19 @@ fn profiling_preserves_every_typed_outcome_close_error_and_custody_order() {
     }
 }
 
-fn retry<const PROFILE: bool>(deadline: Instant) -> Vec<Call> {
+fn retry<const PROFILE: bool, const CURRENTNESS: bool>(deadline: Instant) -> Vec<Call> {
     let transcript = Rc::new(RefCell::new(Transcript::default()));
     let requests: Vec<_> = [9, 4, 7].into_iter().map(Box::new).collect();
     let expected_addresses = addresses(&requests);
-    let (operation, closing) = execute_profiled::<_, PROFILE>(
+    let mut first_detail = None;
+    let (operation, closing) = execute_script::<PROFILE, CURRENTNESS>(
         ProfileScript::new(&transcript, 3, false),
         Input::Ready(requests),
         deadline,
-        &mut CallTimer::<PROFILE>::new(),
+        &mut first_detail,
     );
     assert_eq!(closing, Ok(()));
+    assert_eq!(first_detail, CURRENTNESS.then_some(Some((3, false))));
     let Operation::Retained { error, tickets } = operation else {
         panic!("timeout retains all published tickets")
     };
@@ -265,13 +310,16 @@ fn retry<const PROFILE: bool>(deadline: Instant) -> Vec<Call> {
         message: "retry must never submit".to_owned(),
         token: Box::new(99),
     }));
-    let (operation, closing) = execute_profiled::<_, PROFILE>(
+    let mut retry_detail = None;
+    let (operation, closing) = execute_script::<PROFILE, CURRENTNESS>(
         scope,
         Input::Published(tickets),
         deadline,
-        &mut CallTimer::<PROFILE>::new(),
+        &mut retry_detail,
     );
     assert_eq!(closing, Ok(()));
+    assert_eq!(retry_detail, CURRENTNESS.then_some(Some((6, false))));
+    assert_eq!(first_detail, CURRENTNESS.then_some(Some((3, false))));
     let Operation::Completed(completed) = operation else {
         panic!("retry completes all original tickets")
     };
@@ -297,14 +345,15 @@ fn profiling_preserves_timeout_retry_without_resubmission_or_deadline_extension(
         Call::Wait(vec![9, 4, 7], deadline),
         Call::Close(false),
     ];
-    assert_eq!(retry::<false>(deadline), expected);
-    assert_eq!(retry::<true>(deadline), expected);
+    assert_eq!(retry::<false, false>(deadline), expected);
+    assert_eq!(retry::<true, false>(deadline), expected);
 }
 
-fn panic_trace<const PROFILE: bool>(
+fn panic_trace<const PROFILE: bool, const CURRENTNESS: bool>(
     stage: PanicStage,
     published: bool,
     deadline: Instant,
+    case: usize,
 ) -> Vec<Call> {
     let transcript = Rc::new(RefCell::new(Transcript::default()));
     let custody: Vec<_> = [9, 4, 7].into_iter().map(Box::new).collect();
@@ -315,7 +364,7 @@ fn panic_trace<const PROFILE: bool>(
     });
     let payload_address = &*payload as *const PanicPayload;
     let token_address = &*payload.token as *const u64;
-    let mut scope = ProfileScript::new(&transcript, 6, false);
+    let mut scope = ProfileScript::new(&transcript, case, false);
     scope.panic_at = Some(stage);
     scope.panic_payload = Some(payload);
     let input = if published {
@@ -323,9 +372,11 @@ fn panic_trace<const PROFILE: bool>(
     } else {
         Input::Ready(custody)
     };
+    let mut detail = None;
     let result = catch_unwind(AssertUnwindSafe(|| {
-        execute_profiled::<_, PROFILE>(scope, input, deadline, &mut CallTimer::<PROFILE>::new())
+        execute_script::<PROFILE, CURRENTNESS>(scope, input, deadline, &mut detail)
     }));
+    assert_eq!(detail, None);
     let Err(payload) = result else {
         panic!("original scope panic must propagate")
     };
@@ -343,7 +394,7 @@ fn panic_trace<const PROFILE: bool>(
         expected.push(Call::Wait(vec![9, 4, 7], deadline));
     }
     if stage == PanicStage::Close {
-        expected.push(Call::Close(false));
+        expected.push(Call::Close(matches!(case, 1 | 2 | 4 | 5)));
     }
     let transcript = transcript.borrow();
     assert_eq!(transcript.calls, expected);
@@ -365,9 +416,77 @@ fn profiling_preserves_submit_wait_and_close_panic_payload_identity() {
                 continue;
             }
             assert_eq!(
-                panic_trace::<false>(stage, published, deadline),
-                panic_trace::<true>(stage, published, deadline)
+                panic_trace::<false, false>(stage, published, deadline, 6),
+                panic_trace::<true, false>(stage, published, deadline, 6)
             );
         }
     }
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+#[test]
+fn currentness_adapter_preserves_all_outcomes_close_errors_and_custody() {
+    let deadline = Instant::now();
+    for count in [1, 2, 63] {
+        for case in 0..7 {
+            for close_error in [false, true] {
+                for published in [false, true] {
+                    assert_eq!(
+                        run_case::<true, false>(case, close_error, published, count, deadline),
+                        run_case::<true, true>(case, close_error, published, count, deadline),
+                        "case={case} close_error={close_error} published={published} count={count}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+#[test]
+fn currentness_adapter_preserves_timeout_retry_and_absolute_deadline() {
+    let deadline = Instant::now();
+    assert_eq!(
+        retry::<true, false>(deadline),
+        retry::<true, true>(deadline)
+    );
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+#[test]
+fn currentness_adapter_preserves_panic_identity_without_publishing_detail() {
+    let deadline = Instant::now();
+    for stage in [PanicStage::Submit, PanicStage::Wait, PanicStage::Close] {
+        for published in [false, true] {
+            if published && stage == PanicStage::Submit {
+                continue;
+            }
+            for case in [5, 6] {
+                assert_eq!(
+                    panic_trace::<true, false>(stage, published, deadline, case),
+                    panic_trace::<true, true>(stage, published, deadline, case)
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+#[test]
+fn unavailable_detail_does_not_change_success_or_release_custody() {
+    let transcript = Rc::new(RefCell::new(Transcript::default()));
+    let mut scope = ProfileScript::new(&transcript, 6, false);
+    scope.detail_available = false;
+    let requests = vec![Box::new(9), Box::new(4)];
+    let original_addresses = addresses(&requests);
+    let mut detail = None;
+    let (operation, closing) =
+        execute_script::<true, true>(scope, Input::Ready(requests), Instant::now(), &mut detail);
+    assert_eq!(closing, Ok(()));
+    assert_eq!(detail, Some(None));
+    let Operation::Completed(completed) = operation else {
+        panic!("diagnostic validity must not change operation success")
+    };
+    assert_eq!(addresses(&completed), original_addresses);
+    assert_eq!(values(&completed), [9, 4]);
 }

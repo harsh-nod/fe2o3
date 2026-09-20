@@ -1,0 +1,4 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Finished `test` profile [optimized] target(s) in 3m 18s
+     Running unittests src/lib.rs (/dev/shm/fe2o3-link-parser-build-20260920.2LJm2Q0Q/target/x86_64-unknown-linux-gnu/debug/deps/fe2o3_runtime-4cc58f3e86658bda)

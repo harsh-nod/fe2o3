@@ -1,0 +1,5 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+   Compiling fe2o3-semantic-query v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-semantic-query)
+   Compiling cargo-fe2o3 v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/cargo-fe2o3)
+    Finished `test` profile [optimized] target(s) in 2m 09s
+     Running tests/unsafe_source_policy.rs (/dev/shm/fe2o3-link-parser-build-20260920.2LJm2Q0Q/target/debug/deps/unsafe_source_policy-8c64017031ea499a)

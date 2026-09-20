@@ -14,7 +14,7 @@ use fe2o3_runtime::{
 const CANARY_BYTES: usize = 32;
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_DEPTH: usize = 32;
-const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi|--aggregate-peer-batch|--aggregate-peer-batch-hot-only|--aggregate-peer-batch-hot-diagnose]";
+const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi|--aggregate-peer-batch|--aggregate-peer-batch-hot-only|--aggregate-peer-batch-hot-diagnose|--aggregate-peer-batch-hot-currentness-diagnose]";
 
 type BenchmarkResult<T> = Result<T, Box<dyn Error>>;
 type XgmiContextV1 = RuntimeContextV1<KfdNativeXgmiRuntimeBackendV1>;
@@ -32,6 +32,7 @@ enum ProgressModeV1 {
     AggregatePeerBatch,
     AggregatePeerBatchHotOnly,
     AggregatePeerBatchHotDiagnostic,
+    AggregatePeerBatchHotCurrentnessDiagnostic,
 }
 
 fn facade_error(error: impl Debug) -> Box<dyn Error> {
@@ -84,6 +85,12 @@ fn progress_mode(args: &[String]) -> BenchmarkResult<ProgressModeV1> {
         "--aggregate-peer-batch-hot-diagnose" => Err(
             "--aggregate-peer-batch-hot-diagnose requires the hardware-diagnostic feature".into(),
         ),
+        "--aggregate-peer-batch-hot-currentness-diagnose" if cfg!(feature = "hardware-diagnostic") => {
+            Ok(ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic)
+        }
+        "--aggregate-peer-batch-hot-currentness-diagnose" => Err(
+            "--aggregate-peer-batch-hot-currentness-diagnose requires the hardware-diagnostic feature".into(),
+        ),
         _ => Err(USAGE.into()),
     }
 }
@@ -93,7 +100,8 @@ fn valid_depth(mode: ProgressModeV1, depth: usize) -> bool {
         ProgressModeV1::Ordinary | ProgressModeV1::Diagnostic => MAX_DEPTH,
         ProgressModeV1::AggregatePeerBatch => MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1,
         ProgressModeV1::AggregatePeerBatchHotOnly
-        | ProgressModeV1::AggregatePeerBatchHotDiagnostic => 1,
+        | ProgressModeV1::AggregatePeerBatchHotDiagnostic
+        | ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic => 1,
     };
     depth != 0 && depth <= maximum
 }
@@ -104,13 +112,16 @@ fn is_aggregate_mode(mode: ProgressModeV1) -> bool {
         ProgressModeV1::AggregatePeerBatch
             | ProgressModeV1::AggregatePeerBatchHotOnly
             | ProgressModeV1::AggregatePeerBatchHotDiagnostic
+            | ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic
     )
 }
 
 fn includes_remap_phase(mode: ProgressModeV1) -> bool {
     !matches!(
         mode,
-        ProgressModeV1::AggregatePeerBatchHotOnly | ProgressModeV1::AggregatePeerBatchHotDiagnostic
+        ProgressModeV1::AggregatePeerBatchHotOnly
+            | ProgressModeV1::AggregatePeerBatchHotDiagnostic
+            | ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic
     )
 }
 
@@ -118,7 +129,8 @@ fn report_schema(mode: ProgressModeV1) -> &'static str {
     match mode {
         ProgressModeV1::AggregatePeerBatch => "fe2o3.xgmi-peer-aggregate-benchmark.v1",
         ProgressModeV1::AggregatePeerBatchHotOnly
-        | ProgressModeV1::AggregatePeerBatchHotDiagnostic => {
+        | ProgressModeV1::AggregatePeerBatchHotDiagnostic
+        | ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic => {
             "fe2o3.xgmi-peer-aggregate-hot-only-benchmark.v1"
         }
         ProgressModeV1::Ordinary | ProgressModeV1::Diagnostic => "fe2o3.xgmi-peer-benchmark.v1",
@@ -160,9 +172,70 @@ fn diagnostic_label(enabled: bool) -> &'static str {
 fn aggregate_diagnostic_label(mode: ProgressModeV1) -> &'static str {
     if mode == ProgressModeV1::AggregatePeerBatchHotDiagnostic {
         " diagnostic=aggregate-host-attribution"
+    } else if mode == ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic {
+        " diagnostic=aggregate-currentness-attribution"
     } else {
         ""
     }
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+fn currentness_row(
+    index: usize,
+    record: fe2o3_runtime::KfdRuntimeXgmiAggregateCurrentnessObservationV1,
+) -> String {
+    use std::fmt::Write;
+    let ns = |value: Option<u64>| {
+        value.map_or_else(|| "unavailable".to_owned(), |value| value.to_string())
+    };
+    let aggregate = record.aggregate;
+    let host = aggregate.host;
+    let mut row = format!(
+        "schema=fe2o3.xgmi-aggregate-currentness-attribution.v1 backend=kfd ordinal={} backend_submission={} source_uid={:016x} destination_uid={:016x} admission_validation_ns={} preparation_ns={} opening_currentness_ns={} submission_ns={} wait_ns={} closing_currentness_ns={} settlement_ns={} total_ns={}",
+        index,
+        aggregate.backend_submission,
+        aggregate.source_device,
+        aggregate.destination_device,
+        ns(host.admission_validation_ns),
+        ns(host.preparation_ns),
+        ns(host.opening_currentness_ns),
+        ns(host.submission_ns),
+        ns(host.wait_ns),
+        ns(host.closing_currentness_ns),
+        ns(host.settlement_ns),
+        ns(host.total_ns)
+    );
+    for (prefix, pair) in [("opening", record.opening), ("closing", record.closing)] {
+        for (name, value) in [
+            ("source_before_ns", pair.source_before_ns),
+            ("peer_before_ns", pair.peer_before_ns),
+            ("topology_discovery_ns", pair.topology_discovery_ns),
+            ("route_and_equality_ns", pair.route_and_equality_ns),
+            ("source_after_ns", pair.source_after_ns),
+            ("peer_after_ns", pair.peer_after_ns),
+            ("pair_total_ns", pair.total_ns),
+            ("topology_tree_ns", pair.topology.topology_tree_ns),
+            (
+                "topology_initial_identity_ns",
+                pair.topology.initial_identity_ns,
+            ),
+            (
+                "topology_render_correlation_ns",
+                pair.topology.render_correlation_ns,
+            ),
+            (
+                "topology_closing_identity_ns",
+                pair.topology.closing_identity_ns,
+            ),
+            ("topology_total_ns", pair.topology.total_ns),
+        ] {
+            write!(&mut row, " {prefix}_{name}={}", ns(value)).expect("format into string");
+        }
+    }
+    row.push_str(
+        " authority=none teardown=explicit timing=backend-aggregate-currentness-host-only",
+    );
+    row
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -501,6 +574,8 @@ fn main() -> BenchmarkResult<()> {
     let diagnostic = mode == ProgressModeV1::Diagnostic;
     #[cfg(feature = "hardware-diagnostic")]
     let aggregate_diagnostic = mode == ProgressModeV1::AggregatePeerBatchHotDiagnostic;
+    #[cfg(feature = "hardware-diagnostic")]
+    let currentness_diagnostic = mode == ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic;
     let aggregate = is_aggregate_mode(mode);
     let unique_ids = [parse_unique_id(&args[0])?, parse_unique_id(&args[1])?];
     let copy_bytes: usize = args[2].parse()?;
@@ -523,7 +598,7 @@ fn main() -> BenchmarkResult<()> {
         None
     };
     #[cfg(feature = "hardware-diagnostic")]
-    let aggregate_diagnostic_calls = if aggregate_diagnostic {
+    let aggregate_diagnostic_calls = if aggregate_diagnostic || currentness_diagnostic {
         Some(aggregate_diagnostic_call_count(rounds, depth)?)
     } else {
         None
@@ -543,9 +618,12 @@ fn main() -> BenchmarkResult<()> {
                 .map_err(facade_error)?;
         }
         if let Some(expected) = aggregate_diagnostic_calls {
-            backend
-                .enable_xgmi_aggregate_diagnostics_v1(expected)
-                .map_err(facade_error)?;
+            if currentness_diagnostic {
+                backend.enable_xgmi_aggregate_currentness_diagnostics_v1(expected)
+            } else {
+                backend.enable_xgmi_aggregate_diagnostics_v1(expected)
+            }
+            .map_err(facade_error)?;
         }
         backend
     };
@@ -710,6 +788,16 @@ fn main() -> BenchmarkResult<()> {
         }
     }
 
+    #[cfg(feature = "hardware-diagnostic")]
+    if currentness_diagnostic {
+        let records = backend
+            .finish_xgmi_aggregate_currentness_diagnostics_v1()
+            .map_err(facade_error)?;
+        for (index, record) in records.into_iter().enumerate() {
+            println!("{}", currentness_row(index, record));
+        }
+    }
+
     if let Some((remap_forward_ns, remap_reverse_ns)) = remap_measurements {
         report_measurement(
             unique_ids,
@@ -845,6 +933,7 @@ mod tests {
         for mode in [
             ProgressModeV1::AggregatePeerBatchHotOnly,
             ProgressModeV1::AggregatePeerBatchHotDiagnostic,
+            ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic,
         ] {
             assert!(valid_depth(mode, 1));
             assert!(!valid_depth(mode, 0));
@@ -930,5 +1019,125 @@ mod tests {
         for (rounds, depth) in [(40, 0), (40, 2), (20_000, 1), (usize::MAX, 1)] {
             assert!(aggregate_diagnostic_call_count(rounds, depth).is_err());
         }
+    }
+
+    #[test]
+    fn currentness_flag_is_feature_gated_and_exclusive_before_native_open() {
+        let flag = "--aggregate-peer-batch-hot-currentness-diagnose";
+        let mut args = vec![String::new(); 6];
+        args.push(flag.into());
+        let parsed = progress_mode(&args);
+        if cfg!(feature = "hardware-diagnostic") {
+            assert_eq!(
+                parsed.unwrap(),
+                ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic
+            );
+        } else {
+            assert_eq!(
+                parsed.unwrap_err().to_string(),
+                format!("{flag} requires the hardware-diagnostic feature")
+            );
+        }
+        for other in [
+            "--diagnose-xgmi",
+            "--aggregate-peer-batch",
+            "--aggregate-peer-batch-hot-only",
+            "--aggregate-peer-batch-hot-diagnose",
+            flag,
+        ] {
+            args.push(other.into());
+            assert!(progress_mode(&args).is_err());
+            args.swap(6, 7);
+            assert!(progress_mode(&args).is_err());
+            args.swap(6, 7);
+            args.pop();
+        }
+    }
+
+    #[test]
+    fn currentness_mode_preserves_hot_only_summary_with_distinct_diagnostic_label() {
+        let mode = ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic;
+        assert!(is_aggregate_mode(mode));
+        assert!(!includes_remap_phase(mode));
+        assert_eq!(
+            report_schema(mode),
+            "fe2o3.xgmi-peer-aggregate-hot-only-benchmark.v1"
+        );
+        assert_eq!(
+            aggregate_diagnostic_label(mode),
+            " diagnostic=aggregate-currentness-attribution"
+        );
+    }
+
+    #[cfg(feature = "hardware-diagnostic")]
+    #[test]
+    fn currentness_rows_preserve_every_identity_and_distinct_nested_interval() {
+        use fe2o3_kfd::{
+            Gfx942TopologyDiscoveryDiagnosticsV1, Gfx942XgmiPairCurrentnessDiagnosticsV1,
+        };
+        use fe2o3_runtime::{
+            KfdRuntimeXgmiAggregateCallDiagnosticsV1, KfdRuntimeXgmiAggregateCallObservationV1,
+            KfdRuntimeXgmiAggregateCurrentnessObservationV1,
+        };
+        let pair = |base| Gfx942XgmiPairCurrentnessDiagnosticsV1 {
+            source_before_ns: Some(base),
+            peer_before_ns: Some(base + 1),
+            topology_discovery_ns: Some(base + 2),
+            route_and_equality_ns: Some(base + 3),
+            source_after_ns: Some(base + 4),
+            peer_after_ns: Some(base + 5),
+            total_ns: Some(base + 6),
+            topology: Gfx942TopologyDiscoveryDiagnosticsV1 {
+                topology_tree_ns: Some(base + 7),
+                initial_identity_ns: Some(base + 8),
+                render_correlation_ns: Some(base + 9),
+                closing_identity_ns: Some(base + 10),
+                total_ns: Some(base + 11),
+            },
+        };
+        // Deliberately distinct sentinels test formatting, not capture admission.
+        let mut record = KfdRuntimeXgmiAggregateCurrentnessObservationV1 {
+            aggregate: KfdRuntimeXgmiAggregateCallObservationV1 {
+                backend_submission: 77,
+                source_device: 0xabc,
+                destination_device: 0xdef,
+                host: KfdRuntimeXgmiAggregateCallDiagnosticsV1 {
+                    admission_validation_ns: Some(1),
+                    preparation_ns: Some(2),
+                    opening_currentness_ns: Some(3),
+                    submission_ns: Some(4),
+                    wait_ns: Some(5),
+                    closing_currentness_ns: Some(6),
+                    settlement_ns: Some(7),
+                    total_ns: Some(8),
+                },
+            },
+            opening: pair(101),
+            closing: pair(201),
+        };
+        let expected = concat!(
+            "schema=fe2o3.xgmi-aggregate-currentness-attribution.v1 backend=kfd ordinal=9 ",
+            "backend_submission=77 source_uid=0000000000000abc destination_uid=0000000000000def ",
+            "admission_validation_ns=1 preparation_ns=2 opening_currentness_ns=3 submission_ns=4 ",
+            "wait_ns=5 closing_currentness_ns=6 settlement_ns=7 total_ns=8 ",
+            "opening_source_before_ns=101 opening_peer_before_ns=102 opening_topology_discovery_ns=103 ",
+            "opening_route_and_equality_ns=104 opening_source_after_ns=105 opening_peer_after_ns=106 ",
+            "opening_pair_total_ns=107 opening_topology_tree_ns=108 opening_topology_initial_identity_ns=109 ",
+            "opening_topology_render_correlation_ns=110 opening_topology_closing_identity_ns=111 opening_topology_total_ns=112 ",
+            "closing_source_before_ns=201 closing_peer_before_ns=202 closing_topology_discovery_ns=203 ",
+            "closing_route_and_equality_ns=204 closing_source_after_ns=205 closing_peer_after_ns=206 ",
+            "closing_pair_total_ns=207 closing_topology_tree_ns=208 closing_topology_initial_identity_ns=209 ",
+            "closing_topology_render_correlation_ns=210 closing_topology_closing_identity_ns=211 closing_topology_total_ns=212 ",
+            "authority=none teardown=explicit timing=backend-aggregate-currentness-host-only",
+        );
+        assert_eq!(currentness_row(9, record), expected);
+        record.opening.topology.total_ns = None;
+        assert_eq!(
+            currentness_row(9, record),
+            expected.replace(
+                "opening_topology_total_ns=112",
+                "opening_topology_total_ns=unavailable"
+            )
+        );
     }
 }

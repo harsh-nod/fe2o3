@@ -1,0 +1,9 @@
+{
+  "docs/evidence/dev-sdma-direct-readback-cpu-2026-09-18/source.py": "a7a8b8e73aa1a0817e13f9e575369403ece42f4eb702fd1ec04d9bc57fcff953",
+  "docs/evidence/dev-xgmi-aggregate-attribution-cpu-2026-09-19/cpu.py": "a0b39f6821352fa3f62c9fc72484519cd7a27b4c65d54e1f77f13c44a6b23686",
+  "docs/evidence/dev-xgmi-currentness-capture-cpu-2026-09-20/PROTOCOL.md": "300c3d18044814cada423d16106fb37dfd7da7af1e5ea8b9076374eb160e635e",
+  "docs/evidence/dev-xgmi-currentness-capture-cpu-2026-09-20/cpu.py": "b34f615fb530d262ece95e0d5bad9d9db3f4c0f0219c467bd42d4eb3b83e336f",
+  "docs/evidence/dev-xgmi-currentness-capture-cpu-2026-09-20/test_cpu.py": "3ab1acb518f931153cf1008abc1bb84a3a21b6b1cbc7f40561ab7d524ccb7610",
+  "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py": "df740a80c83c94af02f7e7dfb1203dcf7c1eafbde0010e41219e4aac40b34bb7",
+  "docs/runtime-xgmi-currentness-capture-v1.md": "4d9ee29d3a58a9a7ffd30af0b9dfd063239a3d115fcc1989f2d722fe7c7ea361"
+}

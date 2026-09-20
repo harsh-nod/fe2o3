@@ -8,7 +8,7 @@ use super::{
     RuntimeBackendFailureV1,
 };
 #[cfg(feature = "hardware-diagnostic")]
-use fe2o3_kfd::Gfx942NativeXgmiSdmaQueueV1;
+use fe2o3_kfd::{Gfx942NativeXgmiSdmaQueueV1, Gfx942XgmiPairCurrentnessDiagnosticsV1};
 
 #[cfg(feature = "hardware-diagnostic")]
 const MAX_RECORDS: usize = 40_000;
@@ -31,6 +31,8 @@ const PHASE_COUNT: usize = 7;
 pub(super) struct CallTimer<const ENABLED: bool> {
     elapsed: [Option<u64>; PHASE_COUNT],
     visited: [bool; PHASE_COUNT],
+    #[cfg(feature = "hardware-diagnostic")]
+    pub(super) currentness: [Option<Gfx942XgmiPairCurrentnessDiagnosticsV1>; 2],
 }
 
 impl<const ENABLED: bool> CallTimer<ENABLED> {
@@ -38,6 +40,8 @@ impl<const ENABLED: bool> CallTimer<ENABLED> {
         Self {
             elapsed: [None; PHASE_COUNT],
             visited: [false; PHASE_COUNT],
+            #[cfg(feature = "hardware-diagnostic")]
+            currentness: [None; 2],
         }
     }
 
@@ -115,6 +119,51 @@ pub struct KfdRuntimeXgmiAggregateCallObservationV1 {
     pub host: KfdRuntimeXgmiAggregateCallDiagnosticsV1,
 }
 
+/// Joined host intervals for one successful aggregate call. Available only
+/// after complete teardown; nested intervals grant no execution authority.
+#[cfg(feature = "hardware-diagnostic")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdRuntimeXgmiAggregateCurrentnessObservationV1 {
+    pub aggregate: KfdRuntimeXgmiAggregateCallObservationV1,
+    pub opening: Gfx942XgmiPairCurrentnessDiagnosticsV1,
+    pub closing: Gfx942XgmiPairCurrentnessDiagnosticsV1,
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+enum Records {
+    Aggregate(Vec<KfdRuntimeXgmiAggregateCallObservationV1>),
+    Currentness(Vec<KfdRuntimeXgmiAggregateCurrentnessObservationV1>),
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+impl Records {
+    fn len(&self) -> usize {
+        match self {
+            Self::Aggregate(records) => records.len(),
+            Self::Currentness(records) => records.len(),
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        match self {
+            Self::Aggregate(records) => records.capacity(),
+            Self::Currentness(records) => records.capacity(),
+        }
+    }
+
+    fn is_currentness(&self) -> bool {
+        matches!(self, Self::Currentness(_))
+    }
+
+    #[cfg(test)]
+    fn aggregate(&self) -> &Vec<KfdRuntimeXgmiAggregateCallObservationV1> {
+        match self {
+            Self::Aggregate(records) => records,
+            Self::Currentness(_) => panic!("not aggregate records"),
+        }
+    }
+}
+
 #[cfg(feature = "hardware-diagnostic")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct CallIdentity {
@@ -127,7 +176,7 @@ pub(super) struct CallIdentity {
 pub(super) struct Recorder {
     devices: [u64; 2],
     expected: usize,
-    records: Vec<KfdRuntimeXgmiAggregateCallObservationV1>,
+    records: Records,
     last_submission: Option<u64>,
     pending: Option<CallIdentity>,
     invalid: bool,
@@ -152,13 +201,29 @@ fn valid_timing(value: KfdRuntimeXgmiAggregateCallDiagnosticsV1) -> bool {
 #[cfg(feature = "hardware-diagnostic")]
 impl Recorder {
     pub(super) fn new(devices: [u64; 2], expected: usize) -> Result<Self, &'static str> {
+        Self::with_currentness(devices, expected, false)
+    }
+
+    fn with_currentness(
+        devices: [u64; 2],
+        expected: usize,
+        currentness: bool,
+    ) -> Result<Self, &'static str> {
         if expected == 0 || expected > MAX_RECORDS {
             return Err("XGMI aggregate diagnostic requires 1..=40000 successful calls");
         }
-        let mut records = Vec::new();
-        records
-            .try_reserve_exact(expected)
-            .map_err(|_| "XGMI aggregate diagnostic record reservation")?;
+        fn reserve<T>(expected: usize) -> Result<Vec<T>, &'static str> {
+            let mut records = Vec::new();
+            records
+                .try_reserve_exact(expected)
+                .map_err(|_| "XGMI aggregate diagnostic record reservation")?;
+            Ok(records)
+        }
+        let records = if currentness {
+            Records::Currentness(reserve(expected)?)
+        } else {
+            Records::Aggregate(reserve(expected)?)
+        };
         Ok(Self {
             devices,
             expected,
@@ -198,6 +263,7 @@ impl Recorder {
         &mut self,
         identity: CallIdentity,
         observed: Option<KfdRuntimeXgmiAggregateCallDiagnosticsV1>,
+        currentness: Option<[Gfx942XgmiPairCurrentnessDiagnosticsV1; 2]>,
     ) {
         let Some(host) = observed else {
             self.invalid = true;
@@ -206,6 +272,16 @@ impl Recorder {
         if self.invalid
             || self.pending != Some(identity)
             || !valid_timing(host)
+            || !match (&self.records, currentness) {
+                (Records::Aggregate(_), None) => true,
+                (Records::Currentness(_), Some([opening, closing])) => {
+                    opening.is_complete()
+                        && closing.is_complete()
+                        && matches!((opening.total_ns, host.opening_currentness_ns), (Some(inner), Some(outer)) if inner <= outer)
+                        && matches!((closing.total_ns, host.closing_currentness_ns), (Some(inner), Some(outer)) if inner <= outer)
+                }
+                _ => false,
+            }
             || self.records.len() >= self.expected
             || self.records.len() >= self.records.capacity()
         {
@@ -214,12 +290,27 @@ impl Recorder {
         }
         self.pending = None;
         self.last_submission = Some(identity.submission);
-        self.records.push(KfdRuntimeXgmiAggregateCallObservationV1 {
+        let aggregate = KfdRuntimeXgmiAggregateCallObservationV1 {
             backend_submission: identity.submission,
             source_device: self.devices[identity.direction],
             destination_device: self.devices[1 - identity.direction],
             host,
-        });
+        };
+        match &mut self.records {
+            Records::Aggregate(records) => records.push(aggregate),
+            Records::Currentness(records) => {
+                let [opening, closing] = currentness.expect("validated currentness intervals");
+                records.push(KfdRuntimeXgmiAggregateCurrentnessObservationV1 {
+                    aggregate,
+                    opening,
+                    closing,
+                });
+            }
+        }
+    }
+
+    pub(super) fn is_currentness(&self) -> bool {
+        self.records.is_currentness()
     }
 
     pub(super) fn invalidate(&mut self) {
@@ -238,6 +329,20 @@ fn take_records(
     shutdown: bool,
     quiescent: bool,
 ) -> Result<Vec<KfdRuntimeXgmiAggregateCallObservationV1>, KfdRuntimeBackendErrorKindV1> {
+    match take_storage(slot, terminal, shutdown, quiescent, false)? {
+        Records::Aggregate(records) => Ok(records),
+        Records::Currentness(_) => unreachable!("validated recorder mode"),
+    }
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+fn take_storage(
+    slot: &mut Option<Recorder>,
+    terminal: bool,
+    shutdown: bool,
+    quiescent: bool,
+    currentness: bool,
+) -> Result<Records, KfdRuntimeBackendErrorKindV1> {
     if terminal {
         return Err(KfdRuntimeBackendErrorKindV1::Terminal);
     }
@@ -247,6 +352,9 @@ fn take_records(
     let recorder = slot
         .as_ref()
         .ok_or(KfdRuntimeBackendErrorKindV1::Unsupported)?;
+    if recorder.is_currentness() != currentness {
+        return Err(KfdRuntimeBackendErrorKindV1::Unsupported);
+    }
     if !recorder.complete() {
         return Err(KfdRuntimeBackendErrorKindV1::InvalidLaunch);
     }
@@ -269,6 +377,23 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         &mut self,
         expected_calls: usize,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.enable_aggregate_diagnostics(expected_calls, false)
+    }
+
+    /// Enables joined opening/closing full-currentness intervals under the
+    /// same bounded, success-only, depth-one rules as aggregate attribution.
+    pub fn enable_xgmi_aggregate_currentness_diagnostics_v1(
+        &mut self,
+        expected_calls: usize,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.enable_aggregate_diagnostics(expected_calls, true)
+    }
+
+    fn enable_aggregate_diagnostics(
+        &mut self,
+        expected_calls: usize,
+        currentness: bool,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         if self.xgmi_aggregate_diagnostic.is_some()
             || self.xgmi_diagnostic.is_some()
@@ -285,8 +410,12 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             .descriptions
             .each_ref()
             .map(|device| device.backend_device);
-        let recorder = Recorder::new(devices, expected_calls)
-            .map_err(|error| Self::rejected(KfdRuntimeBackendErrorKindV1::Capacity, error))?;
+        let recorder = if currentness {
+            Recorder::with_currentness(devices, expected_calls, true)
+        } else {
+            Recorder::new(devices, expected_calls)
+        }
+        .map_err(|error| Self::rejected(KfdRuntimeBackendErrorKindV1::Capacity, error))?;
         self.xgmi_aggregate_diagnostic = Some(recorder);
         Ok(())
     }
@@ -299,6 +428,40 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         Vec<KfdRuntimeXgmiAggregateCallObservationV1>,
         RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
     > {
+        let (terminal, quiescent) = self.aggregate_diagnostic_teardown_state();
+        take_records(
+            &mut self.xgmi_aggregate_diagnostic,
+            terminal,
+            self.shutdown,
+            quiescent,
+        )
+        .map_err(Self::aggregate_diagnostic_failure)
+    }
+
+    /// Takes the complete joined capture only after logical and native teardown.
+    /// Calling the wrong extractor leaves the capture available to its own mode.
+    pub fn finish_xgmi_aggregate_currentness_diagnostics_v1(
+        &mut self,
+    ) -> Result<
+        Vec<KfdRuntimeXgmiAggregateCurrentnessObservationV1>,
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        let (terminal, quiescent) = self.aggregate_diagnostic_teardown_state();
+        match take_storage(
+            &mut self.xgmi_aggregate_diagnostic,
+            terminal,
+            self.shutdown,
+            quiescent,
+            true,
+        )
+        .map_err(Self::aggregate_diagnostic_failure)?
+        {
+            Records::Currentness(records) => Ok(records),
+            Records::Aggregate(_) => unreachable!("validated recorder mode"),
+        }
+    }
+
+    fn aggregate_diagnostic_teardown_state(&self) -> (bool, bool) {
         let terminal = self.terminal
             || self
                 .queue_creation_roots
@@ -311,31 +474,29 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 .any(Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1);
         let quiescent = self.queues.iter().all(Option::is_none)
             && self.logical_resource_counts().permits_shutdown();
-        take_records(
-            &mut self.xgmi_aggregate_diagnostic,
-            terminal,
-            self.shutdown,
-            quiescent,
-        )
-        .map_err(|kind| {
-            let detail = match kind {
-                KfdRuntimeBackendErrorKindV1::Terminal => {
-                    "terminal XGMI aggregate capture is unavailable"
-                }
-                KfdRuntimeBackendErrorKindV1::Busy => {
-                    "XGMI aggregate diagnosis requires complete logical and native teardown"
-                }
-                KfdRuntimeBackendErrorKindV1::Unsupported => {
-                    "XGMI aggregate diagnosis was not enabled or was already consumed"
-                }
-                _ => "XGMI aggregate diagnostic capture is incomplete or invalid",
-            };
-            if kind == KfdRuntimeBackendErrorKindV1::Terminal {
-                RuntimeBackendFailureV1::Terminal(KfdRuntimeBackendErrorV1::new(kind, detail))
-            } else {
-                Self::rejected(kind, detail)
+        (terminal, quiescent)
+    }
+
+    fn aggregate_diagnostic_failure(
+        kind: KfdRuntimeBackendErrorKindV1,
+    ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
+        let detail = match kind {
+            KfdRuntimeBackendErrorKindV1::Terminal => {
+                "terminal XGMI aggregate capture is unavailable"
             }
-        })
+            KfdRuntimeBackendErrorKindV1::Busy => {
+                "XGMI aggregate diagnosis requires complete logical and native teardown"
+            }
+            KfdRuntimeBackendErrorKindV1::Unsupported => {
+                "XGMI aggregate diagnosis was not enabled or was already consumed"
+            }
+            _ => "XGMI aggregate diagnostic capture is incomplete or invalid",
+        };
+        if kind == KfdRuntimeBackendErrorKindV1::Terminal {
+            RuntimeBackendFailureV1::Terminal(KfdRuntimeBackendErrorV1::new(kind, detail))
+        } else {
+            Self::rejected(kind, detail)
+        }
     }
 }
 
@@ -452,25 +613,26 @@ mod tests {
     #[cfg(feature = "hardware-diagnostic")]
     fn record(recorder: &mut Recorder, id: CallIdentity) {
         assert!(recorder.begin(id, 1));
-        recorder.finish(id, Some(timing()));
+        recorder.finish(id, Some(timing()), None);
     }
 
     #[cfg(feature = "hardware-diagnostic")]
     #[test]
     fn recorder_preallocates_exact_roster_and_preserves_identity_order() {
         let mut recorder = Recorder::new([71, 93], 3).unwrap();
-        let pointer = recorder.records.as_ptr();
+        let pointer = recorder.records.aggregate().as_ptr();
         let capacity = recorder.records.capacity();
         for submission in [4, 7, 11] {
             record(&mut recorder, identity(submission));
         }
         assert!(recorder.complete());
-        assert_eq!(recorder.records.as_ptr(), pointer);
+        assert_eq!(recorder.records.aggregate().as_ptr(), pointer);
         assert_eq!(recorder.records.capacity(), capacity);
         assert!(capacity >= 3);
         assert_eq!(
             recorder
                 .records
+                .aggregate()
                 .iter()
                 .map(|record| record.backend_submission)
                 .collect::<Vec<_>>(),
@@ -478,14 +640,14 @@ mod tests {
         );
         assert_eq!(
             (
-                recorder.records[1].source_device,
-                recorder.records[1].destination_device
+                recorder.records.aggregate()[1].source_device,
+                recorder.records.aggregate()[1].destination_device
             ),
             (93, 71)
         );
         assert!(!recorder.begin(identity(12), 1));
         assert!(!recorder.complete());
-        assert_eq!(recorder.records.as_ptr(), pointer);
+        assert_eq!(recorder.records.aggregate().as_ptr(), pointer);
         assert_eq!(recorder.records.capacity(), capacity);
     }
 
@@ -541,13 +703,13 @@ mod tests {
             let id = identity(5);
             assert!(recorder.begin(id, 1));
             match case {
-                0 => recorder.finish(id, None),
-                1 => recorder.finish(identity(6), Some(timing())),
+                0 => recorder.finish(id, None, None),
+                1 => recorder.finish(identity(6), Some(timing()), None),
                 2 => assert!(!recorder.begin(id, 1)),
                 _ => {}
             }
             assert!(!recorder.complete());
-            assert!(recorder.records.is_empty());
+            assert_eq!(recorder.records.len(), 0);
         }
     }
 
@@ -574,7 +736,7 @@ mod tests {
             let mut recorder = Recorder::new([1, 2], 1).unwrap();
             let id = identity(3);
             assert!(recorder.begin(id, 1));
-            recorder.finish(id, Some(value));
+            recorder.finish(id, Some(value), None);
             assert!(!recorder.complete());
         }
         assert!(Recorder::new([1, 2], 0).is_err());
@@ -607,3 +769,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "hardware-diagnostic"))]
+mod currentness_tests;

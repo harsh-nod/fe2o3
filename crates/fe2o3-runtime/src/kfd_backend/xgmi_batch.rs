@@ -425,6 +425,123 @@ impl Scope for Gfx942NativeXgmiSdmaBatchV1<'_> {
     }
 }
 
+#[cfg(feature = "hardware-diagnostic")]
+trait CurrentnessFinish: Scope {
+    type Detail;
+    fn finish_currentness(self, terminal: bool) -> Result<Self::Detail, Self::Error>;
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+impl CurrentnessFinish for Gfx942NativeXgmiSdmaBatchV1<'_> {
+    type Detail = fe2o3_kfd::Gfx942XgmiPairCurrentnessDiagnosticsV1;
+
+    fn finish_currentness(self, terminal: bool) -> Result<Self::Detail, Self::Error> {
+        if terminal {
+            self.finish_terminal_currentness_diagnostic_v1()
+        } else {
+            self.finish_currentness_diagnostic_v1()
+        }
+    }
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+struct CurrentnessScope<'a, S: CurrentnessFinish> {
+    inner: S,
+    closing: &'a mut Option<S::Detail>,
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+impl<S: CurrentnessFinish> Scope for CurrentnessScope<'_, S> {
+    type Request = S::Request;
+    type Ticket = S::Ticket;
+    type Completed = S::Completed;
+    type Error = S::Error;
+
+    fn submit(
+        &mut self,
+        requests: Vec<Self::Request>,
+    ) -> Result<Vec<Self::Ticket>, ScopedOperation<Self>> {
+        self.inner.submit(requests)
+    }
+
+    fn wait(&mut self, tickets: Vec<Self::Ticket>, deadline: Instant) -> ScopedOperation<Self> {
+        self.inner.wait(tickets, deadline)
+    }
+
+    fn is_timeout(error: &Self::Error) -> bool {
+        S::is_timeout(error)
+    }
+
+    fn finish(self, terminal: bool) -> Result<(), Self::Error> {
+        let Self { inner, closing } = self;
+        let detail = inner.finish_currentness(terminal)?;
+        *closing = Some(detail);
+        Ok(())
+    }
+}
+
+type NativeOperation = Operation<
+    Gfx942XgmiSdmaCopyRequestV1,
+    Gfx942SdmaCopyTicketV1,
+    Gfx942XgmiCompletedCopyV1,
+    Gfx942SdmaErrorV1,
+>;
+type NativeAttempt = Result<
+    (NativeOperation, Result<(), Gfx942SdmaErrorV1>),
+    (Gfx942SdmaErrorV1, Vec<Gfx942XgmiSdmaCopyRequestV1>),
+>;
+
+fn open_and_execute<const PROFILE: bool, const CURRENTNESS: bool>(
+    queue: &mut Gfx942NativeXgmiSdmaQueueV1,
+    sessions: (&mut SharedGttMemorySessionV1, &mut SharedGttMemorySessionV1),
+    published: bool,
+    requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    deadline: Instant,
+    timer: &mut CallTimer<PROFILE>,
+) -> NativeAttempt {
+    let (source, destination) = sessions;
+    #[cfg(feature = "hardware-diagnostic")]
+    if CURRENTNESS {
+        return match timer.measure(Phase::Opening, || {
+            queue.begin_batch_currentness_diagnostic_v1(source, destination)
+        }) {
+            Ok((inner, opening)) => {
+                let mut closing = None;
+                let result = execute_profiled::<_, PROFILE>(
+                    CurrentnessScope {
+                        inner,
+                        closing: &mut closing,
+                    },
+                    if published {
+                        Input::Published(tickets)
+                    } else {
+                        Input::Ready(requests)
+                    },
+                    deadline,
+                    timer,
+                );
+                timer.currentness = [Some(opening), closing];
+                Ok(result)
+            }
+            Err(error) => Err((error, requests)),
+        };
+    }
+    match timer.measure(Phase::Opening, || queue.begin_batch(source, destination)) {
+        Ok(scope) => Ok(execute_profiled::<_, PROFILE>(
+            scope,
+            if published {
+                Input::Published(tickets)
+            } else {
+                Input::Ready(requests)
+            },
+            deadline,
+            timer,
+        )),
+        Err(error) => Err((error, requests)),
+    }
+}
+
 impl KfdNativeXgmiRuntimeBackendV1 {
     fn batch_custody_is_valid(
         &self,
@@ -622,7 +739,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run_admitted_peer_batch<const PROFILE: bool>(
+    fn run_admitted_peer_batch<const PROFILE: bool, const CURRENTNESS: bool>(
         &mut self,
         admission: Admission,
         ids: Vec<u64>,
@@ -697,23 +814,19 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
         timer.end(Phase::Preparation, preparation_start);
         let result = {
-            let (source, destination) = Self::session_pair(&mut self.sessions, direction);
+            let sessions = Self::session_pair(&mut self.sessions, direction);
             let queue = self.queues[direction]
                 .as_mut()
                 .unwrap_or_else(|| std::process::abort());
-            match timer.measure(Phase::Opening, || queue.begin_batch(source, destination)) {
-                Ok(scope) => Ok(execute_profiled::<_, PROFILE>(
-                    scope,
-                    if admission.published {
-                        Input::Published(tickets)
-                    } else {
-                        Input::Ready(requests)
-                    },
-                    deadline,
-                    timer,
-                )),
-                Err(error) => Err((error, requests)),
-            }
+            open_and_execute::<PROFILE, CURRENTNESS>(
+                queue,
+                sessions,
+                admission.published,
+                requests,
+                tickets,
+                deadline,
+                timer,
+            )
         };
         let (operation, closing) = match result {
             Ok(result) => result,
@@ -839,7 +952,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
 }
 
 impl KfdNativeXgmiRuntimeBackendV1 {
-    fn progress_peer_copy_batch_profiled<const PROFILE: bool>(
+    fn progress_peer_copy_batch_profiled<const PROFILE: bool, const CURRENTNESS: bool>(
         &mut self,
         requested: &[u64],
         deadline: Instant,
@@ -914,7 +1027,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             recorder.invalidate();
         }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_admitted_peer_batch::<PROFILE>(
+            self.run_admitted_peer_batch::<PROFILE, CURRENTNESS>(
                 admission, ids, requests, tickets, deadline, timer,
             )
         }));
@@ -947,6 +1060,7 @@ impl RuntimePeerCopyBatchBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 .xgmi_aggregate_diagnostic
                 .as_mut()
                 .expect("armed recorder");
+            let currentness = recorder.is_currentness();
             let armed = match identity {
                 Some(identity) => recorder.begin(identity, requested.len()),
                 None => {
@@ -957,17 +1071,32 @@ impl RuntimePeerCopyBatchBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             if armed {
                 let start = Instant::now();
                 let mut timer = CallTimer::<true>::new();
-                let result =
-                    self.progress_peer_copy_batch_profiled(requested, deadline, &mut timer);
+                let result = if currentness {
+                    self.progress_peer_copy_batch_profiled::<true, true>(
+                        requested, deadline, &mut timer,
+                    )
+                } else {
+                    self.progress_peer_copy_batch_profiled::<true, false>(
+                        requested, deadline, &mut timer,
+                    )
+                };
+                let [opening, closing] = timer.currentness;
+                let detail = opening
+                    .zip(closing)
+                    .map(|(opening, closing)| [opening, closing]);
                 let observed = matches!(result, Ok(RuntimePeerCopyBatchPollV1::Succeeded))
                     .then(|| timer.finish(start));
                 self.xgmi_aggregate_diagnostic
                     .as_mut()
                     .expect("armed recorder")
-                    .finish(identity.expect("armed identity"), observed);
+                    .finish(identity.expect("armed identity"), observed, detail);
                 return result;
             }
         }
-        self.progress_peer_copy_batch_profiled(requested, deadline, &mut CallTimer::<false>::new())
+        self.progress_peer_copy_batch_profiled::<false, false>(
+            requested,
+            deadline,
+            &mut CallTimer::<false>::new(),
+        )
     }
 }
