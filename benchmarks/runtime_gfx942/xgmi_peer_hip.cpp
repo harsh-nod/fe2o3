@@ -2,6 +2,7 @@
 
 #include "native_benchmark_args.hpp"
 #include "xgmi_peer_benchmark_common.hpp"
+#include "xgmi_peer_segments_common.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -191,10 +192,89 @@ static bool validate_persistent_hot(
       fe2o3::runtime_gfx942::peer_destination_canary(direction), expected);
 }
 
+namespace peer = fe2o3::runtime_gfx942;
+
+struct OrderedHipDirection {
+  void *source = nullptr;
+  void *destination = nullptr;
+  hipStream_t stream{};
+};
+
+static void ordered_hip(hipError_t status) {
+  if (status != hipSuccess)
+    peer::segment_fail(hipGetErrorString(status));
+}
+
+static void run_ordered_hip(const int devices[2], const uint64_t ids[2],
+                            const peer::PeerSegmentPlan &plan) {
+  OrderedHipDirection directions[2];
+  for (size_t direction = 0; direction < 2; ++direction) {
+    auto &buffers = directions[direction];
+    const auto source = peer::segment_source(plan, direction);
+    const auto poison = peer::segment_destination(plan, direction, false);
+    ordered_hip(hipSetDevice(devices[direction]));
+    ordered_hip(hipMalloc(&buffers.source, plan.band_bytes));
+    ordered_hip(hipMemcpy(buffers.source, source.data(), source.size(), hipMemcpyHostToDevice));
+    ordered_hip(hipSetDevice(devices[1 - direction]));
+    ordered_hip(hipMalloc(&buffers.destination, plan.destination_bytes));
+    ordered_hip(hipMemcpy(buffers.destination, poison.data(), poison.size(), hipMemcpyHostToDevice));
+    ordered_hip(hipStreamCreateWithFlags(&buffers.stream, hipStreamNonBlocking));
+  }
+  peer::run_peer_segments("hip", "enqueue-list-stream-query", plan, ids,
+      [&](size_t direction, size_t band) {
+        auto &buffers = directions[direction];
+        ordered_hip(hipSetDevice(devices[1 - direction]));
+        const auto start = peer::PeerClock::now();
+        const auto deadline = start + peer::peer_list_timeout;
+        for (const auto &segment : plan.segments) {
+          peer::require_segment_deadline(deadline);
+          ordered_hip(hipMemcpyPeerAsync(
+              static_cast<uint8_t *>(buffers.destination) + band * plan.band_bytes + segment.destination_offset,
+              devices[1 - direction], static_cast<uint8_t *>(buffers.source) + segment.source_offset,
+              devices[direction], segment.bytes, buffers.stream));
+        }
+        for (;;) {
+          peer::require_segment_deadline(deadline);
+          const auto status = hipStreamQuery(buffers.stream);
+          if (status == hipSuccess)
+            break;
+          if (status != hipErrorNotReady)
+            ordered_hip(status);
+        }
+        const auto end = peer::PeerClock::now();
+        if (end >= deadline)
+          peer::segment_fail("late HIP completion");
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+      },
+      [&](size_t direction) {
+        auto &buffers = directions[direction];
+        auto observed = peer::segment_source(plan, direction);
+        const auto expected_source = observed;
+        ordered_hip(hipSetDevice(devices[direction]));
+        ordered_hip(hipMemcpy(observed.data(), buffers.source, observed.size(), hipMemcpyDeviceToHost));
+        if (observed != expected_source)
+          return false;
+        const auto expected = peer::segment_destination(plan, direction, true);
+        observed.resize(plan.destination_bytes);
+        ordered_hip(hipSetDevice(devices[1 - direction]));
+        ordered_hip(hipMemcpy(observed.data(), buffers.destination, observed.size(), hipMemcpyDeviceToHost));
+        return observed == expected;
+      },
+      [&] {
+        for (size_t i = 2; i-- > 0;) {
+          ordered_hip(hipSetDevice(devices[1 - i]));
+          ordered_hip(hipStreamDestroy(directions[i].stream));
+          ordered_hip(hipFree(directions[i].destination));
+          ordered_hip(hipSetDevice(devices[i]));
+          ordered_hip(hipFree(directions[i].source));
+        }
+      });
+}
+
 int main(int argc, char **argv) {
-  if (argc != 9 && argc != 10) {
+  if (argc != 9 && argc != 10 && argc != 11) {
     std::fprintf(stderr,
-                 "usage: xgmi-peer-hip <device-0> <device-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1> [--persistent-hot]\n");
+                 "usage: xgmi-peer-hip <device-0> <device-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1> [--persistent-hot | --ordered-segments <count>]\n");
     return 2;
   }
   int devices[2] = {};
@@ -217,6 +297,14 @@ int main(int argc, char **argv) {
   const size_t depth = workload.depth;
   const size_t warmups = workload.warmups;
   const size_t samples = workload.samples;
+  peer::PeerSegmentPlan segment_plan;
+  if (argc == 11) {
+    size_t count = 0;
+    if (std::strcmp(argv[9], "--ordered-segments") != 0 || depth != 1 ||
+        !peer::parse_size(argv[10], &count) ||
+        !peer::make_peer_segment_plan(bytes, count, warmups, samples, &segment_plan))
+      return 2;
+  }
 
   hipDeviceProp_t properties[2] = {};
   for (size_t index = 0; index < 2; ++index) {
@@ -237,6 +325,11 @@ int main(int argc, char **argv) {
     hipError_t status = hipDeviceEnablePeerAccess(devices[1 - source], 0);
     if (status != hipSuccess && status != hipErrorPeerAccessAlreadyEnabled)
       HIP_CHECK(status);
+  }
+
+  if (argc == 11) {
+    run_ordered_hip(devices, unique_ids, segment_plan);
+    return 0;
   }
 
   const size_t allocation_bytes =

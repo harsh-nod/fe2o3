@@ -3,6 +3,7 @@
 
 #include "native_benchmark_args.hpp"
 #include "xgmi_peer_benchmark_common.hpp"
+#include "xgmi_peer_segments_common.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -277,10 +278,118 @@ static bool validate_persistent_direction(
   return true;
 }
 
+namespace peer = fe2o3::runtime_gfx942;
+
+struct OrderedHsaDirection {
+  void *source = nullptr;
+  void *destination = nullptr;
+  uint8_t *staging = nullptr;
+  hsa_signal_t setup{};
+  std::vector<hsa_signal_t> completion;
+};
+
+static void ordered_hsa(hsa_status_t status) {
+  if (status != HSA_STATUS_SUCCESS)
+    peer::segment_fail("HSA API error");
+}
+
+static void ordered_hsa_wait(hsa_signal_t signal, peer::PeerClock::time_point deadline) {
+  for (;;) {
+    peer::require_segment_deadline(deadline);
+    const auto value = hsa_signal_load_scacquire(signal);
+    if (value == 0)
+      return;
+    if (value < 0)
+      peer::segment_fail("negative HSA completion");
+  }
+}
+
+static void ordered_hsa_setup_copy(void *destination, hsa_agent_t destination_agent,
+                                   const void *source, hsa_agent_t source_agent,
+                                   size_t bytes, hsa_signal_t signal) {
+  const auto deadline = peer::PeerClock::now() + peer::peer_list_timeout;
+  ordered_hsa(hsa_amd_memory_async_copy(destination, destination_agent, source,
+                                        source_agent, bytes, 0, nullptr, signal));
+  ordered_hsa_wait(signal, deadline);
+  hsa_signal_store_screlease(signal, 1);
+}
+
+static void run_ordered_hsa(const hsa_agent_t gpus[2], hsa_agent_t cpu,
+                            const PoolSelection pools[2], hsa_amd_memory_pool_t host_pool,
+                            const uint64_t ids[2], const peer::PeerSegmentPlan &plan) {
+  OrderedHsaDirection directions[2];
+  for (size_t direction = 0; direction < 2; ++direction) {
+    auto &buffers = directions[direction];
+    ordered_hsa(hsa_amd_memory_pool_allocate(pools[direction].pool, plan.band_bytes, 0, &buffers.source));
+    ordered_hsa(hsa_amd_memory_pool_allocate(pools[1 - direction].pool, plan.destination_bytes, 0, &buffers.destination));
+    ordered_hsa(hsa_amd_memory_pool_allocate(host_pool, plan.destination_bytes, 0,
+                                             reinterpret_cast<void **>(&buffers.staging)));
+    for (void *memory : {buffers.source, buffers.destination, static_cast<void *>(buffers.staging)})
+      ordered_hsa(hsa_amd_agents_allow_access(2, gpus, nullptr, memory));
+    ordered_hsa(hsa_signal_create(1, 0, nullptr, &buffers.setup));
+    buffers.completion.resize(plan.segments.size());
+    for (auto &signal : buffers.completion)
+      ordered_hsa(hsa_signal_create(1, 0, nullptr, &signal));
+    const auto source = peer::segment_source(plan, direction);
+    std::copy(source.begin(), source.end(), buffers.staging);
+    ordered_hsa_setup_copy(buffers.source, gpus[direction], buffers.staging, cpu, source.size(), buffers.setup);
+    const auto poison = peer::segment_destination(plan, direction, false);
+    std::copy(poison.begin(), poison.end(), buffers.staging);
+    ordered_hsa_setup_copy(buffers.destination, gpus[1 - direction], buffers.staging, cpu, poison.size(), buffers.setup);
+  }
+  peer::run_peer_segments("hsa", "enqueue-predecessor-chain-signal-load", plan, ids,
+      [&](size_t direction, size_t band) {
+        auto &buffers = directions[direction];
+        const auto start = peer::PeerClock::now();
+        const auto deadline = start + peer::peer_list_timeout;
+        // A negative predecessor may leave the tail blocked. Deadline failure
+        // retains the entire chain; never reset a failed predecessor to zero.
+        auto end = start;
+        const bool success = peer::execute_peer_segment_chain(plan.segments.size(),
+            [&](size_t i) {
+              const auto &segment = plan.segments[i];
+              return hsa_amd_memory_async_copy(
+                  static_cast<uint8_t *>(buffers.destination) + band * plan.band_bytes + segment.destination_offset,
+                  gpus[1 - direction], static_cast<uint8_t *>(buffers.source) + segment.source_offset,
+                  gpus[direction], segment.bytes, i == 0 ? 0 : 1,
+                  i == 0 ? nullptr : &buffers.completion[i - 1], buffers.completion[i]) == HSA_STATUS_SUCCESS;
+            },
+            [&](size_t i) { return hsa_signal_load_scacquire(buffers.completion[i]); },
+            [&](size_t i) { hsa_signal_store_screlease(buffers.completion[i], 1); },
+            [&] { return peer::PeerClock::now() < deadline; },
+            [&] { end = peer::PeerClock::now(); });
+        if (!success || end >= deadline)
+          peer::segment_fail("HSA chain failure or deadline");
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+      },
+      [&](size_t direction) {
+        auto &buffers = directions[direction];
+        const auto source = peer::segment_source(plan, direction);
+        ordered_hsa_setup_copy(buffers.staging, cpu, buffers.source, gpus[direction], source.size(), buffers.setup);
+        if (!std::equal(source.begin(), source.end(), buffers.staging))
+          return false;
+        const auto expected = peer::segment_destination(plan, direction, true);
+        ordered_hsa_setup_copy(buffers.staging, cpu, buffers.destination, gpus[1 - direction], expected.size(), buffers.setup);
+        return std::equal(expected.begin(), expected.end(), buffers.staging);
+      },
+      [&] {
+        for (size_t i = 2; i-- > 0;) {
+          auto &buffers = directions[i];
+          for (auto signal : buffers.completion)
+            ordered_hsa(hsa_signal_destroy(signal));
+          ordered_hsa(hsa_signal_destroy(buffers.setup));
+          ordered_hsa(hsa_amd_memory_pool_free(buffers.staging));
+          ordered_hsa(hsa_amd_memory_pool_free(buffers.destination));
+          ordered_hsa(hsa_amd_memory_pool_free(buffers.source));
+        }
+        ordered_hsa(hsa_shut_down());
+      });
+}
+
 int main(int argc, char **argv) {
-  if (argc != 9 && argc != 10) {
+  if (argc != 9 && argc != 10 && argc != 11) {
     std::fprintf(stderr,
-                 "usage: xgmi-peer-hsa <gpu-0> <gpu-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1> [--persistent-hot]\n");
+                 "usage: xgmi-peer-hsa <gpu-0> <gpu-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1> [--persistent-hot | --ordered-segments <count>]\n");
     return 2;
   }
   size_t indices[2] = {};
@@ -303,6 +412,14 @@ int main(int argc, char **argv) {
   const size_t depth = workload.depth;
   const size_t warmups = workload.warmups;
   const size_t samples = workload.samples;
+  peer::PeerSegmentPlan segment_plan;
+  if (argc == 11) {
+    size_t count = 0;
+    if (std::strcmp(argv[9], "--ordered-segments") != 0 || depth != 1 ||
+        !peer::parse_size(argv[10], &count) ||
+        !peer::make_peer_segment_plan(bytes, count, warmups, samples, &segment_plan))
+      return 2;
+  }
 
   HSA_CHECK(hsa_init());
   bool xnack_enabled = true;
@@ -354,6 +471,11 @@ int main(int argc, char **argv) {
   }
   if (!host_pool.found || !device_pools[0].found || !device_pools[1].found)
     return 2;
+
+  if (argc == 11) {
+    run_ordered_hsa(gpus, cpu, device_pools, host_pool.pool, unique_ids, segment_plan);
+    return 0;
+  }
 
   DirectionBuffers forward = allocate_direction(
       device_pools[0].pool, device_pools[1].pool, host_pool.pool, gpus,

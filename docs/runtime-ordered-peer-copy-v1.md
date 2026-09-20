@@ -142,11 +142,48 @@ matched warmup/sample counts, raw samples, and fresh shared-host admission.
 Report whole-list p50/p95 latency and useful bytes per second. List time divided
 by descriptor count is amortized time per segment, not measured individual
 segment latency. HIP/HSA do not provide fe2o3's full-currentness contract; the
-comparison must disclose that difference. No host access occurs between timed
-lists; initialization, readback, and completion-record cleanup are outside the
+comparison must disclose that difference. No host reads or writes of the source
+or destination allocation occur between timed lists; initialization, readback,
+and completion-record cleanup are outside the
 declared timed interval. A separate untimed overlap case checks last-writer
 ordering. The existing generic benchmark runner is not evidence that these
-workloads are matched and needs an explicit new mode.
+workloads are matched.
+
+### Benchmark Implementation
+
+`gfx942-runtime-xgmi-segments-benchmark` implements this separate workload.
+The C++ HIP/HSA comparators accept `--ordered-segments <count>` with depth one;
+the previous default and `--persistent-hot` modes are unchanged. All three
+retain pairs in both directions, execute prime/warmup/sample lists into distinct
+poisoned bands, and defer printing until full byte validation and explicit
+teardown. The 60-second per-list deadline includes admission/enqueue through
+observed completion. HSA signal reset and fe2o3 submission release are outside
+timing. A partial enqueue or ambiguous completion never triggers ordinary HSA
+resource teardown. Its negative predecessor can be detected only by tail timeout,
+not necessarily by early error observation.
+
+The standalone parser requires the exact complete band/direction roster and
+caller-supplied workload/device identities. It computes sample-only median p50
+and nearest-rank p95 separately by direction. Useful bytes divided by median
+nanoseconds is decimal GB/s of useful host-observed throughput, not physical link
+bandwidth. The disjoint performance plan cannot prove ordering; the separate
+overlap correctness tests remain necessary.
+
+CPU qualification passed three Rust example tests, warnings-denied Clippy,
+normal and UBSan C++ plan/custody tests, and Rust/C++ differential checks for all
+eight payload/count geometries. Parser adversarial tests reject partial rosters,
+incorrect controls, malformed durations and missing completion/teardown claims.
+These checks do not establish native performance or formal executable refinement.
+
+`benchmarks/runtime_gfx942/xgmi_peer_segments_campaign.py` is a bounded first
+campaign: 64 KiB useful data, 65 descriptors, two warmups and ten samples per
+direction, in KFD/HSA/HIP/HIP/HSA/KFD order. It requires a clean signed checkpoint,
+records a local musl release build, builds C++ comparators on the remote host,
+checks fresh physical endpoint identity/activity before every trial, performs
+settled and delayed postflight checks, collects byte-exact raw receipts, and
+removes only its private remote tree after successful collection. It is not an
+exclusive reservation or general performance acceptance. A collection failure
+retains the owned path for recovery instead of deleting its evidence.
 
 ## Remaining Work
 
