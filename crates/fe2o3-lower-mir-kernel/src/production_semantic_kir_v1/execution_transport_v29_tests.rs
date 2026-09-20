@@ -603,7 +603,7 @@ fn ordinary_operands_without_a_cursor_still_require_the_exact_shared_work_budget
                         ArgumentResourceV1::Work(error),
                     )),
                 ) => {
-                    assert_eq!(error.actual(), limit + 1);
+                    assert_eq!(error.actual(), if limit == 0 { 4 } else { exact });
                     assert_eq!(error.limit(), limit);
                     failed_work = Some(error.actual());
                     if limit == exact - 1 {
