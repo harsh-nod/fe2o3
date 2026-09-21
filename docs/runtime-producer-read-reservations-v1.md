@@ -268,6 +268,20 @@ passed. Direct regressions cover aliases, repeated returns, dirty tails, weak wr
 state and exact `4 * count + 2` commit work. Physical storage/allocation and unwind
 semantics remain separate obligations; this is not whole-wrapper refinement.
 
+The ordinary Rust journal and the proof now also compile the same declaration
+tokens. Lossless, independently anchored views preserve all five scalars, seven
+ordered vector contents and their complete entry/reference fields without a
+valid-state premise. Exact historical error embeddings leave
+`StorageAllocationFailed` explicitly unrepresented. The existing shared explicit
+key comparisons are verified against these actual value declarations. The
+[journal representation development packet](evidence/dev-journal-representation-2026-09-21/README.md)
+retains two 452/0 whole-crate positives, twelve explicitly scoped one-function
+negative controls, 850 unit tests and 27 doctests. Its 398 inherited obligations
+overlap earlier packets. Derived comparison traits, public status/evidence wrapper
+semantics, operation preservation of the content relation and physical storage
+remain distinct obligations; declaration/view correspondence is not full-runtime
+refinement.
+
 These are scoped logical/shared-body proofs with invariant-conditional custody composition,
 not whole-wrapper verification.
 Complete retained-chain coverage is preserved by logical enrollment and Begin;
@@ -287,7 +301,8 @@ Before enabling runtime admission, the remaining work is:
    retained-chain admission/Unknown transition and settlement scratch scan/staging/commit.
    Remaining bodies include construction/enrollment and sorting/search, Begin,
    stable/producer reader admission/release and unread guards.
-   Complete type/view correspondence, physical storage and fallible-allocation
+   Core journal declarations and content views are now shared and related, but
+   remaining type/trait/wrapper correspondence, physical storage and fallible-allocation
    contracts, and explicit normal/unwind semantics remain open before treating
    the logical lifecycle as full-wrapper refinement.
 2. Retain an exact Context event-to-producer writer/member binding and a distinct
