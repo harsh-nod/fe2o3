@@ -727,6 +727,11 @@
   "crates/fe2o3-kfd/src/target_debug_telemetry_v1.rs": {
     "block": 4
   },
+  "crates/fe2o3-kfd/src/topology/tests/directory_entries/allocation_counter.rs": {
+    "block": 4,
+    "function": 4,
+    "impl": 1
+  },
   "crates/fe2o3-kfd/tests/kfd_debug_trap_live.rs": {
     "block": 7
   },

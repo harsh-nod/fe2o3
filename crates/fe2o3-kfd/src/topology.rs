@@ -1827,7 +1827,25 @@ fn parse_named_properties_prechecked(
     Ok(result)
 }
 
-fn read_directory(path: &Path, maximum: usize) -> Result<Vec<(String, PathBuf)>, TopologyError> {
+struct DirectoryEntry {
+    path: PathBuf,
+}
+
+impl DirectoryEntry {
+    fn new(path: PathBuf) -> Result<Self, TopologyError> {
+        if path.file_name().and_then(|name| name.to_str()).is_none() {
+            return Err(TopologyError::InvalidEntryName(path));
+        }
+        Ok(Self { path })
+    }
+
+    fn name(&self) -> &str {
+        // Construction validates the basename; the owned path is never mutated.
+        self.path.file_name().unwrap().to_str().unwrap()
+    }
+}
+
+fn read_directory(path: &Path, maximum: usize) -> Result<Vec<DirectoryEntry>, TopologyError> {
     ensure_directory(path)?;
     #[cfg(test)]
     tests::host_diagnostics::io("read directory", path, maximum);
@@ -1841,37 +1859,36 @@ fn read_directory(path: &Path, maximum: usize) -> Result<Vec<(String, PathBuf)>,
                 maximum,
             });
         }
-        let entry_path = entry.path();
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| TopologyError::InvalidEntryName(entry_path.clone()))?;
-        result.push((name, entry_path));
+        result.push(DirectoryEntry::new(entry.path())?);
     }
-    result.sort_by(|left, right| left.0.cmp(&right.0));
+    // On Linux, validated UTF-8 basenames have the same byte and string order.
+    result.sort_by(|left, right| left.path.file_name().cmp(&right.path.file_name()));
     Ok(result)
 }
 
 fn validate_root(root: &Path) -> Result<(), TopologyError> {
     let expected = ["generation_id", "nodes", "system_properties"];
     let mut observed = BTreeSet::new();
-    for (name, path) in read_directory(root, MAX_ROOT_ENTRIES)? {
-        if !expected.contains(&name.as_str()) {
+    let entries = read_directory(root, MAX_ROOT_ENTRIES)?;
+    for entry in &entries {
+        let name = entry.name();
+        let path = &entry.path;
+        if !expected.contains(&name) {
             return Err(TopologyError::UnexpectedEntry {
                 path: root.to_path_buf(),
-                name,
+                name: name.to_owned(),
             });
         }
         if name == "nodes" {
-            ensure_directory(&path)?;
+            ensure_directory(path)?;
         } else {
-            let metadata = inspect(&path)?;
+            let metadata = inspect(path)?;
             if metadata.file_type().is_symlink() {
-                return Err(TopologyError::Symlink(path));
+                return Err(TopologyError::Symlink(path.clone()));
             }
             if !metadata.is_file() {
                 return Err(TopologyError::UnexpectedFileType {
-                    path,
+                    path: path.clone(),
                     expected: "regular file",
                 });
             }
@@ -1906,30 +1923,33 @@ fn validate_node_entries(path: &Path) -> Result<(), TopologyError> {
     const FILES: [&str; 3] = ["gpu_id", "name", "properties"];
     const DIRECTORIES: [&str; 5] = ["caches", "io_links", "mem_banks", "p2p_links", "perf"];
     let mut files = BTreeSet::new();
-    for (name, entry_path) in read_directory(path, MAX_NODE_ENTRIES)? {
-        let metadata = inspect(&entry_path)?;
+    let entries = read_directory(path, MAX_NODE_ENTRIES)?;
+    for entry in &entries {
+        let name = entry.name();
+        let entry_path = &entry.path;
+        let metadata = inspect(entry_path)?;
         if metadata.file_type().is_symlink() {
-            return Err(TopologyError::Symlink(entry_path));
+            return Err(TopologyError::Symlink(entry_path.clone()));
         }
-        if FILES.contains(&name.as_str()) {
+        if FILES.contains(&name) {
             if !metadata.is_file() {
                 return Err(TopologyError::UnexpectedFileType {
-                    path: entry_path,
+                    path: entry_path.clone(),
                     expected: "regular file",
                 });
             }
             files.insert(name);
-        } else if DIRECTORIES.contains(&name.as_str()) {
+        } else if DIRECTORIES.contains(&name) {
             if !metadata.is_dir() {
                 return Err(TopologyError::UnexpectedFileType {
-                    path: entry_path,
+                    path: entry_path.clone(),
                     expected: "directory",
                 });
             }
         } else {
             return Err(TopologyError::UnexpectedEntry {
                 path: path.to_path_buf(),
-                name,
+                name: name.to_owned(),
             });
         }
     }
@@ -1960,17 +1980,18 @@ fn parse_topology_links(
         });
     }
     let mut links = Vec::with_capacity(entries.len());
-    for (position, (name, path)) in entries.into_iter().enumerate() {
-        let index = parse_node_id(&name)?;
+    for (position, entry) in entries.into_iter().enumerate() {
+        let index = parse_node_id(entry.name())?;
+        let path = entry.path;
         if usize::try_from(index) != Ok(position) {
             return Err(TopologyError::NonCanonicalLinkIndex { path, index });
         }
         ensure_directory(&path)?;
         let contents = read_directory(&path, 2)?;
-        if contents.len() != 1 || contents[0].0 != "properties" {
+        if contents.len() != 1 || contents[0].name() != "properties" {
             return Err(TopologyError::UnexpectedLinkEntry(path));
         }
-        let properties_observation = inspect_regular(&contents[0].1)?;
+        let properties_observation = inspect_regular(&contents[0].path)?;
         let properties = link_properties::read(properties_observation)?;
         let node_from = properties.node_from;
         let node_to = properties.node_to;
@@ -1980,7 +2001,7 @@ fn parse_topology_links(
         let max_bandwidth = properties.max_bandwidth;
         if node_from != node_id || node_to == node_id {
             return Err(TopologyError::InvalidLinkEndpoint {
-                path: contents[0].1.clone(),
+                path: contents[0].path.clone(),
                 expected_from: node_id,
                 observed_from: node_from,
                 observed_to: node_to,
@@ -1989,7 +2010,7 @@ fn parse_topology_links(
         if min_latency > max_latency && max_latency != 0
             || min_bandwidth > max_bandwidth && max_bandwidth != 0
         {
-            return Err(TopologyError::InvalidLinkRange(contents[0].1.clone()));
+            return Err(TopologyError::InvalidLinkRange(contents[0].path.clone()));
         }
         links.push(KfdTopologyLinkV1 {
             set,
@@ -2366,16 +2387,16 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
     let nodes_identity = ensure_directory(&nodes_path)?;
     let mut node_directories = Vec::new();
     let mut node_ids = BTreeSet::new();
-    for (name, path) in read_directory(&nodes_path, MAX_TOPOLOGY_NODES)? {
-        let node_id = parse_node_id(&name)?;
+    for entry in read_directory(&nodes_path, MAX_TOPOLOGY_NODES)? {
+        let node_id = parse_node_id(entry.name())?;
         if !node_ids.insert(node_id) {
             return Err(TopologyError::DuplicateIdentity {
                 field: "node_id",
                 value: node_id.to_string(),
             });
         }
-        let identity = ensure_directory(&path)?;
-        node_directories.push((node_id, path, identity));
+        let identity = ensure_directory(&entry.path)?;
+        node_directories.push((node_id, entry.path, identity));
     }
     node_directories.sort_by_key(|entry| entry.0);
 
@@ -2480,6 +2501,7 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
 
 #[cfg(test)]
 pub(crate) mod tests {
+    mod directory_entries;
     pub(super) mod host_diagnostics;
     mod link_properties;
     mod node_properties;

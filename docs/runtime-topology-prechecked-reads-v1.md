@@ -64,3 +64,36 @@ GNU/musl qualification, strict clippy, feature configurations, unsafe inventory
 and source continuity belong to the accompanying CPU packet. Native provider
 compatibility, a fresh source-to-source performance comparison, matched HIP/HSA
 acceptance and machine-code/formal refinement remain separate requirements.
+
+## Path-Only Directory Entries
+
+Directory enumeration now retains one owned path per entry and borrows the
+validated UTF-8 basename from that path. The former representation retained both
+the path and a separately allocated filename. Root and node membership sets also
+borrow those names for the duration of their validation; error payloads still
+own their paths and names. No public API or topology observation changes.
+
+Entry errors still precede the entry-count limit, which precedes basename UTF-8
+validation. A non-UTF-8 parent path remains accepted when its basename is valid.
+Enumeration and stable lexicographic sorting still finish before child metadata
+inspection. Sorting compares Linux basename bytes, not numeric node/link IDs.
+In particular, `10` still sorts before `2`. All metadata, bounded reads,
+canonicalization, closing checks and fresh-discovery boundaries are retained.
+
+Focused CPU tests compare the reader against the frozen tuple-based reader from
+`87bfbc0f182497fbf6f5e5b9af58f83d90a681f8`, including ordered Rust I/O traces,
+bounds, Unicode names, invalid basenames and invalid parent encoding. Separate
+consumer tests pin root-versus-node unknown-entry/type precedence, missing/type
+errors, link count/index/content precedence and fresh membership/link changes.
+Existing complete-host diagnostic-mode differentials and prechecked-read race
+tests remain in the qualification surface; they are not old/new-reader proofs.
+
+A test-only transparent `System` allocator uses thread-local counters around
+only each reader call. For 0, 1, 3, 8, 17 and 64 entries, the regression asserts
+at least one fewer allocation/reallocation call per entry, with identical
+returned names and paths. Fixture setup, result conversion and assertions occur
+outside the measured scope. The counter is absent from non-test builds; its
+forwarding unsafe operations are listed in the source inventory. This is scoped
+CPU allocation evidence, not a native latency, bandwidth or formal-refinement
+claim. The historical currentness attribution does not establish the fraction
+of discovery time attributable to allocation.
