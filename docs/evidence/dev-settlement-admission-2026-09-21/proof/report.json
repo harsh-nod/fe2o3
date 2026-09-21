@@ -1,0 +1,13 @@
+{
+  "development_checks_passed": true,
+  "positive_obligations": 338,
+  "inherited_obligations": 321,
+  "negative_cases": 10,
+  "conditional_settlement_issuance_preserved": true,
+  "exact_settlement_preflight": true,
+  "exact_unknown_execution": true,
+  "settlement_commit_loop_refined": false,
+  "physical_capacity_binding_proved": false,
+  "rust_source_refinement_proved": false,
+  "native_or_performance_acceptance": false
+}

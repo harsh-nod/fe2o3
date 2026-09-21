@@ -1,0 +1,26 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "fe2o3-runtime-model"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790007058088762723,
+  "group_absent": true,
+  "pid": 4158485,
+  "started_ns": 1790007033916797204,
+  "stderr_sha256": "a1dbb7e85beaa27146536bb48044bc2b7acb09d46c8b91856f6df58b5b60d642",
+  "stdin_sha256": null,
+  "stdout_sha256": "6d9b05632cb588919ff6521a49ec1093043d950f8b8d857f7d133702d6ff8957",
+  "timeout_seconds": 300
+}

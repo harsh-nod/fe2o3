@@ -164,11 +164,31 @@ and 822 model unit tests plus 27 doctests. Its mandatory portable audit binds th
 exact regenerated inputs and receipts to Git objects. Counts include 289 inherited
 obligations and must not be summed across campaigns.
 
+`context_version_journal_settlement_v1.rs` adds exact logical retained-header,
+member, chain, return-capacity and settlement-preflight executors without a
+valid-state precondition. It also executes Unknown marking and its issued wrapper,
+including whole-state rejection and object-identical repeated Unknown marking.
+General conditional settlement and Unknown relations now preserve issuance/history,
+the exact Reserved count and all retained readers without a global-idle premise.
+The constructor witness reaches Pending through Begin, exercises accepted/rejected
+settlement preflight, and executes Unknown; it does not execute Success/NoEffect
+or derive their settlement relation from staging/commit. Capacity arguments remain
+observations, not proved bindings to live Rust `Vec::capacity()` values.
+Production has a journal-private immutable settlement preflight under the same
+exclusive borrow as commit. A 1,080-case fault matrix checks exact result/state,
+storage identity and indexed-access precedence; mixed-reader tests cover all target
+outcomes with all four unrelated producer statuses and a stable lease.
+The [settlement admission development packet](evidence/dev-settlement-admission-2026-09-21/README.md)
+retains two 338/0 whole-crate positives, ten exact 337/1 executable controls,
+823 model unit tests and 27 doctests, with mandatory exact-source/receipt auditing.
+Its 321 inherited obligations overlap earlier campaigns.
+
 These are conditional logical-execution proofs, not whole-wrapper verification.
 Complete retained-chain coverage is preserved by logical enrollment and Begin;
-composition of settlement with issuance/history remains to be established.
+settlement/issuance composition is established only for the exact transition
+relation, not yet for the executable staging/commit loop.
 Physical Vec storage,
-fallible allocation, settlement scratch/preflight execution, panic/unwind behavior,
+fallible allocation, settlement scratch/commit execution, panic/unwind behavior,
 and production Rust correspondence remain separate. Release bounds use an observed
 capacity argument, not a proved binding to Rust `Vec::capacity()`. The acquisition
 induction advances a hypothetical incarnation prefix; the concrete logical loop
@@ -177,11 +197,12 @@ intermediate machine state or atomicity under panic/unwind.
 
 Before enabling runtime admission, the remaining work is:
 
-1. Finish custody/issuance composition through settlement and Pending-to-Unknown
-   marking, preserving unrelated live readers without a global-idle premise.
-   Refine exact ordered settlement preflight and staging/commit, including
-   malformed-state errors and complete unchanged-on-rejection contents.
-   Establish production Rust correspondence for enrollment, Begin and the
+1. Connect successful settlement preflight to prestate-derived scratch plans and
+   sequential Success/NoEffect commit, deriving the exact settlement relation and
+   complete unchanged-on-rejection contents for the whole executor. Preserve
+   unrelated live readers without a global-idle premise.
+   Establish production Rust correspondence for enrollment, Begin, settlement,
+   Unknown marking and the
    proved logical admission/release and unread guards.
    Bind physical capacity and fallible allocation to those relations before
    treating the logical lifecycle as full-wrapper refinement.
