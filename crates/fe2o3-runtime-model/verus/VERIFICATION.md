@@ -104,6 +104,8 @@ with the same check order, backed by a ranked-fault oracle over 4,356 malformed
 cases and reader-wrapper precedence tests. The logical executor does not prove
 Rust source correspondence, physical storage or general pending-custody/reader
 preservation. This development root is not registered in the shared runner.
+Its [development packet](../../../docs/evidence/dev-begin-execution-2026-09-21/README.md)
+retains the standalone proof campaign and CPU receipts with a portable audit.
 
 The strong chain graph is a reachable-state premise, not a whole-arena check
 performed by Rust settlement. Begin-write and settlement composition

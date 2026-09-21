@@ -141,6 +141,8 @@ An independent ranked-fault oracle covers 4,356 paired malformed states and comp
 the full transaction and storage identity. Wrapper tests cover combined-reader
 rejection before raw writer/roster faults. These tests and the parallel logical
 executor are not a compiler-checked Rust correspondence proof.
+The [Begin development packet](evidence/dev-begin-execution-2026-09-21/README.md)
+retains whole-crate proof brackets, executable-body controls and CPU receipts.
 
 These are conditional logical-execution proofs, not whole-wrapper verification.
 Complete retained-chain coverage is preserved by logical enrollment, but its
@@ -156,8 +158,11 @@ intermediate machine state or atomicity under panic/unwind.
 
 Before enabling runtime admission, the remaining work is:
 
-1. Finish base-custody reachability/issuance composition across begin-write and
-   settlement. Establish production Rust correspondence for enrollment and the
+1. Prove general pending-chain and combined-reader preservation across Begin,
+   composing the raw execution/issuance relation with the ordered unread guards.
+   Preserve unrelated live readers and all four producer statuses without a
+   global-idle premise. Finish custody/issuance composition through settlement.
+   Establish production Rust correspondence for enrollment and the
    proved logical admission/release and unread guards.
    Bind physical capacity and fallible allocation to those relations, and refine
    settlement preflight before treating the logical lifecycle as full-wrapper
