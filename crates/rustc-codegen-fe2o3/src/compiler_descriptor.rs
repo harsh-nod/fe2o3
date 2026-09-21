@@ -49,6 +49,8 @@ use std::{
 };
 
 const ADMITTED_PRODUCTION_PROCESSORS: [&str; 2] = ["gfx942", "gfx950"];
+#[path = "compiler_descriptor_nominal_v3.rs"]
+pub(crate) mod nominal_v3;
 #[cfg(test)]
 const WORKGROUP_X: u32 = 256;
 

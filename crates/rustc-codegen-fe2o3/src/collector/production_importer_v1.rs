@@ -48,7 +48,8 @@ use crate::production_semantic_terminal_v1::{
     ProductionBf16ConversionV1, ProductionTerminalExpansionV1,
 };
 use crate::production_semantic_types_v1::{
-    ProductionSemanticTypeErrorV1, construct_production_semantic_types_v1,
+    ProductionSemanticTypeErrorV1, construct_production_semantic_types_nominal_v35,
+    construct_production_semantic_types_v1,
 };
 use crate::production_target_v1::ProductionTargetErrorV1;
 use crate::rustc_semantic_adapter_v1::{
@@ -290,6 +291,23 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
     debug_source_capture: DebugSourceCaptureRequestV2,
 ) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
+    construct_production_semantic_mir_with_nominal_v35(tcx, closure, debug_source_capture, false)
+}
+
+pub(crate) fn construct_production_semantic_mir_nominal_v35<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
+    construct_production_semantic_mir_with_nominal_v35(tcx, closure, debug_source_capture, true)
+}
+
+fn construct_production_semantic_mir_with_nominal_v35<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+    nominal: bool,
+) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
     let AuthenticatedCollectedKernelClosureV1 {
         target,
         collection,
@@ -356,7 +374,12 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         Err(error) => return Err(ProductionSemanticImportErrorV1::Preflight(Box::new(error))),
     };
     require_lineage_transcript_bound_v3("rustc preflight plan", plan.canonical_transcript())?;
-    let semantic_types = match construct_production_semantic_types_v1(tcx, plan.type_producers()) {
+    let constructed_types = if nominal {
+        construct_production_semantic_types_nominal_v35(tcx, plan.type_producers())
+    } else {
+        construct_production_semantic_types_v1(tcx, plan.type_producers())
+    };
+    let semantic_types = match constructed_types {
         Ok(types) => types,
         Err(error) => {
             return Err(ProductionSemanticImportErrorV1::TypeConstruction(Box::new(

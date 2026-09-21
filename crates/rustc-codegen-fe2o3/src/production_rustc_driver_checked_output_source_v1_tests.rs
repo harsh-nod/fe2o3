@@ -3,6 +3,8 @@ use super::*;
 
 #[path = "production_rustc_driver_guarded_loop_read_source_v1_tests.rs"]
 mod guarded_loop_read;
+#[path = "production_rustc_driver_nominal_abi_v3_tests.rs"]
+mod nominal_abi_v3;
 use crate::production_pipeline::checked_output_policy4_v1::snapshots;
 use fe2o3_kernel_ir::OperationKind;
 use fe2o3_rustc_invocation::{
@@ -347,10 +349,7 @@ fn checked_output_source_child() {
         rustc_driver::run_compiler(&args, &mut callbacks);
     }));
     let result = if completed.is_err() {
-        Err(SourceFailure::new(
-            SourceStage::Rustc,
-            "rustc or callback panicked; see captured diagnostics",
-        ))
+        Err(callbacks.progress.panic_failure())
     } else {
         callbacks.result.unwrap_or_else(|| {
             Err(SourceFailure::new(
@@ -382,7 +381,15 @@ use crate::production_rustc_driver_checked_output_source_helpers_v1_tests::{
 #[test]
 #[ignore = "requires pinned nightly rust-src, AMD dependencies, and ordinary-source compilation"]
 fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
-    ordinary_rust_checked_output_cases(&[OrdinarySourceCase::Fill, OrdinarySourceCase::Vecadd]);
+    for profile in [
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        ordinary_rust_checked_output_cases_for_profile(
+            &[OrdinarySourceCase::Fill, OrdinarySourceCase::Vecadd],
+            profile,
+        );
+    }
 }
 
 #[test]
@@ -1080,7 +1087,7 @@ fn ordinary_rust_source_cases(
         } else {
             matches!(case, OrdinarySourceCase::PrivateUnitHelper)
         };
-        if matches!(case, OrdinarySourceCase::Fill) || probe_private {
+        if matches!(case, OrdinarySourceCase::Fill | OrdinarySourceCase::Vecadd) || probe_private {
             let erased_probe = matches!(
                 case,
                 OrdinarySourceCase::PrivateUnitHelper

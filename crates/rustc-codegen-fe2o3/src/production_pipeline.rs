@@ -48,6 +48,8 @@ pub(crate) mod fixed_checked_output_policy6_v1;
 pub(crate) mod fixed_checked_output_v1;
 #[path = "production_native_checked_output_handoff_v1.rs"]
 pub(crate) mod native_checked_output_handoff_v1;
+#[path = "production_pipeline_nominal_abi_v3.rs"]
+mod nominal_abi_v3;
 #[cfg(test)]
 #[path = "production_pipeline_pre_ranked_observation_v1_tests.rs"]
 mod pre_ranked_observation_v1;
@@ -3328,6 +3330,14 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         self,
     ) -> Result<ProductionCompilation<'tcx, AdmittedSemanticMirStage>, ProductionPipelineError>
     {
+        self.import_semantic_mir_with_nominal_v35(false)
+    }
+
+    fn import_semantic_mir_with_nominal_v35(
+        self,
+        nominal: bool,
+    ) -> Result<ProductionCompilation<'tcx, AdmittedSemanticMirStage>, ProductionPipelineError>
+    {
         let CollectedRustStage {
             tcx,
             closure,
@@ -3335,6 +3345,20 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             debug_source_capture,
             transaction,
         } = self.stage;
+        let constructed = if nominal {
+            crate::collector::construct_production_semantic_mir_nominal_v35(
+                tcx,
+                closure,
+                debug_source_capture,
+            )
+        } else {
+            crate::collector::construct_production_semantic_mir_v1(
+                tcx,
+                closure,
+                debug_source_capture,
+            )
+        }
+        .map_err(ProductionPipelineError::SemanticImport)?;
         let crate::collector::ConstructedProductionSemanticMirV1 {
             semantic_mir,
             context_entries,
@@ -3346,12 +3370,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             debug_source_scopes,
             debug_source_variables,
             debug_capture_gap,
-        } = crate::collector::construct_production_semantic_mir_v1(
-            tcx,
-            closure,
-            debug_source_capture,
-        )
-        .map_err(ProductionPipelineError::SemanticImport)?;
+        } = constructed;
         let typed_descriptor_roots =
             crate::compiler_descriptor::order_typed_descriptor_roots_by_semantic_v1(
                 typed_descriptor_roots,

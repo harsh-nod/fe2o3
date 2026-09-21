@@ -142,6 +142,20 @@ impl CallbackProgress {
         self.state().finish(outcome);
     }
 
+    pub(super) fn panic_failure(&self) -> super::SourceFailure {
+        let state = self.state();
+        let stage = state
+            .snapshot
+            .phases
+            .iter()
+            .find(|phase| phase.outcome == Outcome::Panicked)
+            .map_or(SourceStage::Rustc, |phase| phase.stage);
+        super::SourceFailure::new(
+            stage,
+            "rustc or callback panicked; see captured diagnostics",
+        )
+    }
+
     fn state(&self) -> MutexGuard<'_, ProgressState> {
         self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
@@ -455,6 +469,37 @@ fn standalone_callback_drops_only_jobserver_variables() {
             std::ffi::OsStr::new("amdgcn-amd-amdhsa")
         ]
     );
+}
+
+#[test]
+fn callback_panic_attribution_preserves_refusal_and_panic() {
+    for stage in [SourceStage::Policy4, SourceStage::NativeHandoff] {
+        let mut progress = CallbackProgress::default();
+        assert_eq!(progress.panic_failure().stage, SourceStage::Rustc);
+        let refusal = progress.run(SourceStage::NativeSourceProof, || {
+            Err::<(), _>("earlier refusal")
+        });
+        assert_eq!(refusal, Err("earlier refusal"));
+        assert_eq!(progress.panic_failure().stage, SourceStage::Rustc);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            progress.run::<(), ()>(stage, || panic!("original phase panic"))
+        }))
+        .unwrap_err();
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"original phase panic"));
+        let failure = progress.panic_failure();
+        assert_eq!(failure.stage, stage);
+        assert_eq!(
+            failure.detail,
+            "rustc or callback panicked; see captured diagnostics"
+        );
+        progress.finish(Outcome::Panicked);
+        let state = progress.state();
+        assert_eq!(state.snapshot.outcome, Some(Outcome::Panicked));
+        assert!(state.snapshot.active.is_none());
+        assert_eq!(state.snapshot.phases.len(), 2);
+        assert_eq!(state.snapshot.phases[0].outcome, Outcome::Refused);
+        assert_eq!(state.snapshot.phases[1].outcome, Outcome::Panicked);
+    }
 }
 
 #[path = "production_rustc_driver_checked_output_subphase_progress_v1_tests.rs"]

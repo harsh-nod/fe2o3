@@ -58,7 +58,7 @@ pub(crate) mod semantic_import_observation_v1_tests;
 pub(crate) use production_importer_v1::{
     AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
     ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1,
-    construct_production_semantic_mir_v1,
+    construct_production_semantic_mir_nominal_v35, construct_production_semantic_mir_v1,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
