@@ -198,8 +198,10 @@ fn begin_unread_faults_follow_caller_order_before_raw_preflight() {
 }
 
 #[test]
-fn begin_preserves_unrelated_stable_lease_and_all_producer_statuses_together() {
-    for empty in [true, false] {
+fn begin_and_settlement_preserve_unrelated_readers_and_all_producer_statuses() {
+    for (empty, outcome) in [true, false].into_iter().flat_map(|empty| {
+        [Status::Success, Status::NoEffect, Status::Unknown].map(|outcome| (empty, outcome))
+    }) {
         let mut journal = ContextProducerReadJournalV1::new(7, 7, 6, 8).unwrap();
         let device = ContextJournalDeviceKeyV1 {
             context_generation: 7,
@@ -329,13 +331,13 @@ fn begin_preserves_unrelated_stable_lease_and_all_producer_statuses_together() {
                 member_count: if empty { 0 } else { 2 },
             })
         );
-        for (reference, request, status) in retained {
-            assert_eq!(journal.lookup_producer_read(reference), Ok(request));
-            assert_eq!(journal.producer_read_status(reference), Ok(status));
+        for (reference, request, status) in &retained {
+            assert_eq!(journal.lookup_producer_read(*reference), Ok(*request));
+            assert_eq!(journal.producer_read_status(*reference), Ok(*status));
         }
         assert_eq!(journal.lookup_read(lease[0].unwrap()), Ok(stable));
-        for (allocation, state) in allocations[..5].iter().zip(states) {
-            assert_eq!(journal.lookup_allocation(*allocation), Ok(state));
+        for (allocation, state) in allocations[..5].iter().zip(&states) {
+            assert_eq!(journal.lookup_allocation(*allocation), Ok(*state));
             assert_eq!(journal.reader_count(*allocation), Ok(1));
         }
         assert_eq!(journal.reservations, reservations);
@@ -372,6 +374,121 @@ fn begin_preserves_unrelated_stable_lease_and_all_producer_statuses_together() {
             Err(Error::InvalidReference)
         );
         assert_eq!(snapshot(&journal), pending);
+
+        let requests: Vec<_> = if empty { &[][..] } else { &roster[..] }
+            .iter()
+            .map(|member| ContextProducerReadV1 {
+                read: ContextAllocationReadV1 {
+                    allocation: member.allocation,
+                    device,
+                    byte_extent: 64,
+                    byte_offset: 0,
+                    byte_len: 64,
+                    attempt_epoch: 1,
+                    content_lineage: 0,
+                },
+                producer: writer,
+            })
+            .collect();
+        let mut target_reads = [None, None];
+        if !requests.is_empty() {
+            journal
+                .acquire_producer_reads(key(60), &requests, &mut target_reads[..requests.len()])
+                .unwrap();
+        }
+        for reference in target_reads.iter().flatten() {
+            assert_eq!(
+                journal.producer_read_status(*reference),
+                Ok(Status::Pending)
+            );
+        }
+        let arena = (
+            journal.reservations.clone(),
+            journal.free.clone(),
+            journal.counts.clone(),
+            journal.next_incarnation,
+        );
+        let before_settlement = snapshot(&journal);
+        let wrong = ContextWriterReferenceV1 {
+            key: key(51),
+            ..writer
+        };
+        assert_eq!(
+            journal.settle_success(writer, &ContextWriterSuccessEvidenceV1 { writer: wrong }),
+            Err(Error::SettlementEvidenceMismatch)
+        );
+        assert_eq!(
+            journal.settle_no_effect(wrong, &ContextWriterNoEffectEvidenceV1 { writer: wrong }),
+            Err(Error::InvalidReference)
+        );
+        assert_eq!(snapshot(&journal), before_settlement);
+        match outcome {
+            Status::Success => journal
+                .settle_success(writer, &ContextWriterSuccessEvidenceV1 { writer })
+                .unwrap(),
+            Status::NoEffect => journal
+                .settle_no_effect(writer, &ContextWriterNoEffectEvidenceV1 { writer })
+                .unwrap(),
+            Status::Unknown => {
+                journal.mark_unknown(writer).unwrap();
+                let unknown = snapshot(&journal);
+                assert_eq!(
+                    journal
+                        .settle_success(writer, &ContextWriterSuccessEvidenceV1 { writer: wrong }),
+                    Err(Error::InvalidReference)
+                );
+                journal.mark_unknown(writer).unwrap();
+                assert_eq!(snapshot(&journal), unknown);
+            }
+            Status::Pending => unreachable!(),
+        }
+        for (reference, request, status) in &retained {
+            assert_eq!(journal.lookup_producer_read(*reference), Ok(*request));
+            assert_eq!(journal.producer_read_status(*reference), Ok(*status));
+        }
+        for (reference, request) in target_reads.iter().flatten().zip(&requests) {
+            assert_eq!(journal.lookup_producer_read(*reference), Ok(*request));
+            assert_eq!(journal.producer_read_status(*reference), Ok(outcome));
+            assert_eq!(journal.reader_count(request.read.allocation), Ok(1));
+        }
+        assert_eq!(journal.lookup_read(lease[0].unwrap()), Ok(stable));
+        for (allocation, state) in allocations[..5].iter().zip(&states) {
+            assert_eq!(journal.lookup_allocation(*allocation), Ok(*state));
+            assert_eq!(journal.reader_count(*allocation), Ok(1));
+        }
+        assert_eq!(
+            (
+                journal.reservations.clone(),
+                journal.free.clone(),
+                journal.counts.clone(),
+                journal.next_incarnation
+            ),
+            arena
+        );
+        assert_eq!(journal.retained_read_count(), if empty { 5 } else { 7 });
+        assert_eq!(journal.remaining_read_slots(), if empty { 3 } else { 1 });
+        assert_eq!(
+            storage,
+            [
+                (
+                    journal.reservations.as_ptr() as usize,
+                    journal.reservations.capacity()
+                ),
+                (journal.free.as_ptr() as usize, journal.free.capacity()),
+                (journal.counts.as_ptr() as usize, journal.counts.capacity()),
+            ]
+        );
+        assert_eq!(
+            journal.lookup_writer(writer),
+            if outcome == Status::Unknown {
+                Ok(ContextWriterStateV1::Unknown {
+                    member_count: if empty { 0 } else { 2 },
+                })
+            } else {
+                Err(Error::InvalidReference)
+            }
+        );
+        assert_invariant(&journal);
     }
 }
 

@@ -128,6 +128,161 @@ fn settlements_return_exact_canonical_members_and_preserve_unrelated_storage() {
 }
 
 #[test]
+fn immutable_settlement_preflight_matches_ranked_fault_combinations() {
+    for count in [0, 3] {
+        for header_fault in 0..5 {
+            for evidence_fault in [false, true] {
+                for chain_fault in 0..3 {
+                    for capacity_fault in 0..3 {
+                        for scratch_fault in 0..3 {
+                            for success in [false, true] {
+                                let (mut j, writer, _) = pending(count);
+                                let slots = chain(&j, writer);
+                                let head = slots.first().copied();
+                                let mut supplied = writer;
+                                match header_fault {
+                                    0 => {}
+                                    1 => supplied.key.context_generation += 1,
+                                    2 => supplied.key.local += 1,
+                                    3 => supplied.key.kind = Kind::Submission,
+                                    _ => supplied.slot = usize::MAX,
+                                }
+                                let mut evidence = supplied;
+                                if evidence_fault {
+                                    evidence.key.local += 1;
+                                }
+                                if chain_fault != 0 {
+                                    if count == 0 {
+                                        j.writers[writer.slot] = Some(WriterEntryV1::Pending {
+                                            key: writer.key,
+                                            head: Some(usize::MAX),
+                                            count: 0,
+                                        });
+                                    } else if chain_fault == 1 {
+                                        j.members[slots[0]]
+                                            .as_mut()
+                                            .unwrap()
+                                            .allocation
+                                            .key
+                                            .local += 1;
+                                    } else {
+                                        j.members[*slots.last().unwrap()].as_mut().unwrap().next =
+                                            Some(usize::MAX);
+                                    }
+                                }
+                                match capacity_fault {
+                                    0 => {}
+                                    1 => {
+                                        j.free = core::mem::take(&mut j.free)
+                                            .into_boxed_slice()
+                                            .into_vec()
+                                    }
+                                    _ => {
+                                        j.member_free = core::mem::take(&mut j.member_free)
+                                            .into_boxed_slice()
+                                            .into_vec()
+                                    }
+                                }
+                                match scratch_fault {
+                                    0 => {}
+                                    1 => {
+                                        j.scratch[0] = Some(BeginMemberPlanV1 {
+                                            member_slot: usize::MAX,
+                                            allocation: ContextAllocationReferenceV1 {
+                                                slot: usize::MAX,
+                                                key: ContextAllocationKeyV1 {
+                                                    context_generation: 7,
+                                                    local: 1,
+                                                },
+                                            },
+                                            prior_lineage: 0,
+                                            attempt_epoch: 1,
+                                        })
+                                    }
+                                    _ => j.scratch.truncate(count.saturating_sub(1)),
+                                }
+                                // Fault ranks are fixture inputs, independent of the production decision code.
+                                let expected = if header_fault != 0 {
+                                    Err(Error::InvalidReference)
+                                } else if evidence_fault {
+                                    Err(Error::SettlementEvidenceMismatch)
+                                } else if chain_fault != 0
+                                    || capacity_fault == 1
+                                    || (count != 0 && (capacity_fault == 2 || scratch_fault != 0))
+                                {
+                                    Err(Error::InvalidState)
+                                } else {
+                                    Ok((head, count))
+                                };
+                                let preflight_accesses = if header_fault != 0
+                                    || evidence_fault
+                                    || (count == 0 && chain_fault != 0)
+                                {
+                                    1
+                                } else if chain_fault == 1 {
+                                    3
+                                } else if chain_fault == 2
+                                    || capacity_fault == 1
+                                    || (count != 0 && (capacity_fault == 2 || scratch_fault == 2))
+                                {
+                                    1 + 2 * count
+                                } else if count != 0 && scratch_fault == 1 {
+                                    2 + 2 * count
+                                } else {
+                                    1 + 3 * count
+                                };
+                                let mut after = snapshot(&j);
+                                j.indexed_accesses.set(0);
+                                assert_eq!(j.preflight_settlement(supplied, evidence), expected);
+                                assert_eq!(j.indexed_accesses.get(), preflight_accesses);
+                                assert_eq!(
+                                    snapshot(&j),
+                                    after,
+                                    "immutable preflight changed storage"
+                                );
+                                if expected.is_ok() {
+                                    for slot in slots {
+                                        let member = after.members[slot].take().unwrap();
+                                        let allocation = after.allocations[member.allocation.slot]
+                                            .as_mut()
+                                            .unwrap();
+                                        if success {
+                                            allocation.content_lineage = member.attempt_epoch;
+                                        }
+                                        allocation.pending_member = None;
+                                        after.member_free.push(slot);
+                                    }
+                                    after.writers[writer.slot] = None;
+                                    after.free.push(writer.slot);
+                                }
+                                j.indexed_accesses.set(0);
+                                assert_eq!(
+                                    settle(&mut j, supplied, evidence, success),
+                                    expected.map(|_| ())
+                                );
+                                assert_eq!(
+                                    j.indexed_accesses.get(),
+                                    if expected.is_ok() {
+                                        9 * count + 3
+                                    } else {
+                                        preflight_accesses
+                                    }
+                                );
+                                assert_eq!(
+                                    snapshot(&j),
+                                    after,
+                                    "exact settlement and storage frame"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn no_effect_burns_epochs_and_success_advances_lineage_across_gaps() {
     let (mut j, mut writer, roster) = pending(3);
     let original_storage = storage(&j);
@@ -725,6 +880,22 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
 
     let release = source.split("fn settle_retained(").nth(1).unwrap();
     let plan = release.find("self.store_plan(").unwrap();
+    assert!(
+        release
+            .find("self.preflight_settlement(writer, evidence)?")
+            .unwrap()
+            < plan
+    );
+    let preflight = source
+        .split("fn preflight_settlement(")
+        .nth(1)
+        .unwrap()
+        .split("fn settle_retained(")
+        .next()
+        .unwrap();
+    assert!(preflight.contains("&self,"));
+    assert!(!preflight.contains("&mut self"));
+    let mut previous = 0;
     for validation in [
         "self.retained_header(writer, false)?",
         "SettlementEvidenceMismatch",
@@ -736,10 +907,9 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
         "count > self.scratch.len()",
         "self.scratch[index].is_some()",
     ] {
-        assert!(
-            release.find(validation).unwrap() < plan,
-            "late preflight: {validation}"
-        );
+        let position = preflight.find(validation).unwrap();
+        assert!(position >= previous, "out-of-order preflight: {validation}");
+        previous = position;
     }
     let commit = release.find("allocation.pending_member = None").unwrap();
     assert!(plan < commit);

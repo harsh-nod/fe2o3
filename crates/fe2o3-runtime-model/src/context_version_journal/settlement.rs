@@ -101,13 +101,12 @@ impl ContextVersionJournalV1 {
         Ok(())
     }
 
-    fn settle_retained(
-        &mut self,
+    pub(super) fn preflight_settlement(
+        &self,
         writer: ContextWriterReferenceV1,
         evidence: ContextWriterReferenceV1,
-        success: bool,
-    ) -> Result<(), ContextVersionJournalErrorV1> {
-        let (mut head, count, _) = self.retained_header(writer, false)?;
+    ) -> Result<(Option<usize>, usize), ContextVersionJournalErrorV1> {
+        let (head, count, _) = self.retained_header(writer, false)?;
         if evidence != writer {
             return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);
         }
@@ -136,6 +135,16 @@ impl ContextVersionJournalV1 {
                 return Err(ContextVersionJournalErrorV1::InvalidState);
             }
         }
+        Ok((head, count))
+    }
+
+    fn settle_retained(
+        &mut self,
+        writer: ContextWriterReferenceV1,
+        evidence: ContextWriterReferenceV1,
+        success: bool,
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        let (mut head, count) = self.preflight_settlement(writer, evidence)?;
 
         // All touched custody and return capacity are validated under this borrow.
         for index in 0..count {
