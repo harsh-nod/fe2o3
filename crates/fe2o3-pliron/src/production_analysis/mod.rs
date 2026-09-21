@@ -26,6 +26,7 @@ mod pliron_progress;
 mod pliron_provenance_alias;
 mod pliron_race;
 mod pliron_ranked_bounds;
+mod pliron_ranked_coverage_v1;
 mod pliron_report_payload_receipt;
 mod pliron_report_validation;
 mod pliron_resource_envelope;
@@ -68,6 +69,9 @@ pub use pliron_progress::*;
 pub use pliron_provenance_alias::*;
 pub use pliron_race::*;
 pub use pliron_ranked_bounds::*;
+pub use pliron_ranked_coverage_v1::{
+    ProductionRankedRecipeCoverageErrorV1, check_ranked_recipe_paths_v1,
+};
 pub use pliron_report_validation::*;
 pub use pliron_resource_envelope::ProductionAnalysisResourcePhaseV1;
 pub(crate) use pliron_resource_envelope::*;

@@ -14,6 +14,7 @@ fn verify_access(
     block: usize,
     operation: usize,
     check: &mut AccessCheck<'_>,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
 ) -> Result<(), RankedBoundsFindingV1> {
     let context = check.graph.context;
     let view = access.view(context);
@@ -89,9 +90,16 @@ fn verify_access(
                 })?;
             }
             _ => {
-                let presburger_map = check.presburger.map_for_facts(&[sparse_fact]).ok();
+                let presburger_map = check
+                    .presburger
+                    .map_for_facts(&[sparse_fact])
+                    .inspect_err(|failure| observe_bounds_presburger_failure_v1(observer, failure))
+                    .ok();
                 let presburger_decision = static_extent.zip(presburger_map).map(|(extent, map)| {
                     let decision = map.find_out_of_bounds(&[extent]);
+                    if let PresburgerRangeDecisionV1::Incomplete(failure) = &decision {
+                        observe_bounds_presburger_failure_v1(observer, failure);
+                    }
                     (extent, decision)
                 });
                 match presburger_decision {
@@ -251,6 +259,179 @@ fn canonical_runtime_extent(value: Value, context: &Context) -> IndexExpr {
         }
     }
     IndexExpr::Value(value)
+}
+
+#[cfg(test)]
+mod observed_presburger_tests {
+    use super::*;
+    use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+        InvocationReceiptFailureV1 as ReceiptFailure, InvocationReceiptV1 as Receipt,
+    };
+    use fe2o3_kernel_analysis::{
+        MAX_PRESBURGER_WORK_UNITS_V1 as CAP, PresburgerFailureV1 as Failure,
+    };
+    use pliron::{builtin::types::FunctionType, op::Op};
+
+    type Query = Result<PresburgerRangeDecisionV1, Failure>;
+
+    fn fixture(launch: u64, extent: u64) -> (Context, FuncOp, Value) {
+        let mut context = Context::new();
+        dialect_kernel::register_dialect(
+            &mut context,
+            &pliron::dialect::DialectName::try_new(dialect_kernel::DIALECT_NAME).unwrap(),
+        )
+        .unwrap();
+        let signature = FunctionType::get(&context, vec![], vec![]);
+        let function = FuncOp::new(
+            &mut context,
+            "observed_bounds".try_into().unwrap(),
+            signature,
+        );
+        let entry = function.get_entry_block(&context);
+        let ty = RankedViewType::new(&context, 32, false, vec![extent]).unwrap();
+        let view = RankedViewOp::new(&mut context, ty, vec![]).unwrap();
+        let lane = InvocationIndexOp::new(&mut context, 0, launch);
+        let index = lane.result(&context);
+        let value = view.result(&context);
+        let access =
+            RankedAccessOp::new(&mut context, AccessKindAttr::Read, value, vec![index]).unwrap();
+        let ret = ReturnOp::new(&mut context);
+        for op in [
+            view.get_operation(),
+            lane.get_operation(),
+            access.get_operation(),
+            ret.get_operation(),
+        ] {
+            op.insert_at_back(entry, &context);
+        }
+        (context, function, index)
+    }
+
+    fn run(launch: u64, extent: u64) -> (Query, RankedBoundsReportV1, Receipt) {
+        let (context, function, index) = fixture(launch, extent);
+        let mut baseline = PlironAnalysisManagerV1::new(&function);
+        baseline.prepare_sparse_indices(&context, &function);
+        baseline.prepare_presburger(&context, &function);
+        let fact = baseline.sparse_indices().unwrap().fact(index);
+        let query = baseline
+            .presburger()
+            .unwrap()
+            .map_for_facts(&[fact])
+            .map(|map| map.find_out_of_bounds(&[extent]));
+        let ordinary =
+            run_pliron_ranked_bounds_check_with_analyses_v1(&context, &function, &mut baseline);
+        let mut manager = PlironAnalysisManagerV1::new(&function);
+        let mut receipt = Receipt::new(
+            Default::default(),
+            ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+        )
+        .unwrap();
+        let phase = receipt
+            .phase(ProductionAnalysisResourcePhaseV1::MemoryBounds, 0)
+            .unwrap();
+        let observed = run_pliron_ranked_bounds_check_with_observation_v1(
+            &context,
+            &function,
+            &mut manager,
+            Some(&phase.observer(&Ok)),
+        );
+        drop(phase);
+        assert_eq!(observed.findings(), ordinary.findings());
+        // Solver classification only: no phase admission or owner transfer.
+        assert_eq!(receipt.snapshot().committed, Default::default());
+        (query, observed, receipt)
+    }
+
+    #[test]
+    fn real_inventory_limit_is_observed_before_report_conversion() {
+        use crate::production_analysis::pliron_function_inventory::MAX_PLIRON_FUNCTION_INVENTORY_OPERATIONS_V1;
+        let (mut context, function, _) = fixture(8, 4);
+        let entry = function.get_entry_block(&context);
+        let limit = MAX_PLIRON_FUNCTION_INVENTORY_OPERATIONS_V1;
+        // Four existing operations plus these constants exceed the cap by one.
+        for _ in 0..limit - 3 {
+            IndexConstantOp::new(&mut context, 0)
+                .get_operation()
+                .insert_at_front(entry, &context);
+        }
+        let mut receipt = Receipt::new(
+            Default::default(),
+            ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+        )
+        .unwrap();
+        let phase = receipt
+            .phase(ProductionAnalysisResourcePhaseV1::MemoryBounds, 0)
+            .unwrap();
+        let mut manager = PlironAnalysisManagerV1::new(&function);
+        let report = run_pliron_ranked_bounds_check_with_observation_v1(
+            &context,
+            &function,
+            &mut manager,
+            Some(&phase.observer(&Ok)),
+        );
+        assert!(matches!(report.findings(),
+            [RankedBoundsFindingV1::ResourceLimitExceeded { resource: "operation", limit: cap, actual }]
+            if *cap == limit && *actual == limit + 1));
+        drop(phase);
+        let error = ranked_bounds_resource_error_v1("operation");
+        assert_eq!(receipt.snapshot().first_denial, Some(error));
+        assert!(!receipt.snapshot().caught_panic);
+        assert_eq!(receipt.complete(), Err(ReceiptFailure::Denied(error)));
+    }
+
+    #[test]
+    fn dynamic_launch_unsupported_is_not_denial() {
+        let (query, report, receipt) = run(0, 4);
+        assert!(matches!(query, Err(Failure::Unsupported { .. })));
+        assert!(matches!(
+            report.findings(),
+            [RankedBoundsFindingV1::UnprovedBound { .. }]
+        ));
+        assert_eq!(receipt.complete(), Ok(Default::default()));
+    }
+
+    #[test]
+    fn actual_counterexample_is_not_denial() {
+        let (query, report, receipt) = run(8, 4);
+        assert_eq!(
+            query,
+            Ok(PresburgerRangeDecisionV1::Counterexample {
+                domain: vec![4],
+                range: vec![4],
+            })
+        );
+        assert!(matches!(report.findings(),
+            [RankedBoundsFindingV1::PresburgerOutOfBounds {
+                block: 0, operation: 2, index: 4, extent: 4, invocation, ..
+            }] if invocation == &[4]));
+        assert_eq!(receipt.complete(), Ok(Default::default()));
+    }
+
+    #[test]
+    fn real_solver_cap_survives_unproved_fallback() {
+        let (query, report, receipt) = run((CAP + 1) as u64, CAP as u64);
+        assert_eq!(
+            query,
+            Ok(PresburgerRangeDecisionV1::Incomplete(
+                Failure::ResourceLimit {
+                    limit: CAP,
+                    actual: CAP + 1,
+                }
+            ))
+        );
+        assert!(matches!(
+            report.findings(),
+            [RankedBoundsFindingV1::UnprovedBound {
+                block: 0,
+                operation: 2,
+                ..
+            }]
+        ));
+        let error = ranked_bounds_resource_error_v1("Presburger query work limit");
+        assert_eq!(receipt.snapshot().first_denial, Some(error));
+        assert!(!receipt.snapshot().caught_panic);
+        assert_eq!(receipt.complete(), Err(ReceiptFailure::Denied(error)));
+    }
 }
 
 fn canonical_index_expr(value: Value, context: &Context) -> IndexExpr {

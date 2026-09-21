@@ -392,6 +392,46 @@ enum SupportedWitnessBuildV1<T> {
     Incomplete(String),
 }
 
+type WitnessObservationV1<'o, 'p, 'r> = Option<
+    &'o crate::production_analysis::pliron_pipeline::invocation_receipt_v1::InvocationObserverV1<
+        'p,
+        'r,
+    >,
+>;
+
+fn with_witness_observation_v1<T>(
+    observer: WitnessObservationV1<'_, '_, '_>,
+    run: impl FnOnce(WitnessObservationV1<'_, '_, '_>) -> T,
+) -> T {
+    match observer {
+        None => run(None),
+        Some(observer) => observer.with_projection(&Ok, |nested| run(Some(nested))),
+    }
+}
+
+fn observe_witness_limit_v1(
+    observer: WitnessObservationV1<'_, '_, '_>,
+    phase: ProductionAnalysisResourcePhaseV1,
+    resource: &'static str,
+) {
+    if let Some(observer) = observer {
+        observer.deny(ProductionAnalysisResourceLimitV1 { phase, resource });
+    }
+}
+
+fn observe_witness_sparse_failure_v1(
+    observer: WitnessObservationV1<'_, '_, '_>,
+    failure: &crate::SparseIndexFailureV1,
+) {
+    if let crate::SparseIndexFailureV1::ResourceLimit { resource, .. } = failure {
+        observe_witness_limit_v1(
+            observer,
+            ProductionAnalysisResourcePhaseV1::SparseIndex,
+            resource,
+        );
+    }
+}
+
 fn current_mutation_epoch(
     context: &Context,
 ) -> Result<u64, ProductionAnalysisWitnessValidationErrorV1> {
@@ -408,99 +448,108 @@ pub(crate) fn issue_and_validate_production_analysis_witness_v1(
     implementation: ProductionAnalysisImplementationV1,
     configuration: ProductionAnalysisConfigurationV1,
     report: CapturedProductionAnalysisReportV1,
-    analyses: &mut PlironAnalysisManagerV1,
+    execution: (
+        &mut PlironAnalysisManagerV1,
+        WitnessObservationV1<'_, '_, '_>,
+    ),
 ) -> Result<ProductionAnalysisWitnessEnvelopeV1, ProductionAnalysisWitnessValidationErrorV1> {
-    let observed_epoch = current_mutation_epoch(context)?;
-    if observed_epoch != checkpoint.mutation_epoch() {
-        return Err(
-            ProductionAnalysisWitnessValidationErrorV1::MutationEpochMismatch {
-                expected: checkpoint.mutation_epoch(),
-                observed: observed_epoch,
-            },
-        );
-    }
-
-    let context_identity = require_context_identity(context).ok();
-    let pass = report.pass();
-    let (checker, payload, coverage) = match (&report, context_identity) {
-        (CapturedProductionAnalysisReportV1::Bounds(_), None) => {
-            let gap = witness_gap(pass);
-            let reason = "bounds replay cannot complete because this PLIRON context has no compiler-owned ContextIdentity".to_owned();
-            (
-                ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
-                ProductionAnalysisWitnessPayloadV1::Incomplete {
-                    gap,
-                    reason: reason.clone(),
+    let (analyses, observer) = execution;
+    with_witness_observation_v1(observer, |observer| {
+        let observed_epoch = current_mutation_epoch(context)?;
+        if observed_epoch != checkpoint.mutation_epoch() {
+            return Err(
+                ProductionAnalysisWitnessValidationErrorV1::MutationEpochMismatch {
+                    expected: checkpoint.mutation_epoch(),
+                    observed: observed_epoch,
                 },
-                ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
-            )
+            );
         }
-        (CapturedProductionAnalysisReportV1::Bounds(bounds), Some(_)) => {
-            match build_bounds_presburger_witness(context, function, bounds, analyses)? {
-                SupportedWitnessBuildV1::Complete(witness) => {
-                    let obligation_count = witness.obligations.len();
-                    (
-                        ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
-                        ProductionAnalysisWitnessPayloadV1::Bounds(witness),
-                        ProductionAnalysisWitnessCoverageV1::Complete { obligation_count },
-                    )
-                }
-                SupportedWitnessBuildV1::Incomplete(reason) => {
-                    let gap = witness_gap(pass);
-                    let reason = bounded_witness_reason_v1(reason);
-                    (
-                        ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
-                        ProductionAnalysisWitnessPayloadV1::Incomplete {
-                            gap,
-                            reason: reason.clone(),
-                        },
-                        ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
-                    )
+
+        let context_identity = require_context_identity(context).ok();
+        let pass = report.pass();
+        let (checker, payload, coverage) = match (&report, context_identity) {
+            (CapturedProductionAnalysisReportV1::Bounds(_), None) => {
+                let gap = witness_gap(pass);
+                let reason = "bounds replay cannot complete because this PLIRON context has no compiler-owned ContextIdentity".to_owned();
+                (
+                    ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
+                    ProductionAnalysisWitnessPayloadV1::Incomplete {
+                        gap,
+                        reason: reason.clone(),
+                    },
+                    ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
+                )
+            }
+            (CapturedProductionAnalysisReportV1::Bounds(bounds), Some(_)) => {
+                match build_bounds_presburger_witness_with_observation_v1(
+                    context, function, bounds, analyses, observer,
+                )? {
+                    SupportedWitnessBuildV1::Complete(witness) => {
+                        let obligation_count = witness.obligations.len();
+                        (
+                            ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
+                            ProductionAnalysisWitnessPayloadV1::Bounds(witness),
+                            ProductionAnalysisWitnessCoverageV1::Complete { obligation_count },
+                        )
+                    }
+                    SupportedWitnessBuildV1::Incomplete(reason) => {
+                        let gap = witness_gap(pass);
+                        let reason = bounded_witness_reason_v1(reason);
+                        (
+                            ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
+                            ProductionAnalysisWitnessPayloadV1::Incomplete {
+                                gap,
+                                reason: reason.clone(),
+                            },
+                            ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
+                        )
+                    }
                 }
             }
-        }
-        _ => {
-            let gap = witness_gap(pass);
-            let reason = bounded_witness_reason_v1(format!(
-                "{} witness replay is not implemented in V1; required evidence: {}",
-                pass.name(),
-                gap.required_evidence()
-            ));
-            (
-                ProductionAnalysisWitnessCheckerV1::UnsupportedV1,
-                ProductionAnalysisWitnessPayloadV1::Incomplete {
-                    gap,
-                    reason: reason.clone(),
-                },
-                ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
-            )
-        }
-    };
+            _ => {
+                let gap = witness_gap(pass);
+                let reason = bounded_witness_reason_v1(format!(
+                    "{} witness replay is not implemented in V1; required evidence: {}",
+                    pass.name(),
+                    gap.required_evidence()
+                ));
+                (
+                    ProductionAnalysisWitnessCheckerV1::UnsupportedV1,
+                    ProductionAnalysisWitnessPayloadV1::Incomplete {
+                        gap,
+                        reason: reason.clone(),
+                    },
+                    ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
+                )
+            }
+        };
 
-    let envelope = ProductionAnalysisWitnessEnvelopeV1 {
-        context_identity,
-        function: function.get_operation(),
-        checkpoint,
-        implementation,
-        configuration,
-        report,
-        checker,
-        payload,
-        coverage,
-    };
-    validate_production_analysis_witness_v1(
-        context,
-        function,
-        ExpectedProductionAnalysisWitnessV1 {
+        let envelope = ProductionAnalysisWitnessEnvelopeV1 {
+            context_identity,
+            function: function.get_operation(),
             checkpoint,
             implementation,
-            configuration: envelope.configuration(),
-            report: &envelope.report,
-        },
-        &envelope,
-        analyses,
-    )?;
-    Ok(envelope)
+            configuration,
+            report,
+            checker,
+            payload,
+            coverage,
+        };
+        validate_production_analysis_witness_with_observation_v1(
+            context,
+            function,
+            ExpectedProductionAnalysisWitnessV1 {
+                checkpoint,
+                implementation,
+                configuration: envelope.configuration(),
+                report: &envelope.report,
+            },
+            &envelope,
+            analyses,
+            observer,
+        )?;
+        Ok(envelope)
+    })
 }
 
 struct ExpectedProductionAnalysisWitnessV1<'a> {
@@ -510,6 +559,7 @@ struct ExpectedProductionAnalysisWitnessV1<'a> {
     report: &'a CapturedProductionAnalysisReportV1,
 }
 
+#[cfg(test)]
 fn validate_production_analysis_witness_v1(
     context: &Context,
     function: &FuncOp,
@@ -517,109 +567,128 @@ fn validate_production_analysis_witness_v1(
     envelope: &ProductionAnalysisWitnessEnvelopeV1,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> Result<(), ProductionAnalysisWitnessValidationErrorV1> {
-    let ExpectedProductionAnalysisWitnessV1 {
-        checkpoint,
-        implementation,
-        configuration,
-        report,
-    } = expected;
-    if envelope.context_identity != require_context_identity(context).ok()
-        || envelope.function != function.get_operation()
-    {
-        return Err(ProductionAnalysisWitnessValidationErrorV1::SubjectMismatch);
-    }
-    if envelope.checkpoint != checkpoint {
-        return Err(
-            ProductionAnalysisWitnessValidationErrorV1::BindingMismatch {
-                component: "checkpoint",
-            },
-        );
-    }
-    if envelope.implementation != implementation {
-        return Err(
-            ProductionAnalysisWitnessValidationErrorV1::BindingMismatch {
-                component: "implementation",
-            },
-        );
-    }
-    if envelope.configuration != *configuration {
-        return Err(
-            ProductionAnalysisWitnessValidationErrorV1::BindingMismatch {
-                component: "configuration",
-            },
-        );
-    }
-    if envelope.report != *report
-        || envelope.report.pass() != checkpoint.pass()
-        || envelope.report.status() != report.status()
-    {
-        return Err(ProductionAnalysisWitnessValidationErrorV1::ReportMismatch);
-    }
-    let before = current_mutation_epoch(context)?;
-    if before != checkpoint.mutation_epoch() {
-        return Err(
-            ProductionAnalysisWitnessValidationErrorV1::MutationEpochMismatch {
-                expected: checkpoint.mutation_epoch(),
-                observed: before,
-            },
-        );
-    }
+    validate_production_analysis_witness_with_observation_v1(
+        context, function, expected, envelope, analyses, None,
+    )
+}
 
-    match (&envelope.report, &envelope.payload, &envelope.coverage) {
-        (
-            CapturedProductionAnalysisReportV1::Bounds(bounds),
-            ProductionAnalysisWitnessPayloadV1::Bounds(witness),
-            ProductionAnalysisWitnessCoverageV1::Complete { obligation_count },
-        ) if envelope.checker
-            == ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1 =>
+fn validate_production_analysis_witness_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    expected: ExpectedProductionAnalysisWitnessV1<'_>,
+    envelope: &ProductionAnalysisWitnessEnvelopeV1,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: WitnessObservationV1<'_, '_, '_>,
+) -> Result<(), ProductionAnalysisWitnessValidationErrorV1> {
+    with_witness_observation_v1(observer, |observer| {
+        let ExpectedProductionAnalysisWitnessV1 {
+            checkpoint,
+            implementation,
+            configuration,
+            report,
+        } = expected;
+        if envelope.context_identity != require_context_identity(context).ok()
+            || envelope.function != function.get_operation()
         {
-            if envelope.context_identity.is_none() {
-                return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
+            return Err(ProductionAnalysisWitnessValidationErrorV1::SubjectMismatch);
+        }
+        if envelope.checkpoint != checkpoint {
+            return Err(
+                ProductionAnalysisWitnessValidationErrorV1::BindingMismatch {
+                    component: "checkpoint",
+                },
+            );
+        }
+        if envelope.implementation != implementation {
+            return Err(
+                ProductionAnalysisWitnessValidationErrorV1::BindingMismatch {
+                    component: "implementation",
+                },
+            );
+        }
+        if envelope.configuration != *configuration {
+            return Err(
+                ProductionAnalysisWitnessValidationErrorV1::BindingMismatch {
+                    component: "configuration",
+                },
+            );
+        }
+        if envelope.report != *report
+            || envelope.report.pass() != checkpoint.pass()
+            || envelope.report.status() != report.status()
+        {
+            return Err(ProductionAnalysisWitnessValidationErrorV1::ReportMismatch);
+        }
+        let before = current_mutation_epoch(context)?;
+        if before != checkpoint.mutation_epoch() {
+            return Err(
+                ProductionAnalysisWitnessValidationErrorV1::MutationEpochMismatch {
+                    expected: checkpoint.mutation_epoch(),
+                    observed: before,
+                },
+            );
+        }
+
+        match (&envelope.report, &envelope.payload, &envelope.coverage) {
+            (
+                CapturedProductionAnalysisReportV1::Bounds(bounds),
+                ProductionAnalysisWitnessPayloadV1::Bounds(witness),
+                ProductionAnalysisWitnessCoverageV1::Complete { obligation_count },
+            ) if envelope.checker
+                == ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1 =>
+            {
+                if envelope.context_identity.is_none() {
+                    return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
+                }
+                if *obligation_count != witness.obligations.len() {
+                    return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
+                }
+                match build_bounds_presburger_witness_with_observation_v1(
+                    context, function, bounds, analyses, observer,
+                )? {
+                    SupportedWitnessBuildV1::Complete(replayed) if replayed == *witness => {}
+                    SupportedWitnessBuildV1::Complete(_)
+                    | SupportedWitnessBuildV1::Incomplete(_) => {
+                        return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
+                    }
+                }
             }
-            if *obligation_count != witness.obligations.len() {
-                return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
-            }
-            match build_bounds_presburger_witness(context, function, bounds, analyses)? {
-                SupportedWitnessBuildV1::Complete(replayed) if replayed == *witness => {}
-                SupportedWitnessBuildV1::Complete(_) | SupportedWitnessBuildV1::Incomplete(_) => {
+            (
+                _,
+                ProductionAnalysisWitnessPayloadV1::Incomplete {
+                    gap: payload_gap,
+                    reason: payload_reason,
+                },
+                ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
+            ) if envelope.checker == ProductionAnalysisWitnessCheckerV1::UnsupportedV1
+                || envelope.checker
+                    == ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1 =>
+            {
+                if payload_gap != gap
+                    || payload_reason != reason
+                    || gap.pass() != checkpoint.pass()
+                    || reason.is_empty()
+                {
                     return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
                 }
             }
+            _ => return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch),
         }
-        (
-            _,
-            ProductionAnalysisWitnessPayloadV1::Incomplete {
-                gap: payload_gap,
-                reason: payload_reason,
-            },
-            ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
-        ) if envelope.checker == ProductionAnalysisWitnessCheckerV1::UnsupportedV1
-            || envelope.checker
-                == ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1 =>
-        {
-            if payload_gap != gap
-                || payload_reason != reason
-                || gap.pass() != checkpoint.pass()
-                || reason.is_empty()
-            {
-                return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
-            }
-        }
-        _ => return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch),
-    }
 
-    let after = current_mutation_epoch(context)?;
-    if after != before {
-        return Err(
-            ProductionAnalysisWitnessValidationErrorV1::MutationEpochMismatch {
-                expected: before,
-                observed: after,
-            },
-        );
-    }
-    Ok(())
+        let after = current_mutation_epoch(context)?;
+        if after != before {
+            return Err(
+                ProductionAnalysisWitnessValidationErrorV1::MutationEpochMismatch {
+                    expected: before,
+                    observed: after,
+                },
+            );
+        }
+        Ok(())
+    })
 }
 
+#[cfg(test)]
 fn build_bounds_presburger_witness(
     context: &Context,
     function: &FuncOp,
@@ -629,139 +698,183 @@ fn build_bounds_presburger_witness(
     SupportedWitnessBuildV1<BoundsPresburgerWitnessV1>,
     ProductionAnalysisWitnessValidationErrorV1,
 > {
-    analyses.prepare_function_inventory(context, function);
-    let inventory = match analyses.function_inventory_handle() {
-        Ok(inventory) => inventory,
-        Err(failure) => {
-            return Ok(SupportedWitnessBuildV1::Incomplete(format!(
-                "bounds witness function inventory {} count {} exceeds limit {}",
-                failure.resource(),
-                failure.actual(),
-                failure.limit(),
-            )));
-        }
-    };
-    let blocks = inventory.blocks();
-    if blocks.len() != 1 {
-        return Ok(SupportedWitnessBuildV1::Incomplete(
+    build_bounds_presburger_witness_with_observation_v1(context, function, report, analyses, None)
+}
+
+fn build_bounds_presburger_witness_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    report: &RankedBoundsReportV1,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: WitnessObservationV1<'_, '_, '_>,
+) -> Result<
+    SupportedWitnessBuildV1<BoundsPresburgerWitnessV1>,
+    ProductionAnalysisWitnessValidationErrorV1,
+> {
+    with_witness_observation_v1(observer, |observer| {
+        analyses.prepare_function_inventory(context, function);
+        let inventory = match analyses.function_inventory_handle() {
+            Ok(inventory) => inventory,
+            Err(failure) => {
+                observe_witness_limit_v1(
+                    observer,
+                    ProductionAnalysisResourcePhaseV1::ReportValidation,
+                    failure.resource(),
+                );
+                return Ok(SupportedWitnessBuildV1::Incomplete(format!(
+                    "bounds witness function inventory {} count {} exceeds limit {}",
+                    failure.resource(),
+                    failure.actual(),
+                    failure.limit(),
+                )));
+            }
+        };
+        let blocks = inventory.blocks();
+        if blocks.len() != 1 {
+            return Ok(SupportedWitnessBuildV1::Incomplete(
             "bounds witness V1 cannot yet enumerate exhaustive CFG path domains or dominating guard facts"
                 .to_owned(),
         ));
-    }
+        }
 
-    let block_operations = inventory.block_operations(0);
-    let launch_extents = match raw_launch_extents(context, block_operations) {
-        Ok(extents) => extents,
-        Err(reason) => return Ok(SupportedWitnessBuildV1::Incomplete(reason)),
-    };
-    let invocation_count = match exhaustive_invocation_count(&launch_extents) {
-        Ok(count) => count,
-        Err(reason) => return Ok(SupportedWitnessBuildV1::Incomplete(reason)),
-    };
-    if report.status() != KernelCheckStatusV1::Clean {
-        return Ok(SupportedWitnessBuildV1::Incomplete(
+        let block_operations = inventory.block_operations(0);
+        let launch_extents = match raw_launch_extents(context, block_operations) {
+            Ok(extents) => extents,
+            Err(reason) => return Ok(SupportedWitnessBuildV1::Incomplete(reason)),
+        };
+        let invocation_count = match exhaustive_invocation_count(&launch_extents, observer) {
+            Ok(count) => count,
+            Err(reason) => return Ok(SupportedWitnessBuildV1::Incomplete(reason)),
+        };
+        if report.status() != KernelCheckStatusV1::Clean {
+            return Ok(SupportedWitnessBuildV1::Incomplete(
             "the raw launch domain is supported, but only a Clean bounds report can be replayed as a positive witness"
                 .to_owned(),
         ));
-    }
-
-    // This transcript is useful for auditing the production analysis, but it
-    // is deliberately not the authority for `Complete`. The separate raw-IR
-    // evaluator below interprets the defining operation DAG directly and
-    // enumerates every invocation in the finite launch box.
-    analyses.prepare_sparse_indices(context, function);
-    analyses.prepare_presburger(context, function);
-    let sparse = match analyses.sparse_indices() {
-        Ok(sparse) => sparse,
-        Err(failure) => {
-            return Ok(SupportedWitnessBuildV1::Incomplete(format!(
-                "sparse-index witness construction is incomplete: {failure:?}"
-            )));
         }
-    };
-    let presburger = match analyses.presburger() {
-        Ok(presburger) => presburger,
-        Err(failure) => {
-            return Ok(SupportedWitnessBuildV1::Incomplete(format!(
-                "Presburger witness construction is incomplete: {failure:?}"
-            )));
-        }
-    };
-    let evaluation_stack_frame_limit =
-        raw_index_stack_frame_upper_bound_v1(inventory.operations().len())
-            .map_err(|_| ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch)?;
 
-    let mut obligations = Vec::new();
-    let mut evaluation_steps = 0usize;
-    for site in block_operations {
-        let operation_index = site.operation();
-        let operation = Operation::get_op_dyn(site.pointer(), context);
-        let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
-            continue;
-        };
-        let view = access.view(context);
-        let Some(view_type) = ranked_view_type(view, context) else {
-            return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
-        };
-        let view_type: TypedHandle<dialect_kernel::RankedViewType> = view_type;
-        let view_type = view_type.deref(context);
-        for (dimension, index) in access.indices(context).into_iter().enumerate() {
-            let Some(extent) = view_type.shape().get(dimension).copied() else {
-                return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
-            };
-            if extent == DYNAMIC_EXTENT {
+        // This transcript is useful for auditing the production analysis, but it
+        // is deliberately not the authority for `Complete`. The separate raw-IR
+        // evaluator below interprets the defining operation DAG directly and
+        // enumerates every invocation in the finite launch box.
+        analyses.prepare_sparse_indices(context, function);
+        if let Some(observer) = observer
+            && let Err(failure) = analyses.sparse_indices()
+        {
+            observe_witness_sparse_failure_v1(Some(observer), &failure);
+        }
+        analyses.prepare_presburger(context, function);
+        let sparse = match analyses.sparse_indices() {
+            Ok(sparse) => sparse,
+            Err(failure) => {
+                observe_witness_sparse_failure_v1(observer, &failure);
                 return Ok(SupportedWitnessBuildV1::Incomplete(format!(
-                    "bounds witness V1 cannot enumerate dynamic extent at block 0 op {operation_index} dimension {dimension}"
+                    "sparse-index witness construction is incomplete: {failure:?}"
                 )));
             }
-
-            if let Err(failure) = exhaustively_check_raw_index(
-                context,
-                index,
-                &launch_extents,
-                extent,
-                &mut evaluation_steps,
-                evaluation_stack_frame_limit,
-                RawBoundsReplaySiteV1 {
-                    operation: operation_index,
-                    dimension,
-                },
-            ) {
-                match failure {
-                    RawBoundsReplayFailureV1::Incomplete(reason) => {
-                        return Ok(SupportedWitnessBuildV1::Incomplete(reason));
-                    }
-                    RawBoundsReplayFailureV1::Counterexample(error) => return Err(error),
-                }
+        };
+        let presburger = match analyses.presburger() {
+            Ok(presburger) => presburger,
+            Err(failure) => {
+                observe_witness_sparse_failure_v1(observer, &failure);
+                return Ok(SupportedWitnessBuildV1::Incomplete(format!(
+                    "Presburger witness construction is incomplete: {failure:?}"
+                )));
             }
+        };
+        let evaluation_stack_frame_limit = raw_index_stack_frame_upper_bound_v1(
+            inventory.operations().len(),
+        )
+        .map_err(|error| {
+            observe_witness_limit_v1(observer, error.phase, error.resource);
+            ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch
+        })?;
 
-            let fact = sparse.fact(index);
-            if matches!(fact, SparseIndexFactV1::MachineOverflow(_)) {
+        let mut obligations = Vec::new();
+        let mut evaluation_steps = 0usize;
+        for site in block_operations {
+            let operation_index = site.operation();
+            let operation = Operation::get_op_dyn(site.pointer(), context);
+            let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
+                continue;
+            };
+            let view = access.view(context);
+            let Some(view_type) = ranked_view_type(view, context) else {
                 return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
-            }
-            let normalized_map = match presburger
-                .map_for_facts_over_extents(&[fact], &launch_extents)
-            {
-                Ok(map) => map,
-                Err(failure) => {
+            };
+            let view_type: TypedHandle<dialect_kernel::RankedViewType> = view_type;
+            let view_type = view_type.deref(context);
+            for (dimension, index) in access.indices(context).into_iter().enumerate() {
+                let Some(extent) = view_type.shape().get(dimension).copied() else {
+                    return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
+                };
+                if extent == DYNAMIC_EXTENT {
                     return Ok(SupportedWitnessBuildV1::Incomplete(format!(
-                        "bounds witness V1 cannot capture the Presburger transcript at block 0 op {operation_index} dimension {dimension}: {failure}"
+                        "bounds witness V1 cannot enumerate dynamic extent at block 0 op {operation_index} dimension {dimension}"
                     )));
                 }
-            };
-            obligations.push(BoundsPresburgerObligationV1 {
-                block: 0,
-                operation: operation_index,
-                dimension,
-                extent,
-                checked_invocations: invocation_count,
-                normalized_map,
-            });
+
+                if let Err(failure) = exhaustively_check_raw_index(
+                    context,
+                    index,
+                    &launch_extents,
+                    extent,
+                    &mut evaluation_steps,
+                    evaluation_stack_frame_limit,
+                    (
+                        RawBoundsReplaySiteV1 {
+                            operation: operation_index,
+                            dimension,
+                        },
+                        observer,
+                    ),
+                ) {
+                    match failure {
+                        RawBoundsReplayFailureV1::Incomplete(reason) => {
+                            return Ok(SupportedWitnessBuildV1::Incomplete(reason));
+                        }
+                        RawBoundsReplayFailureV1::Counterexample(error) => return Err(error),
+                    }
+                }
+
+                let fact = sparse.fact(index);
+                if matches!(fact, SparseIndexFactV1::MachineOverflow(_)) {
+                    return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
+                }
+                let normalized_map = match presburger
+                    .map_for_facts_over_extents(&[fact], &launch_extents)
+                {
+                    Ok(map) => map,
+                    Err(failure) => {
+                        if matches!(
+                            failure,
+                            fe2o3_kernel_analysis::PresburgerFailureV1::ResourceLimit { .. }
+                        ) {
+                            observe_witness_limit_v1(
+                                observer,
+                                ProductionAnalysisResourcePhaseV1::ReportValidation,
+                                "bounds witness Presburger query work limit",
+                            );
+                        }
+                        return Ok(SupportedWitnessBuildV1::Incomplete(format!(
+                            "bounds witness V1 cannot capture the Presburger transcript at block 0 op {operation_index} dimension {dimension}: {failure}"
+                        )));
+                    }
+                };
+                obligations.push(BoundsPresburgerObligationV1 {
+                    block: 0,
+                    operation: operation_index,
+                    dimension,
+                    extent,
+                    checked_invocations: invocation_count,
+                    normalized_map,
+                });
+            }
         }
-    }
-    Ok(SupportedWitnessBuildV1::Complete(
-        BoundsPresburgerWitnessV1 { obligations },
-    ))
+        Ok(SupportedWitnessBuildV1::Complete(
+            BoundsPresburgerWitnessV1 { obligations },
+        ))
+    })
 }
 
 fn raw_launch_extents(
@@ -847,13 +960,26 @@ fn raw_launch_extents(
     Ok(extents)
 }
 
-fn exhaustive_invocation_count(extents: &[u64]) -> Result<u64, String> {
+fn exhaustive_invocation_count(
+    extents: &[u64],
+    observer: WitnessObservationV1<'_, '_, '_>,
+) -> Result<u64, String> {
     let mut count = 1u64;
     for extent in extents {
         count = count.checked_mul(*extent).ok_or_else(|| {
+            observe_witness_limit_v1(
+                observer,
+                ProductionAnalysisResourcePhaseV1::ReportValidation,
+                "bounds witness invocation count overflow",
+            );
             "bounds witness V1 launch-domain cardinality overflows u64".to_owned()
         })?;
         if count > MAX_BOUNDS_WITNESS_INVOCATIONS_V1 {
+            observe_witness_limit_v1(
+                observer,
+                ProductionAnalysisResourcePhaseV1::ReportValidation,
+                "bounds witness invocation limit",
+            );
             return Err(format!(
                 "bounds witness V1 needs {count} invocations, exceeding its exhaustive replay cap of {MAX_BOUNDS_WITNESS_INVOCATIONS_V1}"
             ));
@@ -879,8 +1005,9 @@ fn exhaustively_check_raw_index(
     extent: u64,
     evaluation_steps: &mut usize,
     evaluation_stack_frame_limit: usize,
-    site: RawBoundsReplaySiteV1,
+    site: (RawBoundsReplaySiteV1, WitnessObservationV1<'_, '_, '_>),
 ) -> Result<(), RawBoundsReplayFailureV1> {
+    let (site, observer) = site;
     let RawBoundsReplaySiteV1 {
         operation,
         dimension,
@@ -892,14 +1019,18 @@ fn exhaustively_check_raw_index(
     loop {
         let mut cache = HashMap::new();
         let mut active = HashSet::new();
-        let evaluated = match evaluate_raw_index_iterative(
+        let evaluated = match evaluate_raw_index_with_budget_v1(
             context,
             index,
             &invocation,
             &mut cache,
             &mut active,
-            evaluation_steps,
-            evaluation_stack_frame_limit,
+            &mut RawIndexEvaluationBudgetV1 {
+                steps: evaluation_steps,
+                stack_frames: evaluation_stack_frame_limit,
+                quota_phase: ProductionAnalysisResourcePhaseV1::ReportValidation,
+                observer,
+            },
         ) {
             Ok(value) => value,
             Err(RawIndexEvaluationFailureV1::Incomplete(reason)) => {
@@ -948,202 +1079,6 @@ fn increment_invocation(invocation: &mut [u64], extents: &[u64]) -> bool {
     false
 }
 
-enum RawIndexEvaluationFailureV1 {
-    Incomplete(&'static str),
-    Overflow(&'static str),
-}
-
-pub(crate) fn evaluate_raw_index_at_invocation_v1(
-    context: &Context,
-    value: Value,
-    invocation: &[u64],
-    evaluation_steps: &mut usize,
-) -> Option<u64> {
-    let evaluation_stack_frame_limit = MAX_BOUNDS_WITNESS_EVALUATION_STEPS_V1
-        .checked_mul(RAW_INDEX_STACK_FRAMES_PER_OPERATION_V1)?
-        .checked_add(RAW_INDEX_STACK_FIXED_FRAMES_V1)?;
-    evaluate_raw_index_iterative(
-        context,
-        value,
-        invocation,
-        &mut HashMap::new(),
-        &mut HashSet::new(),
-        evaluation_steps,
-        evaluation_stack_frame_limit,
-    )
-    .ok()
-}
-
-#[derive(Clone, Copy)]
-enum RawIndexEvaluationFrameV1 {
-    Evaluate(Value),
-    FinishBinary {
-        value: Value,
-        lhs: Value,
-        rhs: Value,
-        kind: Option<IndexBinaryKindAttr>,
-    },
-}
-
-fn push_raw_index_evaluation_frame_v1(
-    stack: &mut Vec<RawIndexEvaluationFrameV1>,
-    frame: RawIndexEvaluationFrameV1,
-    frame_limit: usize,
-) -> Result<(), RawIndexEvaluationFailureV1> {
-    if stack.len() == frame_limit {
-        return Err(RawIndexEvaluationFailureV1::Incomplete(
-            "raw-index evaluation exceeded its deterministic stack cap",
-        ));
-    }
-    stack.try_reserve(1).map_err(|_| {
-        RawIndexEvaluationFailureV1::Incomplete("raw-index evaluation stack allocation failed")
-    })?;
-    stack.push(frame);
-    Ok(())
-}
-
-fn evaluate_raw_index_iterative(
-    context: &Context,
-    value: Value,
-    invocation: &[u64],
-    cache: &mut HashMap<Value, u64>,
-    active: &mut HashSet<Value>,
-    evaluation_steps: &mut usize,
-    evaluation_stack_frame_limit: usize,
-) -> Result<u64, RawIndexEvaluationFailureV1> {
-    let mut stack = Vec::new();
-    push_raw_index_evaluation_frame_v1(
-        &mut stack,
-        RawIndexEvaluationFrameV1::Evaluate(value),
-        evaluation_stack_frame_limit,
-    )?;
-    while let Some(frame) = stack.pop() {
-        match frame {
-            RawIndexEvaluationFrameV1::Evaluate(value) => {
-                if cache.contains_key(&value) {
-                    continue;
-                }
-                *evaluation_steps = evaluation_steps.saturating_add(1);
-                if *evaluation_steps > MAX_BOUNDS_WITNESS_EVALUATION_STEPS_V1 {
-                    return Err(RawIndexEvaluationFailureV1::Incomplete(
-                        "raw-index evaluation exceeded its deterministic work cap",
-                    ));
-                }
-                if !active.insert(value) {
-                    return Err(RawIndexEvaluationFailureV1::Incomplete(
-                        "the raw index definition graph is cyclic",
-                    ));
-                }
-                let Some(definition) = value.defining_op() else {
-                    active.remove(&value);
-                    return Err(RawIndexEvaluationFailureV1::Incomplete(
-                        "block arguments are outside the V1 raw-index fragment",
-                    ));
-                };
-                let operation = Operation::get_op_dyn(definition, context);
-                if let Some(constant) = operation.downcast_ref::<IndexConstantOp>() {
-                    let Some(result) = constant.value(context) else {
-                        active.remove(&value);
-                        return Err(RawIndexEvaluationFailureV1::Incomplete(
-                            "index constant has no value",
-                        ));
-                    };
-                    active.remove(&value);
-                    cache.insert(value, result);
-                    continue;
-                }
-                if let Some(index) = operation.downcast_ref::<InvocationIndexOp>() {
-                    let Some(dimension) = index
-                        .dimension(context)
-                        .and_then(|dimension| usize::try_from(dimension).ok())
-                    else {
-                        active.remove(&value);
-                        return Err(RawIndexEvaluationFailureV1::Incomplete(
-                            "invocation index has no valid dimension",
-                        ));
-                    };
-                    let Some(result) = invocation.get(dimension).copied() else {
-                        active.remove(&value);
-                        return Err(RawIndexEvaluationFailureV1::Incomplete(
-                            "invocation dimension is absent from the launch inventory",
-                        ));
-                    };
-                    active.remove(&value);
-                    cache.insert(value, result);
-                    continue;
-                }
-                let Some(binary) = operation.downcast_ref::<IndexBinaryOp>() else {
-                    active.remove(&value);
-                    return Err(RawIndexEvaluationFailureV1::Incomplete(
-                        "index producer is not a supported constant, invocation, or binary operation",
-                    ));
-                };
-                let lhs = binary.lhs(context);
-                let rhs = binary.rhs(context);
-                push_raw_index_evaluation_frame_v1(
-                    &mut stack,
-                    RawIndexEvaluationFrameV1::FinishBinary {
-                        value,
-                        lhs,
-                        rhs,
-                        kind: binary.kind(context),
-                    },
-                    evaluation_stack_frame_limit,
-                )?;
-                push_raw_index_evaluation_frame_v1(
-                    &mut stack,
-                    RawIndexEvaluationFrameV1::Evaluate(rhs),
-                    evaluation_stack_frame_limit,
-                )?;
-                push_raw_index_evaluation_frame_v1(
-                    &mut stack,
-                    RawIndexEvaluationFrameV1::Evaluate(lhs),
-                    evaluation_stack_frame_limit,
-                )?;
-            }
-            RawIndexEvaluationFrameV1::FinishBinary {
-                value,
-                lhs,
-                rhs,
-                kind,
-            } => {
-                let result = match (cache.get(&lhs).copied(), cache.get(&rhs).copied(), kind) {
-                    (Some(lhs), Some(rhs), Some(IndexBinaryKindAttr::Add)) => lhs
-                        .checked_add(rhs)
-                        .ok_or(RawIndexEvaluationFailureV1::Overflow("addition")),
-                    (Some(lhs), Some(rhs), Some(IndexBinaryKindAttr::Multiply)) => lhs
-                        .checked_mul(rhs)
-                        .ok_or(RawIndexEvaluationFailureV1::Overflow("multiplication")),
-                    (Some(lhs), Some(rhs), Some(IndexBinaryKindAttr::Remainder)) if rhs != 0 => {
-                        Ok(lhs % rhs)
-                    }
-                    (Some(lhs), Some(rhs), Some(IndexBinaryKindAttr::Divide)) if rhs != 0 => {
-                        Ok(lhs / rhs)
-                    }
-                    (Some(_), Some(_), Some(IndexBinaryKindAttr::Remainder)) => Err(
-                        RawIndexEvaluationFailureV1::Incomplete("remainder divisor is zero"),
-                    ),
-                    (Some(_), Some(_), Some(IndexBinaryKindAttr::Divide)) => Err(
-                        RawIndexEvaluationFailureV1::Incomplete("division divisor is zero"),
-                    ),
-                    (Some(_), Some(_), None) => Err(RawIndexEvaluationFailureV1::Incomplete(
-                        "index binary operation has no kind",
-                    )),
-                    _ => Err(RawIndexEvaluationFailureV1::Incomplete(
-                        "raw-index evaluation stack lost an operand result",
-                    )),
-                };
-                active.remove(&value);
-                cache.insert(value, result?);
-            }
-        }
-    }
-    cache
-        .get(&value)
-        .copied()
-        .ok_or(RawIndexEvaluationFailureV1::Incomplete(
-            "raw-index evaluation stack produced no result",
-        ))
-}
+include!("pliron_analysis_witness/raw_index_v1.rs");
 
 include!("pliron_analysis_witness/resource_tests.rs");

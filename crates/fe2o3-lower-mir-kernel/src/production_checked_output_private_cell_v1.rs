@@ -412,6 +412,18 @@ mod metadata_tests;
 #[path = "production_checked_output_loop_preheaders_v1.rs"]
 mod loop_preheaders;
 pub use loop_preheaders::{
+    ProductionCrossBlockForwardingErrorV1, ProductionCrossBlockForwardingOriginV1,
+    ProductionCrossBlockForwardingStorageV1, ProductionInductionRefinementErrorV1,
+    ProductionInductionRefinementOriginV1, ProductionInductionRefinementStorageV1,
+    ProductionOwnedCrossBlockForwardingContinuationV1,
+    ProductionOwnedInductionRefinementContinuationV1,
+    ProductionOwnedRefinedCrossBlockForwardingContinuationV1,
+    ProductionOwnedUnitLocalCrossBlockForwardingContinuationV1,
+    ProductionOwnedUnitLocalInductionRefinementContinuationV1,
+    ProductionOwnedUnitLocalRefinedCrossBlockForwardingContinuationV1,
+    ProductionRefinedCrossBlockForwardingErrorV1, ProductionRefinedCrossBlockForwardingStorageV1,
+};
+pub use loop_preheaders::{
     ProductionLicmErrorV1, ProductionLicmStorageV1, ProductionOwnedLicmContinuationV1,
     ProductionOwnedUnitLocalLicmContinuationV1,
 };

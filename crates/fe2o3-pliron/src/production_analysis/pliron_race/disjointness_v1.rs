@@ -84,42 +84,50 @@ fn symbolically_proves_disjoint(
     sparse: &SparseIndexAnalysisV1,
     launch_extents: &[u64],
     invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+    observer: RaceObserverV1<'_, '_, '_>,
 ) -> bool {
-    let mut by_view: HashMap<u64, Vec<&EffectV1>> = HashMap::new();
-    for effect in effects {
-        by_view
-            .entry(effect.noalias_class)
-            .or_default()
-            .push(effect);
-    }
-    for effects in by_view.values() {
-        if !effect_pair_inventory_fits_budget(effects.len()) {
-            return false;
+    let run = || {
+        let mut by_view: HashMap<u64, Vec<&EffectV1>> = HashMap::new();
+        for effect in effects {
+            by_view
+                .entry(effect.noalias_class)
+                .or_default()
+                .push(effect);
         }
-        for first_index in 0..effects.len() {
-            for second_index in first_index..effects.len() {
-                let first = effects[first_index];
-                let second = effects[second_index];
-                if !access_kinds_need_disjoint_coordinates(first.kind, second.kind)
-                    || atomics_are_device_compatible(first, second)
-                {
-                    continue;
-                }
-                if !effect_pair_symbolically_disjoint(
-                    context,
-                    function,
-                    first,
-                    second,
-                    sparse,
-                    launch_extents,
-                    invocation_bounds,
-                ) {
-                    return false;
+        for effects in by_view.values() {
+            if !effect_pair_inventory_fits_budget(effects.len()) {
+                observe_race_quota_v1(observer, "race effect-pair inventory work limit");
+                return false;
+            }
+            for first_index in 0..effects.len() {
+                for second_index in first_index..effects.len() {
+                    let first = effects[first_index];
+                    let second = effects[second_index];
+                    if !access_kinds_need_disjoint_coordinates(first.kind, second.kind)
+                        || atomics_are_device_compatible(first, second)
+                    {
+                        continue;
+                    }
+                    if !effect_pair_symbolically_disjoint(
+                        context,
+                        function,
+                        first,
+                        second,
+                        sparse,
+                        launch_extents,
+                        invocation_bounds,
+                    ) {
+                        return false;
+                    }
                 }
             }
         }
+        true
+    };
+    match observer {
+        None => run(),
+        Some(observer) => observer.with_projection(&Ok, |_| run()),
     }
-    true
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -362,79 +370,104 @@ fn presburger_proves_no_conflicts(
     sparse: &SparseIndexAnalysisV1,
     presburger: &PlironPresburgerAnalysisV1,
     launch_extents: &[u64],
+    observer: RaceObserverV1<'_, '_, '_>,
 ) -> bool {
-    let Some(invocations) = launch_extents.iter().try_fold(1_u128, |count, extent| {
-        count.checked_mul(u128::from(*extent))
-    }) else {
-        return false;
-    };
-    // The existing address-indexed trace is O(invocations * effects) and is
-    // preferable inside its admitted domain. Presburger map intersection is
-    // reserved for domains that trace intentionally refuses.
-    if invocations <= u128::from(MAX_PLIRON_RACE_INVOCATIONS_V1) {
-        return false;
-    }
-    if !effect_pair_inventory_fits_budget(effects.len()) {
-        return false;
-    }
-    let relevant_pairs = (0..effects.len())
-        .flat_map(|first| (first..effects.len()).map(move |second| (first, second)))
-        .filter(|(first, second)| {
-            let first = &effects[*first];
-            let second = &effects[*second];
-            first.noalias_class == second.noalias_class
-                && access_kinds_need_disjoint_coordinates(first.kind, second.kind)
-                && !atomics_are_device_compatible(first, second)
-        })
-        .count();
-    let estimated_work = invocations
-        .checked_mul((launch_extents.len() as u128).saturating_add(1))
-        .and_then(|work| work.checked_mul(2))
-        .and_then(|work| work.checked_mul(relevant_pairs as u128));
-    if estimated_work.is_none_or(|work| work > MAX_PRESBURGER_WORK_UNITS_V1 as u128) {
-        return false;
-    }
-    for first_index in 0..effects.len() {
-        for second_index in first_index..effects.len() {
-            let first = &effects[first_index];
-            let second = &effects[second_index];
-            if first.noalias_class != second.noalias_class
-                || !access_kinds_need_disjoint_coordinates(first.kind, second.kind)
-                || atomics_are_device_compatible(first, second)
-            {
-                continue;
-            }
-            let first_facts = first
-                .indices
-                .iter()
-                .map(|index| sparse.fact(*index).clone())
-                .collect::<Vec<_>>();
-            let second_facts = second
-                .indices
-                .iter()
-                .map(|index| sparse.fact(*index).clone())
-                .collect::<Vec<_>>();
-            let (Ok(first_map), Ok(second_map)) = (
-                presburger.map_for_facts_over_extents(&first_facts, launch_extents),
-                presburger.map_for_facts_over_extents(&second_facts, launch_extents),
-            ) else {
-                return false;
-            };
-            if first_map.find_machine_overflow(PresburgerMachineIntSemanticsV1::unsigned_64())
-                != PresburgerMachineRangeDecisionV1::Proved
-                || second_map.find_machine_overflow(PresburgerMachineIntSemanticsV1::unsigned_64())
-                    != PresburgerMachineRangeDecisionV1::Proved
-            {
-                return false;
-            }
-            if first_map.find_cross_collision(&second_map, true)
-                != PresburgerCollisionDecisionV1::Proved
-            {
-                return false;
+    let run = || {
+        let Some(invocations) = launch_extents.iter().try_fold(1_u128, |count, extent| {
+            count.checked_mul(u128::from(*extent))
+        }) else {
+            observe_race_quota_v1(observer, "race Presburger invocation-count overflow");
+            return false;
+        };
+        // The existing address-indexed trace is O(invocations * effects) and is
+        // preferable inside its admitted domain. Presburger map intersection is
+        // reserved for domains that trace intentionally refuses.
+        if invocations <= u128::from(MAX_PLIRON_RACE_INVOCATIONS_V1) {
+            return false;
+        }
+        if !effect_pair_inventory_fits_budget(effects.len()) {
+            observe_race_quota_v1(observer, "race effect-pair inventory work limit");
+            return false;
+        }
+        let relevant_pairs = (0..effects.len())
+            .flat_map(|first| (first..effects.len()).map(move |second| (first, second)))
+            .filter(|(first, second)| {
+                let first = &effects[*first];
+                let second = &effects[*second];
+                first.noalias_class == second.noalias_class
+                    && access_kinds_need_disjoint_coordinates(first.kind, second.kind)
+                    && !atomics_are_device_compatible(first, second)
+            })
+            .count();
+        let estimated_work = invocations
+            .checked_mul((launch_extents.len() as u128).saturating_add(1))
+            .and_then(|work| work.checked_mul(2))
+            .and_then(|work| work.checked_mul(relevant_pairs as u128));
+        if estimated_work.is_none_or(|work| work > MAX_PRESBURGER_WORK_UNITS_V1 as u128) {
+            observe_race_quota_v1(observer, "race Presburger estimated work limit");
+            return false;
+        }
+        for first_index in 0..effects.len() {
+            for second_index in first_index..effects.len() {
+                let first = &effects[first_index];
+                let second = &effects[second_index];
+                if first.noalias_class != second.noalias_class
+                    || !access_kinds_need_disjoint_coordinates(first.kind, second.kind)
+                    || atomics_are_device_compatible(first, second)
+                {
+                    continue;
+                }
+                let first_facts = first
+                    .indices
+                    .iter()
+                    .map(|index| sparse.fact(*index).clone())
+                    .collect::<Vec<_>>();
+                let second_facts = second
+                    .indices
+                    .iter()
+                    .map(|index| sparse.fact(*index).clone())
+                    .collect::<Vec<_>>();
+                let (Ok(first_map), Ok(second_map)) = (
+                    presburger
+                        .map_for_facts_over_extents(&first_facts, launch_extents)
+                        .inspect_err(|failure| {
+                            observe_race_presburger_failure_v1(failure, observer)
+                        }),
+                    presburger
+                        .map_for_facts_over_extents(&second_facts, launch_extents)
+                        .inspect_err(|failure| {
+                            observe_race_presburger_failure_v1(failure, observer)
+                        }),
+                ) else {
+                    return false;
+                };
+                for map in [&first_map, &second_map] {
+                    match map.find_machine_overflow(PresburgerMachineIntSemanticsV1::unsigned_64())
+                    {
+                        PresburgerMachineRangeDecisionV1::Proved => {}
+                        PresburgerMachineRangeDecisionV1::Incomplete(failure) => {
+                            observe_race_presburger_failure_v1(&failure, observer);
+                            return false;
+                        }
+                        _ => return false,
+                    }
+                }
+                match first_map.find_cross_collision(&second_map, true) {
+                    PresburgerCollisionDecisionV1::Proved => {}
+                    PresburgerCollisionDecisionV1::Incomplete(failure) => {
+                        observe_race_presburger_failure_v1(&failure, observer);
+                        return false;
+                    }
+                    _ => return false,
+                }
             }
         }
+        true
+    };
+    match observer {
+        None => run(),
+        Some(observer) => observer.with_projection(&Ok, |_| run()),
     }
-    true
 }
 
 fn effect_pair_inventory_fits_budget(effect_count: usize) -> bool {

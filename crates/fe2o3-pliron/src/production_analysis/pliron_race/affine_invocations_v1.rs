@@ -73,6 +73,62 @@ fn invocation_upper_bounds_by_block_impl(
     context: &Context,
     function: &FuncOp,
     inventory: &crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+    #[cfg(test)] stats: Option<&mut RaceCfgStatsV1>,
+) -> Option<Vec<[Option<u64>; MAX_RANKED_MEMORY_RANK]>> {
+    invocation_upper_bounds_by_block_observed_impl_v1(
+        context,
+        function,
+        inventory,
+        None,
+        #[cfg(test)]
+        stats,
+    )
+}
+
+fn invocation_upper_bounds_by_block_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    inventory: &crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+    observer: RaceObserverV1<'_, '_, '_>,
+) -> Option<Vec<[Option<u64>; MAX_RANKED_MEMORY_RANK]>> {
+    invocation_upper_bounds_by_block_observed_impl_v1(
+        context,
+        function,
+        inventory,
+        observer,
+        #[cfg(test)]
+        None,
+    )
+}
+
+fn invocation_upper_bounds_by_block_observed_impl_v1(
+    context: &Context,
+    function: &FuncOp,
+    inventory: &crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+    observer: RaceObserverV1<'_, '_, '_>,
+    #[cfg(test)] stats: Option<&mut RaceCfgStatsV1>,
+) -> Option<Vec<[Option<u64>; MAX_RANKED_MEMORY_RANK]>> {
+    let run = || {
+        invocation_upper_bounds_by_block_core_v1(
+            context,
+            function,
+            inventory,
+            observer,
+            #[cfg(test)]
+            stats,
+        )
+    };
+    match observer {
+        None => run(),
+        Some(observer) => observer.with_projection(&Ok, |_| run()),
+    }
+}
+
+fn invocation_upper_bounds_by_block_core_v1(
+    context: &Context,
+    function: &FuncOp,
+    inventory: &crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+    observer: RaceObserverV1<'_, '_, '_>,
     #[cfg(test)] mut stats: Option<&mut RaceCfgStatsV1>,
 ) -> Option<Vec<[Option<u64>; MAX_RANKED_MEMORY_RANK]>> {
     let blocks = inventory.blocks();
@@ -97,8 +153,15 @@ fn invocation_upper_bounds_by_block_impl(
         if let Some(stats) = stats.as_deref_mut() {
             stats.pops += 1;
         }
-        work = work.checked_add(1)?;
+        work = match work.checked_add(1) {
+            Some(work) => work,
+            None => {
+                observe_race_quota_v1(observer, "race invocation-bound work overflow");
+                return None;
+            }
+        };
         if work > MAX_PLIRON_RACE_EFFECT_INSTANCES_V1 {
+            observe_race_quota_v1(observer, "race invocation-bound work limit");
             return None;
         }
         let source = inputs[block_index]?;

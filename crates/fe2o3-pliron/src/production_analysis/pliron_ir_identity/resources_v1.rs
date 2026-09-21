@@ -218,10 +218,62 @@ fn dominate_identity_preflight_bound_v1(
     ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, retained, temporary)
 }
 
+fn carry_identity_callbacks_v1(
+    bound: ProductionAnalysisResourceUpperBoundV1,
+    callbacks: usize,
+) -> Result<
+    ProductionAnalysisResourceUpperBoundV1,
+    crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+> {
+    dominate_identity_preflight_bound_v1(
+        bound,
+        ProductionAnalysisResourceUpperBoundV1::checked_phase(
+            ProductionAnalysisResourcePhaseV1::StructuralIdentity,
+            callbacks,
+            0,
+            0,
+        )?,
+    )
+}
+
+fn require_identity_prefix_v1(
+    limits: ProductionAnalysisResourceLimitsV1,
+    bound: Result<
+        ProductionAnalysisResourceUpperBoundV1,
+        crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+    >,
+    callbacks: usize,
+    observer: RenderObserverV1<'_, '_, '_>,
+) -> Result<
+    ProductionAnalysisResourceUpperBoundV1,
+    crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+> {
+    let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+    match observer {
+        None => bound.and_then(|bound| limits.require(phase, bound)),
+        Some(parent) => parent.with_projection(
+            &|bound| carry_identity_callbacks_v1(bound, callbacks),
+            |nested| nested.require(limits, phase, bound),
+        ),
+    }
+}
+
 fn preflight_identity_structure_v1(
     context: &Context,
     function: &FuncOp,
     limits: ProductionAnalysisResourceLimitsV1,
+) -> Result<
+    IdentityPreflightCensusV1,
+    crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+> {
+    preflight_identity_structure_with_observation_v1(context, function, limits, None)
+}
+
+fn preflight_identity_structure_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<
     IdentityPreflightCensusV1,
     crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
@@ -231,11 +283,17 @@ fn preflight_identity_structure_v1(
     let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
     let mut work = 1_usize;
     let mut storage = 1_usize;
-    let require = |work, storage| {
-        let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, 0, storage)?;
-        limits.require(phase, bound).map(|_| ())
+    let mut native_switch_verification_work = 0_usize;
+    let require = |work, storage, callbacks| {
+        require_identity_prefix_v1(
+            limits,
+            ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, 0, storage),
+            callbacks,
+            observer,
+        )
+        .map(|_| ())
     };
-    require(work, storage)?;
+    require(work, storage, native_switch_verification_work)?;
     let root = function.get_operation().deref(context);
     let root_attributes = root.attributes.0.len();
     work = work
@@ -250,7 +308,7 @@ fn preflight_identity_structure_v1(
             phase,
             resource: "identity preflight storage upper bound",
         })?;
-    require(work, storage)?;
+    require(work, storage, native_switch_verification_work)?;
     let root_semantic_attributes = semantic_attribute_count_v1(&root.attributes);
     let mut rendered_entities = root_semantic_attributes
         .checked_mul(9)
@@ -268,7 +326,6 @@ fn preflight_identity_structure_v1(
             })?;
     let mut records = 3_usize;
     let mut max_semantic_attributes_per_dictionary = root_semantic_attributes;
-    let mut native_switch_verification_work = 0_usize;
     let mut native_switch_verification_scratch = 0_usize;
     for block in function.get_region(context).deref(context).iter(context) {
         let block = block.deref(context);
@@ -284,7 +341,7 @@ fn preflight_identity_structure_v1(
                 phase,
                 resource: "identity preflight storage upper bound",
             })?;
-        require(work, storage)?;
+        require(work, storage, native_switch_verification_work)?;
         let block_items = block
             .get_num_arguments()
             .checked_add(block.attributes.0.len())
@@ -304,7 +361,7 @@ fn preflight_identity_structure_v1(
                 phase,
                 resource: "identity preflight storage upper bound",
             })?;
-        require(work, storage)?;
+        require(work, storage, native_switch_verification_work)?;
         let block_semantic_attributes = semantic_attribute_count_v1(&block.attributes);
         max_semantic_attributes_per_dictionary =
             max_semantic_attributes_per_dictionary.max(block_semantic_attributes);
@@ -367,16 +424,34 @@ fn preflight_identity_structure_v1(
                     phase,
                     resource: "identity preflight storage upper bound",
                 })?;
-            require(work, storage)?;
+            require(work, storage, native_switch_verification_work)?;
             if let Some(switch) =
                 Operation::get_op::<dialect_gpu::switch_v3::SwitchOpV3>(pointer, context)
             {
                 let prefix =
                     ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, storage, 0)?;
                 let available = limits.remaining_after_retained(phase, prefix)?;
-                let native = crate::production_analysis::pliron_switch_verification_v1::census_switch_verification_v1(
-                    context, switch, available,
-                )?;
+                use crate::production_analysis::pliron_switch_verification_v1::census_switch_verification_with_observation_v1;
+                let callbacks_before = native_switch_verification_work;
+                let project = |child| {
+                    carry_identity_callbacks_v1(
+                        prefix.checked_then_retain(child, phase)?,
+                        callbacks_before,
+                    )
+                };
+                let native = match observer {
+                    None => census_switch_verification_with_observation_v1(
+                        context, switch, available, None,
+                    ),
+                    Some(parent) => parent.with_projection(&project, |nested| {
+                        census_switch_verification_with_observation_v1(
+                            context,
+                            switch,
+                            available,
+                            Some(nested),
+                        )
+                    }),
+                }?;
                 work = work.checked_add(native.traversal_work).ok_or(
                     ProductionAnalysisResourceLimitV1 {
                         phase,

@@ -26,6 +26,7 @@ use std::{fmt, mem::size_of};
 
 #[path = "production_pipeline_loop_preheaders_native_v1.rs"]
 mod loop_preheaders_native_v1;
+pub(crate) use loop_preheaders_native_v1::InductionRefinementNativeStageErrorV1;
 pub(crate) use loop_preheaders_native_v1::LicmNativeStageErrorV1;
 pub(crate) use loop_preheaders_native_v1::LoopPreheadersNativeStageErrorV1;
 

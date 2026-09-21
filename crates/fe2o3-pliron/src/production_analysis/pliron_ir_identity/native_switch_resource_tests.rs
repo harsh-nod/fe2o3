@@ -57,6 +57,86 @@ fn native_switch_preflight_sums_callback_work_and_reuses_scratch_without_admitti
         capture_bound_v1(context, &function, hard),
         Err(IdentityCaptureFailureV1::Unavailable { .. })
     ));
+    use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+        InvocationReceiptFailureV1, InvocationReceiptV1,
+    };
+    let phase_kind = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+    let mut census_receipt = InvocationReceiptV1::new(Default::default(), hard).unwrap();
+    let phase = census_receipt.phase(phase_kind, 0).unwrap();
+    assert_eq!(
+        preflight_identity_structure_with_observation_v1(
+            context,
+            &function,
+            hard,
+            Some(&phase.observer(&Ok))
+        )
+        .unwrap(),
+        preflight
+    );
+    drop(phase);
+    let census_prefix = census_receipt.complete().unwrap();
+    assert_eq!(
+        census_prefix.work_upper_bound(),
+        preflight.structural_work + 8145
+    );
+    let textual = identity_textual_preflight_resource_upper_bound_v1(preflight).unwrap();
+    let expected = carry_identity_callbacks_v1(textual, 8145).unwrap();
+    assert_eq!(
+        expected.work_upper_bound(),
+        textual.work_upper_bound() + 8145
+    );
+    assert_eq!(
+        expected.peak_storage_upper_bound(),
+        textual.peak_storage_upper_bound()
+    );
+    assert_eq!(
+        expected.retained_storage_upper_bound(),
+        textual.retained_storage_upper_bound()
+    );
+    for short in [false, true] {
+        let limits = ProductionAnalysisResourceLimitsV1::new(
+            expected.work_upper_bound() - usize::from(short),
+            hard.max_peak_storage(),
+        );
+        let mut receipt = InvocationReceiptV1::new(Default::default(), limits).unwrap();
+        let phase = receipt.phase(phase_kind, 0).unwrap();
+        let result = LivePlironStructuralIdentityProviderV1::new(context, &function)
+            .capture_with_resource_observation_v1(hard, Some(&phase.observer(&Ok)));
+        drop(phase);
+        let state = receipt.snapshot();
+        assert!(!state.caught_panic);
+        if short {
+            let Err(IdentityCaptureFailureV1::ResourceLimit(error)) = result else {
+                panic!("textual admission must refuse one-short work");
+            };
+            assert_eq!(error.phase, phase_kind);
+            assert_eq!(error.resource, "work upper bound");
+            assert_eq!(state.committed, census_prefix);
+            assert_eq!(state.first_denial, Some(error));
+            assert_eq!(
+                receipt.complete(),
+                Err(InvocationReceiptFailureV1::Denied(error))
+            );
+        } else {
+            assert!(matches!(
+                result,
+                Err(IdentityCaptureFailureV1::Unavailable {
+                    source_code: "FE2O3-PRESERVE-001",
+                    ..
+                })
+            ));
+            assert_eq!(
+                state.committed.work_upper_bound(),
+                expected.work_upper_bound()
+            );
+            assert_eq!(
+                state.committed.peak_storage_upper_bound(),
+                expected.peak_storage_upper_bound()
+            );
+            assert_eq!(state.first_denial, None);
+            assert_eq!(receipt.complete(), Ok(state.committed));
+        }
+    }
     let census = ProductionAnalysisInputCensusV1 {
         blocks: 3,
         operations: 3,

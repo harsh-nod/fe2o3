@@ -1,3 +1,33 @@
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::InvocationObserverV1;
+use fe2o3_kernel_analysis::PresburgerFailureV1;
+
+type RankedBoundsObserverV1<'o, 'p, 'r> = Option<&'o InvocationObserverV1<'p, 'r>>;
+
+fn observe_bounds_presburger_failure_v1(
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+    failure: &PresburgerFailureV1,
+) {
+    if let (Some(observer), PresburgerFailureV1::ResourceLimit { .. }) = (observer, failure) {
+        observer.deny(ranked_bounds_resource_error_v1(
+            "Presburger query work limit",
+        ));
+    }
+}
+
+fn observe_bounds_sparse_failure_v1(
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+    failure: &SparseIndexFailureV1,
+) {
+    if let (Some(observer), SparseIndexFailureV1::ResourceLimit { resource, .. }) =
+        (observer, failure)
+    {
+        observer.deny(ProductionAnalysisResourceLimitV1 {
+            phase: ProductionAnalysisResourcePhaseV1::SparseIndex,
+            resource,
+        });
+    }
+}
+
 /// Runs the target-neutral ranked-memory bounds stage for one Pliron function.
 ///
 /// The function must already contain `kernel.ranked_view`, `kernel.dim`,
@@ -12,26 +42,55 @@ pub(crate) fn run_pliron_ranked_bounds_check_v1(
     run_pliron_ranked_bounds_check_with_analyses_v1(context, function, &mut analyses)
 }
 
+#[cfg(test)]
 pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
+) -> RankedBoundsReportV1 {
+    run_pliron_ranked_bounds_check_with_observation_v1(context, function, analyses, None)
+}
+
+pub(crate) fn run_pliron_ranked_bounds_check_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+) -> RankedBoundsReportV1 {
+    match observer {
+        None => run_pliron_ranked_bounds_inner_v1(context, function, analyses, None),
+        Some(observer) => observer.with_projection(&Ok, |nested| {
+            run_pliron_ranked_bounds_inner_v1(context, function, analyses, Some(nested))
+        }),
+    }
+}
+
+fn run_pliron_ranked_bounds_inner_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
 ) -> RankedBoundsReportV1 {
     let mut budget = RankedBoundsBudget::default();
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,
         Err(failure) => {
-            return resource_failure(failure.resource(), failure.limit(), failure.actual());
+            return resource_failure(
+                failure.resource(),
+                failure.limit(),
+                failure.actual(),
+                observer,
+            );
         }
     };
     let blocks = inventory.blocks();
     for _block in blocks {
         if let Err(finding) = budget.reserve(RankedBoundsResource::Blocks, 1) {
-            return finding_failure(finding);
+            return finding_failure(finding, observer);
         }
         if let Err(finding) = budget.storage(1) {
-            return finding_failure(finding);
+            return finding_failure(finding, observer);
         }
     }
     if blocks.is_empty() {
@@ -47,7 +106,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
             let operation_index = site.operation();
             let operation_pointer = site.pointer();
             if let Err(finding) = budget.reserve(RankedBoundsResource::Operations, 1) {
-                return finding_failure(finding);
+                return finding_failure(finding, observer);
             }
             let operation = Operation::get_op_dyn(operation_pointer, context);
             let Some(kind) = ranked_operation_kind(operation.as_ref()) else {
@@ -63,7 +122,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                         kind: operation.get_opid().to_string(),
                     }
                 };
-                return finding_failure(finding);
+                return finding_failure(finding, observer);
             };
             if kind.is_terminator() != (terminator == Some(operation_pointer)) {
                 return structural_failure();
@@ -83,20 +142,21 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                     RankedBoundsResource::OperationItems.description(),
                     RankedBoundsResource::OperationItems.limit(),
                     usize::MAX,
+                    observer,
                 );
             };
             if let Err(finding) =
                 budget.reserve(RankedBoundsResource::OperationItems, operation_items)
             {
-                return finding_failure(finding);
+                return finding_failure(finding, observer);
             }
             if let Err(finding) =
                 budget.reserve(RankedBoundsResource::Edges, raw.get_num_successors())
             {
-                return finding_failure(finding);
+                return finding_failure(finding, observer);
             }
             if let Err(finding) = budget.work(operation_items.saturating_add(1)) {
-                return finding_failure(finding);
+                return finding_failure(finding, observer);
             }
         }
     }
@@ -110,21 +170,23 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     let sparse_indices = match analyses.sparse_indices() {
         Ok(analysis) => analysis,
         Err(failure) => {
-            return finding_failure(sparse_index_failure(failure));
+            observe_bounds_sparse_failure_v1(observer, &failure);
+            return finding_failure(sparse_index_failure(failure), observer);
         }
     };
     let presburger = match analyses.presburger() {
         Ok(analysis) => analysis,
         Err(failure) => {
-            return finding_failure(sparse_index_failure(failure));
+            observe_bounds_sparse_failure_v1(observer, &failure);
+            return finding_failure(sparse_index_failure(failure), observer);
         }
     };
 
     if let Err(finding) = budget.storage(blocks.len().saturating_mul(3)) {
-        return finding_failure(finding);
+        return finding_failure(finding, observer);
     }
     if let Err(finding) = budget.work(blocks.len()) {
-        return finding_failure(finding);
+        return finding_failure(finding, observer);
     }
     let indices = blocks
         .iter()
@@ -139,7 +201,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
 
     for (block_index, block) in blocks.iter().enumerate() {
         if let Err(finding) = budget.work(1) {
-            return finding_failure(finding);
+            return finding_failure(finding, observer);
         }
         has_forwarded_arguments |=
             block_index != 0 && block.deref(context).get_num_arguments() != 0;
@@ -164,10 +226,10 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                 Some(index)
             } else {
                 if let Err(finding) = budget.reserve(RankedBoundsResource::Facts, 1) {
-                    return finding_failure(finding);
+                    return finding_failure(finding, observer);
                 }
                 if let Err(finding) = budget.storage(1) {
-                    return finding_failure(finding);
+                    return finding_failure(finding, observer);
                 }
                 let next = fact_indices.len();
                 fact_indices.insert(fact, next);
@@ -180,7 +242,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
         let raw = terminator.deref(context);
         for (successor_index, successor) in raw.successors().enumerate() {
             if let Err(finding) = budget.work(2) {
-                return finding_failure(finding);
+                return finding_failure(finding, observer);
             }
             let Some(target) = indices.get(&successor).copied() else {
                 if let Err(finding) = push_finding(&mut findings, &mut budget, || {
@@ -189,13 +251,13 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                         operation: "successor outside function region".to_owned(),
                     }
                 }) {
-                    return finding_failure(finding);
+                    return finding_failure(finding, observer);
                 }
                 continue;
             };
             successors[block_index].push(target);
             if let Err(finding) = budget.storage(1) {
-                return finding_failure(finding);
+                return finding_failure(finding, observer);
             }
             predecessors[target].push(PredecessorEdge {
                 block: block_index,
@@ -206,14 +268,14 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     }
 
     if let Err(finding) = budget.storage(budget.edges.saturating_mul(2)) {
-        return finding_failure(finding);
+        return finding_failure(finding, observer);
     }
     if let Err(finding) = budget.storage(blocks.len().saturating_mul(2)) {
-        return finding_failure(finding);
+        return finding_failure(finding, observer);
     }
     let reachable = match reachable_blocks(&successors, &mut budget) {
         Ok(reachable) => reachable,
-        Err(finding) => return finding_failure(finding),
+        Err(finding) => return finding_failure(finding, observer),
     };
     for (block, is_reachable) in reachable.iter().copied().enumerate() {
         if !is_reachable
@@ -221,7 +283,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                 RankedBoundsFindingV1::UnreachableBlock { block }
             })
         {
-            return finding_failure(finding);
+            return finding_failure(finding, observer);
         }
     }
 
@@ -232,6 +294,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
             RankedBoundsResource::StorageItems.description(),
             RankedBoundsResource::StorageItems.limit(),
             usize::MAX,
+            observer,
         );
     };
     let Some(dataflow_storage) = blocks
@@ -243,10 +306,11 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
             RankedBoundsResource::StorageItems.description(),
             RankedBoundsResource::StorageItems.limit(),
             usize::MAX,
+            observer,
         );
     };
     if let Err(finding) = budget.storage(dataflow_storage) {
-        return finding_failure(finding);
+        return finding_failure(finding, observer);
     }
     let mut inputs = (0..blocks.len())
         .map(|block| {
@@ -274,17 +338,17 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                 &mut budget,
             ) {
                 Ok(next) => next,
-                Err(finding) => return finding_failure(finding),
+                Err(finding) => return finding_failure(finding, observer),
             }
         };
         if let Err(finding) = budget.work(1) {
-            return finding_failure(finding);
+            return finding_failure(finding, observer);
         }
         if next != inputs[block] {
             inputs[block] = next;
             for successor in &successors[block] {
                 if let Err(finding) = budget.work(1) {
-                    return finding_failure(finding);
+                    return finding_failure(finding, observer);
                 }
                 if reachable[*successor] && !queued[*successor] {
                     queued[*successor] = true;
@@ -307,7 +371,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
         for site in inventory.block_operations(block_index) {
             let operation_index = site.operation();
             if let Err(finding) = budget.work(1) {
-                return finding_failure(finding);
+                return finding_failure(finding, observer);
             }
             let operation = Operation::get_op_dyn(site.pointer(), context);
             if let Some(access) = operation.downcast_ref::<RankedAccessOp>()
@@ -325,9 +389,10 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                         findings: &mut findings,
                         budget: &mut budget,
                     },
+                    observer,
                 )
             {
-                return finding_failure(finding);
+                return finding_failure(finding, observer);
             }
         }
     }
@@ -353,12 +418,14 @@ pub(crate) fn require_pliron_ranked_bounds_before_lowering_v1(
     }
 }
 
-pub(crate) fn require_pliron_ranked_bounds_with_analyses_v1(
+pub(crate) fn require_pliron_ranked_bounds_with_observation_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
 ) -> Result<RankedBoundsReportV1, RankedBoundsCheckErrorV1> {
-    let report = run_pliron_ranked_bounds_check_with_analyses_v1(context, function, analyses);
+    let report =
+        run_pliron_ranked_bounds_check_with_observation_v1(context, function, analyses, observer);
     if report.is_clean() {
         Ok(report)
     } else {
@@ -366,19 +433,35 @@ pub(crate) fn require_pliron_ranked_bounds_with_analyses_v1(
     }
 }
 
-fn resource_failure(resource: &'static str, limit: usize, actual: usize) -> RankedBoundsReportV1 {
-    finding_failure(RankedBoundsFindingV1::ResourceLimitExceeded {
-        resource,
-        limit,
-        actual,
-    })
+fn resource_failure(
+    resource: &'static str,
+    limit: usize,
+    actual: usize,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+) -> RankedBoundsReportV1 {
+    finding_failure(
+        RankedBoundsFindingV1::ResourceLimitExceeded {
+            resource,
+            limit,
+            actual,
+        },
+        observer,
+    )
 }
 
 fn structural_failure() -> RankedBoundsReportV1 {
-    finding_failure(RankedBoundsFindingV1::StructuralVerificationFailed)
+    finding_failure(RankedBoundsFindingV1::StructuralVerificationFailed, None)
 }
 
-fn finding_failure(finding: RankedBoundsFindingV1) -> RankedBoundsReportV1 {
+fn finding_failure(
+    finding: RankedBoundsFindingV1,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+) -> RankedBoundsReportV1 {
+    if let (Some(observer), RankedBoundsFindingV1::ResourceLimitExceeded { resource, .. }) =
+        (observer, &finding)
+    {
+        observer.deny(ranked_bounds_resource_error_v1(resource));
+    }
     RankedBoundsReportV1 {
         findings: vec![finding],
     }

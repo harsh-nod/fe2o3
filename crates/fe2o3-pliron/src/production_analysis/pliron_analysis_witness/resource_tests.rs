@@ -98,6 +98,7 @@ mod resource_upper_bound_tests {
 
 #[cfg(test)]
 mod tests {
+    include!("observation_v1_tests.rs");
     use dialect_kernel::{DIALECT_NAME, register_dialect};
     use fe2o3_pliron_owner_core::{ensure_context_identity, require_context_identity};
     use pliron::{

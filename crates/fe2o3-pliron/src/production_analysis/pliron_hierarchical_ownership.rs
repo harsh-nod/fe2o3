@@ -24,11 +24,9 @@ use pliron::{
 use crate::production_analysis::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::production_analysis::pliron_barrier::trace_failure_detail;
 use crate::production_analysis::pliron_invocation_trace::{
-    PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceLocationV1,
+    PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1, PlironTraceLocationV1,
     ProductionInvocationTraceResourceAdmissionV1,
 };
-use crate::production_analysis::pliron_race::run_pliron_ranked_race_check_with_analyses_v1;
-use crate::production_analysis::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::production_analysis::pliron_resource_envelope::{
     ProductionAnalysisInputCensusV1, ProductionAnalysisResourceLimitV1,
     ProductionAnalysisResourceLimitsV1, ProductionAnalysisResourcePhaseV1,
@@ -822,3 +820,6 @@ include!("pliron_hierarchical_ownership/resource_tests.rs");
 
 #[path = "pliron_hierarchical_ownership/conditional_analysis_v1.rs"]
 pub(crate) mod conditional_analysis_v1;
+
+#[path = "pliron_hierarchical_ownership/conditional_execution_v1.rs"]
+pub(crate) mod conditional_execution_v1;

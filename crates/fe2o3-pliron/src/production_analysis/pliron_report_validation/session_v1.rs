@@ -1,62 +1,152 @@
+type ReportObservationV1<'o, 'p, 'r> =
+    super::pliron_report_payload_receipt::PayloadObservationV1<'o, 'p, 'r>;
+
+fn with_report_observation_v1<T>(
+    observer: ReportObservationV1<'_, '_, '_>,
+    run: impl FnOnce(
+        ReportObservationV1<'_, '_, '_>,
+    ) -> Result<T, ProductionAnalysisReportValidationErrorV1>,
+) -> Result<T, ProductionAnalysisReportValidationErrorV1> {
+    match observer {
+        None => run(None),
+        Some(observer) => observer.with_projection(&Ok, |nested| run(Some(nested))),
+    }
+}
+
+fn observed_report_resource_error_v1(
+    observer: ReportObservationV1<'_, '_, '_>,
+    pass: Option<KernelCheckPassKindV1>,
+    error: ProductionAnalysisResourceLimitV1,
+) -> ProductionAnalysisReportValidationErrorV1 {
+    if let Some(observer) = observer {
+        observer.deny(error);
+    }
+    match pass {
+        None => report_resource_error_v1(error),
+        Some(pass) => report_stage_resource_error_v1(pass, error),
+    }
+}
+
 impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
-    fn new_with_resource_limits_v1(
+    fn new_with_observation_v1(
         context: &'a Context,
         function: &'a FuncOp,
         atomic_target: Option<&PlironAtomicTargetContextV1>,
         preservation: PlironPassValidationHandleV1,
         input_census: ProductionAnalysisInputCensusV1,
         limits: ProductionAnalysisResourceLimitsV1,
+        observer: ReportObservationV1<'_, '_, '_>,
     ) -> Result<Self, ProductionAnalysisReportValidationErrorV1> {
-        let configuration_items = atomic_target.map_or(0, |target| target.capabilities().len());
-        let setup_resource_upper_bound =
-            report_validation_setup_resource_upper_bound_v1(configuration_items)
-                .map_err(report_resource_error_v1)?;
-        limits
-            .require(
+        with_report_observation_v1(observer, |observer| {
+            let resource_error = |error| observed_report_resource_error_v1(observer, None, error);
+            let configuration_items = atomic_target.map_or(0, |target| target.capabilities().len());
+            let setup_resource_upper_bound =
+                report_validation_setup_resource_upper_bound_v1(configuration_items)
+                    .map_err(resource_error)?;
+            super::pliron_pipeline::invocation_receipt_v1::require_observed_v1(
+                limits,
                 ProductionAnalysisResourcePhaseV1::ReportValidation,
-                setup_resource_upper_bound,
+                Ok(setup_resource_upper_bound),
+                observer,
             )
-            .map_err(report_resource_error_v1)?;
+            .map_err(resource_error)?;
 
-        let atomic_configuration = match atomic_target {
-            None => ProductionAnalysisConfigurationV1::AtomicTargetAgnostic,
-            Some(target) => {
-                let mut capabilities = Vec::new();
-                capabilities
-                    .try_reserve_exact(configuration_items)
-                    .map_err(
-                        |_| ProductionAnalysisReportValidationErrorV1::ResourceLimit {
-                            producing_pass: None,
-                            resource: "report validation target capability allocation",
-                        },
-                    )?;
-                capabilities.extend(target.capabilities().iter().copied());
-                ProductionAnalysisConfigurationV1::AtomicTarget { capabilities }
-            }
-        };
-        let mut stages = Vec::new();
-        stages
-            .try_reserve_exact(PRODUCTION_ANALYSIS_REPORT_COUNT_V1)
-            .map_err(
-                |_| ProductionAnalysisReportValidationErrorV1::ResourceLimit {
-                    producing_pass: None,
-                    resource: "report validation stage allocation",
-                },
-            )?;
-        Ok(Self {
-            preservation,
-            context_address: context as *const Context as usize,
-            function: function.get_operation(),
-            atomic_configuration,
-            input_census,
-            next: 0,
-            stages,
-            setup_resource_upper_bound,
-            last_stage_resource_upper_bound: None,
-            _subject_borrow: PhantomData,
+            let atomic_configuration = match atomic_target {
+                None => ProductionAnalysisConfigurationV1::AtomicTargetAgnostic,
+                Some(target) => {
+                    let mut capabilities = Vec::new();
+                    capabilities
+                        .try_reserve_exact(configuration_items)
+                        .map_err(|_| {
+                            resource_error(ProductionAnalysisResourceLimitV1 {
+                                phase: ProductionAnalysisResourcePhaseV1::ReportValidation,
+                                resource: "report validation target capability allocation",
+                            })
+                        })?;
+                    capabilities.extend(target.capabilities().iter().copied());
+                    ProductionAnalysisConfigurationV1::AtomicTarget { capabilities }
+                }
+            };
+            let mut stages = Vec::new();
+            stages
+                .try_reserve_exact(PRODUCTION_ANALYSIS_REPORT_COUNT_V1)
+                .map_err(|_| {
+                    resource_error(ProductionAnalysisResourceLimitV1 {
+                        phase: ProductionAnalysisResourcePhaseV1::ReportValidation,
+                        resource: "report validation stage allocation",
+                    })
+                })?;
+            Ok(Self {
+                preservation,
+                context_address: context as *const Context as usize,
+                function: function.get_operation(),
+                atomic_configuration,
+                input_census,
+                next: 0,
+                stages,
+                setup_resource_upper_bound,
+                last_stage_resource_upper_bound: None,
+                _subject_borrow: PhantomData,
+            })
         })
     }
 
+    fn subject_v1(&self) -> ReportValidationSubjectV1<'_> {
+        ReportValidationSubjectV1 {
+            preservation: &self.preservation,
+            context_address: self.context_address,
+            function: self.function,
+            atomic_configuration: &self.atomic_configuration,
+        }
+    }
+
+    fn issue_with_payload_receipt_v1(
+        &self,
+        context: &Context,
+        function: &FuncOp,
+        checkpoint_token: PlironPassCheckpointTokenV1,
+        report: CapturedProductionAnalysisReportV1,
+        payload_receipt: ProductionAnalysisReportPayloadReceiptV1,
+        observer: ReportObservationV1<'_, '_, '_>,
+    ) -> Result<BoundProductionAnalysisReportV1, ProductionAnalysisReportValidationErrorV1> {
+        self.subject_v1().issue_at_v1(
+            self.next,
+            context,
+            function,
+            checkpoint_token,
+            report,
+            (payload_receipt, observer),
+        )
+    }
+
+    fn accept_with_resource_upper_bound_v1(
+        &mut self,
+        context: &Context,
+        function: &FuncOp,
+        bound: &BoundProductionAnalysisReportV1,
+        resource_upper_bound: ProductionAnalysisResourceUpperBoundV1,
+        analyses: &mut PlironAnalysisManagerV1,
+        observer: ReportObservationV1<'_, '_, '_>,
+    ) -> Result<(), ProductionAnalysisReportValidationErrorV1> {
+        let stage = self
+            .subject_v1()
+            .accept_at_v1(self.next, context, function, bound, analyses, observer)?;
+        self.stages.push(stage);
+        self.last_stage_resource_upper_bound = Some(resource_upper_bound);
+        self.next += 1;
+        Ok(())
+    }
+}
+
+// One stage's custody and witness checks, shared without an ordinary session.
+struct ReportValidationSubjectV1<'a> {
+    preservation: &'a PlironPassValidationHandleV1,
+    context_address: usize,
+    function: Ptr<Operation>,
+    atomic_configuration: &'a ProductionAnalysisConfigurationV1,
+}
+
+impl ReportValidationSubjectV1<'_> {
     fn expected_configuration(
         &self,
         pass: KernelCheckPassKindV1,
@@ -68,26 +158,31 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
         }
     }
 
-    fn issue_with_payload_receipt_v1(
+    fn issue_at_v1(
         &self,
+        position: usize,
         context: &Context,
         function: &FuncOp,
         checkpoint_token: PlironPassCheckpointTokenV1,
         report: CapturedProductionAnalysisReportV1,
-        payload_receipt: ProductionAnalysisReportPayloadReceiptV1,
+        payload: (
+            ProductionAnalysisReportPayloadReceiptV1,
+            ReportObservationV1<'_, '_, '_>,
+        ),
     ) -> Result<BoundProductionAnalysisReportV1, ProductionAnalysisReportValidationErrorV1> {
-        self.require_subject_handles(context, function, self.next)?;
+        let (payload_receipt, observer) = payload;
+        self.require_subject_handles(context, function, position)?;
         if !self.preservation.same_custody(&checkpoint_token) {
             return Err(
                 ProductionAnalysisReportValidationErrorV1::CounterfeitOrCrossSessionSeal {
-                    position: self.next,
+                    position,
                 },
             );
         }
         let expected = PRODUCTION_PLIRON_PASS_CONTRACTS_V1
-            .get(self.next)
+            .get(position)
             .ok_or(ProductionAnalysisReportValidationErrorV1::OmittedReport {
-                position: self.next,
+                position,
                 pass: report.pass(),
             })?
             .pass();
@@ -108,32 +203,23 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
             claimed_status: report.status(),
             issued_report: report
                 .try_clone_payload_v1(payload_receipt)
-                .map_err(|error| report_stage_resource_error_v1(report.pass(), error))?,
+                .map_err(|error| {
+                    observed_report_resource_error_v1(observer, Some(report.pass()), error)
+                })?,
             submitted_report: report,
         })
     }
 
-    #[cfg(test)]
-    fn issue(
+    fn accept_at_v1(
         &self,
-        context: &Context,
-        function: &FuncOp,
-        checkpoint_token: PlironPassCheckpointTokenV1,
-        report: CapturedProductionAnalysisReportV1,
-    ) -> Result<BoundProductionAnalysisReportV1, ProductionAnalysisReportValidationErrorV1> {
-        let receipt = ProductionAnalysisReportPayloadReceiptV1::fallback(report.pass(), 0);
-        self.issue_with_payload_receipt_v1(context, function, checkpoint_token, report, receipt)
-    }
-
-    fn accept_with_resource_upper_bound_v1(
-        &mut self,
+        position: usize,
         context: &Context,
         function: &FuncOp,
         bound: &BoundProductionAnalysisReportV1,
-        resource_upper_bound: ProductionAnalysisResourceUpperBoundV1,
         analyses: &mut PlironAnalysisManagerV1,
-    ) -> Result<(), ProductionAnalysisReportValidationErrorV1> {
-        let position = self.next;
+        observer: ReportObservationV1<'_, '_, '_>,
+    ) -> Result<ProductionAnalysisStageValidationV1, ProductionAnalysisReportValidationErrorV1>
+    {
         self.require_subject_handles(context, function, position)?;
         if !self.preservation.same_custody(&bound.checkpoint_token) {
             return Err(
@@ -227,51 +313,21 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
                 bound
                     .submitted_report
                     .try_clone_payload_v1(bound.payload_receipt)
-                    .map_err(|error| report_stage_resource_error_v1(expected, error))?,
-                analyses,
+                    .map_err(|error| {
+                        observed_report_resource_error_v1(observer, Some(expected), error)
+                    })?,
+                (analyses, observer),
             )
             .map_err(|error| {
                 ProductionAnalysisReportValidationErrorV1::WitnessValidation { position, error }
             })?;
-        self.stages.push(ProductionAnalysisStageValidationV1 {
+        Ok(ProductionAnalysisStageValidationV1 {
             checkpoint: bound.submitted_checkpoint,
             implementation: bound.implementation,
             configuration: bound.configuration.clone(),
             analysis_status: bound.claimed_status,
             witness,
-        });
-        self.last_stage_resource_upper_bound = Some(resource_upper_bound);
-        self.next += 1;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn accept(
-        &mut self,
-        context: &Context,
-        function: &FuncOp,
-        bound: &BoundProductionAnalysisReportV1,
-    ) -> Result<(), ProductionAnalysisReportValidationErrorV1> {
-        let mut analyses = PlironAnalysisManagerV1::new(function);
-        self.accept_with_resource_upper_bound_v1(
-            context,
-            function,
-            bound,
-            ProductionAnalysisResourceUpperBoundV1::default(),
-            &mut analyses,
-        )
-    }
-
-    pub(crate) const fn last_stage_resource_upper_bound_v1(
-        &self,
-    ) -> Option<ProductionAnalysisResourceUpperBoundV1> {
-        self.last_stage_resource_upper_bound
-    }
-
-    pub(crate) const fn setup_resource_upper_bound_v1(
-        &self,
-    ) -> ProductionAnalysisResourceUpperBoundV1 {
-        self.setup_resource_upper_bound
+        })
     }
 
     fn require_subject_handles(
@@ -289,6 +345,57 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
             );
         }
         Ok(())
+    }
+}
+
+impl ProductionAnalysisReportValidationSessionV1<'_> {
+    #[cfg(test)]
+    fn issue(
+        &self,
+        context: &Context,
+        function: &FuncOp,
+        checkpoint_token: PlironPassCheckpointTokenV1,
+        report: CapturedProductionAnalysisReportV1,
+    ) -> Result<BoundProductionAnalysisReportV1, ProductionAnalysisReportValidationErrorV1> {
+        let receipt = ProductionAnalysisReportPayloadReceiptV1::fallback(report.pass(), 0);
+        self.issue_with_payload_receipt_v1(
+            context,
+            function,
+            checkpoint_token,
+            report,
+            receipt,
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    fn accept(
+        &mut self,
+        context: &Context,
+        function: &FuncOp,
+        bound: &BoundProductionAnalysisReportV1,
+    ) -> Result<(), ProductionAnalysisReportValidationErrorV1> {
+        let mut analyses = PlironAnalysisManagerV1::new(function);
+        self.accept_with_resource_upper_bound_v1(
+            context,
+            function,
+            bound,
+            ProductionAnalysisResourceUpperBoundV1::default(),
+            &mut analyses,
+            None,
+        )
+    }
+
+    pub(crate) const fn last_stage_resource_upper_bound_v1(
+        &self,
+    ) -> Option<ProductionAnalysisResourceUpperBoundV1> {
+        self.last_stage_resource_upper_bound
+    }
+
+    pub(crate) const fn setup_resource_upper_bound_v1(
+        &self,
+    ) -> ProductionAnalysisResourceUpperBoundV1 {
+        self.setup_resource_upper_bound
     }
 
     fn finish(
@@ -335,6 +442,7 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn begin_production_analysis_report_validation_with_resource_limits_v1<'a>(
     context: &'a Context,
     function: &'a FuncOp,
@@ -346,13 +454,37 @@ pub(crate) fn begin_production_analysis_report_validation_with_resource_limits_v
     ProductionAnalysisReportValidationSessionV1<'a>,
     ProductionAnalysisReportValidationErrorV1,
 > {
-    ProductionAnalysisReportValidationSessionV1::new_with_resource_limits_v1(
+    begin_production_analysis_report_validation_with_observation_v1(
         context,
         function,
         atomic_target,
         preservation,
         input_census,
         limits,
+        None,
+    )
+}
+
+pub(crate) fn begin_production_analysis_report_validation_with_observation_v1<'a>(
+    context: &'a Context,
+    function: &'a FuncOp,
+    atomic_target: Option<&PlironAtomicTargetContextV1>,
+    preservation: PlironPassValidationHandleV1,
+    input_census: ProductionAnalysisInputCensusV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: ReportObservationV1<'_, '_, '_>,
+) -> Result<
+    ProductionAnalysisReportValidationSessionV1<'a>,
+    ProductionAnalysisReportValidationErrorV1,
+> {
+    ProductionAnalysisReportValidationSessionV1::new_with_observation_v1(
+        context,
+        function,
+        atomic_target,
+        preservation,
+        input_census,
+        limits,
+        observer,
     )
 }
 
@@ -376,9 +508,17 @@ pub(crate) fn begin_production_analysis_report_validation_v1<'a>(
 
 pub(crate) trait SealedProductionAnalysisReportV1: Clone {
     fn pass(&self) -> KernelCheckPassKindV1;
+    #[cfg(test)]
     fn payload_receipt_v1(
         &self,
         limits: ProductionAnalysisResourceLimitsV1,
+    ) -> Result<ProductionAnalysisReportPayloadReceiptV1, ProductionAnalysisResourceLimitV1> {
+        self.payload_receipt_with_observation_v1(limits, None)
+    }
+    fn payload_receipt_with_observation_v1(
+        &self,
+        limits: ProductionAnalysisResourceLimitsV1,
+        observer: super::pliron_report_payload_receipt::PayloadObservationV1<'_, '_, '_>,
     ) -> Result<ProductionAnalysisReportPayloadReceiptV1, ProductionAnalysisResourceLimitV1>;
     fn try_capture_for_sealed_validation_v1(
         &self,
@@ -393,12 +533,18 @@ macro_rules! impl_sealed_report {
                 KernelCheckPassKindV1::$pass
             }
 
-            fn payload_receipt_v1(
+            fn payload_receipt_with_observation_v1(
                 &self,
                 limits: ProductionAnalysisResourceLimitsV1,
+                observer: super::pliron_report_payload_receipt::PayloadObservationV1<'_, '_, '_>,
             ) -> Result<ProductionAnalysisReportPayloadReceiptV1, ProductionAnalysisResourceLimitV1>
             {
-                self.validation_payload_receipt_v1(limits)
+                match observer {
+                    None => self.validation_payload_receipt_v1(limits),
+                    Some(observer) => {
+                        self.validation_payload_receipt_with_observation_v1(limits, Some(observer))
+                    }
+                }
             }
 
             fn try_capture_for_sealed_validation_v1(
@@ -425,9 +571,10 @@ macro_rules! impl_conservative_sealed_report {
                 KernelCheckPassKindV1::$pass
             }
 
-            fn payload_receipt_v1(
+            fn payload_receipt_with_observation_v1(
                 &self,
                 _limits: ProductionAnalysisResourceLimitsV1,
+                _observer: super::pliron_report_payload_receipt::PayloadObservationV1<'_, '_, '_>,
             ) -> Result<ProductionAnalysisReportPayloadReceiptV1, ProductionAnalysisResourceLimitV1>
             {
                 Ok(ProductionAnalysisReportPayloadReceiptV1::fallback(
@@ -475,6 +622,7 @@ pub(crate) struct ProductionAnalysisReportEndpointV1<'a> {
 }
 
 impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
+    #[cfg(test)]
     pub(crate) fn record_with_resource_limits_v1<R: SealedProductionAnalysisReportV1>(
         &mut self,
         endpoint: ProductionAnalysisReportEndpointV1<'_>,
@@ -484,45 +632,78 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
         limits: ProductionAnalysisResourceLimitsV1,
         analyses: &mut PlironAnalysisManagerV1,
     ) -> Result<(), ProductionAnalysisReportValidationErrorV1> {
-        let ProductionAnalysisReportEndpointV1 { context, function } = endpoint;
-        let configuration_items = match &self.atomic_configuration {
-            ProductionAnalysisConfigurationV1::AtomicTarget { capabilities } => capabilities.len(),
-            ProductionAnalysisConfigurationV1::FixedByImplementation
-            | ProductionAnalysisConfigurationV1::AtomicTargetAgnostic => 0,
-        };
-        let stage_error = |error| report_stage_resource_error_v1(report.pass(), error);
-        let payload_receipt = report.payload_receipt_v1(limits).map_err(stage_error)?;
-        let resource_upper_bound = report_validation_stage_resource_upper_bound_v1(
+        self.record_with_observation_v1(
+            endpoint,
+            checkpoint,
+            report,
             producing_phase_upper_bound,
-            payload_receipt,
-            configuration_items,
-            report.pass(),
-            self.input_census,
             limits,
+            (analyses, None),
         )
-        .map_err(stage_error)?;
-        limits
-            .require(
-                ProductionAnalysisResourcePhaseV1::ReportValidation,
-                resource_upper_bound,
+    }
+
+    pub(crate) fn record_with_observation_v1<R: SealedProductionAnalysisReportV1>(
+        &mut self,
+        endpoint: ProductionAnalysisReportEndpointV1<'_>,
+        checkpoint: PlironPassCheckpointTokenV1,
+        report: &R,
+        producing_phase_upper_bound: ProductionAnalysisResourceUpperBoundV1,
+        limits: ProductionAnalysisResourceLimitsV1,
+        observed_analyses: (
+            &mut PlironAnalysisManagerV1,
+            ReportObservationV1<'_, '_, '_>,
+        ),
+    ) -> Result<(), ProductionAnalysisReportValidationErrorV1> {
+        let (analyses, observer) = observed_analyses;
+        with_report_observation_v1(observer, |observer| {
+            let ProductionAnalysisReportEndpointV1 { context, function } = endpoint;
+            let configuration_items = match &self.atomic_configuration {
+                ProductionAnalysisConfigurationV1::AtomicTarget { capabilities } => {
+                    capabilities.len()
+                }
+                ProductionAnalysisConfigurationV1::FixedByImplementation
+                | ProductionAnalysisConfigurationV1::AtomicTargetAgnostic => 0,
+            };
+            let stage_error =
+                |error| observed_report_resource_error_v1(observer, Some(report.pass()), error);
+            let payload_receipt = report
+                .payload_receipt_with_observation_v1(limits, observer)
+                .map_err(stage_error)?;
+            let resource_upper_bound = report_validation_stage_resource_upper_bound_v1(
+                producing_phase_upper_bound,
+                payload_receipt,
+                configuration_items,
+                report.pass(),
+                self.input_census,
+                limits,
             )
             .map_err(stage_error)?;
-        let bound = self.issue_with_payload_receipt_v1(
-            context,
-            function,
-            checkpoint,
-            report
-                .try_capture_for_sealed_validation_v1(payload_receipt)
-                .map_err(stage_error)?,
-            payload_receipt,
-        )?;
-        self.accept_with_resource_upper_bound_v1(
-            context,
-            function,
-            &bound,
-            resource_upper_bound,
-            analyses,
-        )
+            super::pliron_pipeline::invocation_receipt_v1::require_observed_v1(
+                limits,
+                ProductionAnalysisResourcePhaseV1::ReportValidation,
+                Ok(resource_upper_bound),
+                observer,
+            )
+            .map_err(stage_error)?;
+            let bound = self.issue_with_payload_receipt_v1(
+                context,
+                function,
+                checkpoint,
+                report
+                    .try_capture_for_sealed_validation_v1(payload_receipt)
+                    .map_err(stage_error)?,
+                payload_receipt,
+                observer,
+            )?;
+            self.accept_with_resource_upper_bound_v1(
+                context,
+                function,
+                &bound,
+                resource_upper_bound,
+                analyses,
+                observer,
+            )
+        })
     }
 
     #[cfg(test)]
@@ -554,12 +735,22 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn finish_validation(
         self,
         preservation: &PlironPassPreservationReportV1,
     ) -> Result<ProductionAnalysisReportValidationV1, ProductionAnalysisReportValidationErrorV1>
     {
-        self.finish(preservation)
+        self.finish_validation_with_observation_v1(preservation, None)
+    }
+
+    pub(crate) fn finish_validation_with_observation_v1(
+        self,
+        preservation: &PlironPassPreservationReportV1,
+        observer: ReportObservationV1<'_, '_, '_>,
+    ) -> Result<ProductionAnalysisReportValidationV1, ProductionAnalysisReportValidationErrorV1>
+    {
+        with_report_observation_v1(observer, |_| self.finish(preservation))
     }
 }
 

@@ -4,10 +4,24 @@ use fe2o3_kernel_analysis::{
     CheckedCanonicalKirPrivateCellPromotionV1 as PromotionRelation,
 };
 type Site = Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>;
+#[path = "production_checked_output_cross_block_forwarding_sites_v1.rs"]
+mod cross_block_forwarding_sites;
+pub use cross_block_forwarding_sites::ProductionCrossBlockForwardingOriginV1;
+pub(super) use cross_block_forwarding_sites::check_cross_block_forwarding_sites;
+#[cfg(test)]
+pub(super) use cross_block_forwarding_sites::exercise_cross_block_source_refusals;
+pub(super) use cross_block_forwarding_sites::with_checked_cross_block_forwarding_sites;
 
 #[path = "production_checked_output_licm_sites_v1.rs"]
 mod licm_sites;
+#[cfg(test)]
 pub(super) use licm_sites::check_licm_after_preheaders_sites;
+pub(super) use licm_sites::with_licm_after_preheaders_sites;
+#[path = "production_checked_output_induction_refinement_sites_v1.rs"]
+mod induction_refinement_sites;
+pub use induction_refinement_sites::ProductionInductionRefinementOriginV1;
+pub(super) use induction_refinement_sites::check_induction_refinement_sites;
+pub(super) use induction_refinement_sites::with_checked_induction_refinement_sites;
 #[cfg(test)]
 pub(super) use licm_sites::exercise_licm_source_sites;
 
@@ -240,6 +254,62 @@ fn census_sites_named(
     budget: &mut AssertOriginBudgetV1<'_>,
     binding: &PromotionBinding,
 ) -> PResult<Box<[FormalMemoryObligations]>> {
+    census_sites_inner(sites, stage, None, None, budget, binding)
+}
+
+pub(super) fn census_induction_refinement_sites(
+    sites: CheckedPromotedSites<'_, '_>,
+    pair: &fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
+    census_sites_inner(
+        sites,
+        "checked induction refinement",
+        Some(pair),
+        None,
+        budget,
+        binding,
+    )
+}
+
+pub(super) fn census_refined_forwarding_sites(
+    sites: CheckedPromotedSites<'_, '_>,
+    intermediate: &CanonicalKirInventoryV1<'_>,
+    refinement: &fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>,
+    forwarding: &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
+    census_sites_inner(
+        sites,
+        "refined cross-block private forwarding",
+        Some(refinement),
+        Some((forwarding, intermediate)),
+        budget,
+        binding,
+    )
+}
+
+pub(super) fn check_licm_sites(
+    sites: CheckedPromotedSites<'_, '_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
+    census_sites_named(sites, "total-integer LICM", budget, binding)
+}
+
+fn census_sites_inner(
+    sites: CheckedPromotedSites<'_, '_>,
+    stage: &'static str,
+    refinement: Option<&fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>>,
+    forwarding: Option<(
+        &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'_>,
+        &CanonicalKirInventoryV1<'_>,
+    )>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
     let source = sites.source();
     let output = sites.output();
     let output_sites = sites.statements();
@@ -259,21 +329,54 @@ fn census_sites_named(
             .checked_mul(3)
             .ok_or(AssertOriginResourceV1::Arithmetic)?,
     )?;
-    census::native(
-        output,
-        &private,
-        &division,
-        &helpers,
-        stage,
-        |ordinal, coordinate| {
-            Ok(traps.get(ordinal).copied().unwrap_or(false)
-                && output
-                    .operations()
-                    .get(ordinal)
-                    .is_some_and(|row| row.coordinate == coordinate))
-        },
-        budget,
-    )?;
+    let authorized_trap = |ordinal: usize, coordinate: CanonicalKirOperationCoordinateV1| {
+        Ok(traps.get(ordinal).copied().unwrap_or(false)
+            && output
+                .operations()
+                .get(ordinal)
+                .is_some_and(|row| row.coordinate == coordinate))
+    };
+    if let Some((forwarding, intermediate)) = forwarding {
+        let pair = refinement.ok_or_else(|| {
+            refused(
+                "refined cross-block private forwarding",
+                "both actual sequential pairs",
+            )
+        })?;
+        census::native_with_refinement_forwarding(
+            output,
+            &private,
+            &division,
+            &helpers,
+            stage,
+            authorized_trap,
+            pair,
+            forwarding,
+            intermediate,
+            budget,
+        )?;
+    } else if let Some(pair) = refinement {
+        census::native_with_induction_refinement(
+            output,
+            &private,
+            &division,
+            &helpers,
+            stage,
+            authorized_trap,
+            pair,
+            budget,
+        )?;
+    } else {
+        census::native(
+            output,
+            &private,
+            &division,
+            &helpers,
+            stage,
+            authorized_trap,
+            budget,
+        )?;
+    }
     binding.check(budget)?;
     let reports = derive_checked_output_guarded_obligations_v1(
         output.owner(),

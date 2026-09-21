@@ -2817,6 +2817,7 @@ fn reviewed_provider_semantic_definition_from_source_v1(
         canonical_definition_path,
         structural_local_definition_component,
         cargo_metadata_build_observation: decode_sha256_environment(
+            tcx,
             CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
         )?,
         source_closure_identity: source_closure.identity,
@@ -3177,8 +3178,15 @@ fn reviewed_provider_source_identity_from_path(
     Ok(hasher.finalize().into())
 }
 
-fn decode_sha256_environment(name: &str) -> Result<[u8; 32], String> {
+fn decode_sha256_environment(tcx: TyCtxt<'_>, name: &str) -> Result<[u8; 32], String> {
+    if let Some(value) = tcx.sess.opts.logical_env.get(name) {
+        return decode_sha256_environment_value(name, value);
+    }
     let value = std::env::var(name).map_err(|_| format!("managed build omitted {name}"))?;
+    decode_sha256_environment_value(name, &value)
+}
+
+fn decode_sha256_environment_value(name: &str, value: &str) -> Result<[u8; 32], String> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(format!("managed build supplied malformed {name}"));
     }
@@ -3190,6 +3198,12 @@ fn decode_sha256_environment(name: &str) -> Result<[u8; 32], String> {
     }
     Ok(digest)
 }
+
+#[cfg(test)]
+#[path = "trusted_device_items/managed_session_environment_v1_tests.rs"]
+mod managed_session_environment_v1_tests;
+#[cfg(test)]
+pub(crate) use managed_session_environment_v1_tests::observe_managed_build_value_v1;
 
 fn half_math_path(item: Fe2o3DeviceDiagnosticItem) -> &'static str {
     HALF_MATH_DIAGNOSTIC_ITEMS

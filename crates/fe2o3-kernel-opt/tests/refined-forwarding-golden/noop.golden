@@ -1,0 +1,14 @@
+CASE: noop
+CHECK-BEFORE: module wire-chain kernels=0 capabilities=[]
+CHECK-BEFORE: f0 f role=InternalHelper params=[] results=[] capabilities=[]
+CHECK-BEFORE: f0:b0 block-id=10 params=[]
+CHECK-BEFORE: f0:b0 Return []
+CHECK-R: module wire-chain kernels=0 capabilities=[]
+CHECK-R: f0 f role=InternalHelper params=[] results=[] capabilities=[]
+CHECK-R: f0:b0 block-id=10 params=[]
+CHECK-R: f0:b0 Return []
+CHECK-AFTER: module wire-chain kernels=0 capabilities=[]
+CHECK-AFTER: f0 f role=InternalHelper params=[] results=[] capabilities=[]
+CHECK-AFTER: f0:b0 block-id=10 params=[]
+CHECK-AFTER: f0:b0 Return []
+CHECK-REMARK: splits=0 forwards=0 same-middle-owner=true independent-pairs=true authority=false

@@ -114,6 +114,7 @@ pub(crate) enum ProductionPipelineError {
     PrivateCellNativeStage(private_cell_native_v1::PrivateCellNativeStageErrorV1),
     LoopPreheadersNativeStage(private_cell_native_v1::LoopPreheadersNativeStageErrorV1),
     LicmNativeStage(private_cell_native_v1::LicmNativeStageErrorV1),
+    InductionRefinementNativeStage(private_cell_native_v1::InductionRefinementNativeStageErrorV1),
     ScalarEmissionCapture(Box<fe2o3_lower_mir_kernel::ProductionScalarSsaEmissionErrorV1>),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
     TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
@@ -154,6 +155,7 @@ impl fmt::Display for ProductionPipelineError {
             Self::PrivateCellNativeStage(error) => write!(formatter, "private-cell native stage failed: {error}"),
             Self::LoopPreheadersNativeStage(error) => write!(formatter, "loop-preheaders native stage failed: {error}"),
             Self::LicmNativeStage(error) => write!(formatter, "LICM native stage failed: {error}"),
+            Self::InductionRefinementNativeStage(error) => write!(formatter, "induction-refinement native stage failed: {error}"),
             Self::CustomLlvmConfiguration => formatter.write_str(
                 "production compilation rejects caller-selected LLVM arguments or passes before transaction construction",
             ),
@@ -366,6 +368,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::PrivateCellNativeStage(error) => Some(error),
             Self::LoopPreheadersNativeStage(error) => Some(error),
             Self::LicmNativeStage(error) => Some(error),
+            Self::InductionRefinementNativeStage(error) => Some(error),
             Self::TargetKernelIrV8(error) => Some(error),
             Self::TargetKernelIrV9(error) => Some(error),
             Self::TargetKernelIrV11(error) => Some(error),

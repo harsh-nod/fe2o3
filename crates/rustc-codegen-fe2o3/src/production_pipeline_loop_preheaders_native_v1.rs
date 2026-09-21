@@ -11,6 +11,7 @@ use fe2o3_lower_mir_kernel::{
 
 #[path = "production_pipeline_licm_native_v1.rs"]
 mod licm_native_v1;
+pub(crate) use licm_native_v1::InductionRefinementNativeStageErrorV1;
 pub(crate) use licm_native_v1::LicmNativeStageErrorV1;
 
 #[derive(Debug)]

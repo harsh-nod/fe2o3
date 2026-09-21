@@ -227,9 +227,34 @@ impl PlironSemanticRefinementReportV1 {
         super::pliron_report_payload_receipt::ProductionAnalysisReportPayloadReceiptV1,
         super::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
     > {
+        self.validation_payload_receipt_with_observation_v1(limits, None)
+    }
+
+    pub(super) fn validation_payload_receipt_with_observation_v1(
+        &self,
+        limits: super::pliron_resource_envelope::ProductionAnalysisResourceLimitsV1,
+        observer: super::pliron_report_payload_receipt::PayloadObservationV1<'_, '_, '_>,
+    ) -> Result<
+        super::pliron_report_payload_receipt::ProductionAnalysisReportPayloadReceiptV1,
+        super::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+    > {
+        super::pliron_pipeline::invocation_receipt_v1::observe_resource_preflight_v1(
+            observer,
+            |observer| self.validation_payload_receipt_observed_inner_v1(limits, observer),
+        )
+    }
+
+    fn validation_payload_receipt_observed_inner_v1(
+        &self,
+        limits: super::pliron_resource_envelope::ProductionAnalysisResourceLimitsV1,
+        observer: super::pliron_report_payload_receipt::PayloadObservationV1<'_, '_, '_>,
+    ) -> Result<
+        super::pliron_report_payload_receipt::ProductionAnalysisReportPayloadReceiptV1,
+        super::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+    > {
         use super::pliron_report_payload_receipt::{
             ProductionAnalysisReportPayloadReceiptV1 as Receipt, payload_product_v1,
-            payload_sum_v1, require_payload_census_v1,
+            payload_sum_v1, require_payload_census_with_observation_v1,
         };
         // Header reads and arithmetic are fixed. Each progress certificate adds
         // one visit, four length/capacity reads, and six checked additions.
@@ -242,7 +267,7 @@ impl PlironSemanticRefinementReportV1 {
         const FIXED_COMPARISON_WORK: usize = 6 + 2 + 6 + 3;
         // Each evaluation folds three empty finding vectors and joins twice.
         const STATUS_WORK: usize = 4 * (3 + 2);
-        require_payload_census_v1(HEADER_CENSUS_WORK, limits)?;
+        require_payload_census_with_observation_v1(HEADER_CENSUS_WORK, limits, observer)?;
         if !self.findings.is_empty()
             || self.findings.capacity() != 0
             || !self.progress.has_empty_validation_findings_v1()
@@ -253,7 +278,7 @@ impl PlironSemanticRefinementReportV1 {
         let certificates = self.progress.certificates().len();
         let census_work =
             payload_sum_v1(&[HEADER_CENSUS_WORK, payload_product_v1(certificates, 11)?])?;
-        require_payload_census_v1(census_work, limits)?;
+        require_payload_census_with_observation_v1(census_work, limits, observer)?;
         let (owned_text, copied_text) = self.progress.validation_text_storage_v1()?;
         let owner_storage = payload_sum_v1(&[
             payload_product_v1(self.typed_root_commitments.capacity(), 4)?,

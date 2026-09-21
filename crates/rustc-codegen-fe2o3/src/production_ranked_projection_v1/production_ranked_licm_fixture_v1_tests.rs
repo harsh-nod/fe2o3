@@ -298,6 +298,31 @@ pub(crate) fn with_backend_licm_erased_prefix_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_licm_erased_prefix_order_v1(profile, mutation, false, next);
+}
+
+pub(crate) fn with_backend_forwarding_erased_prefix_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    mutation: bool,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_licm_erased_prefix_order_v1(profile, mutation, true, next);
+}
+
+fn with_backend_licm_erased_prefix_order_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    mutation: bool,
+    global_before_private: bool,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     canonical_assertion_graph_tests::with_backend_erased_functions_roster_v1(
         false,
         2,
@@ -309,6 +334,49 @@ pub(crate) fn with_backend_licm_erased_prefix_v1(
                 let boolean = functions[0].locals()[5].ty();
                 let wide = functions[0].locals()[6].ty();
                 native_licm_source_v1(functions, boolean, wide, true);
+                if global_before_private {
+                    for function in functions.iter_mut().take(2) {
+                        let mut blocks = function.blocks().to_vec();
+                        let body = &blocks[6];
+                        let mut statements = body.statements().to_vec();
+                        assert_eq!(statements.len(), 4);
+                        assert!(matches!(
+                            statements[2].kind(),
+                            SemanticStatementKindV1::Store(_)
+                        ));
+                        assert!(matches!(
+                            statements[3].kind(),
+                            SemanticStatementKindV1::Store(_)
+                        ));
+                        // Change only these unadmitted source occurrences. The
+                        // old wrapper never takes this branch; all admission,
+                        // source lifetime, erasure and ranked gates below rerun.
+                        statements.swap(2, 3);
+                        blocks[6] = SemanticBasicBlockV1::new(
+                            body.identity(),
+                            body.source(),
+                            statements,
+                            body.terminator().clone(),
+                        )
+                        .unwrap();
+                        let rebuilt = SemanticFunctionDeclV1::new(
+                            function.identity(),
+                            function.role(),
+                            function.item_definition_identity(),
+                            function.monomorphization_identity(),
+                            function.generic_type_arguments_identity(),
+                            function.const_generic_arguments_identity(),
+                            function.source(),
+                            function.abi().clone(),
+                            function.locals().to_vec(),
+                            function.entry(),
+                            blocks,
+                        )
+                        .unwrap()
+                        .with_kernel_entry(function.kernel_entry().unwrap().clone());
+                        *function = rebuilt;
+                    }
+                }
             }
         },
         |source, bound, ranked, budget| {

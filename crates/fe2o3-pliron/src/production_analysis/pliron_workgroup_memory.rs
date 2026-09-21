@@ -39,7 +39,7 @@ use crate::production_analysis::pliron_invocation_trace::{
 use crate::production_analysis::pliron_memory_order::{
     PlironMemoryOrderFailureV1, PlironMemoryOrderIssueV1, ProductionMemoryOrderResourceAdmissionV1,
 };
-use crate::production_analysis::pliron_pipeline_protocol::run_pliron_pipeline_protocol_check_with_analyses_v1;
+use crate::production_analysis::pliron_pipeline_protocol::run_pliron_pipeline_protocol_with_observation_v1;
 use crate::production_analysis::pliron_provenance_alias::MAX_PLIRON_PROVENANCE_DIAGNOSTIC_BYTES_V1;
 #[cfg(test)]
 use crate::production_analysis::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
@@ -400,15 +400,17 @@ pub(crate) fn run_pliron_workgroup_memory_check_v1(
     run_pliron_workgroup_memory_check_with_analyses_v1(context, function, &mut analyses)
 }
 
-pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
+fn run_pliron_workgroup_memory_observed_inner_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
+    observer: WorkgroupObserverV1<'_, '_, '_>,
 ) -> PlironWorkgroupMemoryReportV1 {
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,
-        Err(_) => {
+        Err(failure) => {
+            observe_workgroup_quota_v1(observer, failure.resource());
             return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
                 detail: "the bounded function inventory limit was exceeded".to_owned(),
             });
@@ -495,6 +497,7 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
             context,
             &inventory,
             &collective_effect_sites,
+            observer,
         ) {
             return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail });
         }
@@ -504,7 +507,7 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
     }
     if !pipeline_views.is_empty() {
         let pipeline =
-            run_pliron_pipeline_protocol_check_with_analyses_v1(context, function, analyses);
+            run_pliron_pipeline_protocol_with_observation_v1(context, function, analyses, observer);
         if pipeline.is_clean() {
             let certified = pipeline
                 .certificates()
@@ -529,6 +532,7 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
     let memory_order = match analyses.memory_order() {
         Ok(analysis) => analysis,
         Err(failure) => {
+            observe_workgroup_dependency_failure_v1(observer, &failure);
             return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
                 detail: memory_order_failure_detail(failure),
             });
@@ -638,16 +642,18 @@ struct CollectiveTransposePathSummaryV1 {
     trapped: Vec<Vec<CollectiveTransposePathEventV1>>,
 }
 
-fn prepend_collective_path_v1(
+fn prepend_collective_path_with_observation_v1(
     local: &[CollectiveTransposePathEventV1],
     summary: CollectiveTransposePathSummaryV1,
+    observer: WorkgroupObserverV1<'_, '_, '_>,
 ) -> Result<CollectiveTransposePathSummaryV1, String> {
     let prepend = |mut suffix: Vec<CollectiveTransposePathEventV1>| {
-        let total = local
-            .len()
-            .checked_add(suffix.len())
-            .ok_or_else(|| "collective transpose path length overflowed".to_owned())?;
+        let total = local.len().checked_add(suffix.len()).ok_or_else(|| {
+            observe_workgroup_quota_v1(observer, "collective transpose path length overflow");
+            "collective transpose path length overflowed".to_owned()
+        })?;
         if total > MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1 {
+            observe_workgroup_quota_v1(observer, "collective transpose path event limit");
             return Err(format!(
                 "collective transpose path has more than {MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1} events"
             ));
@@ -666,9 +672,10 @@ fn prepend_collective_path_v1(
     Ok(CollectiveTransposePathSummaryV1 { normal, trapped })
 }
 
-fn merge_collective_path_v1(
+fn merge_collective_path_with_observation_v1(
     complete: &mut CollectiveTransposePathSummaryV1,
     candidate: CollectiveTransposePathSummaryV1,
+    observer: WorkgroupObserverV1<'_, '_, '_>,
 ) -> Result<(), String> {
     if let Some(candidate_normal) = candidate.normal {
         if let Some(first_normal) = &complete.normal
@@ -681,6 +688,10 @@ fn merge_collective_path_v1(
     for candidate_trap in candidate.trapped {
         if !complete.trapped.contains(&candidate_trap) {
             if complete.trapped.len() == MAX_COLLECTIVE_TRANSPOSE_TRAP_TRACES_V1 {
+                observe_workgroup_quota_v1(
+                    observer,
+                    "collective transpose terminal trap trace limit",
+                );
                 return Err(format!(
                     "collective transpose CFG has more than {MAX_COLLECTIVE_TRANSPOSE_TRAP_TRACES_V1} distinct terminal trap traces"
                 ));
@@ -711,6 +722,7 @@ fn collective_block_events_v1(
     inventory: &BoundedPlironFunctionInventoryV1,
     block: usize,
     terminator: Ptr<Operation>,
+    observer: WorkgroupObserverV1<'_, '_, '_>,
 ) -> Result<Vec<CollectiveTransposePathEventV1>, String> {
     let mut events = Vec::with_capacity(MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1);
     for site in inventory.block_operations(block) {
@@ -746,6 +758,7 @@ fn collective_block_events_v1(
                 continue;
             }
             if events.len() == MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1 {
+                observe_workgroup_quota_v1(observer, "collective transpose block event limit");
                 return Err(format!(
                     "block {block} has more than {MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1} collective transpose events"
                 ));
@@ -772,6 +785,7 @@ fn collective_block_events_v1(
                 ));
             };
             if events.len() == MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1 {
+                observe_workgroup_quota_v1(observer, "collective transpose block event limit");
                 return Err(format!(
                     "block {block} has more than {MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1} collective transpose events"
                 ));
@@ -795,6 +809,7 @@ fn validate_collective_transpose_lifecycle_v1(
     context: &Context,
     inventory: &BoundedPlironFunctionInventoryV1,
     expected_sites: &HashSet<PlironTraceLocationV1>,
+    observer: WorkgroupObserverV1<'_, '_, '_>,
 ) -> Result<(), String> {
     let blocks = inventory.blocks();
     let block_indices = blocks
@@ -817,6 +832,7 @@ fn validate_collective_transpose_lifecycle_v1(
             inventory,
             block_index,
             terminator,
+            observer,
         )?);
         let terminator_op = Operation::get_op_dyn(terminator, context);
         let raw = terminator_op.get_operation().deref(context);
@@ -893,8 +909,12 @@ fn validate_collective_transpose_lifecycle_v1(
                 let suffix = summaries[successor].clone().ok_or_else(|| {
                     format!("block {predecessor} has an unresolved cyclic CFG successor")
                 })?;
-                let candidate = prepend_collective_path_v1(&local_events[predecessor], suffix)?;
-                merge_collective_path_v1(&mut summary, candidate)?;
+                let candidate = prepend_collective_path_with_observation_v1(
+                    &local_events[predecessor],
+                    suffix,
+                    observer,
+                )?;
+                merge_collective_path_with_observation_v1(&mut summary, candidate, observer)?;
             }
             summaries[predecessor] = Some(summary);
             ready.push_back(predecessor);
@@ -986,19 +1006,6 @@ fn memory_order_failure_detail(failure: PlironMemoryOrderAnalysisFailureV1) -> S
     }
 }
 
-pub(crate) fn require_pliron_workgroup_memory_with_analyses_v1(
-    context: &Context,
-    function: &FuncOp,
-    analyses: &mut PlironAnalysisManagerV1,
-) -> Result<PlironWorkgroupMemoryReportV1, PlironWorkgroupMemoryCheckErrorV1> {
-    let report = run_pliron_workgroup_memory_check_with_analyses_v1(context, function, analyses);
-    if report.is_clean() {
-        Ok(report)
-    } else {
-        Err(PlironWorkgroupMemoryCheckErrorV1 { report })
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn require_pliron_workgroup_memory_safety_before_lowering_v1(
     context: &Context,
@@ -1019,3 +1026,5 @@ fn one(finding: PlironWorkgroupMemoryFindingV1) -> PlironWorkgroupMemoryReportV1
 }
 
 include!("pliron_workgroup_memory/resource_tests.rs");
+include!("pliron_workgroup_memory/observation_v1.rs");
+include!("pliron_workgroup_memory/observation_v1_tests.rs");

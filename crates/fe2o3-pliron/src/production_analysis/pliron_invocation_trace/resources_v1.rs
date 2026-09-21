@@ -1,3 +1,7 @@
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+    InvocationObserverV1, observe_resource_preflight_v1, require_observed_v1,
+};
+
 /// Precharges the full operation scan that extracts and validates the single
 /// fixed-size execution-layout contract. This phase must run before the
 /// resulting layout is used to derive an invocation-trace expansion bound.
@@ -5,16 +9,26 @@ pub(crate) fn preflight_execution_layout_resource_upper_bound_v1(
     census: ProductionAnalysisInputCensusV1,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
-    let phase = ProductionAnalysisResourcePhaseV1::LaunchContract;
-    let work = census
-        .operations
-        .checked_add(12)
-        .ok_or(ProductionAnalysisResourceLimitV1 {
-            phase,
-            resource: "execution layout resource upper bound",
-        })?;
-    let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, 10, 0)?;
-    limits.require(phase, bound)
+    preflight_execution_layout_resource_upper_bound_with_observation_v1(census, limits, None)
+}
+
+pub(crate) fn preflight_execution_layout_resource_upper_bound_with_observation_v1(
+    census: ProductionAnalysisInputCensusV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: Option<&InvocationObserverV1<'_, '_>>,
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    observe_resource_preflight_v1(observer, |observer| {
+        let phase = ProductionAnalysisResourcePhaseV1::LaunchContract;
+        let work = census
+            .operations
+            .checked_add(12)
+            .ok_or(ProductionAnalysisResourceLimitV1 {
+                phase,
+                resource: "execution layout resource upper bound",
+            })?;
+        let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, 10, 0)?;
+        require_observed_v1(limits, phase, Ok(bound), observer)
+    })
 }
 
 const TRACE_BLOCK_STATE_CENSUS_TEMPORARY_V1: usize = 3;
@@ -33,11 +47,22 @@ fn trace_block_state_census_error_v1() -> ProductionAnalysisResourceLimitV1 {
 
 // The analysis manager supplies the same immutable inventory to preflight and
 // tracing. Aggregate counts check the scan domain; they are not owner identity.
+#[cfg(test)]
 fn collect_trace_block_state_census_v1(
     context: &Context,
     inventory: &BoundedPlironFunctionInventoryV1,
     census: ProductionAnalysisInputCensusV1,
     limits: ProductionAnalysisResourceLimitsV1,
+) -> Result<InvocationTraceBlockStateCensusV1, ProductionAnalysisResourceLimitV1> {
+    collect_trace_block_state_census_observed_v1(context, inventory, census, limits, None)
+}
+
+fn collect_trace_block_state_census_observed_v1(
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    census: ProductionAnalysisInputCensusV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: Option<&InvocationObserverV1<'_, '_>>,
 ) -> Result<InvocationTraceBlockStateCensusV1, ProductionAnalysisResourceLimitV1> {
     let phase = ProductionAnalysisResourcePhaseV1::InvocationTrace;
     let work = census
@@ -45,14 +70,16 @@ fn collect_trace_block_state_census_v1(
         .checked_add(1)
         .ok_or_else(trace_resource_overflow_v1)?;
     // Two result fields and the running sum; no roster or key is allocated.
-    limits.require(
+    require_observed_v1(
+        limits,
         phase,
         ProductionAnalysisResourceUpperBoundV1::checked_phase(
             phase,
             work,
             0,
             TRACE_BLOCK_STATE_CENSUS_TEMPORARY_V1,
-        )?,
+        ),
+        observer,
     )?;
     if inventory.blocks().len() != census.blocks {
         return Err(trace_block_state_census_error_v1());
@@ -91,50 +118,74 @@ pub(crate) fn preflight_invocation_trace_resource_upper_bound_v1(
     layout: Option<PlironExecutionLayoutV1>,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionInvocationTraceResourcePreflightV1, ProductionAnalysisResourceLimitV1> {
-    let exact_shape =
-        sparse.and_then(|sparse| static_invocation_shape_for_resource_v1(sparse, layout));
-    if let Some((invocations, launch_rank)) = exact_shape {
-        let inventory = inventory.ok_or(ProductionAnalysisResourceLimitV1 {
-            phase: ProductionAnalysisResourcePhaseV1::InvocationTrace,
-            resource: "invocation trace inventory unavailable",
-        })?;
-        let block_state = collect_trace_block_state_census_v1(context, inventory, census, limits)?;
-        let exact_admission = invocation_trace_resource_upper_bound_for_block_state_v1(
-            census,
-            block_state,
-            invocations,
-            launch_rank,
-            limits,
-        )?;
-        return Ok(ProductionInvocationTraceResourcePreflightV1 {
-            attempt_upper_bound: exact_admission.upper_bound(),
-            exact_admission: Some(exact_admission),
-        });
-    }
+    preflight_invocation_trace_resource_upper_bound_with_observation_v1(
+        context, inventory, census, sparse, layout, limits, None,
+    )
+}
 
-    // Rejected attempts still scan for scoped operations, validate the bounded
-    // launch vector, and retain a cache error. Admit that work even though no
-    // exact invocation expansion is available to downstream analyses.
-    let launch_rank = layout
-        .map(|_| 3)
-        .or_else(|| sparse.map(|sparse| sparse.launch_extents().len()))
-        .unwrap_or(MAX_RANKED_MEMORY_RANK);
-    let work = checked_trace_sum_v1(&[
-        census.operations,
-        checked_trace_product_v1(launch_rank, 2)?,
-        16,
-    ])?;
-    let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(
-        ProductionAnalysisResourcePhaseV1::InvocationTrace,
-        work,
-        8,
-        launch_rank,
-    )?;
-    let attempt_upper_bound =
-        limits.require(ProductionAnalysisResourcePhaseV1::InvocationTrace, bound)?;
-    Ok(ProductionInvocationTraceResourcePreflightV1 {
-        attempt_upper_bound,
-        exact_admission: None,
+pub(crate) fn preflight_invocation_trace_resource_upper_bound_with_observation_v1(
+    context: &Context,
+    inventory: Option<&BoundedPlironFunctionInventoryV1>,
+    census: ProductionAnalysisInputCensusV1,
+    sparse: Option<&crate::SparseIndexAnalysisV1>,
+    layout: Option<PlironExecutionLayoutV1>,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: Option<&InvocationObserverV1<'_, '_>>,
+) -> Result<ProductionInvocationTraceResourcePreflightV1, ProductionAnalysisResourceLimitV1> {
+    observe_resource_preflight_v1(observer, |observer| {
+        let exact_shape =
+            sparse.and_then(|sparse| static_invocation_shape_for_resource_v1(sparse, layout));
+        if let Some((invocations, launch_rank)) = exact_shape {
+            let inventory = inventory.ok_or(ProductionAnalysisResourceLimitV1 {
+                phase: ProductionAnalysisResourcePhaseV1::InvocationTrace,
+                resource: "invocation trace inventory unavailable",
+            })?;
+            let block_state = collect_trace_block_state_census_observed_v1(
+                context, inventory, census, limits, observer,
+            )?;
+            let exact_admission =
+                invocation_trace_resource_upper_bound_for_block_state_observed_v1(
+                    census,
+                    block_state,
+                    invocations,
+                    launch_rank,
+                    limits,
+                    observer,
+                )?;
+            return Ok(ProductionInvocationTraceResourcePreflightV1 {
+                attempt_upper_bound: exact_admission.upper_bound(),
+                exact_admission: Some(exact_admission),
+            });
+        }
+
+        // Rejected attempts still scan for scoped operations, validate the bounded
+        // launch vector, and retain a cache error. Admit that work even though no
+        // exact invocation expansion is available to downstream analyses.
+        let launch_rank = layout
+            .map(|_| 3)
+            .or_else(|| sparse.map(|sparse| sparse.launch_extents().len()))
+            .unwrap_or(MAX_RANKED_MEMORY_RANK);
+        let work = checked_trace_sum_v1(&[
+            census.operations,
+            checked_trace_product_v1(launch_rank, 2)?,
+            16,
+        ])?;
+        let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(
+            ProductionAnalysisResourcePhaseV1::InvocationTrace,
+            work,
+            8,
+            launch_rank,
+        )?;
+        let attempt_upper_bound = require_observed_v1(
+            limits,
+            ProductionAnalysisResourcePhaseV1::InvocationTrace,
+            Ok(bound),
+            observer,
+        )?;
+        Ok(ProductionInvocationTraceResourcePreflightV1 {
+            attempt_upper_bound,
+            exact_admission: None,
+        })
     })
 }
 
@@ -179,12 +230,31 @@ pub(super) fn invocation_trace_resource_upper_bound_for_shape_v1(
     )
 }
 
+#[cfg(test)]
 fn invocation_trace_resource_upper_bound_for_block_state_v1(
     census: ProductionAnalysisInputCensusV1,
     block_state: InvocationTraceBlockStateCensusV1,
     invocations: usize,
     launch_rank: usize,
     limits: ProductionAnalysisResourceLimitsV1,
+) -> Result<ProductionInvocationTraceResourceAdmissionV1, ProductionAnalysisResourceLimitV1> {
+    invocation_trace_resource_upper_bound_for_block_state_observed_v1(
+        census,
+        block_state,
+        invocations,
+        launch_rank,
+        limits,
+        None,
+    )
+}
+
+fn invocation_trace_resource_upper_bound_for_block_state_observed_v1(
+    census: ProductionAnalysisInputCensusV1,
+    block_state: InvocationTraceBlockStateCensusV1,
+    invocations: usize,
+    launch_rank: usize,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: Option<&InvocationObserverV1<'_, '_>>,
 ) -> Result<ProductionInvocationTraceResourceAdmissionV1, ProductionAnalysisResourceLimitV1> {
     // A finite loop may revisit the same block with different block arguments.
     // The global step meter, rather than the static block/operation census, is
@@ -302,7 +372,12 @@ fn invocation_trace_resource_upper_bound_for_block_state_v1(
         retained,
         temporary,
     )?;
-    let upper_bound = limits.require(ProductionAnalysisResourcePhaseV1::InvocationTrace, bound)?;
+    let upper_bound = require_observed_v1(
+        limits,
+        ProductionAnalysisResourcePhaseV1::InvocationTrace,
+        Ok(bound),
+        observer,
+    )?;
     Ok(ProductionInvocationTraceResourceAdmissionV1 {
         upper_bound,
         invocation_count: invocations,

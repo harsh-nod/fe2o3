@@ -12,7 +12,7 @@ const SCOPED_PROGRESS_EPOCH_DETAIL_V1: &str = "IR mutation-attempt epoch exhaust
 // Error discriminant, optional pass (two cells), and three-cell String owner.
 const SCOPED_PROGRESS_ERROR_FIELDS_V1: usize = 6;
 
-fn scoped_progress_input_resource_upper_bound_v1()
+pub(crate) fn scoped_progress_input_resource_upper_bound_v1()
 -> Result<ProductionAnalysisResourceUpperBoundV1, PlironPassPreservationErrorV1> {
     ProductionAnalysisResourceUpperBoundV1::checked_phase(
         ProductionAnalysisResourcePhaseV1::PassPreservation,
@@ -106,6 +106,7 @@ impl<'scope, const BARRIER: bool> ScopedVerifiedProgressInputV1<'scope, BARRIER>
 }
 
 impl PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>> {
+    #[cfg(test)]
     pub(crate) fn run_scoped_semantic_refinement_with_resource_limits_v1<T, E>(
         &mut self,
         limits: impl Into<ProductionAnalysisReplacementLimitsV1>,
@@ -113,9 +114,21 @@ impl PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>> {
             ScopedVerifiedProgressInputV1<'scope>,
         ) -> Result<Result<T, E>, PlironPassPreservationErrorV1>,
     ) -> Result<Result<T, E>, PlironPassPreservationErrorV1> {
-        self.run_scoped_progress_pass_with_resource_limits_v1::<false, T, E>(limits, execute)
+        self.run_scoped_semantic_refinement_with_observation_v1(limits, execute, None)
     }
 
+    pub(crate) fn run_scoped_semantic_refinement_with_observation_v1<T, E>(
+        &mut self,
+        limits: impl Into<ProductionAnalysisReplacementLimitsV1>,
+        execute: impl for<'scope> FnOnce(
+            ScopedVerifiedProgressInputV1<'scope>,
+        ) -> Result<Result<T, E>, PlironPassPreservationErrorV1>,
+        observer: Option<&InvocationObserverV1<'_, '_>>,
+    ) -> Result<Result<T, E>, PlironPassPreservationErrorV1> {
+        self.run_scoped_progress_pass_with_observation_v1::<false, T, E>(limits, execute, observer)
+    }
+
+    #[cfg(test)]
     pub(crate) fn run_scoped_barrier_with_resource_limits_v1<T, E>(
         &mut self,
         limits: impl Into<ProductionAnalysisReplacementLimitsV1>,
@@ -123,20 +136,62 @@ impl PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>> {
             ScopedVerifiedProgressInputV1<'scope, true>,
         ) -> Result<Result<T, E>, PlironPassPreservationErrorV1>,
     ) -> Result<Result<T, E>, PlironPassPreservationErrorV1> {
-        self.run_scoped_progress_pass_with_resource_limits_v1::<true, T, E>(limits, execute)
+        self.run_scoped_barrier_with_observation_v1(limits, execute, None)
+    }
+
+    pub(crate) fn run_scoped_barrier_with_observation_v1<T, E>(
+        &mut self,
+        limits: impl Into<ProductionAnalysisReplacementLimitsV1>,
+        execute: impl for<'scope> FnOnce(
+            ScopedVerifiedProgressInputV1<'scope, true>,
+        ) -> Result<Result<T, E>, PlironPassPreservationErrorV1>,
+        observer: Option<&InvocationObserverV1<'_, '_>>,
+    ) -> Result<Result<T, E>, PlironPassPreservationErrorV1> {
+        self.run_scoped_progress_pass_with_observation_v1::<true, T, E>(limits, execute, observer)
     }
 
     // The two named entry points bind the pass at compile time; no caller can
     // mint an input for an arbitrary pass or replace its verified endpoints.
-    fn run_scoped_progress_pass_with_resource_limits_v1<const BARRIER: bool, T, E>(
+    fn run_scoped_progress_pass_with_observation_v1<const BARRIER: bool, T, E>(
         &mut self,
         limits: impl Into<ProductionAnalysisReplacementLimitsV1>,
         execute: impl for<'scope> FnOnce(
             ScopedVerifiedProgressInputV1<'scope, BARRIER>,
         ) -> Result<Result<T, E>, PlironPassPreservationErrorV1>,
+        observer: Option<&InvocationObserverV1<'_, '_>>,
+    ) -> Result<Result<T, E>, PlironPassPreservationErrorV1> {
+        match observer {
+            None => self.run_scoped_progress_pass_observed_inner_v1::<BARRIER, T, E>(
+                limits.into(),
+                execute,
+                None,
+            ),
+            Some(observer) => observer.with_projection(&Ok, |nested| {
+                self.run_scoped_progress_pass_observed_inner_v1::<BARRIER, T, E>(
+                    limits.into(),
+                    execute,
+                    Some(nested),
+                )
+            }),
+        }
+    }
+
+    fn run_scoped_progress_pass_observed_inner_v1<const BARRIER: bool, T, E>(
+        &mut self,
+        limits: ProductionAnalysisReplacementLimitsV1,
+        execute: impl for<'scope> FnOnce(
+            ScopedVerifiedProgressInputV1<'scope, BARRIER>,
+        ) -> Result<Result<T, E>, PlironPassPreservationErrorV1>,
+        observer: Option<&InvocationObserverV1<'_, '_>>,
     ) -> Result<Result<T, E>, PlironPassPreservationErrorV1> {
         let pass = scoped_progress_pass_v1::<BARRIER>();
-        let limits = limits.into();
+        let phase = ProductionAnalysisResourcePhaseV1::PassPreservation;
+        let resource_error = |error| {
+            if let Some(observer) = observer {
+                observer.deny(error);
+            }
+            preservation_resource_error_v1(error)
+        };
         let scope_bound = scoped_progress_input_resource_upper_bound_v1()?;
         let input_limits = limits
             .input
@@ -144,16 +199,39 @@ impl PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>> {
                 ProductionAnalysisResourcePhaseV1::PassPreservation,
                 scope_bound,
             )
-            .map_err(preservation_resource_error_v1)?;
+            .map_err(resource_error)?;
         let preservation_limits = limits
             .output
             .remaining_after_retained(
                 ProductionAnalysisResourcePhaseV1::PassPreservation,
                 scope_bound,
             )
-            .map_err(preservation_resource_error_v1)?;
+            .map_err(resource_error)?;
+        if let Some(observer) = observer {
+            let old = ProductionAnalysisResourceUpperBoundV1::checked_phase(
+                phase,
+                0,
+                self.lineage_resource_upper_bound
+                    .retained_storage_upper_bound(),
+                0,
+            )
+            .map_err(resource_error)?;
+            // The preservation projection excludes the outgoing identity.
+            // Restore it while scope admission and begin still retain it.
+            observer
+                .with_projection(&|scope| old.checked_then_retain(scope, phase), |nested| {
+                    nested.require(limits.input, phase, Ok(scope_bound))
+                })
+                .map_err(resource_error)?;
+        }
+        let scoped_prefix = |checkpoint| scope_bound.checked_then_retain(checkpoint, phase);
         self.require_pass_can_begin(pass)?;
-        self.begin_pass_with_resource_limits_v1(pass, false, input_limits)?;
+        match observer {
+            None => self.begin_pass_with_resource_limits_v1(pass, false, input_limits),
+            Some(observer) => observer.with_projection(&scoped_prefix, |nested| {
+                self.begin_contiguous_pass_with_observation_v1(pass, input_limits, Some(nested))
+            }),
+        }?;
         let mutation_epoch = self
             .pending
             .as_ref()
@@ -168,7 +246,10 @@ impl PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>> {
                 function,
                 mutation_epoch,
             };
-            catch_unwind(AssertUnwindSafe(|| execute(input)))
+            catch_unwind(AssertUnwindSafe(|| match observer {
+                None => execute(input),
+                Some(observer) => observer.with_projection(&Ok, |_| execute(input)),
+            }))
         };
         match result {
             Err(_) => Err(PlironPassPreservationErrorV1::AnalysisPanicked { pass }),
@@ -176,7 +257,12 @@ impl PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>> {
             Ok(Ok(result)) => {
                 // The callback and all scoped inputs end before the unchanged
                 // post-pass capture, including an ordinary analysis Err result.
-                self.end_pass_with_resource_limits_v1(pass, preservation_limits)?;
+                match observer {
+                    None => self.end_pass_with_resource_limits_v1(pass, preservation_limits),
+                    Some(observer) => observer.with_projection(&scoped_prefix, |nested| {
+                        self.end_pass_with_observation_v1(pass, preservation_limits, Some(nested))
+                    }),
+                }?;
                 let checkpoint = self.last_checkpoint_resource_upper_bound.ok_or(
                     PlironPassPreservationErrorV1::InvalidSessionState {
                         detail: "the scoped analysis pass has no completed resource checkpoint",
@@ -187,14 +273,9 @@ impl PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>> {
                         checkpoint,
                         ProductionAnalysisResourcePhaseV1::PassPreservation,
                     )
-                    .map_err(preservation_resource_error_v1)?;
-                limits
-                    .output
-                    .require(
-                        ProductionAnalysisResourcePhaseV1::PassPreservation,
-                        combined,
-                    )
-                    .map_err(preservation_resource_error_v1)?;
+                    .map_err(resource_error)?;
+                require_observed_v1(limits.output, phase, Ok(combined), observer)
+                    .map_err(resource_error)?;
                 self.last_checkpoint_resource_upper_bound = Some(combined);
                 Ok(result)
             }

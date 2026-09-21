@@ -3,9 +3,7 @@ use fe2o3_kernel_analysis::{
     CheckedCanonicalKirLicmV1 as LicmPair, CheckedCanonicalKirLoopPreheadersV1 as PreheaderPair,
 };
 
-// Only the actual connected promotion -> preheaders -> LICM path may construct
-// these final sites. The old neutral pair never describes the populated final
-// preheader; the distinct LICM pair proves every moved/retained operation.
+#[cfg(test)]
 pub(in super::super) fn check_licm_after_preheaders_sites(
     sites: CheckedPromotedSites<'_, '_>,
     preheaders: &PreheaderPair<'_>,
@@ -15,6 +13,36 @@ pub(in super::super) fn check_licm_after_preheaders_sites(
     budget: &mut AssertOriginBudgetV1<'_>,
     binding: &PromotionBinding,
 ) -> PResult<Box<[FormalMemoryObligations]>> {
+    with_licm_after_preheaders_sites(
+        sites,
+        preheaders,
+        licm,
+        input,
+        output,
+        budget,
+        binding,
+        check_licm_sites,
+    )
+}
+
+// Only the actual connected promotion -> preheaders -> LICM path may construct
+// these final sites. The old neutral pair never describes the populated final
+// preheader; the distinct LICM pair proves every moved/retained operation.
+#[allow(clippy::too_many_arguments)]
+pub(in super::super) fn with_licm_after_preheaders_sites<'g, 'w, R>(
+    sites: CheckedPromotedSites<'_, '_>,
+    preheaders: &PreheaderPair<'_>,
+    licm: &LicmPair<'_>,
+    input: &CanonicalKirInventoryV1<'_>,
+    output: &CanonicalKirInventoryV1<'g>,
+    budget: &mut AssertOriginBudgetV1<'w>,
+    binding: &PromotionBinding,
+    use_sites: impl for<'s> FnOnce(
+        CheckedPromotedSites<'s, 'g>,
+        &mut AssertOriginBudgetV1<'w>,
+        &PromotionBinding,
+    ) -> PResult<R>,
+) -> PResult<R> {
     with_final_sites(
         sites,
         preheaders,
@@ -22,7 +50,7 @@ pub(in super::super) fn check_licm_after_preheaders_sites(
         (input, output),
         budget,
         binding,
-        |sites, budget, binding| census_sites_named(sites, "total-integer LICM", budget, binding),
+        use_sites,
     )
 }
 

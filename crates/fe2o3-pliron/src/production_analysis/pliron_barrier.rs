@@ -12,12 +12,15 @@ use dialect_gpu::{
 use dialect_kernel::{PipelineEventKindAttr, PipelineEventOp, TensorLayoutOp};
 use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation};
 
-use crate::production_analysis::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::production_analysis::pliron_analysis_manager::{
+    PlironAnalysisManagerV1, PlironSimtProtocolAnalysisFailureV1,
+};
 use crate::production_analysis::pliron_invocation_trace::{
     PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1, PlironTraceLocationV1,
     ProductionInvocationTraceResourceAdmissionV1,
 };
-use crate::production_analysis::pliron_pipeline_protocol::run_pliron_pipeline_protocol_check_with_analyses_v1;
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::InvocationObserverV1;
+use crate::production_analysis::pliron_pipeline_protocol::run_pliron_pipeline_protocol_with_observation_v1;
 #[cfg(test)]
 use crate::production_analysis::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::production_analysis::pliron_resource_envelope::{
@@ -51,6 +54,41 @@ const FALLBACK_BARRIER_GRAPH_EDGE_ITEMS_V1: usize = 11;
 const FALLBACK_BARRIER_GRAPH_LOCAL_ITEMS_V1: usize = 6;
 const FALLBACK_BARRIER_FIXED_ITEMS_V1: usize = 96;
 const FALLBACK_BARRIER_TRANSIENT_SUMMARIES_V1: usize = 4;
+
+type BarrierObserverV1<'o, 'p, 'r> = Option<&'o InvocationObserverV1<'p, 'r>>;
+
+fn observe_barrier_quota_v1(observer: BarrierObserverV1<'_, '_, '_>, resource: &'static str) {
+    if let Some(observer) = observer {
+        observer.deny(ProductionAnalysisResourceLimitV1 {
+            phase: ProductionAnalysisResourcePhaseV1::BarrierConvergence,
+            resource,
+        });
+    }
+}
+
+fn observe_barrier_trace_failure_v1(
+    observer: BarrierObserverV1<'_, '_, '_>,
+    failure: &PlironTraceFailureV1,
+) {
+    let (phase, resource) = match failure {
+        PlironTraceFailureV1::ResourceLimit => (
+            ProductionAnalysisResourcePhaseV1::InvocationTrace,
+            "barrier trace resource limit",
+        ),
+        PlironTraceFailureV1::LaunchTooLarge { .. } => (
+            ProductionAnalysisResourcePhaseV1::InvocationTrace,
+            "barrier trace launch limit",
+        ),
+        PlironTraceFailureV1::Sparse(crate::SparseIndexFailureV1::ResourceLimit {
+            resource,
+            ..
+        }) => (ProductionAnalysisResourcePhaseV1::SparseIndex, *resource),
+        _ => return,
+    };
+    if let Some(observer) = observer {
+        observer.deny(ProductionAnalysisResourceLimitV1 { phase, resource });
+    }
+}
 
 fn barrier_resource_overflow_v1() -> ProductionAnalysisResourceLimitV1 {
     ProductionAnalysisResourceLimitV1 {
@@ -384,6 +422,7 @@ pub(crate) fn run_pliron_barrier_convergence_check_v1(
     run_pliron_barrier_convergence_check_with_analyses_v1(context, function, &mut analyses)
 }
 
+#[cfg(test)]
 fn run_barrier_with_progress_v1(
     context: &Context,
     function: &FuncOp,
@@ -396,107 +435,152 @@ fn run_barrier_with_progress_v1(
     PlironBarrierReportV1,
     crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
 > {
-    analyses.prepare_function_inventory(context, function);
-    let inventory = match analyses.function_inventory_handle() {
-        Ok(inventory) => inventory,
-        Err(_) => {
-            return Ok(report(PlironBarrierFindingV1::AnalysisIncomplete {
-                detail: "the bounded function inventory limit was exceeded".to_owned(),
-            }));
-        }
-    };
-    let mut has_barrier = false;
-    let mut has_tensor = false;
-    for site in inventory.operations() {
-        let operation = Operation::get_op_dyn(site.pointer(), context);
-        has_barrier |= operation.downcast_ref::<BarrierOp>().is_some();
-        has_tensor |= operation.downcast_ref::<TensorLayoutOp>().is_some();
-    }
-    if !has_barrier && !has_tensor {
-        return Ok(PlironBarrierReportV1 { findings: vec![] });
-    }
-    analyses.prepare_simt_protocol(context, function);
-    if let Ok(protocol) = analyses.simt_protocol()
-        && let Some(issue) = protocol.issues().first()
-    {
-        return Ok(report(PlironBarrierFindingV1::SimtProtocolViolation {
-            issue: Box::new(issue.clone()),
-        }));
-    }
-    // The existing all-path barrier proof can still decide some dynamic or
-    // cyclic cases for which exact active-mask tracing is unavailable.
-    if !has_barrier {
-        // Tensor-layout analysis retains the static convergence proof when an
-        // exact active-mask trace is unavailable. This stage only adds a
-        // counterexample when the exact SIMT trace succeeds.
-        return Ok(PlironBarrierReportV1 { findings: vec![] });
-    }
-    let trace_failure = match analyses.exact_trace() {
-        Ok(traces) => {
-            if traces.is_empty() {
+    run_barrier_with_progress_observation_v1(context, function, analyses, prove_progress, None)
+}
+
+fn run_barrier_with_progress_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    prove_progress: impl FnOnce() -> Result<
+        crate::production_analysis::pliron_progress::PlironProgressReportV1,
+        crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
+    >,
+    observer: BarrierObserverV1<'_, '_, '_>,
+) -> Result<
+    PlironBarrierReportV1,
+    crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
+> {
+    let run = || {
+        analyses.prepare_function_inventory(context, function);
+        let inventory = match analyses.function_inventory_handle() {
+            Ok(inventory) => inventory,
+            Err(failure) => {
+                observe_barrier_quota_v1(observer, failure.resource());
                 return Ok(report(PlironBarrierFindingV1::AnalysisIncomplete {
-                    detail: "the launch domain is empty".to_owned(),
+                    detail: "the bounded function inventory limit was exceeded".to_owned(),
                 }));
             }
-            if let Some(finding) = divergent_scope_trace(traces, HierarchyAttr::Workgroup)
-                .or_else(|| divergent_scope_trace(traces, HierarchyAttr::Subgroup))
-            {
-                return Ok(report(finding));
-            }
+        };
+        let mut has_barrier = false;
+        let mut has_tensor = false;
+        for site in inventory.operations() {
+            let operation = Operation::get_op_dyn(site.pointer(), context);
+            has_barrier |= operation.downcast_ref::<BarrierOp>().is_some();
+            has_tensor |= operation.downcast_ref::<TensorLayoutOp>().is_some();
+        }
+        if !has_barrier && !has_tensor {
             return Ok(PlironBarrierReportV1 { findings: vec![] });
         }
-        Err(failure) => failure,
-    };
-    if matches!(
-        trace_failure,
-        PlironTraceFailureV1::MissingExecutionLayout
-            | PlironTraceFailureV1::InvalidExecutionLayout
-            | PlironTraceFailureV1::UnsupportedGridSynchronization { .. }
-            | PlironTraceFailureV1::PartialBarrierParticipants { .. }
-    ) {
-        return Ok(report(PlironBarrierFindingV1::AnalysisIncomplete {
-            detail: trace_failure_detail(trace_failure),
-        }));
-    }
-    if matches!(trace_failure, PlironTraceFailureV1::DynamicLaunch { .. })
-        && !matches!(
-            analyses.execution_layout(),
-            Ok(Some(layout))
-                if layout.execution_domain == ExecutionDomainAttr::FullPhysicalWorkgroups
-        )
-    {
-        return Ok(report(PlironBarrierFindingV1::AnalysisIncomplete {
-            detail: "dynamic barrier convergence requires authenticated full physical workgroups"
-                .to_owned(),
-        }));
-    }
-    Ok(
-        match barrier_paths::summarize_all_barrier_paths(context, &inventory, prove_progress)? {
-            BarrierPathSummaryV1::Unique => PlironBarrierReportV1 { findings: vec![] },
-            BarrierPathSummaryV1::Divergent {
-                first_trace,
-                second_trace,
-            } => report(PlironBarrierFindingV1::DivergentBarrierPaths {
-                first_trace,
-                second_trace,
-            }),
-            BarrierPathSummaryV1::Incomplete(path_detail) => {
-                let epoch_detail = match pipeline_barriers_have_uniform_epoch_proof(
-                    context, function, &inventory, analyses,
-                ) {
-                    Ok(()) => return Ok(PlironBarrierReportV1 { findings: vec![] }),
-                    Err(detail) => detail,
-                };
-                report(PlironBarrierFindingV1::AnalysisIncomplete {
-                    detail: bounded_barrier_diagnostic_v1(BarrierFallbackDiagnosticV1 {
-                        trace_failure: &trace_failure,
-                        path_detail: &path_detail,
-                        epoch_detail: &epoch_detail,
-                    }),
-                })
+        analyses.prepare_simt_protocol(context, function);
+        match analyses.simt_protocol() {
+            Ok(protocol) => {
+                if let Some(issue) = protocol.issues().first() {
+                    if matches!(issue, PlironSimtProtocolIssueV1::ResourceLimitExceeded)
+                        && let Some(observer) = observer
+                    {
+                        observer.deny(ProductionAnalysisResourceLimitV1 {
+                            phase: ProductionAnalysisResourcePhaseV1::SimtProtocol,
+                            resource: "SIMT protocol issue limit",
+                        });
+                    }
+                    return Ok(report(PlironBarrierFindingV1::SimtProtocolViolation {
+                        issue: Box::new(issue.clone()),
+                    }));
+                }
             }
-        },
-    )
+            Err(PlironSimtProtocolAnalysisFailureV1::Trace(failure)) => {
+                observe_barrier_trace_failure_v1(observer, &failure);
+            }
+        }
+        // The existing all-path barrier proof can still decide some dynamic or
+        // cyclic cases for which exact active-mask tracing is unavailable.
+        if !has_barrier {
+            // Tensor-layout analysis retains the static convergence proof when an
+            // exact active-mask trace is unavailable. This stage only adds a
+            // counterexample when the exact SIMT trace succeeds.
+            return Ok(PlironBarrierReportV1 { findings: vec![] });
+        }
+        let trace_failure = match analyses.exact_trace() {
+            Ok(traces) => {
+                if traces.is_empty() {
+                    return Ok(report(PlironBarrierFindingV1::AnalysisIncomplete {
+                        detail: "the launch domain is empty".to_owned(),
+                    }));
+                }
+                if let Some(finding) = divergent_scope_trace(traces, HierarchyAttr::Workgroup)
+                    .or_else(|| divergent_scope_trace(traces, HierarchyAttr::Subgroup))
+                {
+                    return Ok(report(finding));
+                }
+                return Ok(PlironBarrierReportV1 { findings: vec![] });
+            }
+            Err(failure) => {
+                observe_barrier_trace_failure_v1(observer, &failure);
+                failure
+            }
+        };
+        if matches!(
+            trace_failure,
+            PlironTraceFailureV1::MissingExecutionLayout
+                | PlironTraceFailureV1::InvalidExecutionLayout
+                | PlironTraceFailureV1::UnsupportedGridSynchronization { .. }
+                | PlironTraceFailureV1::PartialBarrierParticipants { .. }
+        ) {
+            return Ok(report(PlironBarrierFindingV1::AnalysisIncomplete {
+                detail: trace_failure_detail(trace_failure),
+            }));
+        }
+        if matches!(trace_failure, PlironTraceFailureV1::DynamicLaunch { .. })
+            && !matches!(
+                analyses.execution_layout(),
+                Ok(Some(layout))
+                    if layout.execution_domain == ExecutionDomainAttr::FullPhysicalWorkgroups
+            )
+        {
+            return Ok(report(PlironBarrierFindingV1::AnalysisIncomplete {
+                detail:
+                    "dynamic barrier convergence requires authenticated full physical workgroups"
+                        .to_owned(),
+            }));
+        }
+        Ok(
+            match barrier_paths::summarize_all_barrier_paths_with_observation_v1(
+                context,
+                &inventory,
+                prove_progress,
+                observer,
+            )? {
+                BarrierPathSummaryV1::Unique => PlironBarrierReportV1 { findings: vec![] },
+                BarrierPathSummaryV1::Divergent {
+                    first_trace,
+                    second_trace,
+                } => report(PlironBarrierFindingV1::DivergentBarrierPaths {
+                    first_trace,
+                    second_trace,
+                }),
+                BarrierPathSummaryV1::Incomplete(path_detail) => {
+                    let epoch_detail = match pipeline_barriers_have_uniform_epoch_proof(
+                        context, function, &inventory, analyses, observer,
+                    ) {
+                        Ok(()) => return Ok(PlironBarrierReportV1 { findings: vec![] }),
+                        Err(detail) => detail,
+                    };
+                    report(PlironBarrierFindingV1::AnalysisIncomplete {
+                        detail: bounded_barrier_diagnostic_v1(BarrierFallbackDiagnosticV1 {
+                            trace_failure: &trace_failure,
+                            path_detail: &path_detail,
+                            epoch_detail: &epoch_detail,
+                        }),
+                    })
+                }
+            },
+        )
+    };
+    match observer {
+        None => run(),
+        Some(observer) => observer.with_projection(&Ok, |_| run()),
+    }
 }
 
 fn pipeline_barriers_have_uniform_epoch_proof(
@@ -504,8 +588,10 @@ fn pipeline_barriers_have_uniform_epoch_proof(
     function: &FuncOp,
     inventory: &crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
     analyses: &mut PlironAnalysisManagerV1,
+    observer: BarrierObserverV1<'_, '_, '_>,
 ) -> Result<(), String> {
-    let protocol = run_pliron_pipeline_protocol_check_with_analyses_v1(context, function, analyses);
+    let protocol =
+        run_pliron_pipeline_protocol_with_observation_v1(context, function, analyses, observer);
     if !protocol.is_clean() {
         return Err(protocol
             .findings()
@@ -692,15 +778,26 @@ struct BarrierPathBlockSummaryV1 {
     trapped_prefix: Option<Vec<(usize, usize)>>,
 }
 
+#[cfg(test)]
 fn prepend_barrier_path_v1(
     local: &[(usize, usize)],
     summary: BarrierPathBlockSummaryV1,
 ) -> Result<BarrierPathBlockSummaryV1, BarrierPathFailureV1> {
+    prepend_barrier_path_with_observation_v1(local, summary, None)
+}
+
+fn prepend_barrier_path_with_observation_v1(
+    local: &[(usize, usize)],
+    summary: BarrierPathBlockSummaryV1,
+    observer: BarrierObserverV1<'_, '_, '_>,
+) -> Result<BarrierPathBlockSummaryV1, BarrierPathFailureV1> {
     let prepend = |mut suffix: Vec<(usize, usize)>| {
         let total = local.len().checked_add(suffix.len()).ok_or_else(|| {
+            observe_barrier_quota_v1(observer, "fallback barrier path length overflow");
             BarrierPathFailureV1::Incomplete("fallback barrier path length overflowed".to_owned())
         })?;
         if total > MAX_FALLBACK_BARRIER_PATH_EVENTS_V1 {
+            observe_barrier_quota_v1(observer, "fallback barrier path event limit");
             return Err(BarrierPathFailureV1::Incomplete(format!(
                 "a fallback barrier path has more than {MAX_FALLBACK_BARRIER_PATH_EVENTS_V1} events"
             )));

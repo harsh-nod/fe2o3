@@ -10,6 +10,7 @@ use dialect_kernel::{DYNAMIC_EXTENT, MemorySpaceAttr, RankedViewOp};
 use pliron::{builtin::ops::FuncOp, common_traits::Named, context::Context, operation::Operation};
 
 use crate::production_analysis::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::InvocationObserverV1;
 use crate::production_analysis::pliron_resource_envelope::{
     ProductionAnalysisInputCensusV1, ProductionAnalysisResourceLimitV1,
     ProductionAnalysisResourceLimitsV1, ProductionAnalysisResourcePhaseV1,
@@ -487,24 +488,91 @@ pub(crate) fn run_pliron_launch_contract_check_v1(
     run_pliron_launch_contract_check_with_analyses_v1(context, function, contract, &mut analyses)
 }
 
+type LaunchObservationV1<'o, 'p, 'r> = Option<&'o InvocationObserverV1<'p, 'r>>;
+
+fn with_launch_observation_v1<T>(
+    observer: LaunchObservationV1<'_, '_, '_>,
+    run: impl FnOnce(LaunchObservationV1<'_, '_, '_>) -> T,
+) -> T {
+    match observer {
+        None => run(None),
+        Some(observer) => observer.with_projection(&Ok, |nested| run(Some(nested))),
+    }
+}
+
+fn launch_prerequisite_failed_v1(
+    context: &Context,
+    function: &FuncOp,
+    observer: LaunchObservationV1<'_, '_, '_>,
+) -> bool {
+    let result = derive_pliron_ir_structural_identity_v1(context, function);
+    if let (Some(observer), Err(error)) = (observer, &result) {
+        match error {
+            crate::PlironIrIdentityErrorV1::ResourceLimitExceeded { resource, .. } => {
+                observer.deny(ProductionAnalysisResourceLimitV1 {
+                    phase: ProductionAnalysisResourcePhaseV1::StructuralIdentity,
+                    resource,
+                });
+            }
+            crate::PlironIrIdentityErrorV1::TraversalPanicked => observer.caught(),
+            _ => {}
+        }
+    }
+    result.is_err()
+}
+
+#[cfg(test)]
 pub(crate) fn run_pliron_launch_contract_check_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
     contract: &PlironLaunchContractV1,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironLaunchContractReportV1 {
+    run_pliron_launch_contract_check_with_observation_v1(
+        context, function, contract, analyses, None,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn run_pliron_launch_contract_check_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    contract: &PlironLaunchContractV1,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: LaunchObservationV1<'_, '_, '_>,
+) -> PlironLaunchContractReportV1 {
+    with_launch_observation_v1(observer, |observer| {
+        run_launch_contract_inner_v1(context, function, contract, analyses, observer)
+    })
+}
+
+fn run_launch_contract_inner_v1(
+    context: &Context,
+    function: &FuncOp,
+    contract: &PlironLaunchContractV1,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: LaunchObservationV1<'_, '_, '_>,
+) -> PlironLaunchContractReportV1 {
     // The production preservation session authenticated this exact immutable
     // function before constructing the shared bounded inventory. Test-only
     // standalone callers retain the historical structural prerequisite.
     if analyses.input_census().is_none()
-        && derive_pliron_ir_structural_identity_v1(context, function).is_err()
+        && launch_prerequisite_failed_v1(context, function, observer)
     {
         return structural_prerequisite_failure();
     }
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,
-        Err(_) => return structural_prerequisite_failure(),
+        Err(failure) => {
+            if let Some(observer) = observer {
+                observer.deny(ProductionAnalysisResourceLimitV1 {
+                    phase: ProductionAnalysisResourcePhaseV1::FunctionInventory,
+                    resource: failure.resource(),
+                });
+            }
+            return structural_prerequisite_failure();
+        }
     };
 
     let mut layout_count = 0_usize;
@@ -740,19 +808,21 @@ fn fold_ranked_view(
     }
 }
 
-pub(crate) fn require_pliron_launch_contract_with_analyses_v1(
+pub(crate) fn require_pliron_launch_contract_with_observation_v1(
     context: &Context,
     function: &FuncOp,
     contract: &PlironLaunchContractV1,
     analyses: &mut PlironAnalysisManagerV1,
+    observer: LaunchObservationV1<'_, '_, '_>,
 ) -> Result<PlironLaunchContractReportV1, PlironLaunchContractCheckErrorV1> {
-    let report =
-        run_pliron_launch_contract_check_with_analyses_v1(context, function, contract, analyses);
-    if report.is_clean() {
-        Ok(report)
-    } else {
-        Err(PlironLaunchContractCheckErrorV1 { report })
-    }
+    with_launch_observation_v1(observer, |observer| {
+        let report = run_launch_contract_inner_v1(context, function, contract, analyses, observer);
+        if report.is_clean() {
+            Ok(report)
+        } else {
+            Err(PlironLaunchContractCheckErrorV1 { report })
+        }
+    })
 }
 
 enum ViewSizeFailureV1 {

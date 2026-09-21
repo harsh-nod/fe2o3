@@ -1,4 +1,10 @@
 use super::*;
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+    InvocationReceiptFailureV1 as ReceiptFailure, InvocationReceiptV1 as Receipt,
+};
+use crate::production_analysis::pliron_resource_envelope::{
+    ProductionAnalysisResourceLimitsV1 as Limits, ProductionAnalysisResourceUpperBoundV1 as Bound,
+};
 use dialect_gpu::switch_v3::{SwitchEdgeV3, SwitchKeyKindAttrV3};
 use pliron::{
     basic_block::BasicBlock,
@@ -59,6 +65,152 @@ fn collect(context: &Context, switch: SwitchOpV3) -> SwitchVerificationCensusV1 
         ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
     )
     .unwrap()
+}
+
+const OBSERVED_PHASE: ProductionAnalysisResourcePhaseV1 =
+    ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+
+#[test]
+fn observed_switch_census_preserves_each_admitted_prefix() {
+    let mut context = Context::new();
+    let switch = fixture(
+        &mut context,
+        128,
+        false,
+        SwitchKeyKindAttrV3::LegacyU64,
+        (0..17).collect(),
+        3,
+        &[2; 18],
+    );
+    let census = collect(&context, switch);
+    let work = census.traversal_work + census.callback_work;
+    let peak = census.callback_scratch;
+    for (limits, prefix_work, prefix_peak, denial) in [
+        (Limits::new(127, peak), 0, 0, Some("work upper bound")),
+        (Limits::new(128, peak), 128, 64, Some("work upper bound")),
+        (
+            Limits::new(census.traversal_work, peak),
+            census.traversal_work,
+            64,
+            Some("work upper bound"),
+        ),
+        (
+            Limits::new(work - 1, peak),
+            census.traversal_work,
+            64,
+            Some("work upper bound"),
+        ),
+        (
+            Limits::new(work, peak - 1),
+            census.traversal_work,
+            64,
+            Some("peak storage upper bound"),
+        ),
+        (Limits::new(work, peak), work, peak, None),
+    ] {
+        let mut receipt =
+            Receipt::new(Bound::default(), Limits::production_hard_ceiling()).unwrap();
+        let phase = receipt.phase(OBSERVED_PHASE, 0).unwrap();
+        let result = census_switch_verification_with_observation_v1(
+            &context,
+            switch,
+            limits,
+            Some(&phase.observer(&Ok)),
+        );
+        if let Some(resource) = denial {
+            let error = result.unwrap_err();
+            assert_eq!(error.phase, OBSERVED_PHASE);
+            assert_eq!(error.resource, resource);
+            drop(phase);
+            assert_eq!(receipt.snapshot().first_denial, Some(error));
+            assert_eq!(receipt.complete(), Err(ReceiptFailure::Denied(error)));
+        } else {
+            assert_eq!(result.unwrap(), census);
+            let bound = Bound::checked_phase(OBSERVED_PHASE, work, 0, peak).unwrap();
+            phase.commit(bound).unwrap();
+            assert_eq!(receipt.complete(), Ok(bound));
+        }
+        let state = receipt.snapshot();
+        assert_eq!(state.current, state.committed);
+        assert!(!state.caught_panic);
+        assert_eq!(
+            (
+                state.committed.work_upper_bound(),
+                state.committed.peak_storage_upper_bound()
+            ),
+            (prefix_work, prefix_peak)
+        );
+    }
+}
+
+#[test]
+fn observed_switch_early_error_and_externally_caught_panic_survive() {
+    for panic_case in [false, true] {
+        let mut context = Context::new();
+        let switch = fixture(
+            &mut context,
+            128,
+            false,
+            SwitchKeyKindAttrV3::LegacyU64,
+            (0..17).collect(),
+            3,
+            &[2; 18],
+        );
+        let pointer = switch.get_operation();
+        if !panic_case {
+            pointer
+                .deref_mut(&context)
+                .attributes
+                .set("extra".try_into().unwrap(), UnitAttr::new());
+        }
+        let mut receipt =
+            Receipt::new(Bound::default(), Limits::production_hard_ceiling()).unwrap();
+        let phase = receipt.phase(OBSERVED_PHASE, 0).unwrap();
+        let held = panic_case.then(|| pointer.deref_mut(&context));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            census_switch_verification_with_observation_v1(
+                &context,
+                switch,
+                Limits::production_hard_ceiling(),
+                Some(&phase.observer(&Ok)),
+            )
+        }));
+        drop(held);
+        if panic_case {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(
+                result.unwrap().unwrap_err().resource,
+                "native-switch verification frame"
+            );
+        }
+        // The unwind is already caught; phase Drop alone cannot detect it.
+        drop(phase);
+        let state = receipt.snapshot();
+        assert_eq!(state.caught_panic, panic_case);
+        assert_eq!(
+            (
+                state.committed.work_upper_bound(),
+                state.committed.peak_storage_upper_bound()
+            ),
+            (128, 64)
+        );
+        assert_eq!(
+            state.first_denial.map(|e| e.resource),
+            if panic_case {
+                None
+            } else {
+                Some("native-switch verification frame")
+            }
+        );
+        assert_eq!(
+            receipt.complete(),
+            Err(match state.first_denial {
+                Some(error) => ReceiptFailure::Denied(error),
+                None => ReceiptFailure::CaughtPanic,
+            })
+        );
+    }
 }
 
 fn assert_boundary(context: &Context, switch: SwitchOpV3, expected: SwitchVerificationCensusV1) {

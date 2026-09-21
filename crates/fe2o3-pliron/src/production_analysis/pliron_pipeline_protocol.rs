@@ -293,12 +293,14 @@ pub(crate) fn run_pliron_pipeline_protocol_check_v1(
     run_pliron_pipeline_protocol_check_with_analyses_v1(context, function, &mut analyses)
 }
 
-pub(crate) fn require_pliron_pipeline_protocol_with_analyses_v1(
+pub(crate) fn require_pliron_pipeline_protocol_with_observation_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
+    observer: ProtocolObserverV1<'_, '_, '_>,
 ) -> Result<PlironPipelineProtocolReportV1, PlironPipelineProtocolCheckErrorV1> {
-    let report = run_pliron_pipeline_protocol_check_with_analyses_v1(context, function, analyses);
+    let report =
+        run_pliron_pipeline_protocol_with_observation_v1(context, function, analyses, observer);
     if report.is_clean() {
         Ok(report)
     } else {
@@ -306,16 +308,46 @@ pub(crate) fn require_pliron_pipeline_protocol_with_analyses_v1(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironPipelineProtocolReportV1 {
+    run_pliron_pipeline_protocol_with_observation_v1(context, function, analyses, None)
+}
+
+pub(crate) fn run_pliron_pipeline_protocol_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: ProtocolObserverV1<'_, '_, '_>,
+) -> PlironPipelineProtocolReportV1 {
+    match observer {
+        None => run_pliron_pipeline_protocol_observed_inner_v1(context, function, analyses, None),
+        Some(observer) => observer.with_projection(&Ok, |nested| {
+            run_pliron_pipeline_protocol_observed_inner_v1(
+                context,
+                function,
+                analyses,
+                Some(nested),
+            )
+        }),
+    }
+}
+
+fn run_pliron_pipeline_protocol_observed_inner_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: ProtocolObserverV1<'_, '_, '_>,
+) -> PlironPipelineProtocolReportV1 {
     let authenticated_census = analyses.input_census();
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,
-        Err(_) => {
+        Err(failure) => {
+            observe_protocol_quota_v1(observer, failure.resource());
             return report(PlironPipelineProtocolFindingV1::AnalysisIncomplete {
                 detail: "the bounded function inventory limit was exceeded".to_owned(),
             });
@@ -325,7 +357,10 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
         .or_else(|| pipeline_protocol_inventory_census_v1(context, &inventory))
     {
         Some(census) => census,
-        None => return equivalence_resource_failure_report_v1(),
+        None => {
+            observe_protocol_quota_v1(observer, "pipeline protocol census counter overflow");
+            return equivalence_resource_failure_report_v1();
+        }
     };
     if census.pipeline_creates == 0 {
         let mut findings = Vec::new();
@@ -350,30 +385,59 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
     // barrier/workgroup-memory attempts. A census alone is not that admission;
     // those closed callers own the descriptor. Standalone diagnostics have no
     // descriptor and reserve their own cumulative phase before discovery.
-    if authenticated_census.is_none()
-        && analyses
+    if authenticated_census.is_none() {
+        let admission = analyses
             .remaining_resource_limits(ProductionAnalysisResourcePhaseV1::PipelineProtocol)
-            .and_then(|limits| preflight_pipeline_protocol_resource_upper_bound_v1(census, limits))
+            .and_then(|limits| {
+                let bound = preflight_pipeline_protocol_resource_upper_bound_v1(census, limits)?;
+                match observer {
+                    None => Ok(bound),
+                    Some(observer) => observer.require(
+                        limits,
+                        ProductionAnalysisResourcePhaseV1::PipelineProtocol,
+                        Ok(bound),
+                    ),
+                }
+            })
             .and_then(|bound| {
                 analyses.admit_retained_resource_upper_bound(
                     ProductionAnalysisResourcePhaseV1::PipelineProtocol,
                     bound,
                 )
-            })
-            .is_err()
-    {
-        return report(PlironPipelineProtocolFindingV1::AnalysisIncomplete {
-            detail: "pipeline protocol exceeded its cumulative work or storage limit".to_owned(),
-        });
+            });
+        if let Err(error) = admission {
+            if let Some(observer) = observer {
+                observer.deny(error);
+            }
+            return report(PlironPipelineProtocolFindingV1::AnalysisIncomplete {
+                detail: "pipeline protocol exceeded its cumulative work or storage limit"
+                    .to_owned(),
+            });
+        }
     }
     let unique_pair_limit = match pipeline_equivalence_unique_pair_upper_bound_v1(census) {
         Ok(limit) => limit,
-        Err(_) => return equivalence_resource_failure_report_v1(),
+        Err(error) => {
+            if let Some(observer) = observer {
+                observer.deny(error);
+            }
+            return equivalence_resource_failure_report_v1();
+        }
     };
     let mut equivalence_resources = match pipeline_equivalence_query_upper_bound_v1(census)
-        .map_err(|_| EquivalenceVisitLimitV1)
-        .and_then(|query_limit| EquivalenceResourceMeterV1::new(query_limit, unique_pair_limit))
-    {
+        .map_err(|error| {
+            if let Some(observer) = observer {
+                observer.deny(error);
+            }
+            EquivalenceVisitLimitV1
+        })
+        .and_then(|query_limit| {
+            EquivalenceResourceMeterV1::new_with_observation_v1(
+                query_limit,
+                unique_pair_limit,
+                observer,
+            )
+        }) {
         Ok(resources) => resources,
         Err(_) => return equivalence_resource_failure_report_v1(),
     };
@@ -782,11 +846,12 @@ fn verify_one_pipeline(
             .copied()
             .filter(|block| *block != pipeline.block()),
     );
-    let uniform_bound = is_uniform_value(
+    let uniform_bound = is_uniform_value_with_observation_v1(
         context,
         summary.bound,
         uniform_roots,
         uniformity_visit_limit,
+        equivalence_resources.observer,
     );
     if uniform_bound != Ok(true) {
         let detail = if uniform_bound.is_err() {
@@ -881,6 +946,25 @@ enum UniformityFrameV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct UniformityVisitLimitV1;
+
+fn is_uniform_value_with_observation_v1(
+    context: &Context,
+    value: Value,
+    uniform_roots: &HashSet<Value>,
+    visit_limit: usize,
+    observer: ProtocolObserverV1<'_, '_, '_>,
+) -> Result<bool, UniformityVisitLimitV1> {
+    let result = match observer {
+        None => is_uniform_value(context, value, uniform_roots, visit_limit),
+        Some(observer) => observer.with_projection(&Ok, |_| {
+            is_uniform_value(context, value, uniform_roots, visit_limit)
+        }),
+    };
+    if result.is_err() {
+        observe_protocol_quota_v1(observer, "uniformity operation visit quota");
+    }
+    result
+}
 
 fn is_uniform_value(
     context: &Context,

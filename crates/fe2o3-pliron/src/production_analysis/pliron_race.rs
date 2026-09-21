@@ -19,6 +19,7 @@ use dialect_kernel::{
     MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
     is_supported_allocation_effect_contract_v1,
 };
+use fe2o3_kernel_analysis::PresburgerFailureV1;
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
     common_traits::Named,
@@ -30,11 +31,14 @@ use pliron::{
 
 use crate::production_analysis::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::production_analysis::pliron_analysis_witness::{
-    MAX_BOUNDS_WITNESS_EVALUATION_STEPS_V1, evaluate_raw_index_at_invocation_v1,
+    MAX_BOUNDS_WITNESS_EVALUATION_STEPS_V1, evaluate_raw_index_at_invocation_with_observation_v1,
 };
 use crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1;
 use crate::production_analysis::pliron_invocation_trace::{
     PlironExecutionLayoutV1, PlironTraceFailureV1, static_invocation_shape_for_resource_v1,
+};
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+    InvocationObserverV1, observe_resource_preflight_v1, require_observed_v1,
 };
 use crate::production_analysis::pliron_presburger_adapter::PlironPresburgerAnalysisV1;
 use crate::production_analysis::pliron_provenance_alias::MAX_PLIRON_PROVENANCE_DIAGNOSTIC_BYTES_V1;
@@ -61,6 +65,45 @@ const RAW_INDEX_EVALUATION_QUERY_MAP_LIFECYCLE_WORK_V1: usize = 3;
 // units per field and stack capacity at two units per four-field frame.
 const RAW_INDEX_EVALUATION_MAP_STORAGE_PER_OPERATION_V1: usize = 6;
 const RAW_INDEX_EVALUATION_STACK_FRAME_STORAGE_V1: usize = 8;
+
+type RaceObserverV1<'o, 'p, 'r> = Option<&'o InvocationObserverV1<'p, 'r>>;
+
+pub(crate) struct RaceResourceAdmissionV1<'o, 'p, 'r> {
+    pub(crate) limits: ProductionAnalysisResourceLimitsV1,
+    pub(crate) observer: RaceObserverV1<'o, 'p, 'r>,
+}
+
+fn observe_race_quota_v1(observer: RaceObserverV1<'_, '_, '_>, resource: &'static str) {
+    if let Some(observer) = observer {
+        observer.deny(ProductionAnalysisResourceLimitV1 {
+            phase: ProductionAnalysisResourcePhaseV1::RaceFreedom,
+            resource,
+        });
+    }
+}
+
+fn observe_race_presburger_failure_v1(
+    failure: &PresburgerFailureV1,
+    observer: RaceObserverV1<'_, '_, '_>,
+) {
+    if matches!(failure, PresburgerFailureV1::ResourceLimit { .. }) {
+        observe_race_quota_v1(observer, "race Presburger query work limit");
+    }
+}
+
+fn observe_race_sparse_failure_v1(
+    failure: &SparseIndexFailureV1,
+    observer: RaceObserverV1<'_, '_, '_>,
+) {
+    if let (Some(observer), SparseIndexFailureV1::ResourceLimit { resource, .. }) =
+        (observer, failure)
+    {
+        observer.deny(ProductionAnalysisResourceLimitV1 {
+            phase: ProductionAnalysisResourcePhaseV1::SparseIndex,
+            resource,
+        });
+    }
+}
 
 fn race_resource_overflow_v1() -> ProductionAnalysisResourceLimitV1 {
     ProductionAnalysisResourceLimitV1 {
@@ -187,119 +230,141 @@ fn require_race_name_value_v1(
 }
 
 // Immediate, private same-manager inventory use; this is not a cached owner.
+#[cfg(test)]
 fn collect_race_name_census_v1(
     context: &Context,
     function: &FuncOp,
     inventory: &BoundedPlironFunctionInventoryV1,
     census: ProductionAnalysisInputCensusV1,
     limits: ProductionAnalysisResourceLimitsV1,
-    mut name_bytes: impl FnMut(Value) -> Option<usize>,
+    name_bytes: impl FnMut(Value) -> Option<usize>,
 ) -> Result<RaceNameCensusV1, ProductionAnalysisResourceLimitV1> {
-    let work = race_name_scan_work_v1(census)?;
-    limits.require(
-        ProductionAnalysisResourcePhaseV1::RaceFreedom,
-        ProductionAnalysisResourceUpperBoundV1::checked_phase(
+    collect_race_name_census_with_observation_v1(
+        context, function, inventory, census, limits, name_bytes, None,
+    )
+}
+
+fn collect_race_name_census_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    census: ProductionAnalysisInputCensusV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    mut name_bytes: impl FnMut(Value) -> Option<usize>,
+    observer: RaceObserverV1<'_, '_, '_>,
+) -> Result<RaceNameCensusV1, ProductionAnalysisResourceLimitV1> {
+    observe_resource_preflight_v1(observer, |observer| {
+        let work = race_name_scan_work_v1(census)?;
+        require_observed_v1(
+            limits,
             ProductionAnalysisResourcePhaseV1::RaceFreedom,
-            work,
-            0,
-            RACE_NAME_CENSUS_SCRATCH_V1,
-        )?,
-    )?;
-    if inventory.blocks().len() != census.blocks
-        || inventory.operations().len() != census.operations
-    {
-        return Err(race_name_census_error_v1());
-    }
-    let epoch = context
-        .ir_mutation_attempt_epoch()
-        .map_err(|_| race_name_census_error_v1())?;
-    let mut scan = RaceNameScanV1::default();
-    race_name_prefix_v1(
-        &mut scan.attributes,
-        function.get_operation().deref(context).attributes.0.len(),
-        census.attributes,
-    )?;
-    for pointer in inventory.blocks() {
-        let block = pointer.deref(context);
-        if block.get_parent_region() != Some(function.get_region(context)) {
-            return Err(race_name_census_error_v1());
-        }
-        race_name_prefix_v1(
-            &mut scan.arguments,
-            block.get_num_arguments(),
-            census.block_arguments,
+            ProductionAnalysisResourceUpperBoundV1::checked_phase(
+                ProductionAnalysisResourcePhaseV1::RaceFreedom,
+                work,
+                0,
+                RACE_NAME_CENSUS_SCRATCH_V1,
+            ),
+            observer,
         )?;
-        race_name_prefix_v1(
-            &mut scan.attributes,
-            block.attributes.0.len(),
-            census.attributes,
-        )?;
-    }
-    for site in inventory.operations() {
-        let pointer = site.pointer();
-        let raw = pointer.deref(context);
-        if raw.get_parent_block() != inventory.blocks().get(site.block()).copied()
-            || raw
-                .get_num_operands()
-                .checked_add(raw.get_num_results())
-                .ok_or_else(race_resource_overflow_v1)?
-                > census.max_operation_arity
+        if inventory.blocks().len() != census.blocks
+            || inventory.operations().len() != census.operations
         {
             return Err(race_name_census_error_v1());
         }
-        race_name_prefix_v1(&mut scan.operands, raw.get_num_operands(), census.operands)?;
-        race_name_prefix_v1(&mut scan.results, raw.get_num_results(), census.results)?;
+        let epoch = context
+            .ir_mutation_attempt_epoch()
+            .map_err(|_| race_name_census_error_v1())?;
+        let mut scan = RaceNameScanV1::default();
         race_name_prefix_v1(
             &mut scan.attributes,
-            raw.attributes.0.len(),
+            function.get_operation().deref(context).attributes.0.len(),
             census.attributes,
         )?;
-        if Operation::is_op::<AllocationEffectOp>(pointer, context) {
-            race_name_prefix_v1(&mut scan.allocation_effects, 1, census.allocation_effects)?;
+        for pointer in inventory.blocks() {
+            let block = pointer.deref(context);
+            if block.get_parent_region() != Some(function.get_region(context)) {
+                return Err(race_name_census_error_v1());
+            }
+            race_name_prefix_v1(
+                &mut scan.arguments,
+                block.get_num_arguments(),
+                census.block_arguments,
+            )?;
+            race_name_prefix_v1(
+                &mut scan.attributes,
+                block.attributes.0.len(),
+                census.attributes,
+            )?;
         }
-        let Some(access) = Operation::get_op::<RankedAccessOp>(pointer, context) else {
-            continue;
-        };
-        race_name_prefix_v1(&mut scan.ranked_accesses, 1, census.ranked_accesses)?;
-        if raw.get_num_operands() == 0 {
+        for site in inventory.operations() {
+            let pointer = site.pointer();
+            let raw = pointer.deref(context);
+            if raw.get_parent_block() != inventory.blocks().get(site.block()).copied()
+                || raw
+                    .get_num_operands()
+                    .checked_add(raw.get_num_results())
+                    .ok_or_else(race_resource_overflow_v1)?
+                    > census.max_operation_arity
+            {
+                return Err(race_name_census_error_v1());
+            }
+            race_name_prefix_v1(&mut scan.operands, raw.get_num_operands(), census.operands)?;
+            race_name_prefix_v1(&mut scan.results, raw.get_num_results(), census.results)?;
+            race_name_prefix_v1(
+                &mut scan.attributes,
+                raw.attributes.0.len(),
+                census.attributes,
+            )?;
+            if Operation::is_op::<AllocationEffectOp>(pointer, context) {
+                race_name_prefix_v1(&mut scan.allocation_effects, 1, census.allocation_effects)?;
+            }
+            let Some(access) = Operation::get_op::<RankedAccessOp>(pointer, context) else {
+                continue;
+            };
+            race_name_prefix_v1(&mut scan.ranked_accesses, 1, census.ranked_accesses)?;
+            if raw.get_num_operands() == 0 {
+                return Err(race_name_census_error_v1());
+            }
+            for operand in raw.operands() {
+                require_race_name_value_v1(context, function, operand, census)?;
+            }
+            // checked_success performs a type query; its last-operand search was
+            // bounded above. Borrow the same index range without allocating indices().
+            let end =
+                raw.get_num_operands() - usize::from(access.checked_success(context).is_some());
+            if end == 0 {
+                return Err(race_name_census_error_v1());
+            }
+            let view_bytes =
+                name_bytes(raw.get_operand(0)).ok_or_else(race_resource_overflow_v1)?;
+            scan.max_view_name = scan.max_view_name.max(view_bytes);
+            for index in 1..end {
+                let bytes =
+                    name_bytes(raw.get_operand(index)).ok_or_else(race_resource_overflow_v1)?;
+                scan.max_index_name = scan.max_index_name.max(bytes);
+            }
+        }
+        if scan.operands != census.operands
+            || scan.results != census.results
+            || scan.arguments != census.block_arguments
+            || scan.attributes != census.attributes
+            || scan.ranked_accesses != census.ranked_accesses
+            || scan.allocation_effects != census.allocation_effects
+            || context
+                .ir_mutation_attempt_epoch()
+                .map_err(|_| race_name_census_error_v1())?
+                != epoch
+        {
             return Err(race_name_census_error_v1());
         }
-        for operand in raw.operands() {
-            require_race_name_value_v1(context, function, operand, census)?;
-        }
-        // checked_success performs a type query; its last-operand search was
-        // bounded above. Borrow the same index range without allocating indices().
-        let end = raw.get_num_operands() - usize::from(access.checked_success(context).is_some());
-        if end == 0 {
-            return Err(race_name_census_error_v1());
-        }
-        let view_bytes = name_bytes(raw.get_operand(0)).ok_or_else(race_resource_overflow_v1)?;
-        scan.max_view_name = scan.max_view_name.max(view_bytes);
-        for index in 1..end {
-            let bytes = name_bytes(raw.get_operand(index)).ok_or_else(race_resource_overflow_v1)?;
-            scan.max_index_name = scan.max_index_name.max(bytes);
-        }
-    }
-    if scan.operands != census.operands
-        || scan.results != census.results
-        || scan.arguments != census.block_arguments
-        || scan.attributes != census.attributes
-        || scan.ranked_accesses != census.ranked_accesses
-        || scan.allocation_effects != census.allocation_effects
-        || context
-            .ir_mutation_attempt_epoch()
-            .map_err(|_| race_name_census_error_v1())?
-            != epoch
-    {
-        return Err(race_name_census_error_v1());
-    }
-    Ok(RaceNameCensusV1 {
-        name_storage: scan
-            .max_view_name
-            .max(scan.max_index_name)
-            .max(RACE_ALLOCATION_NAME_BYTES_V1),
-        scan_work: work,
-        execution_lookup_work: race_name_lookup_work_v1(census)?,
+        Ok(RaceNameCensusV1 {
+            name_storage: scan
+                .max_view_name
+                .max(scan.max_index_name)
+                .max(RACE_ALLOCATION_NAME_BYTES_V1),
+            scan_work: work,
+            execution_lookup_work: race_name_lookup_work_v1(census)?,
+        })
     })
 }
 
@@ -355,22 +420,57 @@ pub(crate) fn preflight_race_resource_upper_bound_v1(
     layout: Option<PlironExecutionLayoutV1>,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
-    let inventory = inventory.ok_or_else(race_name_census_error_v1)?;
-    let names =
-        collect_race_name_census_v1(context, function, inventory, census, limits, |value| {
-            value.unique_name_byte_len(context)
-        })?;
-    let extents = layout
-        .as_ref()
-        .map(|layout| layout.global_extents.as_slice())
-        .unwrap_or_else(|| sparse.launch_extents());
-    race_resource_upper_bound_for_shape_v1(
+    preflight_race_resource_upper_bound_with_observation_v1(
+        context,
+        function,
+        inventory,
         census,
-        names,
-        static_invocation_shape_for_resource_v1(sparse, layout),
-        presburger_invocation_shape_for_resource_v1(extents),
-        limits,
+        sparse,
+        layout,
+        RaceResourceAdmissionV1 {
+            limits,
+            observer: None,
+        },
     )
+}
+
+pub(crate) fn preflight_race_resource_upper_bound_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    inventory: Option<&BoundedPlironFunctionInventoryV1>,
+    census: ProductionAnalysisInputCensusV1,
+    sparse: &SparseIndexAnalysisV1,
+    layout: Option<PlironExecutionLayoutV1>,
+    admission: RaceResourceAdmissionV1<'_, '_, '_>,
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    let RaceResourceAdmissionV1 { limits, observer } = admission;
+    observe_resource_preflight_v1(observer, |observer| {
+        let inventory = inventory.ok_or_else(race_name_census_error_v1)?;
+        let names = collect_race_name_census_with_observation_v1(
+            context,
+            function,
+            inventory,
+            census,
+            limits,
+            |value| value.unique_name_byte_len(context),
+            observer,
+        )?;
+        let extents = layout
+            .as_ref()
+            .map(|layout| layout.global_extents.as_slice())
+            .unwrap_or_else(|| sparse.launch_extents());
+        finish_race_resource_preflight_with_observation_v1(
+            calculate_race_resource_upper_bound_for_shape_v1(
+                census,
+                names,
+                static_invocation_shape_for_resource_v1(sparse, layout),
+                presburger_invocation_shape_for_resource_v1(extents),
+            ),
+            limits,
+            trace_race_resource_preflight_v1,
+            observer,
+        )
+    })
 }
 
 fn presburger_invocation_shape_for_resource_v1(extents: &[u64]) -> Option<(usize, usize)> {
@@ -438,6 +538,7 @@ fn presburger_relation_resource_upper_bound_v1(
     Ok((work, temporary))
 }
 
+#[cfg(test)]
 fn race_resource_upper_bound_for_shape_v1(
     census: ProductionAnalysisInputCensusV1,
     names: RaceNameCensusV1,
@@ -486,16 +587,28 @@ struct RaceResourcePreflightNumbersV1 {
     bound: ProductionAnalysisResourceUpperBoundV1,
 }
 
+#[cfg(test)]
 fn finish_race_resource_preflight_v1(
     numbers: Result<RaceResourcePreflightNumbersV1, ProductionAnalysisResourceLimitV1>,
     limits: ProductionAnalysisResourceLimitsV1,
     observe: impl FnOnce(&RaceResourcePreflightNumbersV1, ProductionAnalysisResourceLimitsV1),
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    finish_race_resource_preflight_with_observation_v1(numbers, limits, observe, None)
+}
+
+fn finish_race_resource_preflight_with_observation_v1(
+    numbers: Result<RaceResourcePreflightNumbersV1, ProductionAnalysisResourceLimitV1>,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observe: impl FnOnce(&RaceResourcePreflightNumbersV1, ProductionAnalysisResourceLimitsV1),
+    observer: RaceObserverV1<'_, '_, '_>,
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
     let numbers = numbers?;
     observe(&numbers, limits);
-    limits.require(
+    require_observed_v1(
+        limits,
         ProductionAnalysisResourcePhaseV1::RaceFreedom,
-        numbers.bound,
+        Ok(numbers.bound),
+        observer,
     )
 }
 

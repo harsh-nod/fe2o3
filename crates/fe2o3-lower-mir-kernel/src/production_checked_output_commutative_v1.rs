@@ -370,6 +370,18 @@ mod tests;
 #[path = "production_checked_output_private_cell_v1.rs"]
 mod private_cell;
 pub use private_cell::{
+    ProductionCrossBlockForwardingErrorV1, ProductionCrossBlockForwardingOriginV1,
+    ProductionCrossBlockForwardingStorageV1, ProductionInductionRefinementErrorV1,
+    ProductionInductionRefinementOriginV1, ProductionInductionRefinementStorageV1,
+    ProductionOwnedCrossBlockForwardingContinuationV1,
+    ProductionOwnedInductionRefinementContinuationV1,
+    ProductionOwnedRefinedCrossBlockForwardingContinuationV1,
+    ProductionOwnedUnitLocalCrossBlockForwardingContinuationV1,
+    ProductionOwnedUnitLocalInductionRefinementContinuationV1,
+    ProductionOwnedUnitLocalRefinedCrossBlockForwardingContinuationV1,
+    ProductionRefinedCrossBlockForwardingErrorV1, ProductionRefinedCrossBlockForwardingStorageV1,
+};
+pub use private_cell::{
     ProductionLicmErrorV1, ProductionLicmStorageV1, ProductionOwnedLicmContinuationV1,
     ProductionOwnedUnitLocalLicmContinuationV1,
 };

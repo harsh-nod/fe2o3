@@ -682,3 +682,137 @@ fn constant_lookup_and_late_refusals_preserve_the_callers_storage() {
     assert_eq!(budget.peak_storage(), 31);
     assert!(budget.work() > 0);
 }
+
+#[test]
+fn literal_scan_preserves_first_refusal_and_exact_work_before_dead_admission() {
+    let unresolved = Error::UnresolvedCondition { block: 0 };
+    let unsupported = Error::UnsupportedOperation {
+        block: 4,
+        operation: 0,
+    };
+    for bad in [
+        write(),
+        Op::Access {
+            kind: AccessKindAttr::Read,
+            view: local(2),
+            indices: vec![local(1)],
+        },
+        Op::IndexBinary {
+            result: Id::new(6),
+            kind: IndexBinaryKindAttr::Divide,
+            lhs: local(0),
+            rhs: local(4),
+        },
+    ] {
+        for (lhs, rhs, exact, last_charge, expected) in [
+            (local(0), local(4), 85, 2, unresolved),
+            (local(4), local(0), 85, 2, unresolved),
+            (Value::Argument(1), local(0), 74, 2, unresolved),
+            (local(4), local(5), 119, 4, unsupported),
+        ] {
+            for equal in [false, true] {
+                let mut b = blocks();
+                b.push(Block::new(vec![bad.clone()], Term::Return));
+                let term = if equal {
+                    Term::IndexEqual {
+                        lhs,
+                        rhs,
+                        true_block: 3,
+                        false_block: 3,
+                    }
+                } else {
+                    Term::IndexLessThan {
+                        lhs,
+                        rhs,
+                        true_block: 3,
+                        false_block: 3,
+                    }
+                };
+                set_terminator(&mut b, 0, term);
+                let kernel = construct(b);
+                for limit in [exact - 1, exact] {
+                    let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+                    {
+                        let mut budget = Budget::new(&mut work, 43);
+                        budget.reserve_storage(43).unwrap();
+                        budget.charge_work(17).unwrap();
+                        let result = check_paths(&kernel, local(1), EXTENT, WRITE, &mut budget);
+                        if limit == exact {
+                            assert_eq!(result, Err(expected));
+                        } else {
+                            let Err(Error::Resource(ResourceError::Work(e))) = result else {
+                                panic!("{result:?}");
+                            };
+                            assert_eq!((e.limit(), e.actual()), (limit, exact));
+                        }
+                        assert_eq!(
+                            budget.work(),
+                            if limit == exact {
+                                exact
+                            } else {
+                                exact - last_charge
+                            }
+                        );
+                        assert_eq!(
+                            (
+                                budget.storage(),
+                                budget.peak_storage(),
+                                budget.failed_storage()
+                            ),
+                            (43, 43, None)
+                        );
+                    }
+                    assert_eq!(work.failed_work(), (limit < exact).then_some(exact));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn recipe_query_preserves_exact_work_and_retained_floor_boundaries() {
+    let kernel = construct(blocks());
+    for (work_limit, storage_limit) in [(155, 43), (154, 43), (155, 42)] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        {
+            let mut budget = Budget::new(&mut work, storage_limit);
+            budget.charge_work(17).unwrap();
+            if storage_limit == 42 {
+                let Err(ResourceError::Storage(e)) = budget.reserve_storage(43) else {
+                    panic!("floor admitted");
+                };
+                assert_eq!((e.limit(), e.actual()), (42, 43));
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_storage()
+                    ),
+                    (17, 0, 0, Some(43))
+                );
+                continue;
+            }
+            budget.reserve_storage(43).unwrap();
+            let result = check_paths(&kernel, local(1), EXTENT, WRITE, &mut budget);
+            if work_limit == 155 {
+                assert_eq!(result, Ok([1, 1]));
+            } else {
+                let Err(Error::Resource(ResourceError::Work(e))) = result else {
+                    panic!("{result:?}");
+                };
+                assert_eq!((e.limit(), e.actual()), (154, 155));
+            }
+            assert_eq!(budget.work(), if work_limit == 155 { 155 } else { 149 });
+            assert_eq!(
+                (
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_storage()
+                ),
+                (43, 43, None)
+            );
+        }
+        assert_eq!(work.failed_work(), (work_limit < 155).then_some(155));
+    }
+}

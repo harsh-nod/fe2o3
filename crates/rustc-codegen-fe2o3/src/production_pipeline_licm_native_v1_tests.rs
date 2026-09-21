@@ -1,4 +1,6 @@
 //! Constructed semantic-source owners, not authenticated rustc capture.
+#[path = "production_pipeline_induction_refinement_source_v1_tests.rs"]
+mod induction_refinement_tests;
 #[path = "production_pipeline_licm_loop_induction_v1_tests.rs"]
 mod loop_induction_tests;
 use super::*;

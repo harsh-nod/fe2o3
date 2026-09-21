@@ -73,6 +73,7 @@ fn symbolic_subgroup_convergence(
     layout: PlironExecutionLayoutV1,
     analyses: &mut PlironAnalysisManagerV1,
     tensor_sites: &[(usize, usize)],
+    observer: TensorObservationV1<'_, '_, '_>,
 ) -> Result<(), PlironTensorLayoutFindingV1> {
     let workgroup_size = layout
         .workgroup_extents
@@ -104,7 +105,12 @@ fn symbolic_subgroup_convergence(
     }
     analyses.prepare_sparse_indices(context, function);
     let sparse = analyses.sparse_indices().map_err(|failure| match failure {
-        SparseIndexFailureV1::ResourceLimit { .. } => {
+        SparseIndexFailureV1::ResourceLimit { resource, .. } => {
+            observe_tensor_quota_v1(
+                observer,
+                ProductionAnalysisResourcePhaseV1::SparseIndex,
+                resource,
+            );
             PlironTensorLayoutFindingV1::ResourceLimitExceeded
         }
         failure => PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
@@ -112,321 +118,336 @@ fn symbolic_subgroup_convergence(
         },
     })?;
     let uniformity =
-        analyze_pliron_subgroup_uniformity(context, function, inventory, layout, sparse)?;
+        analyze_pliron_subgroup_uniformity(context, function, inventory, layout, sparse)
+            .map_err(|finding| observe_tensor_bounded_finding_v1(observer, finding))?;
     let blocks = inventory.blocks();
     if blocks.is_empty() || blocks.len() > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1 {
+        if blocks.len() > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1 {
+            observe_tensor_quota_v1(
+                observer,
+                ProductionAnalysisResourcePhaseV1::TensorLayout,
+                "tensor convergence block limit",
+            );
+        }
         return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
     }
-    let block_indices = blocks
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, block)| (block, index))
-        .collect::<HashMap<_, _>>();
-    let entry = function.get_entry_block(context);
-    let mut successors = Vec::with_capacity(blocks.len());
-    let mut branch_uniformity = Vec::with_capacity(blocks.len());
-    for (block_index, block) in blocks.iter().copied().enumerate() {
-        let terminator = block
-            .deref(context)
-            .get_terminator(context)
-            .ok_or_else(
-                || PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                    detail: format!("block {block_index} has no terminator"),
-                },
-            )?;
-        let terminator = Operation::get_op_dyn(terminator, context);
-        let raw = terminator.get_operation().deref(context);
-        let (kind, expected_successors) = if terminator.downcast_ref::<ReturnOp>().is_some()
-            || terminator.downcast_ref::<TrapOp>().is_some()
-        {
-            (SubgroupBranchUniformityV1::Uniform, 0)
-        } else if terminator.downcast_ref::<BranchOp>().is_some()
-            || terminator.downcast_ref::<BranchArgsOp>().is_some()
-        {
-            (SubgroupBranchUniformityV1::Uniform, 1)
-        } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchOp>() {
-            if raw.get_num_operands() != 2 {
-                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                    detail: format!(
-                        "block {block_index} index comparison has a malformed operand count"
+    let result = (|| {
+        let block_indices = blocks
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, block)| (block, index))
+            .collect::<HashMap<_, _>>();
+        let entry = function.get_entry_block(context);
+        let mut successors = Vec::with_capacity(blocks.len());
+        let mut branch_uniformity = Vec::with_capacity(blocks.len());
+        for (block_index, block) in blocks.iter().copied().enumerate() {
+            let terminator = block
+                .deref(context)
+                .get_terminator(context)
+                .ok_or_else(
+                    || PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: format!("block {block_index} has no terminator"),
+                    },
+                )?;
+            let terminator = Operation::get_op_dyn(terminator, context);
+            let raw = terminator.get_operation().deref(context);
+            let (kind, expected_successors) = if terminator.downcast_ref::<ReturnOp>().is_some()
+                || terminator.downcast_ref::<TrapOp>().is_some()
+            {
+                (SubgroupBranchUniformityV1::Uniform, 0)
+            } else if terminator.downcast_ref::<BranchOp>().is_some()
+                || terminator.downcast_ref::<BranchArgsOp>().is_some()
+            {
+                (SubgroupBranchUniformityV1::Uniform, 1)
+            } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchOp>() {
+                if raw.get_num_operands() != 2 {
+                    return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: format!(
+                            "block {block_index} index comparison has a malformed operand count"
+                        ),
+                    });
+                }
+                (
+                    classify_subgroup_predicate(
+                        entry,
+                        layout,
+                        sparse,
+                        &uniformity,
+                        branch.lhs(context),
+                        branch.rhs(context),
                     ),
-                });
-            }
-            (
-                classify_subgroup_predicate(
-                    entry,
-                    layout,
-                    sparse,
-                    &uniformity,
-                    branch.lhs(context),
-                    branch.rhs(context),
-                ),
-                2,
-            )
-        } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchArgsOp>() {
-            if raw.get_num_successors() != 2 {
-                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                    detail: format!(
-                        "block {block_index} typed index comparison has a malformed successor count"
+                    2,
+                )
+            } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchArgsOp>() {
+                if raw.get_num_successors() != 2 {
+                    return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: format!(
+                            "block {block_index} typed index comparison has a malformed successor count"
+                        ),
+                    });
+                }
+                let expected_operands = 2
+                    + raw.get_successor(0).deref(context).get_num_arguments()
+                    + raw.get_successor(1).deref(context).get_num_arguments();
+                if raw.get_num_operands() != expected_operands {
+                    return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: format!(
+                            "block {block_index} typed index comparison has a malformed operand count"
+                        ),
+                    });
+                }
+                (
+                    classify_subgroup_predicate(
+                        entry,
+                        layout,
+                        sparse,
+                        &uniformity,
+                        branch.lhs(context),
+                        branch.rhs(context),
                     ),
-                });
-            }
-            let expected_operands = 2
-                + raw.get_successor(0).deref(context).get_num_arguments()
-                + raw.get_successor(1).deref(context).get_num_arguments();
-            if raw.get_num_operands() != expected_operands {
-                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                    detail: format!(
-                        "block {block_index} typed index comparison has a malformed operand count"
+                    2,
+                )
+            } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchOp>() {
+                if raw.get_num_operands() != 2 {
+                    return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: format!(
+                            "block {block_index} equality comparison has a malformed operand count"
+                        ),
+                    });
+                }
+                (
+                    classify_subgroup_equality(
+                        entry,
+                        layout,
+                        sparse,
+                        &uniformity,
+                        branch.lhs(context),
+                        branch.rhs(context),
                     ),
-                });
-            }
-            (
-                classify_subgroup_predicate(
-                    entry,
-                    layout,
-                    sparse,
-                    &uniformity,
-                    branch.lhs(context),
-                    branch.rhs(context),
-                ),
-                2,
-            )
-        } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchOp>() {
-            if raw.get_num_operands() != 2 {
-                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                    detail: format!(
-                        "block {block_index} equality comparison has a malformed operand count"
+                    2,
+                )
+            } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchArgsOp>() {
+                if raw.get_num_successors() != 2 {
+                    return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: format!(
+                            "block {block_index} typed equality comparison has a malformed successor count"
+                        ),
+                    });
+                }
+                let expected_operands = 2
+                    + raw.get_successor(0).deref(context).get_num_arguments()
+                    + raw.get_successor(1).deref(context).get_num_arguments();
+                if raw.get_num_operands() != expected_operands {
+                    return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: format!(
+                            "block {block_index} typed equality comparison has a malformed operand count"
+                        ),
+                    });
+                }
+                (
+                    classify_subgroup_equality(
+                        entry,
+                        layout,
+                        sparse,
+                        &uniformity,
+                        branch.lhs(context),
+                        branch.rhs(context),
                     ),
-                });
-            }
-            (
-                classify_subgroup_equality(
-                    entry,
-                    layout,
-                    sparse,
-                    &uniformity,
-                    branch.lhs(context),
-                    branch.rhs(context),
-                ),
-                2,
-            )
-        } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchArgsOp>() {
-            if raw.get_num_successors() != 2 {
-                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                    detail: format!(
-                        "block {block_index} typed equality comparison has a malformed successor count"
-                    ),
-                });
-            }
-            let expected_operands = 2
-                + raw.get_successor(0).deref(context).get_num_arguments()
-                + raw.get_successor(1).deref(context).get_num_arguments();
-            if raw.get_num_operands() != expected_operands {
-                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                    detail: format!(
-                        "block {block_index} typed equality comparison has a malformed operand count"
-                    ),
-                });
-            }
-            (
-                classify_subgroup_equality(
-                    entry,
-                    layout,
-                    sparse,
-                    &uniformity,
-                    branch.lhs(context),
-                    branch.rhs(context),
-                ),
-                2,
-            )
-        } else if terminator
-            .downcast_ref::<dialect_gpu::optimization_v1::CondBranchOp>()
-            .is_some()
-        {
-            if raw.get_num_operands() == 0 {
-                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                    detail: format!("block {block_index} Boolean branch has no condition"),
-                });
-            }
-            let kind = match uniformity.fact(raw.get_operand(0)) {
-                SubgroupValueUniformityV1::Uniform => SubgroupBranchUniformityV1::Uniform,
-                SubgroupValueUniformityV1::Varying => SubgroupBranchUniformityV1::Varying,
-                SubgroupValueUniformityV1::Unknown => SubgroupBranchUniformityV1::Unknown,
-            };
-            (kind, 2)
-        } else if let Some(split) = terminator.downcast_ref::<AnalysisSplitOp>() {
-            let dependencies = split.control_dependencies(context);
-            let kind = if dependencies.is_empty() {
-                SubgroupBranchUniformityV1::Unknown
-            } else {
-                match SubgroupValueUniformityV1::merge(
-                    dependencies
-                        .into_iter()
-                        .map(|dependency| uniformity.fact(dependency)),
-                ) {
+                    2,
+                )
+            } else if terminator
+                .downcast_ref::<dialect_gpu::optimization_v1::CondBranchOp>()
+                .is_some()
+            {
+                if raw.get_num_operands() == 0 {
+                    return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: format!("block {block_index} Boolean branch has no condition"),
+                    });
+                }
+                let kind = match uniformity.fact(raw.get_operand(0)) {
                     SubgroupValueUniformityV1::Uniform => SubgroupBranchUniformityV1::Uniform,
                     SubgroupValueUniformityV1::Varying => SubgroupBranchUniformityV1::Varying,
                     SubgroupValueUniformityV1::Unknown => SubgroupBranchUniformityV1::Unknown,
-                }
-            };
-            (kind, 2)
-        } else {
-            return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                detail: format!("block {block_index} has an unsupported terminator"),
-            });
-        };
-        if raw.get_num_successors() != expected_successors {
-            return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                detail: format!(
-                    "block {block_index} terminator has {} successors, expected {expected_successors}",
-                    raw.get_num_successors()
-                ),
-            });
-        }
-        let targets = raw
-            .successors()
-            .map(|successor| {
-                block_indices.get(&successor).copied().ok_or_else(|| {
-                    PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                        detail: format!("block {block_index} targets a block outside the kernel"),
+                };
+                (kind, 2)
+            } else if let Some(split) = terminator.downcast_ref::<AnalysisSplitOp>() {
+                let dependencies = split.control_dependencies(context);
+                let kind = if dependencies.is_empty() {
+                    SubgroupBranchUniformityV1::Unknown
+                } else {
+                    match SubgroupValueUniformityV1::merge(
+                        dependencies
+                            .into_iter()
+                            .map(|dependency| uniformity.fact(dependency)),
+                    ) {
+                        SubgroupValueUniformityV1::Uniform => SubgroupBranchUniformityV1::Uniform,
+                        SubgroupValueUniformityV1::Varying => SubgroupBranchUniformityV1::Varying,
+                        SubgroupValueUniformityV1::Unknown => SubgroupBranchUniformityV1::Unknown,
                     }
+                };
+                (kind, 2)
+            } else {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: format!("block {block_index} has an unsupported terminator"),
+                });
+            };
+            if raw.get_num_successors() != expected_successors {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: format!(
+                        "block {block_index} terminator has {} successors, expected {expected_successors}",
+                        raw.get_num_successors()
+                    ),
+                });
+            }
+            let targets = raw
+                .successors()
+                .map(|successor| {
+                    block_indices.get(&successor).copied().ok_or_else(|| {
+                        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                            detail: format!(
+                                "block {block_index} targets a block outside the kernel"
+                            ),
+                        }
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        successors.push(targets);
-        branch_uniformity.push(kind);
-    }
+                .collect::<Result<Vec<_>, _>>()?;
+            successors.push(targets);
+            branch_uniformity.push(kind);
+        }
 
-    let mut reachable = vec![false; blocks.len()];
-    let entry_index = block_indices.get(&entry).copied().ok_or_else(|| {
-        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-            detail: "the kernel entry block is outside its body region".to_owned(),
+        let mut reachable = vec![false; blocks.len()];
+        let entry_index = block_indices.get(&entry).copied().ok_or_else(|| {
+            PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                detail: "the kernel entry block is outside its body region".to_owned(),
+            }
+        })?;
+        let mut worklist = VecDeque::from([entry_index]);
+        while let Some(block) = worklist.pop_front() {
+            if reachable[block] {
+                continue;
+            }
+            reachable[block] = true;
+            worklist.extend(successors[block].iter().copied());
         }
-    })?;
-    let mut worklist = VecDeque::from([entry_index]);
-    while let Some(block) = worklist.pop_front() {
-        if reachable[block] {
-            continue;
-        }
-        reachable[block] = true;
-        worklist.extend(successors[block].iter().copied());
-    }
-    let cfg = SymbolicTensorCfgV1 {
-        successors,
-        branch_uniformity,
-        reachable,
-    };
+        let cfg = SymbolicTensorCfgV1 {
+            successors,
+            branch_uniformity,
+            reachable,
+        };
 
-    let tensor_blocks = tensor_sites.iter().copied().fold(
-        BTreeMap::<usize, usize>::new(),
-        |mut blocks, (block, operation)| {
-            blocks.entry(block).or_insert(operation);
-            blocks
-        },
-    );
-    if tensor_blocks.len() > MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1 {
-        return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
-    }
-    let mut convergence_work = 0_usize;
-    let predecessors = bounded_predecessors(&cfg.successors, &mut convergence_work)?;
-    let postdominators = bounded_postdominators(
-        &cfg.successors,
-        &cfg.reachable,
-        &predecessors,
-        &mut convergence_work,
-    )?;
-    let control_regions = bounded_control_regions(
-        &cfg.successors,
-        &cfg.reachable,
-        &cfg.branch_uniformity,
-        &postdominators,
-        &mut convergence_work,
-    )?;
-    let tensor_blocks = tensor_blocks.into_iter().collect::<Vec<_>>();
-    let mut tensor_block_ids = Vec::new();
-    tensor_block_ids
-        .try_reserve_exact(tensor_blocks.len())
-        .map_err(|_| PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
-    tensor_block_ids.extend(tensor_blocks.iter().map(|(block, _)| *block));
-    let tensor_reachability = bounded_tensor_reachability(
-        &cfg.successors,
-        &predecessors,
-        &tensor_block_ids,
-        &mut convergence_work,
-    )?;
-    let edge_count = cfg
-        .successors
-        .iter()
-        .try_fold(0_usize, |count, targets| count.checked_add(targets.len()));
-    let Some(edge_count) = edge_count else {
-        return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
-    };
-    let controller_query_work = cfg
-        .successors
-        .len()
-        .checked_mul(2)
-        .and_then(|blocks| blocks.checked_add(edge_count))
-        .and_then(|per_tensor| per_tensor.checked_mul(tensor_blocks.len()))
-        .ok_or(PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
-    charge_convergence_work(&mut convergence_work, controller_query_work)?;
-    for (tensor_index, (tensor_block, tensor_operation)) in tensor_blocks.into_iter().enumerate() {
-        if tensor_block >= cfg.successors.len() || !cfg.reachable[tensor_block] {
-            continue;
+        let tensor_blocks = tensor_sites.iter().copied().fold(
+            BTreeMap::<usize, usize>::new(),
+            |mut blocks, (block, operation)| {
+                blocks.entry(block).or_insert(operation);
+                blocks
+            },
+        );
+        if tensor_blocks.len() > MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1 {
+            return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
         }
-        for (controller, region) in control_regions
+        let mut convergence_work = 0_usize;
+        let predecessors = bounded_predecessors(&cfg.successors, &mut convergence_work)?;
+        let postdominators = bounded_postdominators(
+            &cfg.successors,
+            &cfg.reachable,
+            &predecessors,
+            &mut convergence_work,
+        )?;
+        let control_regions = bounded_control_regions(
+            &cfg.successors,
+            &cfg.reachable,
+            &cfg.branch_uniformity,
+            &postdominators,
+            &mut convergence_work,
+        )?;
+        let tensor_blocks = tensor_blocks.into_iter().collect::<Vec<_>>();
+        let mut tensor_block_ids = Vec::new();
+        tensor_block_ids
+            .try_reserve_exact(tensor_blocks.len())
+            .map_err(|_| PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
+        tensor_block_ids.extend(tensor_blocks.iter().map(|(block, _)| *block));
+        let tensor_reachability = bounded_tensor_reachability(
+            &cfg.successors,
+            &predecessors,
+            &tensor_block_ids,
+            &mut convergence_work,
+        )?;
+        let edge_count = cfg
+            .successors
             .iter()
-            .enumerate()
-            .take(cfg.successors.len())
+            .try_fold(0_usize, |count, targets| count.checked_add(targets.len()));
+        let Some(edge_count) = edge_count else {
+            return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+        };
+        let controller_query_work = cfg
+            .successors
+            .len()
+            .checked_mul(2)
+            .and_then(|blocks| blocks.checked_add(edge_count))
+            .and_then(|per_tensor| per_tensor.checked_mul(tensor_blocks.len()))
+            .ok_or(PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
+        charge_convergence_work(&mut convergence_work, controller_query_work)?;
+        for (tensor_index, (tensor_block, tensor_operation)) in
+            tensor_blocks.into_iter().enumerate()
         {
-            let kind = cfg.branch_uniformity[controller];
-            let mut controls_future_tensor = false;
-            for successor in cfg.successors[controller].iter().copied() {
-                if tensor_reachability.block_reaches(successor, tensor_index)? {
-                    controls_future_tensor = true;
-                    break;
-                }
+            if tensor_block >= cfg.successors.len() || !cfg.reachable[tensor_block] {
+                continue;
             }
-            if !cfg.reachable[controller]
-                || !tensor_reachability.block_reaches(controller, tensor_index)?
-                || !controls_future_tensor
-                || kind == SubgroupBranchUniformityV1::Uniform
+            for (controller, region) in control_regions
+                .iter()
+                .enumerate()
+                .take(cfg.successors.len())
             {
-                continue;
+                let kind = cfg.branch_uniformity[controller];
+                let mut controls_future_tensor = false;
+                for successor in cfg.successors[controller].iter().copied() {
+                    if tensor_reachability.block_reaches(successor, tensor_index)? {
+                        controls_future_tensor = true;
+                        break;
+                    }
+                }
+                if !cfg.reachable[controller]
+                    || !tensor_reachability.block_reaches(controller, tensor_index)?
+                    || !controls_future_tensor
+                    || kind == SubgroupBranchUniformityV1::Uniform
+                {
+                    continue;
+                }
+                let Some(region) = region else {
+                    continue;
+                };
+                if !region.contains(tensor_block) && !region.has_cycle {
+                    continue;
+                }
+                return Err(match kind {
+                    SubgroupBranchUniformityV1::Varying => {
+                        PlironTensorLayoutFindingV1::DivergentSubgroupControl {
+                            block: tensor_block,
+                            operation: tensor_operation,
+                            controller,
+                        }
+                    }
+                    SubgroupBranchUniformityV1::Unknown => {
+                        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                            detail: format!(
+                                "tensor instruction at block {tensor_block} op {tensor_operation} is control-dependent on unresolved branch block {controller}"
+                            ),
+                        }
+                    }
+                    SubgroupBranchUniformityV1::Uniform => {
+                        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                            detail: format!(
+                                "uniform controller block {controller} reached the divergent-control rejection boundary"
+                            ),
+                        }
+                    }
+                });
             }
-            let Some(region) = region else {
-                continue;
-            };
-            if !region.contains(tensor_block) && !region.has_cycle {
-                continue;
-            }
-            return Err(match kind {
-                SubgroupBranchUniformityV1::Varying => {
-                    PlironTensorLayoutFindingV1::DivergentSubgroupControl {
-                        block: tensor_block,
-                        operation: tensor_operation,
-                        controller,
-                    }
-                }
-                SubgroupBranchUniformityV1::Unknown => {
-                    PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                        detail: format!(
-                            "tensor instruction at block {tensor_block} op {tensor_operation} is control-dependent on unresolved branch block {controller}"
-                        ),
-                    }
-                }
-                SubgroupBranchUniformityV1::Uniform => {
-                    PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-                        detail: format!(
-                            "uniform controller block {controller} reached the divergent-control rejection boundary"
-                        ),
-                    }
-                }
-            });
         }
-    }
-    Ok(())
+        Ok(())
+    })();
+    result.map_err(|finding| observe_tensor_bounded_finding_v1(observer, finding))
 }
 
 fn classify_subgroup_predicate(

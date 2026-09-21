@@ -1,0 +1,99 @@
+CASE: different-stores
+CHECK-BEFORE: module wire-chain kernels=0 capabilities=[]
+CHECK-BEFORE: f0 f role=InternalHelper params=[v0:U64,v1:U64,v2:U32,v3:Bool,v4:PtrGlobal] results=[] capabilities=[]
+CHECK-BEFORE: f0:b0 block-id=10 params=[]
+CHECK-BEFORE: f0:b0:o0 [v10:U64] Constant U64(1)
+CHECK-BEFORE: f0:b0:o1 [v100:PtrPrivate] Alloca U32 private align=4 count=none
+CHECK-BEFORE: f0:b0:o2 [v102:U32] Constant U32(9)
+CHECK-BEFORE: f0:b0 Branch bb20 [v0]
+CHECK-BEFORE: f0:b1 block-id=20 params=[v20:U64]
+CHECK-BEFORE: f0:b1:o0 [v21:Bool] LessThan v20,v1
+CHECK-BEFORE: f0:b1 Conditional v21 bb30 [] bb90 []
+CHECK-BEFORE: f0:b2 block-id=30 params=[]
+CHECK-BEFORE: f0:b2 Conditional v3 bb31 [] bb32 []
+CHECK-BEFORE: f0:b3 block-id=31 params=[]
+CHECK-BEFORE: f0:b3:o0 [] Store v100,v2 Private align=4 volatile=false
+CHECK-BEFORE: f0:b3 Branch bb40 []
+CHECK-BEFORE: f0:b4 block-id=32 params=[]
+CHECK-BEFORE: f0:b4:o0 [] Store v100,v102 Private align=4 volatile=false
+CHECK-BEFORE: f0:b4 Branch bb40 []
+CHECK-BEFORE: f0:b5 block-id=40 params=[]
+CHECK-BEFORE: f0:b5:o0 [v101:U32] Load v100 Private align=4 volatile=false
+CHECK-BEFORE: f0:b5 Branch bb50 []
+CHECK-BEFORE: f0:b6 block-id=50 params=[]
+CHECK-BEFORE: f0:b6:o0 [v30:U64,v31:Bool] CheckedAdd v20,v10
+CHECK-BEFORE: f0:b6 Branch bb20 [v30]
+CHECK-BEFORE: f0:b7 block-id=90 params=[]
+CHECK-BEFORE: f0:b7 Return []
+CHECK-R: module wire-chain kernels=0 capabilities=[]
+CHECK-R: f0 f role=InternalHelper params=[v0:U64,v1:U64,v2:U32,v3:Bool,v4:PtrGlobal] results=[] capabilities=[]
+CHECK-R: f0:b0 block-id=10 params=[]
+CHECK-R: f0:b0:o0 [v10:U64] Constant U64(1)
+CHECK-R: f0:b0:o1 [v100:PtrPrivate] Alloca U32 private align=4 count=none
+CHECK-R: f0:b0:o2 [v102:U32] Constant U32(9)
+CHECK-R: f0:b0 Branch bb20 [v0]
+CHECK-R: f0:b1 block-id=20 params=[v20:U64]
+CHECK-R: f0:b1:o0 [v21:Bool] LessThan v20,v1
+CHECK-R: f0:b1 Conditional v21 bb30 [] bb90 []
+CHECK-R: f0:b2 block-id=30 params=[]
+CHECK-R: f0:b2 Conditional v3 bb31 [] bb32 []
+CHECK-R: f0:b3 block-id=31 params=[]
+CHECK-R: f0:b3:o0 [] Store v100,v2 Private align=4 volatile=false
+CHECK-R: f0:b3 Branch bb40 []
+CHECK-R: f0:b4 block-id=32 params=[]
+CHECK-R: f0:b4:o0 [] Store v100,v102 Private align=4 volatile=false
+CHECK-R: f0:b4 Branch bb40 []
+CHECK-R: f0:b5 block-id=40 params=[]
+CHECK-R: f0:b5:o0 [v101:U32] Load v100 Private align=4 volatile=false
+CHECK-R: f0:b5 Branch bb50 []
+CHECK-R: f0:b6 block-id=50 params=[]
+CHECK-R: f0:b6:o0 [v30:U64] Add v20,v10
+CHECK-R: f0:b6:o1 [v31:Bool] Constant Bool(false)
+CHECK-R: f0:b6 Branch bb20 [v30]
+CHECK-R: f0:b7 block-id=90 params=[]
+CHECK-R: f0:b7 Return []
+CHECK-AFTER: module wire-chain kernels=0 capabilities=[]
+CHECK-AFTER: f0 f role=InternalHelper params=[v0:U64,v1:U64,v2:U32,v3:Bool,v4:PtrGlobal] results=[] capabilities=[]
+CHECK-AFTER: f0:b0 block-id=10 params=[]
+CHECK-AFTER: f0:b0:o0 [v10:U64] Constant U64(1)
+CHECK-AFTER: f0:b0:o1 [v100:PtrPrivate] Alloca U32 private align=4 count=none
+CHECK-AFTER: f0:b0:o2 [v102:U32] Constant U32(9)
+CHECK-AFTER: f0:b0 Branch bb20 [v0]
+CHECK-AFTER: f0:b1 block-id=20 params=[v20:U64]
+CHECK-AFTER: f0:b1:o0 [v21:Bool] LessThan v20,v1
+CHECK-AFTER: f0:b1 Conditional v21 bb30 [] bb90 []
+CHECK-AFTER: f0:b2 block-id=30 params=[]
+CHECK-AFTER: f0:b2 Conditional v3 bb31 [] bb32 []
+CHECK-AFTER: f0:b3 block-id=31 params=[]
+CHECK-AFTER: f0:b3:o0 [] Store v100,v2 Private align=4 volatile=false
+CHECK-AFTER: f0:b3 Branch bb40 []
+CHECK-AFTER: f0:b4 block-id=32 params=[]
+CHECK-AFTER: f0:b4:o0 [] Store v100,v102 Private align=4 volatile=false
+CHECK-AFTER: f0:b4 Branch bb40 []
+CHECK-AFTER: f0:b5 block-id=40 params=[]
+CHECK-AFTER: f0:b5:o0 [v101:U32] Load v100 Private align=4 volatile=false
+CHECK-AFTER: f0:b5 Branch bb50 []
+CHECK-AFTER: f0:b6 block-id=50 params=[]
+CHECK-AFTER: f0:b6:o0 [v30:U64] Add v20,v10
+CHECK-AFTER: f0:b6:o1 [v31:Bool] Constant Bool(false)
+CHECK-AFTER: f0:b6 Branch bb20 [v30]
+CHECK-AFTER: f0:b7 block-id=90 params=[]
+CHECK-AFTER: f0:b7 Return []
+CHECK-REMARK: splits=1 forwards=0 same-middle-owner=true independent-pairs=true authority=false
+CHECK-REMARK: R f0:b0:o0 unchanged f0:b0:o0
+CHECK-REMARK: R f0:b0:o1 unchanged f0:b0:o1
+CHECK-REMARK: R f0:b0:o2 unchanged f0:b0:o2
+CHECK-REMARK: R f0:b1:o0 unchanged f0:b1:o0
+CHECK-REMARK: R f0:b3:o0 unchanged f0:b3:o0
+CHECK-REMARK: R f0:b4:o0 unchanged f0:b4:o0
+CHECK-REMARK: R f0:b5:o0 unchanged f0:b5:o0
+CHECK-REMARK: R f0:b6:o0 split f0:b6:o0,f0:b6:o1 fact=0
+CHECK-REMARK: F f0:b0:o0 retained
+CHECK-REMARK: F f0:b0:o1 retained
+CHECK-REMARK: F f0:b0:o2 retained
+CHECK-REMARK: F f0:b1:o0 retained
+CHECK-REMARK: F f0:b3:o0 retained
+CHECK-REMARK: F f0:b4:o0 retained
+CHECK-REMARK: F f0:b5:o0 retained
+CHECK-REMARK: F f0:b6:o0 retained
+CHECK-REMARK: F f0:b6:o1 retained
