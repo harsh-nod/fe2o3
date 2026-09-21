@@ -128,6 +128,87 @@ fn settlements_return_exact_canonical_members_and_preserve_unrelated_storage() {
 }
 
 #[test]
+fn settlement_preserves_unreachable_corruption_and_free_prefixes() {
+    for faults in 0..16 {
+        for success in [false, true] {
+            let (mut j, writer, roster) = pending(3);
+            let slots = chain(&j, writer);
+            if faults & 1 != 0 {
+                let slot = j.member_free.pop().unwrap();
+                let allocation = roster[3].allocation;
+                j.members[slot] = Some(MemberEntryV1 {
+                    writer,
+                    allocation,
+                    prior_lineage: 0,
+                    attempt_epoch: 1,
+                    next: None,
+                });
+                let entry = j.allocations[allocation.slot].as_mut().unwrap();
+                entry.pending_member = Some(slot);
+                entry.attempt_epoch = 1;
+            }
+            if faults & 2 != 0 {
+                j.allocations[roster[4].allocation.slot]
+                    .as_mut()
+                    .unwrap()
+                    .pending_member = Some(slots[0]);
+            }
+            if faults & 4 != 0 {
+                j.free.extend([writer.slot, writer.slot]);
+                j.member_free[0] = slots[0];
+                j.member_free[1] = slots[0];
+            }
+            if faults & 8 != 0 {
+                let poison = Some(BeginMemberPlanV1 {
+                    member_slot: usize::MAX,
+                    allocation: roster[7].allocation,
+                    prior_lineage: u64::MAX,
+                    attempt_epoch: 0,
+                });
+                j.scratch[3] = poison;
+                j.scratch[7] = poison;
+            }
+            // Raw settlement validates the reachable chain, not unrelated arena state.
+            let mut expected = snapshot(&j);
+            expected.writers[writer.slot] = None;
+            expected.free.push(writer.slot);
+            for slot in slots {
+                let member = expected.members[slot].take().unwrap();
+                let entry = expected.allocations[member.allocation.slot]
+                    .as_mut()
+                    .unwrap();
+                if success {
+                    entry.content_lineage = member.attempt_epoch;
+                }
+                entry.pending_member = None;
+                expected.member_free.push(slot);
+            }
+            j.indexed_accesses.set(0);
+            assert_eq!(settle(&mut j, writer, writer, success), Ok(()));
+            assert_eq!(j.indexed_accesses.get(), 30);
+            assert_eq!(snapshot(&j), expected, "faults={faults}, success={success}");
+        }
+    }
+}
+
+#[test]
+fn empty_settlement_does_not_require_unrelated_arena_shapes() {
+    for success in [false, true] {
+        let (mut j, writer, _) = pending(0);
+        j.allocations.clear();
+        j.members.clear();
+        j.scratch.clear();
+        let mut expected = snapshot(&j);
+        expected.writers[writer.slot] = None;
+        expected.free.push(writer.slot);
+        j.indexed_accesses.set(0);
+        assert_eq!(settle(&mut j, writer, writer, success), Ok(()));
+        assert_eq!(j.indexed_accesses.get(), 3);
+        assert_eq!(snapshot(&j), expected);
+    }
+}
+
+#[test]
 fn immutable_settlement_preflight_matches_ranked_fault_combinations() {
     for count in [0, 3] {
         for header_fault in 0..5 {
