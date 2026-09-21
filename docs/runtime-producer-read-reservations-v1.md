@@ -252,9 +252,21 @@ loop-invariant failures and five exact postcondition failures. Its 382 inherited
 obligations overlap prior packets. All 840 unit tests and 27 doctests passed;
 new direct staging tests inspect nonzero prior lineage before commit erases scratch,
 linked slot/field identity, malformed untouched state, dirty tails, zero-count
-identity, cyclic prefixes and exact access counts. The final settlement commit
-still has separate production/model bodies, and pointer/capacity identity remains
+identity, cyclic prefixes and exact access counts. Pointer/capacity identity remains
 CPU evidence rather than a physical-storage theorem.
+
+The final settlement commit now shares its executable production body as well.
+`settlement_commit_body.rs` retains the actual scratch `take`, allocation `as_mut`,
+in-place lineage/backlink mutations, member clear and both free-list appends.
+Its unchanged raw logical contract permits repeated member/allocation destinations,
+arbitrary untouched malformed state and an in-bounds writer slot without requiring
+stored writer identity. Success preserves sequential last-write-wins semantics;
+NoEffect preserves current allocation lineage. The [shared commit development packet](evidence/dev-shared-settlement-commit-2026-09-21/README.md)
+retains two 398/0 whole-crate positives and ten 397/1 executable controls, with 392
+inherited obligations overlapping earlier packets. All 847 unit tests and 27 doctests
+passed. Direct regressions cover aliases, repeated returns, dirty tails, weak writer
+state and exact `4 * count + 2` commit work. Physical storage/allocation and unwind
+semantics remain separate obligations; this is not whole-wrapper refinement.
 
 These are scoped logical/shared-body proofs with invariant-conditional custody composition,
 not whole-wrapper verification.
@@ -272,9 +284,9 @@ Before enabling runtime admission, the remaining work is:
 1. Finish production Rust correspondence for enrollment, Begin, settlement,
    Unknown marking and the proved logical admission/release and unread guards.
    Shared executable source now covers the settlement scalar return guard,
-   retained-chain admission/Unknown transition and settlement scratch scan/staging.
+   retained-chain admission/Unknown transition and settlement scratch scan/staging/commit.
    Remaining bodies include construction/enrollment and sorting/search, Begin,
-   final settlement commit, stable/producer reader admission/release and unread guards.
+   stable/producer reader admission/release and unread guards.
    Complete type/view correspondence, physical storage and fallible-allocation
    contracts, and explicit normal/unwind semantics remain open before treating
    the logical lifecycle as full-wrapper refinement.

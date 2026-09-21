@@ -1,0 +1,15 @@
+{
+  "development_checks_passed": true,
+  "positive_obligations": 398,
+  "inherited_obligations": 392,
+  "negative_cases": 10,
+  "loop_invariant_negatives": 7,
+  "postcondition_negatives": 3,
+  "shared_production_commit": true,
+  "unchanged_raw_commit_precondition": true,
+  "logical_settlement_composition": true,
+  "issued_custody_preservation": true,
+  "allocator_or_machine_refinement": false,
+  "full_runtime_refinement": false,
+  "native_or_performance_acceptance": false
+}
