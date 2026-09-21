@@ -125,9 +125,26 @@ producer custody and issuance preservation: two 263/0 positives and 21 exact
 262/1 controls. Its constructor/enroll/register witness reaches Reserved, not
 Pending. Production still uses the standard-library sorting/search operations.
 
+`context_version_journal_begin_v1.rs` adds a separate raw Begin executor with
+exact ordered preflight, prestate-derived scratch plans, sequential member and
+allocation commit, and complete unchanged-on-error contents. It has no valid-state
+precondition: malformed free lists retain production's sequential overwrite
+semantics rather than silently acquiring a uniqueness premise. A general theorem
+preserves issuance history and the exact Reserved count. Executable constructor,
+enrollment and registration traces reach both empty and two-member Pending writers;
+repeat Begin rejects without mutation. This does not yet establish general
+pending-custody or producer-reader preservation across Begin.
+
+Production Begin now calls a private immutable preflight under the same exclusive
+borrow as staging/commit. Its guard order and indexed-access bound are unchanged.
+An independent ranked-fault oracle covers 4,356 paired malformed states and compares
+the full transaction and storage identity. Wrapper tests cover combined-reader
+rejection before raw writer/roster faults. These tests and the parallel logical
+executor are not a compiler-checked Rust correspondence proof.
+
 These are conditional logical-execution proofs, not whole-wrapper verification.
 Complete retained-chain coverage is preserved by logical enrollment, but its
-reachability through begin-write and the remaining base-journal transitions
+general preservation through begin-write and the remaining base-journal transitions
 still needs to be established.
 Physical Vec storage,
 fallible allocation, settlement scratch/preflight execution, panic/unwind behavior,

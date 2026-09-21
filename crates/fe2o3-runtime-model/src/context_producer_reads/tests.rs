@@ -129,6 +129,75 @@ fn snapshot(journal: &ContextProducerReadJournalV1) -> String {
 }
 
 #[test]
+fn begin_checks_combined_unread_roster_before_raw_writer_or_destination_faults() {
+    for reader_kind in 0..3 {
+        for protected_position in 0..3 {
+            for raw_fault in 0..5 {
+                let mut f = Fixture::new(4);
+                if reader_kind != 0 {
+                    f.acquire(20);
+                }
+                f.journal
+                    .settle_no_effect(
+                        f.producer,
+                        &ContextWriterNoEffectEvidenceV1 { writer: f.producer },
+                    )
+                    .unwrap();
+                if reader_kind != 1 {
+                    let request = f.stable_read(f.source);
+                    f.journal
+                        .acquire_reads(key(21), &[request], &mut [None])
+                        .unwrap();
+                }
+                let mut writer = f.journal.register_writer(key(30)).unwrap();
+                let mut members = alloc::vec![f.member(f.other); 3];
+                members[protected_position] = f.member(f.source);
+                match raw_fault {
+                    0 => writer.slot = usize::MAX,
+                    1 => members[0].device.local += 1,
+                    2 => members[0].byte_extent = 0,
+                    3 => members.extend_from_slice(&[f.member(f.other); 2]),
+                    // The repeated other allocation already makes this roster noncanonical.
+                    _ => {}
+                }
+                let before = snapshot(&f.journal);
+                assert_eq!(
+                    f.journal.begin_write(writer, &members),
+                    Err(Error::AllocationBusy)
+                );
+                assert_eq!(snapshot(&f.journal), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn begin_unread_faults_follow_caller_order_before_raw_preflight() {
+    for protected_position in 0..3 {
+        for invalid_position in 0..3 {
+            if protected_position == invalid_position {
+                continue;
+            }
+            let mut f = Fixture::new(2);
+            f.acquire(20);
+            let mut writer = f.journal.register_writer(key(30)).unwrap();
+            writer.slot = usize::MAX;
+            let mut members = [f.member(f.other); 3];
+            members[protected_position] = f.member(f.source);
+            members[invalid_position].allocation.slot = usize::MAX;
+            let expected = if invalid_position < protected_position {
+                Error::InvalidAllocationReference
+            } else {
+                Error::AllocationBusy
+            };
+            let before = snapshot(&f.journal);
+            assert_eq!(f.journal.begin_write(writer, &members), Err(expected));
+            assert_eq!(snapshot(&f.journal), before);
+        }
+    }
+}
+
+#[test]
 fn producer_settlement_preserves_custody_and_never_promotes_failure() {
     for status in [
         Status::Pending,

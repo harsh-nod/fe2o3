@@ -449,13 +449,11 @@ impl ContextVersionJournalV1 {
         Ok(state)
     }
 
-    /// The caller supplies an already canonical whole-allocation roster.
-    /// Full preflight precedes even scratch mutation; commit keeps the same borrow.
-    pub fn begin_write(
-        &mut self,
+    fn preflight_begin_write(
+        &self,
         writer: ContextWriterReferenceV1,
         canonical: &[ContextAllocationWriteV1],
-    ) -> Result<(), ContextVersionJournalErrorV1> {
+    ) -> Result<usize, ContextVersionJournalErrorV1> {
         self.lookup_reserved(writer)?;
         let reserved_count = self
             .reserved_count
@@ -504,6 +502,18 @@ impl ContextVersionJournalV1 {
                 return Err(ContextVersionJournalErrorV1::InvalidState);
             }
         }
+        Ok(reserved_count)
+    }
+
+    /// The caller supplies an already canonical whole-allocation roster.
+    /// Full preflight precedes even scratch mutation; commit keeps the same borrow.
+    pub fn begin_write(
+        &mut self,
+        writer: ContextWriterReferenceV1,
+        canonical: &[ContextAllocationWriteV1],
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        let reserved_count = self.preflight_begin_write(writer, canonical)?;
+        let count = canonical.len();
         for (index, destination) in canonical.iter().enumerate() {
             let entry = self
                 .read_allocation(destination.allocation.slot)

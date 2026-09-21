@@ -1015,6 +1015,13 @@ fn short_traces_match_independent_writer_and_allocation_maps() {
 #[test]
 fn begin_routes_full_preflight_before_bounded_planning_and_commit() {
     let source = include_str!("../context_version_journal.rs");
+    let preflight = source
+        .split("fn preflight_begin_write(")
+        .nth(1)
+        .unwrap()
+        .split("pub fn begin_write(")
+        .next()
+        .unwrap();
     let begin = source
         .split("pub fn begin_write(")
         .nth(1)
@@ -1045,7 +1052,9 @@ fn begin_routes_full_preflight_before_bounded_planning_and_commit() {
         ".extend(",
     ] {
         assert!(
-            !begin.contains(forbidden) && !helpers.contains(forbidden),
+            !preflight.contains(forbidden)
+                && !begin.contains(forbidden)
+                && !helpers.contains(forbidden),
             "allocation/growth form: {forbidden}"
         );
     }
@@ -1075,19 +1084,35 @@ fn begin_routes_full_preflight_before_bounded_planning_and_commit() {
         "0..self.allocation_capacity",
         "0..self.writer_capacity",
     ] {
-        assert!(!begin.contains(forbidden), "Begin contains {forbidden}");
+        assert!(
+            !preflight.contains(forbidden) && !begin.contains(forbidden),
+            "Begin contains {forbidden}"
+        );
     }
     for traversal in [
         "canonical.windows(2)",
         "for destination in canonical",
-        "canonical.iter().enumerate()",
         "for index in 0..count",
     ] {
+        assert!(preflight.contains(traversal));
+    }
+    for traversal in ["canonical.iter().enumerate()", "for index in 0..count"] {
         assert!(begin.contains(traversal));
     }
     let first_plan = begin.find("self.store_plan(index, plan)").unwrap();
+    assert!(preflight.trim_start().starts_with("&self,"));
+    assert!(preflight.contains("Ok(reserved_count)"));
+    assert!(
+        begin
+            .find("self.preflight_begin_write(writer, canonical)?")
+            .unwrap()
+            < first_plan
+    );
+    let mut previous = 0;
     for validation in [
         "self.lookup_reserved(writer)?",
+        ".checked_sub(1)",
+        "count > self.allocation_capacity",
         "NonCanonicalRoster",
         "self.exact_allocation(destination.allocation)?",
         "AllocationDeviceMismatch",
@@ -1095,12 +1120,13 @@ fn begin_routes_full_preflight_before_bounded_planning_and_commit() {
         "AllocationBusy",
         "EpochExhausted",
         "MemberCapacity",
+        "count > self.scratch.len()",
+        "self.members.get(member) != Some(&None)",
         "self.scratch[index].is_some()",
     ] {
-        assert!(
-            begin.find(validation).unwrap() < first_plan,
-            "late preflight: {validation}"
-        );
+        let position = preflight.find(validation).unwrap();
+        assert!(position > previous, "out-of-order preflight: {validation}");
+        previous = position;
     }
     assert!(first_plan < begin.find("self.scratch[index].take()").unwrap());
     assert!(
@@ -1115,4 +1141,266 @@ fn begin_routes_full_preflight_before_bounded_planning_and_commit() {
         .next()
         .unwrap();
     assert!(plan_helper.contains("self.scratch[index] = Some(plan)"));
+}
+
+// Rank all observable faults independently; unlike production, do not short-circuit.
+fn begin_fault_oracle(
+    journal: &Journal,
+    writer: Reference,
+    roster: &[Write],
+) -> Result<usize, Error> {
+    let mut faults = Vec::new();
+    let mut record = |phase, index, check, error| faults.push(((phase, index, check), error));
+    if journal.writers.get(writer.slot) != Some(&Some(WriterEntryV1::Reserved(writer.key)))
+        || writer.key.context_generation != journal.context_generation
+    {
+        record(0, 0, 0, Error::InvalidReference);
+    }
+    if journal.reserved_count == 0 {
+        record(1, 0, 0, Error::InvalidState);
+    }
+    if roster.len() > journal.allocation_capacity {
+        record(2, 0, 0, Error::RosterCapacity);
+    }
+    for index in 1..roster.len() {
+        if roster[index - 1].allocation.key >= roster[index].allocation.key {
+            record(3, index, 0, Error::NonCanonicalRoster);
+        }
+    }
+    for (index, destination) in roster.iter().enumerate() {
+        let Some(entry) = journal
+            .allocations
+            .get(destination.allocation.slot)
+            .copied()
+            .flatten()
+        else {
+            record(4, index, 0, Error::InvalidAllocationReference);
+            continue;
+        };
+        if entry.key != destination.allocation.key
+            || entry.key.context_generation != journal.context_generation
+        {
+            record(4, index, 0, Error::InvalidAllocationReference);
+        }
+        if entry.device != destination.device {
+            record(4, index, 1, Error::AllocationDeviceMismatch);
+        }
+        if entry.byte_extent != destination.byte_extent {
+            record(4, index, 2, Error::AllocationExtentMismatch);
+        }
+        if entry.pending_member.is_some() {
+            record(4, index, 3, Error::AllocationBusy);
+        }
+        if entry.attempt_epoch == u64::MAX {
+            record(4, index, 4, Error::EpochExhausted);
+        }
+    }
+    if roster.len() > journal.member_free.len() {
+        record(5, 0, 0, Error::MemberCapacity);
+    }
+    if roster.len() > journal.scratch.len() {
+        record(6, 0, 0, Error::InvalidState);
+    }
+    for (index, slot) in journal
+        .member_free
+        .iter()
+        .rev()
+        .take(roster.len())
+        .enumerate()
+    {
+        if journal.members.get(*slot) != Some(&None) {
+            record(7, index, 0, Error::InvalidState);
+        }
+        if journal.scratch.get(index).is_some_and(Option::is_some) {
+            record(7, index, 1, Error::InvalidState);
+        }
+    }
+    match faults.into_iter().min_by_key(|(rank, _)| *rank) {
+        Some((_, error)) => Err(error),
+        None => Ok(journal.reserved_count - 1),
+    }
+}
+
+fn check_begin_oracle(
+    journal: &mut Journal,
+    writer: Reference,
+    roster: &[Write],
+) -> Result<(), Error> {
+    let expected_result = begin_fault_oracle(journal, writer, roster);
+    let mut expected = snapshot(journal);
+    assert_eq!(
+        journal.preflight_begin_write(writer, roster),
+        expected_result
+    );
+    assert_eq!(snapshot(journal), expected, "preflight changed the journal");
+    if let Ok(reserved_count) = expected_result {
+        let selected: Vec<_> = expected
+            .member_free
+            .iter()
+            .rev()
+            .copied()
+            .take(roster.len())
+            .collect();
+        // Capture all plans before any mutation, including deliberately aliased private slots.
+        let planned: Vec<_> = roster
+            .iter()
+            .enumerate()
+            .map(|(index, destination)| {
+                let allocation = expected.allocations[destination.allocation.slot].unwrap();
+                (
+                    selected[index],
+                    MemberEntryV1 {
+                        writer,
+                        allocation: destination.allocation,
+                        prior_lineage: allocation.content_lineage,
+                        attempt_epoch: allocation.attempt_epoch + 1,
+                        next: selected.get(index + 1).copied(),
+                    },
+                )
+            })
+            .collect();
+        for (slot, member) in planned {
+            expected.members[slot] = Some(member);
+            let allocation = expected.allocations[member.allocation.slot]
+                .as_mut()
+                .unwrap();
+            allocation.attempt_epoch = member.attempt_epoch;
+            allocation.pending_member = Some(slot);
+        }
+        expected
+            .member_free
+            .truncate(expected.member_free.len() - roster.len());
+        expected.writers[writer.slot] = Some(WriterEntryV1::Pending {
+            key: writer.key,
+            head: selected.first().copied(),
+            count: roster.len(),
+        });
+        expected.reserved_count = reserved_count;
+    }
+    let result = journal.begin_write(writer, roster);
+    assert_eq!(result, expected_result.map(|_| ()));
+    assert_eq!(
+        snapshot(journal),
+        expected,
+        "exact Begin transaction/storage mismatch"
+    );
+    result
+}
+
+fn inject_begin_fault(
+    journal: &mut Journal,
+    writer: &mut Reference,
+    roster: &mut [Write],
+    fault: usize,
+    index: usize,
+) {
+    let allocation_slot = index;
+    match fault {
+        0 => {}
+        1 => writer.slot = usize::MAX,
+        2 => writer.key.kind = Kind::Submission,
+        3 => journal.reserved_count = 0,
+        4 => journal.allocation_capacity = 2,
+        5 => roster.swap(0, 2),
+        6 => roster[index].allocation.slot = usize::MAX,
+        7 => journal.allocations[allocation_slot] = None,
+        8 => roster[index].allocation.key.local += 1,
+        9 => journal.context_generation = 8,
+        10 => roster[index].device.local = 12,
+        11 => roster[index].byte_extent = 0,
+        12..=13 => {
+            if let Some(entry) = journal.allocations[allocation_slot].as_mut() {
+                if fault == 12 {
+                    entry.pending_member = Some(usize::MAX);
+                } else {
+                    entry.attempt_epoch = u64::MAX;
+                }
+            }
+        }
+        14 => journal.member_free.truncate(2),
+        15 => journal.scratch.truncate(2),
+        16 => {
+            if let Some(slot) = journal.member_free.iter_mut().rev().nth(index) {
+                *slot = usize::MAX;
+            }
+        }
+        17 => {
+            journal.members[index] = Some(MemberEntryV1 {
+                writer: *writer,
+                allocation: roster[index].allocation,
+                prior_lineage: 0,
+                attempt_epoch: 1,
+                next: None,
+            })
+        }
+        18 => {
+            if let Some(plan) = journal.scratch.get_mut(index) {
+                *plan = Some(BeginMemberPlanV1 {
+                    member_slot: index,
+                    allocation: roster[index].allocation,
+                    prior_lineage: 0,
+                    attempt_epoch: 1,
+                });
+            }
+        }
+        19 => journal.member_free.fill(0),
+        20 => journal.reserved_count = usize::MAX,
+        21 => {
+            journal.writers[0] = Some(WriterEntryV1::Pending {
+                key: key(41),
+                head: None,
+                count: 0,
+            })
+        }
+        _ => panic!("unknown test fault"),
+    }
+}
+
+#[test]
+fn begin_matches_ranked_fault_oracle_for_pairwise_malformed_states() {
+    let mut cases = 0;
+    for first in 0..22 {
+        for second in 0..22 {
+            for first_index in 0..3 {
+                for second_index in 0..3 {
+                    let mut journal = Journal::new(7, 3, 1).unwrap();
+                    let mut roster = enroll(&mut journal, &[100, 200, 300]);
+                    let mut writer = journal.register_writer(key(41)).unwrap();
+                    inject_begin_fault(&mut journal, &mut writer, &mut roster, first, first_index);
+                    inject_begin_fault(
+                        &mut journal,
+                        &mut writer,
+                        &mut roster,
+                        second,
+                        second_index,
+                    );
+                    let _ = check_begin_oracle(&mut journal, writer, &roster);
+                    cases += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(cases, 4_356);
+}
+
+#[test]
+fn begin_oracle_covers_empty_and_partial_rosters_with_unrelated_retained_custody() {
+    for count in 0..=3 {
+        let (mut journal, writer, roster) = fixture();
+        let before = snapshot(&journal);
+        check_begin_oracle(&mut journal, writer, &roster[..count]).unwrap();
+        assert_eq!(storage(&journal), before.storage);
+        audit(&journal);
+    }
+    let (mut journal, writer, roster) = fixture();
+    let unrelated_reserved = journal.register_writer(key(45)).unwrap();
+    assert_eq!(journal.reserved_writer_count(), 2);
+    assert_eq!(journal.preflight_begin_write(writer, &roster), Ok(1));
+    check_begin_oracle(&mut journal, writer, &roster).unwrap();
+    assert_eq!(
+        journal.lookup_writer(unrelated_reserved),
+        Ok(WriterState::Reserved)
+    );
+    assert_eq!(journal.reserved_writer_count(), 1);
+    audit(&journal);
 }

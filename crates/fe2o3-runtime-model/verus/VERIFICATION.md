@@ -94,6 +94,17 @@ the experiment is not registered in the shared runner. Its
 contains a separately compiled Rust candidate, oracle tests and scoped CPU
 measurements, not Rust refinement or a native milestone.
 
+`context_version_journal_begin_v1.rs` adds 26 obligations to the 263-obligation
+enrollment root (289 total). The raw executable has exact ordered preflight,
+scratch staging and sequential commit with no valid-state premise, complete
+unchanged-on-error contents, and general issuance-history preservation. Both
+empty and two-member constructor/enroll/register/Begin witnesses reach Pending;
+repeat Begin rejects unchanged. Production has an immutable preflight boundary
+with the same check order, backed by a ranked-fault oracle over 4,356 malformed
+cases and reader-wrapper precedence tests. The logical executor does not prove
+Rust source correspondence, physical storage or general pending-custody/reader
+preservation. This development root is not registered in the shared runner.
+
 The strong chain graph is a reachable-state premise, not a whole-arena check
 performed by Rust settlement. Begin-write and settlement composition
 with issuance history, production enrollment correspondence, physical storage, fallible allocation, panic/unwind behavior
