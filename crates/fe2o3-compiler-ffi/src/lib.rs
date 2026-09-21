@@ -14,6 +14,7 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest, Sha256};
 
 mod descriptor_source;
+mod descriptor_source_v3;
 mod external_device_library_manifest;
 mod external_device_library_provider_set;
 mod final_compiler_module_commitment_v3;
@@ -28,6 +29,15 @@ mod symbol_manifest;
 pub use descriptor_source::{
     COMPILER_DESCRIPTOR_SECTION_NAME_V1, CompilerDescriptorSourceErrorV1,
     CompilerDescriptorSourceIdentityV1, CompilerDescriptorSourceV1,
+};
+pub use descriptor_source_v3::{
+    COMPILER_DESCRIPTOR_SECTION_NAME_V3, COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V3,
+    COMPILER_DESCRIPTOR_SOURCE_HASH_STORAGE_V3, COMPILER_DESCRIPTOR_SOURCE_HEADER_STORAGE_V3,
+    COMPILER_DESCRIPTOR_SOURCE_TABLE_STORAGE_V3, COMPILER_DESCRIPTOR_SOURCE_VALIDATION_STORAGE_V3,
+    CompilerDescriptorSourceErrorV3, CompilerDescriptorSourceIdentityV3,
+    CompilerDescriptorSourceStorageV3, CompilerDescriptorSourceV3,
+    compiler_descriptor_source_retained_storage_v3, compiler_descriptor_source_table_storage_v3,
+    compiler_descriptor_source_validation_storage_v3,
 };
 pub use external_device_library_manifest::{
     EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1, EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1,
