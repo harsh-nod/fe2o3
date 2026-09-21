@@ -1,0 +1,2478 @@
+{
+  "func-details": {
+    "context_version_journal_enrollment_transaction_v1::issuance::register_execution_refines_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::constructor_contents_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_prefix_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_constructor_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::EnrollmentErrorV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::lease_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::EnrollmentV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_register_result": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::lease_count_bound_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::settle_preserves_producer_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::same_producer_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::constructor_preflight_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::lookup_reserved_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_selected_unique_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_writer_partition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ProducerReadV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::lookup_and_rejection_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_keeps_older_reserved_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_storage_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_prefix_reader_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::array_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_reserved_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_abort_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::allocation_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::same_key_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_preflight_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::unknown_preserves_producer_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterEntryV1::arrow_Unknown_count": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::unread_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%17::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%0::is_some": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::VecAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::producer_status_issuance_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%26::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::to_multiset_build": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_empty": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::axiom_array_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::selected_member_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::order_local_count_zero_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::retaining_entry_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_sort_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::same_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_entry_valid_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_decreases_to_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_writer_unique_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::pop_last_membership_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_prefix_length_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::empty_prefixes_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Acquire_requests": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::same_kind_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_stage_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_index_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::ActionV1::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::contains": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_contents_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::AllocationKeyV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%1::truncate": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::impls::impl&%6::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_push_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::constructor_contents_projection_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_commit_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_contents_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_with_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_final_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::lease_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::released_requests_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_successor_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_status_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_mixed_initial_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_interval_origin_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_epoch_trace_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_writer_identity_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::occupied_allocation_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_distinct_entries_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::same_read_reference_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_final_entries_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::pending_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_mixed_result_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_entry_error_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_heap_hole_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_step_minted_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_epoch_projection_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::spec_unwrap": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_epoch_step_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_contents_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::resolved_producer_storage_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::read_count_local_dominance_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_keeps_other_reserved_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_permutation_unique_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::axiom_multiset_singleton_different": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::new": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReadLeaseV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_fresh_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::retained_chain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_commit_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Release_result": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquired_reference_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::released_readers_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::trace_state_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%0::new": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::released_leases_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_stage_membership_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::arena_insert_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquired_outputs_are_installed_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_preflight_contents_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::result::is_err": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::drop_last": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::boxed::box_assume_init_into_vec_unsafe": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::View::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%1::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::axiom_multiset_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::retained_chain_issuance_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_selected_vacant_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Acquire_output_after": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::lemma_multiset_has_no_duplicates_conv": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_stage_at_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_storage_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::DeviceKeyV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::zero_readers_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterEntryV1::arrow_Unknown_key": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_replay_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::lift_error_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterEntryV1::arrow_Pending_count": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::unknown_preserves_chain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::spec_vec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::lift_error_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_history_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::reserved_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_storage_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_requires": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_add_index2": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_commit_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_permutation_slot_set_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_replay_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterReferenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_subrange_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_sift_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReadErrorV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::constructor_contents_projection_exact_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::issuance_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::issuance_contents_projection_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_add_index1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::unknown_producer_status_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::ActionV1::arrow_Abort_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::lease_count_zero_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_stage_pop_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterEntryV1::arrow_Unknown_head": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_stage_bound_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_preflight_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_output_after": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::ArrayAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_arena_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_heap_maximum_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::writer_key_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_roster_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_makes_reference_stale_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::RegisterPlanV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::settle_preserves_pending_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_contents_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::maybe_uninit::MaybeUninitAdditionalSpecFns::mem_contents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_references": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_entry_error_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::impls::impl&%9::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_value_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::read_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_spec_slice_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_commit_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::canonical_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_constructor_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_keys_strict_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::last_valid_id_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::vec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::push_distributes_over_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%1::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::OutcomeV1::arrow_Rejected_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::representation_valid_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::vacant_allocation_has_no_readers_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_execution_projection_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_empty_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ProducerStatusV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::trace_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::subrange": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_sort_frontier_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_header_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::axiom_multiset_singleton": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::SliceAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::retained_chain_enrollment_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_constructor_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_prefix_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::impl&%1::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%14::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::read_slot_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::read_order_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_arena_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_execution_projection_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::surviving_chain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::reverse_free_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_reference": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::writer_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::validate_capacity_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%8::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_initial_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_all_some_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_constructor_verified_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%43::push": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::capacity_one_reuse_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%6::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::to_multiset": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::arena_remove_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_push_index_different": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::watermark_never_decreases_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_item_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_fixture_history_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::exact_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%30::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::impl&%0::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_keys_sorted_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::member_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::impl&%0::add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::slot_partition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Acquire_output_before": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::settle_chain_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_preflight_implies_commit_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_output_before": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::mixed_phase_frame_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_nonempty_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::impl&%0::insert": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_header_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_subrange_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_commit_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterKeyV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::vec_clone_deep_view_proof": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_allocation_frame_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_permutation_distinct_slots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%16::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::take": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquired_readers_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_verified_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::boxed::impl&%0::new_uninit": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::initial_state_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%1::pop": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::step_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::settled_producer_status_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::slice::impl&%0::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%52::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_plan_output_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::retained_reader_consequences_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_contains_slot_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_count_zero_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_add_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_unstage_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::impl&%0::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::result::impl&%0::is_err": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_slots_distinct_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%46::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_preflight_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::retained_producer_positive_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::JournalErrorV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_clear_output_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::impl&%0::remove": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::step_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterEntryV1::arrow_Reserved_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::AllocationReadV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::lemma_array_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::producer_issuance_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_evidence_consumer": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::retaining_writers_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_epoch_monotone_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Acquire_consumer": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_fill_plan_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_concat_contains_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_two_subranges_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_trace_never_reissues_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%1::clear": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_plan_unique_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_constructor_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_register_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::num::impl&%11::checked_sub": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_trace_prefix_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::OptionAdditionalFns::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%53::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::impl&%0::contains": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::occupied_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::ops::deref::Deref::deref": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_commit_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_selected_vacant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::no_duplicates": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_contents_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::empty": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_scan_commit_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::DeepView::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_heap_from_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_fixture_entry_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::chain_link_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::lease_count_update_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Release_observed_free_capacity": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_transaction_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_empty_partition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_preflight_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_constructor_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_retained_clear_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_producer_constructor_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_none": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_retained_clear_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_preserves_reader_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_issued_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%1::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_reference_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::constructor_contents_refines_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%1::as_slice": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_fixture_member_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::capacity_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::OutcomeV1::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_count_bound_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_item_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%4::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::reserved_slot_headroom_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_successor_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%9::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_commit_suffix_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::prefix_bounds_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_reuse_result_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::rejected_old_reference_stays_rejected_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterEntryV1::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_fixture_issuance_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::order_local_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_prefix_extend_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%7::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%18::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterKindV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_contains_key_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_preflight_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::settlement_preserves_stable_readers_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::order_lt_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_execution_refines_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "verus_builtin::impl&%7::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::add_empty_right": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_producer_commit_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_trace_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::same_read_reference_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::rejected_old_reference_trace_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_preflight_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::num::impl&%9::checked_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_fixture_producer_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterEntryV1::arrow_Pending_key": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::allocation_lookup_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Release_evidence_consumer": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::custody_issuance_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::canonical_prefix_extend_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::gaps_and_older_reference_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterEntryV1::arrow_Pending_head": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_nonempty_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%0::unwrap": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::MemberEntryV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::abort_issued_producer_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_journal_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_transaction_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_pending_custody_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::spec_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_roster_order_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::abort_reader_journal_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Acquire_result": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::order_transitive_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::malformed_count_guards_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%48::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%9::deref": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_history_never_reissues_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReadScanV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_ensures": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_producer_reuse_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_step_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::initialized_journal_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::constructor_contents_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_fixture_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_constructor_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_arena_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::boxed::impl&%15::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::same_key_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::partition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::impls::impl&%41::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_prefix_selected_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_swap_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::register_issued_producer_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::unknown_preserves_pending_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_requests": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::settled_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_journal_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_history_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::maybe_uninit::impl&%0::mem_contents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_preflight_contents_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_prefix_entry_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ProducerReservationV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::selected_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_historical_implies_transaction_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::impl&%0::singleton": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_index_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::impls::impl&%17::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::same_key_is_structural_equality_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::AbortPlanV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_verified_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_producer_mixed_witness_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::vec_index_mut": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::num::impl&%11::checked_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_contents_refines_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_constructor_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::last": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_output_bound_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::pervasive::impl&%1::set": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::OutcomeV1::arrow_Found_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_sift_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_subrange_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::array_len_matches_n": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_constructor_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%19::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::pervasive::strictly_cloned": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_fixture_journal_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::history_key_bounded_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::ops::deref::DerefMut::deref_mut": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::to_multiset_update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_trace_projects_epochs_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::unknown_writer_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%0::is_none": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::vec_clone_trigger": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_untouched_journal_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_key_less_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::OutcomeV1::arrow_Registered_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_weight_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::malformed_slot_and_headroom_witnesses_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%31::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_journal_output_bound_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::axiom_multiset_sub": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::unchanged_other_state_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_constructor_admission_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::mark_unknown_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_status_enrollment_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::read_slot_count_bound_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_issuance_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::occupied_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::impl&%0::count": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::to_multiset_contains": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::output_vacant_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_entry_admitted_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::constructor_admission_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_scan_accepts_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_header_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_preserves_reader_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_commit_journal_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_staged_retained_clear_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_count_consequences_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Release_references": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::intrinsics::write_box_via_move": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%49::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Abort_observed_free_capacity": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_duplicate_slots_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Release_consumer": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_success_admission_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_writer_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_header_success_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::axiom_multiset_ext_equal_deep": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_different": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_producer_mixed_fixture_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_permutation_contains_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_spec_slice_update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%6::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::lease_weight_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_swap_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquired_lease_installed_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::selected_free_unique_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::BeginMemberPlanV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::AllocationReferenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_header_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::len%returns_clause_autospec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_transaction_issued_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_gaps_result_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::issuance_contents_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::identity_and_registration_guard_witnesses_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_scan_commit_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::constructor_contents_initialized_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_heap_edge_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::register_reader_journal_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::same_allocation_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "verus_builtin::impl&%9::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquire_arena_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReadReferenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Register_key": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::lease_lookup_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%3::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::issuable_id_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%15::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_commit_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_same": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::issuable_id_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%5::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_prefix_unselected_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::array::impl&%20::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::history_valid_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::array::axiom_array_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::released_leases_unselected_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::acquired_leases_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::lookup_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::ActionV1::arrow_Lookup_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::pervasive::cloned": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::release_preflight_implies_commit_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Register_register_result": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::abort_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::storage_admission_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::writer_retains_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_abort_result": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::producer_constructor_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::axiom_multiset_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::lemma_multiset_has_no_duplicates": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::next_group_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::Clone::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::AllocationEntryV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::require_unread_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::validated_same_slot_local_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_fixture_entry_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::constructor_guard_witnesses_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_sort_slots_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal_deep": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_push_index_same": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_key_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_retained_permutation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_header_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::witness_last_id_result_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::register_issued_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::register_contents_refines_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::WriterEntryV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%12::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::impl&%0::sub": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Abort_abort_result": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_Abort_reference": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::next_group_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::validate_read_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::lemma_seq_contains_after_push": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%27::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::abort_issued_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%10::deref_mut": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::read_slot_count_push_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::push": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::free_contents_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::issued_producer_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::aborted_reference_never_revives_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::add_empty_left": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ProducerReadReferenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::reverse_free_partition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::prefix_update_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_key_less_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::reader_step_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::ReaderStepV1::arrow_key": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::order_lt_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_stage_member_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_some": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::allocation_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::reserved_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::vacant_contents_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_issued_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::issuance::ActionV1::arrow_Register_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_preserves_issued_producer_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::enrollment_suffix_partition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_version_journal_enrollment_transaction_v1::journal_issuance::registration_history_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%47::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%3::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::result::is_ok": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    }
+  },
+  "verification-results": {
+    "encountered-error": true,
+    "encountered-vir-error": false,
+    "success": false,
+    "verified": 274,
+    "errors": 1,
+    "is-verifying-entire-crate": true
+  },
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  }
+}

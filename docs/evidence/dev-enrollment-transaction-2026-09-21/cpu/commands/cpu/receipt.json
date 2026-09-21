@@ -1,0 +1,22 @@
+{
+  "command": [
+    "lscpu"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-enrollment-nosort-20260921/cpu-complete-b",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789998240580749712,
+  "group_absent": true,
+  "pid": 3204411,
+  "started_ns": 1789998240562026735,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "bd10d2bd26b2f27d395dbdd26f1b966556c2cdac42c06466907df83bb05ac808",
+  "timeout_seconds": 30
+}

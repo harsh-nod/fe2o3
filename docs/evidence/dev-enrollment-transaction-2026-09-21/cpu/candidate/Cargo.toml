@@ -1,0 +1,18 @@
+[package]
+name = "enrollment-candidate"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[lib]
+name = "fe2o3_runtime_model"
+path = "crates/fe2o3-runtime-model/src/lib.rs"
+[[bin]]
+name = "enrollment-candidate"
+path = "bench.rs"
+[dependencies]
+spin = { version = "=0.12.3", default-features = false, features = ["once"] }
+[profile.release]
+opt-level = 3
+debug = false
+codegen-units = 1
+lto = false

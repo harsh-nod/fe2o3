@@ -1,0 +1,25 @@
+{
+  "command": [
+    "taskset",
+    "-c",
+    "0",
+    "/home/harsh/.codex-tmp/fe2o3-enrollment-nosort-20260921/cpu-complete-b/candidate/target/release/enrollment-candidate"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-enrollment-nosort-20260921/cpu-complete-b",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789998384325661976,
+  "group_absent": true,
+  "pid": 3240355,
+  "started_ns": 1789998381864458816,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "30435502bc211c532f18dcf57df25a97572446d7b1918dcd97a055013f50082d",
+  "timeout_seconds": 300
+}

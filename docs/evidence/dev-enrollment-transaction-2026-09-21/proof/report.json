@@ -1,0 +1,9 @@
+{
+  "development_checks_passed": true,
+  "positive_obligations": 275,
+  "inherited_obligations": 263,
+  "negative_cases": 6,
+  "historical_error_contract_proved": false,
+  "production_promoted": false,
+  "native_or_performance_acceptance": false
+}

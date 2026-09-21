@@ -1,0 +1,28 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--manifest-path",
+    "/home/harsh/.codex-tmp/fe2o3-enrollment-nosort-20260921/cpu-complete-b/baseline/Cargo.toml",
+    "--lib"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-enrollment-nosort-20260921/cpu-complete-b",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789998281588071504,
+  "group_absent": true,
+  "pid": 3204412,
+  "started_ns": 1789998240582326163,
+  "stderr_sha256": "253fbfeb261d2a9357c1ee3800cf0244c3203171b0095957636674fdbe948195",
+  "stdin_sha256": null,
+  "stdout_sha256": "0e35905f6a7b145912c245bbc4338f2096b7ef55e6dccf4576ca86c01eaaf12d",
+  "timeout_seconds": 180
+}

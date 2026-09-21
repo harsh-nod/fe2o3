@@ -1,0 +1,52 @@
+{
+  "allowed_cpus": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "baseline_git_commit": "ee6489242a5f9976847193fada2d5fd966b25353",
+  "cpu": 0,
+  "csv_adverse_cases": 13,
+  "exclusive_cpu_reservation": false,
+  "load_average": [
+    4.12158203125,
+    6.00927734375,
+    6.11962890625
+  ],
+  "uname": [
+    "Linux",
+    "XSJHARMENON01",
+    "6.6.87.2-microsoft-standard-WSL2",
+    "#1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025",
+    "x86_64"
+  ]
+}

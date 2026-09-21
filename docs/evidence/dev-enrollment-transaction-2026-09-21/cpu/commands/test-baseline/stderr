@@ -1,0 +1,4 @@
+   Compiling spin v0.12.3
+   Compiling enrollment-baseline v0.1.0 (/home/harsh/.codex-tmp/fe2o3-enrollment-nosort-20260921/cpu-complete-b/baseline)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.56s
+     Running unittests crates/fe2o3-runtime-model/src/lib.rs (baseline/target/debug/deps/fe2o3_runtime_model-35bdac261b517f4e)
