@@ -981,16 +981,67 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
         "self.retained_header(writer, false)?",
         "SettlementEvidenceMismatch",
         "self.validate_retained_chain(writer, head, count)?",
-        "writer_returns > self.writer_capacity",
-        "writer_returns > self.free.capacity()",
-        "member_returns > self.allocation_capacity",
-        "member_returns > self.member_free.capacity()",
-        "count > self.scratch.len()",
+        "SettlementReturnStorageV1 {",
+        ".check(count)?",
         "self.scratch[index].is_some()",
     ] {
         let position = preflight.find(validation).unwrap();
         assert!(position >= previous, "out-of-order preflight: {validation}");
         previous = position;
+    }
+    for observation in [
+        "writer_free_len: self.free.len()",
+        "member_free_len: self.member_free.len()",
+        "writer_limit: self.writer_capacity",
+        "writer_storage: self.free.capacity()",
+        "member_limit: self.allocation_capacity",
+        "member_storage: self.member_free.capacity()",
+        "scratch_len: self.scratch.len()",
+    ] {
+        assert_eq!(preflight.matches(observation).count(), 1);
+    }
+    assert_eq!(source.matches(".check(count)?").count(), 1);
+    let body = include_str!("settlement_return_body.rs");
+    let storage = include_str!("settlement_storage.rs")
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap();
+    assert!(storage.contains("include!(\"settlement_return_body.rs\")"));
+    let compact_storage = storage
+        .split_whitespace()
+        .collect::<alloc::string::String>();
+    assert!(compact_storage.contains(
+        "settlement_return_admission_body!(self,count,ContextVersionJournalErrorV1::InvalidState)"
+    ));
+    let mut previous = 0;
+    for validation in [
+        "$storage.writer_free_len.checked_add(1)",
+        "$storage.member_free_len.checked_add($count)",
+        "writer_returns > $storage.writer_limit",
+        "writer_returns > $storage.writer_storage",
+        "member_returns > $storage.member_limit",
+        "member_returns > $storage.member_storage",
+        "$count > $storage.scratch_len",
+    ] {
+        let position = body.find(validation).unwrap();
+        assert!(
+            position >= previous,
+            "out-of-order shared admission: {validation}"
+        );
+        previous = position;
+    }
+    for forbidden in [
+        "Vec",
+        "Box",
+        "for ",
+        "while ",
+        "unsafe",
+        ".push(",
+        ".reserve(",
+        "&mut",
+    ] {
+        assert!(!body.contains(forbidden));
+        assert!(!storage.contains(forbidden));
     }
     let commit = release.find("allocation.pending_member = None").unwrap();
     assert!(plan < commit);

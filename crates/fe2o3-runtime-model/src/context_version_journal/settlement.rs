@@ -111,24 +111,16 @@ impl ContextVersionJournalV1 {
             return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);
         }
         self.validate_retained_chain(writer, head, count)?;
-        let writer_returns = self
-            .free
-            .len()
-            .checked_add(1)
-            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
-        let member_returns = self
-            .member_free
-            .len()
-            .checked_add(count)
-            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
-        if writer_returns > self.writer_capacity
-            || writer_returns > self.free.capacity()
-            || member_returns > self.allocation_capacity
-            || member_returns > self.member_free.capacity()
-            || count > self.scratch.len()
-        {
-            return Err(ContextVersionJournalErrorV1::InvalidState);
+        SettlementReturnStorageV1 {
+            writer_free_len: self.free.len(),
+            member_free_len: self.member_free.len(),
+            writer_limit: self.writer_capacity,
+            writer_storage: self.free.capacity(),
+            member_limit: self.allocation_capacity,
+            member_storage: self.member_free.capacity(),
+            scratch_len: self.scratch.len(),
         }
+        .check(count)?;
         for index in 0..count {
             self.count_indexed_access();
             if self.scratch[index].is_some() {

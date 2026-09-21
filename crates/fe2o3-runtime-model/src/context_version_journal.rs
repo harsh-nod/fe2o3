@@ -11,7 +11,9 @@ use core::cell::Cell;
 
 mod allocation_lifecycle;
 mod settlement;
+mod settlement_storage;
 pub use allocation_lifecycle::ContextAllocationEnrollmentV1;
+use settlement_storage::SettlementReturnStorageV1;
 
 pub const CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1: usize = 1_048_576;
 
