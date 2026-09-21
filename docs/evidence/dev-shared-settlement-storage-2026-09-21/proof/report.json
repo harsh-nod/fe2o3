@@ -1,0 +1,13 @@
+{
+  "development_checks_passed": true,
+  "positive_obligations": 367,
+  "inherited_obligations": 360,
+  "negative_cases": 10,
+  "shared_scalar_body_verified": true,
+  "logical_settlement_composition": true,
+  "actual_vec_observations_in_rust_callsite": true,
+  "allocator_behavior_proved": false,
+  "physical_capacity_binding_proved": false,
+  "full_rust_source_refinement_proved": false,
+  "native_or_performance_acceptance": false
+}

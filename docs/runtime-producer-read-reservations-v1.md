@@ -205,6 +205,22 @@ untouched state, and preserve all seven vector storage identities and the
 touched-chain indexed-access bound.
 The 338 inherited obligations overlap prior packets.
 
+Settlement's scalar return-admission body is now shared directly between ordinary
+Rust and Verus through `settlement_return_body.rs`: both checked additions and all
+five logical/storage/scratch bounds execute from the same included source. The
+private production adapter captures actual live vector lengths/capacities after
+retained-chain validation and before the unchanged indexed scratch scan. It does
+not allocate, mutate state, create public authority or change failing-guard order.
+The [shared scalar storage development packet](evidence/dev-shared-settlement-storage-2026-09-21/README.md)
+retains two 367/0 whole-crate positives, ten exact 366/1 controls, 826 unit tests
+and 27 doctests, including 6,996 independent widened-arithmetic boundary cases.
+Macro diagnostics are bound to the actual included body, invocation, definition
+site and wrapper postcondition. Its 360 inherited obligations overlap the preceding
+packet. This closes one scalar source-correspondence slice, not the full Rust
+settlement gate: the live callsite is authenticated and tested, but the standard
+library's capacity implementation, allocator, unwind and remaining production
+header/chain/scratch/staging/commit bodies are not refined by this proof.
+
 These are logical-execution proofs with invariant-conditional custody composition,
 not whole-wrapper verification.
 Complete retained-chain coverage is preserved by logical enrollment and Begin;
@@ -218,8 +234,10 @@ intermediate machine state or atomicity under panic/unwind.
 
 Before enabling runtime admission, the remaining work is:
 
-1. Establish production Rust correspondence for enrollment, Begin, settlement,
+1. Finish production Rust correspondence for enrollment, Begin, settlement,
    Unknown marking and the proved logical admission/release and unread guards.
+   The shared settlement scalar guard is complete; retained-header/chain admission
+   and the Pending-to-Unknown transition are the next shared-source candidates.
    Bind physical capacity and fallible allocation to those relations and specify
    normal/unwind semantics before treating the logical lifecycle as full-wrapper
    refinement.
