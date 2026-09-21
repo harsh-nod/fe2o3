@@ -1,0 +1,27 @@
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=0 direction=0 population=prime elapsed_ns=287935332
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=0 direction=1 population=prime elapsed_ns=293007030
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=1 direction=0 population=warmup elapsed_ns=25005460
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=1 direction=1 population=warmup elapsed_ns=25131689
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=2 direction=0 population=warmup elapsed_ns=25311658
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=2 direction=1 population=warmup elapsed_ns=25086361
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=3 direction=0 population=sample elapsed_ns=25132670
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=3 direction=1 population=sample elapsed_ns=25096266
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=4 direction=0 population=sample elapsed_ns=25303526
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=4 direction=1 population=sample elapsed_ns=25026071
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=5 direction=0 population=sample elapsed_ns=25123837
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=5 direction=1 population=sample elapsed_ns=25332259
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=6 direction=0 population=sample elapsed_ns=25096476
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=6 direction=1 population=sample elapsed_ns=25215555
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=7 direction=0 population=sample elapsed_ns=25167672
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=7 direction=1 population=sample elapsed_ns=25132009
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=8 direction=0 population=sample elapsed_ns=25188444
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=8 direction=1 population=sample elapsed_ns=25016567
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=9 direction=0 population=sample elapsed_ns=25430215
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=9 direction=1 population=sample elapsed_ns=24991209
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=10 direction=0 population=sample elapsed_ns=25219681
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=10 direction=1 population=sample elapsed_ns=25138830
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=11 direction=0 population=sample elapsed_ns=25169495
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=11 direction=1 population=sample elapsed_ns=25069977
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=12 direction=0 population=sample elapsed_ns=25298157
+schema=fe2o3.xgmi-ordered-segments.v1 record=list backend=kfd band=12 direction=1 population=sample elapsed_ns=24966311
+schema=fe2o3.xgmi-ordered-segments.v1 record=complete backend=kfd unique_ids=b7baafd0fb173d8e,10a254ce4987e716 useful_bytes=65536 descriptor_count=65 logical_depth=1 warmups=2 samples=10 prime_lists=1 band_bytes=73728 source_bytes=73728 destination_bytes=958464 layout=reversed-ragged-slots-v1 progress=single-ticket-sequence-full-currentness deadline_ns=60000000000 timing=list-admission-through-observed-completion mapping_lifetime=retained-pair-no-allocation-host-readwrite-between-lists completion_cleanup=outside-timing correctness=passed teardown=explicit

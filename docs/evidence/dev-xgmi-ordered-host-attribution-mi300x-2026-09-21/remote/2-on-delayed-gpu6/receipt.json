@@ -1,0 +1,37 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "benchmarks/runtime_gfx942/copy-host-observe.py",
+    "--gpu-index",
+    "6",
+    "--pci-bdf",
+    "0000:c6:00.0",
+    "--unique-id",
+    "0x10a254ce4987e716"
+  ],
+  "cwd": "/home/harsh/fe2o3-xgmi-segments-attribution-20260921.141ba9aac5e2f0ae/source",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/fe2o3-xgmi-segments-attribution-20260921.141ba9aac5e2f0ae/target",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/opt/rocm/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "TMPDIR": "/home/harsh/fe2o3-xgmi-segments-attribution-20260921.141ba9aac5e2f0ae/tmp",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789956588332441232,
+  "group_absent": true,
+  "pid": 877648,
+  "started_ns": 1789956586158169979,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "b124d23f0f0585b343eb322533ff2db12e051d33e788b7b36f499cac779d55c0",
+  "timeout_seconds": 100
+}

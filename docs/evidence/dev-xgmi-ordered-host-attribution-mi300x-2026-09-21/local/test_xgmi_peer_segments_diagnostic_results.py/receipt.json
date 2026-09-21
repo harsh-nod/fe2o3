@@ -1,0 +1,32 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-async-peer-segments-b8YM9rhe/benchmarks/runtime_gfx942/test_xgmi_peer_segments_diagnostic_results.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-async-peer-segments-b8YM9rhe",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/dev/shm/fe2o3-link-parser-build-20260920.2LJm2Q0Q/target",
+    "CARGO_TERM_COLOR": "never",
+    "FE2O3_SEGMENTS_RUST_BINARY": "/dev/shm/fe2o3-link-parser-build-20260920.2LJm2Q0Q/target/x86_64-unknown-linux-musl/release/examples/gfx942-runtime-xgmi-segments-benchmark",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789956509287947508,
+  "group_absent": true,
+  "pid": 3356411,
+  "started_ns": 1789956509018612349,
+  "stderr_sha256": "d9849e86bc5244d5e78df36d69d01029e1c7c90b1029b5b7402f4d33ccf06f7d",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}

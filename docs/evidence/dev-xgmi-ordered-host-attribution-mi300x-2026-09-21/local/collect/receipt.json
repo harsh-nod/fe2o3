@@ -1,0 +1,30 @@
+{
+  "command": [
+    "scp",
+    "-q",
+    "-r",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "--",
+    "mi300x:/home/harsh/fe2o3-xgmi-segments-attribution-20260921.141ba9aac5e2f0ae/results",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-segments-results-patno9to/remote"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-async-peer-segments-b8YM9rhe",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789956692971903656,
+  "group_absent": true,
+  "pid": 3392407,
+  "started_ns": 1789956669946761726,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}

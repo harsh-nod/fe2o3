@@ -291,8 +291,17 @@ noncanonical/overflowing durations, and inconsistent phase/nested totals. Each
 trial retains fresh admission and settled/delayed postflight checks. Idle
 observations are not a reservation, and this protocol does not establish
 speedup, causal instrumentation overhead, HIP/HSA parity or performance acceptance.
-This new diagnostic mode has CPU qualification only; source-bound native phase
-measurements remain pending. The earlier native packets do not qualify it.
+Signed source `a7b8602dce0c5d38ae1425f6544392f03f55341b` subsequently passed
+all four diagnostic trials on freshly admitted MI300X GPUs 5 and 6. The
+[source-bound attribution packet](evidence/dev-xgmi-ordered-host-attribution-mi300x-2026-09-21/README.md)
+contains 52 diagnostic observations, 80 ordinary timed samples, all 24 passing
+endpoint observations, explicit cleanup and an offline replay with negative
+controls. Across 40 instrumented timed samples, mean backend host time was
+25.68 ms: 58.27% in opening/closing currentness and 41.65% in repeated
+submission/wait phases. These phases include host checks, not isolated DMA
+execution. This KFD-only attribution is neither a matched HIP/HSA comparison nor
+a measured gain from the topology allocation change. Native owner-engine wrapper
+qualification remains separate from this caller-driven Context workload.
 
 ## Remaining Work
 

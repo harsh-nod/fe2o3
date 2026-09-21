@@ -1,0 +1,29 @@
+{
+  "command": [
+    "rustc",
+    "-vV"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-async-peer-segments-b8YM9rhe",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/dev/shm/fe2o3-link-parser-build-20260920.2LJm2Q0Q/target",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789956497873165304,
+  "group_absent": true,
+  "pid": 3355743,
+  "started_ns": 1789956497838013557,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "580dbecb7627e4e8ad67fd0b1d539727ba8d2651d04035c907b406d83200b4e2",
+  "timeout_seconds": 30
+}
