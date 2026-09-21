@@ -81,6 +81,9 @@ The dedicated pinned checker runs the whole importing crate before and after
 named postcondition. These mutations test the invariant, not implementations of
 acquisition, release, or settlement. The checker authenticates the recursive
 source/tool closure and binds solver inputs to captured pinned bytes.
+The [signed-source custody qualification](evidence/dev-producer-read-custody-verus-2026-09-21/README.md)
+records the accepted dedicated campaign and the full registered proof run,
+including all 691 standalone negative files and portable evidence validation.
 
 These are conditional logical-content proofs, not whole-wrapper verification.
 Complete retained-chain coverage is a premise whose reachability across all

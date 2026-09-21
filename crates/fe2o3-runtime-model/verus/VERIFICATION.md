@@ -19,6 +19,9 @@ are pinned. Captured pinned bytes determine the generated solver inputs.
 The standalone negative-file roster remains 691; preseal authority bindings are
 1535. The twelve generated mutations are not standalone negative files or
 transition-implementation mutation proofs.
+The [signed-source qualification](../../../docs/evidence/dev-producer-read-custody-verus-2026-09-21/README.md)
+records the complete registered run and an independently retained dedicated
+campaign, with exact inputs, receipts and portable offline evidence validation.
 
 The strong chain graph is a reachable-state premise, not a whole-arena check
 performed by Rust settlement. Base issuance/history and exact reserved-count

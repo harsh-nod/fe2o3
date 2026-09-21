@@ -1,0 +1,11 @@
+{
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/watermark_zero/producer.rs": "4a43007b37f580957b78c4e1981ddfc335255e0a143a27727c08b742788805b1",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/watermark_zero/context_read_invariant_v1.rs": "e008c765882b7f38d4a7763e58d64674af4ff6d15d41562c2b186f64d300e4a5",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/watermark_zero/context_read_commit_v1.rs": "0a8f4fbde07ad650a9b6facbd4d5910fbf6f5058eedf9ff4b4875867db67e2f2",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/watermark_zero/context_read_preflight_v1.rs": "acb26a009d0946e22d8fb6027b99a47b922ada6a8200992d8b38699a108f1f15",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/watermark_zero/context_version_journal_issuance_v1.rs": "018a295aa951568aa93f2f32318106af341c79e4568dda649ad803c6f4b95792",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/watermark_zero/audited-producer-body.rs": "4becdcaae5379a602bf87e3d50ed9a406d88dded3b5dd0f94ce686c29391980f",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/watermark_zero/audited-invariant-body.rs": "d7f813cdf9643545d298d2dafe7a0178e6389c233be9e7968132e7b807da530c",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/watermark_zero/audited-commit-body.rs": "98545d8400d4d0debf4f3711e5c381e89faa09690ae1c44c4a07f522ce4201f1",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/watermark_zero/audited-preflight-body.rs": "046afc9fb9eaa3268424bfe87717b4e5007e8f63488e86965009269e7f62f493"
+}

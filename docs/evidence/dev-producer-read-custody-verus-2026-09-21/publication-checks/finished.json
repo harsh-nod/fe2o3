@@ -1,0 +1,11 @@
+{
+  "native_execution": false,
+  "passed": true,
+  "scripts": {
+    "archive-selftest.py": "cd11cd578b8697cec1ed84df9e1c01c667afd91d7b9c69a381591bcb52415a00",
+    "archive.py": "1dd6d08fab2f8e60f89ab4bfd2dd3e8a10d09daccd11024735558f3e56bc847b",
+    "publication-checks.py": "494e09359908fd2892e39c63d11a47daa2fe361fb12b62f458cc7cb8e1f99a96",
+    "qualify.py": "995ec68a97c06ed2ed9582a6f3fcf9e8736349b5b7a18f1deb440f39fe37e708"
+  },
+  "solver_rerun": false
+}

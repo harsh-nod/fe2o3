@@ -1,0 +1,9 @@
+{
+  "conditional_producer_custody": true,
+  "context_integration": false,
+  "native_execution": false,
+  "performance_acceptance": false,
+  "qualified": true,
+  "source_commit": "237f02c6997eff73ee4d0a17d77c2b9019376715",
+  "wrapper_lifecycle_refinement": false
+}

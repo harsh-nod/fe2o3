@@ -1,0 +1,11 @@
+{
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/producer_count/producer.rs": "2ed2a7fb1d3168b75016d251fad5f8be104c6a82b0e0231791c109b8f720566c",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/producer_count/context_read_invariant_v1.rs": "e008c765882b7f38d4a7763e58d64674af4ff6d15d41562c2b186f64d300e4a5",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/producer_count/context_read_commit_v1.rs": "0a8f4fbde07ad650a9b6facbd4d5910fbf6f5058eedf9ff4b4875867db67e2f2",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/producer_count/context_read_preflight_v1.rs": "acb26a009d0946e22d8fb6027b99a47b922ada6a8200992d8b38699a108f1f15",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/producer_count/context_version_journal_issuance_v1.rs": "018a295aa951568aa93f2f32318106af341c79e4568dda649ad803c6f4b95792",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/producer_count/audited-producer-body.rs": "cdf1efec37c76f96c4f161ebb52f2dacf75a8accd9411cb7e468ed407720b83f",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/producer_count/audited-invariant-body.rs": "d7f813cdf9643545d298d2dafe7a0178e6389c233be9e7968132e7b807da530c",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/producer_count/audited-commit-body.rs": "98545d8400d4d0debf4f3711e5c381e89faa09690ae1c44c4a07f522ce4201f1",
+  "/home/harsh/.codex-tmp/fe2o3-producer-custody-verus-20260921-a2/producer_count/audited-preflight-body.rs": "046afc9fb9eaa3268424bfe87717b4e5007e8f63488e86965009269e7f62f493"
+}

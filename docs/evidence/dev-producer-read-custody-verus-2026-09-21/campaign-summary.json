@@ -1,0 +1,100 @@
+[
+  {
+    "case": "positive_before",
+    "exit": 0,
+    "verified": 181,
+    "errors": 0,
+    "seconds": 70.02142166
+  },
+  {
+    "case": "lost_free_slot",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 77.710735904
+  },
+  {
+    "case": "duplicate_free_slot",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 89.661440993
+  },
+  {
+    "case": "producer_count",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 89.233572373
+  },
+  {
+    "case": "watermark_zero",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 86.020215113
+  },
+  {
+    "case": "watermark_rollback",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 79.151418247
+  },
+  {
+    "case": "physical_slot",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 76.884171131
+  },
+  {
+    "case": "consumer_context",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 77.894550469
+  },
+  {
+    "case": "consumer_before_producer",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 78.241473061
+  },
+  {
+    "case": "producer_identity",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 95.628360876
+  },
+  {
+    "case": "request_version",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 100.538448269
+  },
+  {
+    "case": "duplicate_incarnation",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 96.026052294
+  },
+  {
+    "case": "live_allocation_removed",
+    "exit": 1,
+    "verified": 180,
+    "errors": 1,
+    "seconds": 85.426743865
+  },
+  {
+    "case": "positive_after",
+    "exit": 0,
+    "verified": 181,
+    "errors": 0,
+    "seconds": 88.603388101
+  }
+]
