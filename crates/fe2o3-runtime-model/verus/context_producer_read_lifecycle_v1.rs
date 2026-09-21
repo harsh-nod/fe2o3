@@ -1150,6 +1150,7 @@ pub open spec fn producer_acquire_authorized_v1(before: ProducerReadContentsV1, 
     }
 }
 
+#[verifier::spinoff_prover]
 pub proof fn producer_acquire_scan_ready_v1(before: ProducerReadContentsV1, consumer: WriterKeyV1,
     requests: Seq<ProducerReadV1>, output: Seq<Option<ProducerReadReferenceV1>>, index: nat, state: ReadScanV1)
     requires producer_invariant_v1(before), requests.len() <= usize::MAX, requests.len() <= u64::MAX,

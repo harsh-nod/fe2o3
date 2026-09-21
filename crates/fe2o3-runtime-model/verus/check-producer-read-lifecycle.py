@@ -90,14 +90,16 @@ def mutations():
     add("device_extent_order", "producer_status_exec_v1", device + extent, extent + device)
     add("nonpending_admitted", "producer_validate_exec_v1",
         "Ok(_) => Err(ReadErrorV1::AllocationBusy),", "Ok(_) => Ok(()),")
-    add("producer_kind_omitted", "producer_acquire_header_exec_v1",
-        "if !issuable_id_exec_v1(consumer.local) || !matches!(consumer.kind, WriterKindV1::Submission)",
-        "if !issuable_id_exec_v1(consumer.local)")
-    add("producer_equal_consumer", "producer_acquire_item_exec_v1",
-        "request.producer.key.local >= consumer.local", "request.producer.key.local > consumer.local")
+    identity = "    if !issuable_id_exec_v1(consumer.local) || !matches!(consumer.kind, WriterKindV1::Submission) { return Err(ReadErrorV1::InvalidWriterId); }\n"
+    add("producer_kind_admitted", "producer_acquire_header_exec_v1", identity,
+        "    if !issuable_id_exec_v1(consumer.local) { return Err(ReadErrorV1::InvalidWriterId); }\n"
+        "    if !matches!(consumer.kind, WriterKindV1::Submission) { return Ok(()); }\n")
+    producer_order = "    if request.producer.key.local >= consumer.local { return Err(ReadErrorV1::InvalidWriterId); }\n"
+    add("producer_equal_consumer", "producer_acquire_item_exec_v1", producer_order,
+        "    if request.producer.key.local == consumer.local { return Ok(state); }\n" + producer_order)
     capacity = "    if count > remaining { return Err(ReadErrorV1::MemberCapacity); }\n"
     add("shared_capacity_ignores_stable", "producer_capacity_exec_v1", capacity,
-        "    let _ = remaining;\n    if count > contents.free.len() { return Err(ReadErrorV1::MemberCapacity); }\n")
+        "    if count > remaining && count <= contents.free.len() { return Ok(()); }\n" + capacity)
     epoch = """    if contents.next_incarnation == 0 || contents.next_incarnation.checked_add(count as u64).is_none() {
         return Err(ReadErrorV1::EpochExhausted);
     }
@@ -107,7 +109,6 @@ def mutations():
     empty = "    if count == 0 { return Err(ReadErrorV1::RosterCapacity); }\n"
     add("release_evidence_order", "producer_release_header_exec_v1", evidence + empty, empty + evidence)
     context = "    if consumer.context_generation != contents.stable.journal.context_generation { return Err(ReadErrorV1::ForeignContext); }\n"
-    identity = "    if !issuable_id_exec_v1(consumer.local) || !matches!(consumer.kind, WriterKindV1::Submission) { return Err(ReadErrorV1::InvalidWriterId); }\n"
     add("identity_before_context", "producer_acquire_header_exec_v1", context + identity, identity + context)
     for kind, args in [
         ("acquire", "requests[index], index, state"), ("release", "references[index], state"),

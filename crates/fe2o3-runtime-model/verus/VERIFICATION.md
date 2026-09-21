@@ -36,6 +36,8 @@ and recursively audits all five inherited sources without widening the global
 import policy. Whole-crate positives must report 254 verified obligations. Each
 of 19 executable-body mutations must report exactly its intended postcondition
 failure with 253 other obligations verified. No synthetic subject is appended.
+Consumer-kind, equal-producer-ID and shared-capacity controls insert focused
+wrong admissions rather than deleting whole guards with multiple failure exits.
 Counts overlap across importing campaigns and must not be summed.
 
 The strong chain graph is a reachable-state premise, not a whole-arena check
