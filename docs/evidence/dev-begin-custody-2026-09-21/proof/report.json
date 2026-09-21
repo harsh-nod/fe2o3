@@ -1,0 +1,10 @@
+{
+  "development_checks_passed": true,
+  "positive_obligations": 321,
+  "inherited_obligations": 289,
+  "negative_cases": 8,
+  "general_begin_custody_and_readers_preserved": true,
+  "exact_ordered_begin_wrapper": true,
+  "rust_source_refinement_proved": false,
+  "native_or_performance_acceptance": false
+}

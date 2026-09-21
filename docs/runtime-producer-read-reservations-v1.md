@@ -132,8 +132,8 @@ precondition: malformed free lists retain production's sequential overwrite
 semantics rather than silently acquiring a uniqueness premise. A general theorem
 preserves issuance history and the exact Reserved count. Executable constructor,
 enrollment and registration traces reach both empty and two-member Pending writers;
-repeat Begin rejects without mutation. This does not yet establish general
-pending-custody or producer-reader preservation across Begin.
+repeat Begin rejects without mutation. This raw root alone does not establish
+general pending-custody or producer-reader preservation across Begin.
 
 Production Begin now calls a private immutable preflight under the same exclusive
 borrow as staging/commit. Its guard order and indexed-access bound are unchanged.
@@ -144,10 +144,29 @@ executor are not a compiler-checked Rust correspondence proof.
 The [Begin development packet](evidence/dev-begin-execution-2026-09-21/README.md)
 retains whole-crate proof brackets, executable-body controls and CPU receipts.
 
+`context_version_journal_begin_custody_v1.rs` composes that exact raw transition
+with pending-chain custody, stable leases, producer reservations and issuance.
+The successful preflight derives distinct selected allocation/member slots;
+the ordered combined-reader guard proves both selected counts zero. No global-idle
+premise is required: unrelated Pending/Unknown chains, live stable readers and all
+four producer statuses are preserved, including resolved producer-slot reuse.
+The executable wrapper runs the complete combined scan, complete stable scan,
+then raw Begin, framing the whole producer state on every error. Its five shared
+guard declarations are authenticated against pinned lifecycle bytes and reverified
+in the importing type universe, without modifying the historical lifecycle root.
+Constructor witnesses reach empty and two-member Pending writers through this
+wrapper with empty reader arenas; a separate production regression has a stable
+lease and all four producer statuses present together. That test is not a formal
+constructor-derived witness for the mixed state.
+The [Begin custody development packet](evidence/dev-begin-custody-2026-09-21/README.md)
+retains two 321/0 whole-crate positives, eight exact 320/1 executable controls,
+and 822 model unit tests plus 27 doctests. Its mandatory portable audit binds the
+exact regenerated inputs and receipts to Git objects. Counts include 289 inherited
+obligations and must not be summed across campaigns.
+
 These are conditional logical-execution proofs, not whole-wrapper verification.
-Complete retained-chain coverage is preserved by logical enrollment, but its
-general preservation through begin-write and the remaining base-journal transitions
-still needs to be established.
+Complete retained-chain coverage is preserved by logical enrollment and Begin;
+composition of settlement with issuance/history remains to be established.
 Physical Vec storage,
 fallible allocation, settlement scratch/preflight execution, panic/unwind behavior,
 and production Rust correspondence remain separate. Release bounds use an observed
@@ -158,15 +177,14 @@ intermediate machine state or atomicity under panic/unwind.
 
 Before enabling runtime admission, the remaining work is:
 
-1. Prove general pending-chain and combined-reader preservation across Begin,
-   composing the raw execution/issuance relation with the ordered unread guards.
-   Preserve unrelated live readers and all four producer statuses without a
-   global-idle premise. Finish custody/issuance composition through settlement.
-   Establish production Rust correspondence for enrollment and the
+1. Finish custody/issuance composition through settlement and Pending-to-Unknown
+   marking, preserving unrelated live readers without a global-idle premise.
+   Refine exact ordered settlement preflight and staging/commit, including
+   malformed-state errors and complete unchanged-on-rejection contents.
+   Establish production Rust correspondence for enrollment, Begin and the
    proved logical admission/release and unread guards.
-   Bind physical capacity and fallible allocation to those relations, and refine
-   settlement preflight before treating the logical lifecycle as full-wrapper
-   refinement.
+   Bind physical capacity and fallible allocation to those relations before
+   treating the logical lifecycle as full-wrapper refinement.
 2. Retain an exact Context event-to-producer writer/member binding and a distinct
    producer-reader root, with preallocated capacity before backend entry.
    Include it in Context cleanup, generated-operation exclusion and usage.
