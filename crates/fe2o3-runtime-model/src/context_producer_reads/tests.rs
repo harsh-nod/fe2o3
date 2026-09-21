@@ -198,6 +198,184 @@ fn begin_unread_faults_follow_caller_order_before_raw_preflight() {
 }
 
 #[test]
+fn begin_preserves_unrelated_stable_lease_and_all_producer_statuses_together() {
+    for empty in [true, false] {
+        let mut journal = ContextProducerReadJournalV1::new(7, 7, 6, 8).unwrap();
+        let device = ContextJournalDeviceKeyV1 {
+            context_generation: 7,
+            local: 1,
+        };
+        let allocations: Vec<_> = (1..=7)
+            .map(|local| {
+                journal
+                    .enroll_allocation(
+                        ContextAllocationKeyV1 {
+                            context_generation: 7,
+                            local,
+                        },
+                        device,
+                        64,
+                    )
+                    .unwrap()
+            })
+            .collect();
+        let member = |allocation| ContextAllocationWriteV1 {
+            allocation,
+            device,
+            byte_extent: 64,
+        };
+        let mut retained = Vec::new();
+        let producers: Vec<_> = (10..14)
+            .map(|local| journal.register_writer(key(local)).unwrap())
+            .collect();
+        for (index, status) in [
+            Status::Pending,
+            Status::Success,
+            Status::NoEffect,
+            Status::Unknown,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let producer = producers[index];
+            journal
+                .begin_write(producer, &[member(allocations[index])])
+                .unwrap();
+            let request = ContextProducerReadV1 {
+                read: ContextAllocationReadV1 {
+                    allocation: allocations[index],
+                    device,
+                    byte_extent: 64,
+                    byte_offset: 0,
+                    byte_len: 64,
+                    attempt_epoch: 1,
+                    content_lineage: 0,
+                },
+                producer,
+            };
+            let mut output = [None];
+            journal
+                .acquire_producer_reads(key(30 + index as u64), &[request], &mut output)
+                .unwrap();
+            match status {
+                Status::Pending => {}
+                Status::Success => journal
+                    .settle_success(
+                        producer,
+                        &ContextWriterSuccessEvidenceV1 { writer: producer },
+                    )
+                    .unwrap(),
+                Status::NoEffect => journal
+                    .settle_no_effect(
+                        producer,
+                        &ContextWriterNoEffectEvidenceV1 { writer: producer },
+                    )
+                    .unwrap(),
+                Status::Unknown => journal.mark_unknown(producer).unwrap(),
+            }
+            retained.push((output[0].unwrap(), request, status));
+        }
+        let stable = ContextAllocationReadV1 {
+            allocation: allocations[4],
+            device,
+            byte_extent: 64,
+            byte_offset: 8,
+            byte_len: 16,
+            attempt_epoch: 0,
+            content_lineage: 0,
+        };
+        let mut lease = [None];
+        journal
+            .acquire_reads(key(40), &[stable], &mut lease)
+            .unwrap();
+        let writer = journal.register_writer(key(50)).unwrap();
+        // A resolved producer's descriptive slot is reused by the new writer.
+        assert_eq!(writer.slot, retained[2].1.producer.slot);
+        assert_eq!(
+            journal.lookup_writer(writer),
+            Ok(ContextWriterStateV1::Reserved)
+        );
+        for (reference, request, status) in &retained {
+            assert_eq!(journal.lookup_producer_read(*reference), Ok(*request));
+            assert_eq!(journal.producer_read_status(*reference), Ok(*status));
+        }
+        assert_eq!(journal.lookup_read(lease[0].unwrap()), Ok(stable));
+        for allocation in &allocations[5..] {
+            assert_eq!(journal.reader_count(*allocation), Ok(0));
+        }
+        let states: Vec<_> = allocations[..5]
+            .iter()
+            .map(|a| journal.lookup_allocation(*a).unwrap())
+            .collect();
+        let reservations = journal.reservations.clone();
+        let free = journal.free.clone();
+        let counts = journal.counts.clone();
+        let incarnation = journal.next_incarnation;
+        let storage = [
+            (
+                journal.reservations.as_ptr() as usize,
+                journal.reservations.capacity(),
+            ),
+            (journal.free.as_ptr() as usize, journal.free.capacity()),
+            (journal.counts.as_ptr() as usize, journal.counts.capacity()),
+        ];
+        let roster = [member(allocations[5]), member(allocations[6])];
+        journal
+            .begin_write(writer, if empty { &[] } else { &roster })
+            .unwrap();
+        assert_eq!(
+            journal.lookup_writer(writer),
+            Ok(ContextWriterStateV1::Pending {
+                member_count: if empty { 0 } else { 2 },
+            })
+        );
+        for (reference, request, status) in retained {
+            assert_eq!(journal.lookup_producer_read(reference), Ok(request));
+            assert_eq!(journal.producer_read_status(reference), Ok(status));
+        }
+        assert_eq!(journal.lookup_read(lease[0].unwrap()), Ok(stable));
+        for (allocation, state) in allocations[..5].iter().zip(states) {
+            assert_eq!(journal.lookup_allocation(*allocation), Ok(state));
+            assert_eq!(journal.reader_count(*allocation), Ok(1));
+        }
+        assert_eq!(journal.reservations, reservations);
+        assert_eq!(journal.free, free);
+        assert_eq!(journal.counts, counts);
+        assert_eq!(journal.next_incarnation, incarnation);
+        assert_eq!(journal.retained_read_count(), 5);
+        assert_eq!(journal.remaining_read_slots(), 3);
+        assert_eq!(
+            storage,
+            [
+                (
+                    journal.reservations.as_ptr() as usize,
+                    journal.reservations.capacity()
+                ),
+                (journal.free.as_ptr() as usize, journal.free.capacity()),
+                (journal.counts.as_ptr() as usize, journal.counts.capacity()),
+            ]
+        );
+        for allocation in &allocations[5..] {
+            let state = journal.lookup_allocation(*allocation).unwrap();
+            assert_eq!(state.attempt_epoch, u64::from(!empty));
+            assert_eq!(state.content_lineage, 0);
+            assert_eq!(
+                state.pending_writer,
+                if empty { None } else { Some(writer) }
+            );
+            assert_eq!(journal.reader_count(*allocation), Ok(0));
+        }
+        assert_invariant(&journal);
+        let pending = snapshot(&journal);
+        assert_eq!(
+            journal.begin_write(writer, if empty { &[] } else { &roster }),
+            Err(Error::InvalidReference)
+        );
+        assert_eq!(snapshot(&journal), pending);
+    }
+}
+
+#[test]
 fn producer_settlement_preserves_custody_and_never_promotes_failure() {
     for status in [
         Status::Pending,
