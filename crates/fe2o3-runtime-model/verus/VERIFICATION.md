@@ -1,5 +1,15 @@
 # Runtime model verification
 
+## Producer Read Candidate
+
+`src/context_producer_reads.rs` adds a concrete producer-bound reservation wrapper
+around the stable-reader journal. Its Rust tests do not extend the authenticated
+Verus inventory below. Outer arena/count preservation, producer-settlement
+composition and executable correspondence remain unproved; RuntimeContext does
+not yet use this candidate. See `docs/runtime-producer-read-reservations-v1.md`
+for its exact lifecycle, shared capacity and integration gates. Existing stable
+reader proofs must not be cited as proving this wrapper.
+
 ## R74 Ordered Peer Copy
 
 R74 adds ten parameterized ordered-cursor obligations and five standalone

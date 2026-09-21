@@ -372,6 +372,9 @@ qualification remains separate from this caller-driven Context workload.
 - Versioned pending-producer input handoff. A host-deferred owner driver and
   native admission of future readers are distinct designs; neither is supplied
   by the completed-event fixture or ready-prefix flush change.
+  The [producer-bound reservation model](runtime-producer-read-reservations-v1.md)
+  is now a concrete Rust candidate, but its proof and Context/backend integration
+  remain gates before enabling that runtime behavior.
 - More permissive scheduling-domain coexistence and native multi-packet
   publication are separate optimizations. This serial version still publishes
   and waits once per descriptor and does not claim optimal packet throughput.
