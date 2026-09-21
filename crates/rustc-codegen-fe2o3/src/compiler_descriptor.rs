@@ -536,6 +536,29 @@ fn validate_production_v1_descriptor_root_evidence(
     obligations: &fe2o3_kernel_ir::FormalMemoryObligations,
     device_target: &str,
 ) -> Result<crate::production_geometry_v1::ProductionGeometryV1, CompilerDescriptorError> {
+    validate_production_descriptor_root_with_physical_matcher_v1(
+        module,
+        root,
+        semantic,
+        semantic_function,
+        kernel,
+        obligations,
+        device_target,
+        production_descriptor_argument_matches_kernel_type_v1,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_production_descriptor_root_with_physical_matcher_v1(
+    module: &Module,
+    root: &TypedDescriptorRootV1,
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    semantic_function: &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1,
+    kernel: &fe2o3_kernel_ir::Kernel,
+    obligations: &fe2o3_kernel_ir::FormalMemoryObligations,
+    device_target: &str,
+    physical_matches: fn(DescriptorArgumentKindV1, AccessMode, &fe2o3_kernel_ir::Type) -> bool,
+) -> Result<crate::production_geometry_v1::ProductionGeometryV1, CompilerDescriptorError> {
     use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1};
     use fe2o3_kernel_ir::{
         AccessMode as KirAccessMode, AddressSpace, FormalMemoryAccessKind, FormalParameterKind,
@@ -588,11 +611,8 @@ fn validate_production_v1_descriptor_root_evidence(
         .zip(&entry.signature.parameters)
         .enumerate()
     {
-        let exact_kernel_type = production_descriptor_argument_matches_kernel_type_v1(
-            root_argument.kind,
-            root_argument.access,
-            kernel_type,
-        );
+        let exact_kernel_type =
+            physical_matches(root_argument.kind, root_argument.access, kernel_type);
         if !exact_kernel_type {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "typed descriptor/Kernel IR argument correspondence",
@@ -734,21 +754,20 @@ fn validate_production_v1_descriptor_root_evidence(
         }
     }
 
-    let expected_allocations = root
-        .arguments
-        .as_slice()
-        .iter()
-        .enumerate()
-        .filter(|(_, argument)| {
-            matches!(
-                argument.kind,
-                DescriptorArgumentKindV1::SharedSlice(_)
-                    | DescriptorArgumentKindV1::DisjointSlice(_)
-                    | DescriptorArgumentKindV1::GlobalMutPointer(_)
-            )
-        })
-        .collect::<Vec<_>>();
-    if obligations.allocations().len() != expected_allocations.len()
+    let expected_allocations =
+        root.arguments
+            .as_slice()
+            .iter()
+            .enumerate()
+            .filter(|(_, argument)| {
+                matches!(
+                    argument.kind,
+                    DescriptorArgumentKindV1::SharedSlice(_)
+                        | DescriptorArgumentKindV1::DisjointSlice(_)
+                        | DescriptorArgumentKindV1::GlobalMutPointer(_)
+                )
+            });
+    if obligations.allocations().len() != expected_allocations.clone().count()
         || !obligations.inter_invocation_conflicts().is_empty()
     {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(

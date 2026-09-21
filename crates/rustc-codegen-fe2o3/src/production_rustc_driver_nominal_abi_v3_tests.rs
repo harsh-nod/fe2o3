@@ -1,4 +1,6 @@
 //! Real ordinary rustc callback, through nominal capture and the inert ABI entry.
+#[path = "production_rustc_driver_nominal_policy4_v3_tests.rs"]
+mod policy4;
 use super::guarded_loop_read::Case;
 use super::*;
 use crate::compiler_descriptor::nominal_v3::NominalDescriptorErrorV3 as E;

@@ -36,6 +36,8 @@ pub(crate) enum NominalDescriptorErrorV3 {
     Wire(fe2o3_kernel_descriptor::DescriptorWireErrorV3<Resource>),
     Pipeline(crate::production_pipeline::ProductionPipelineError),
     Agreement(fe2o3_verifier::NominalSourceAbiErrorV3),
+    CheckedOutput(fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy4V1),
+    SourceBytes(fe2o3_compiler_ffi::CompilerDescriptorSourceErrorV3<Resource>),
     UnsupportedRequirements,
     Mismatch(&'static str),
     Panicked,
@@ -64,6 +66,8 @@ impl std::error::Error for E {
             Self::Wire(error) => Some(error),
             Self::Pipeline(error) => Some(error),
             Self::Agreement(error) => Some(error),
+            Self::CheckedOutput(error) => Some(error),
+            Self::SourceBytes(error) => Some(error),
             Self::UnsupportedRequirements | Self::Mismatch(_) | Self::Panicked => None,
         }
     }
@@ -430,20 +434,46 @@ pub(crate) fn produce(
     target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
     budget: &mut Budget<'_>,
 ) -> R<Vec<u8>> {
+    let source = formal.semantic_kir();
+    encode_subject(
+        roots,
+        source.semantic().semantic(),
+        source.module(),
+        source.canonical_kernel_ir_bytes(),
+        formal.kernels().len(),
+        target.profile(),
+        target.rustc_layout().default_pointer_width_bits(),
+        b"FE2O3/NOMINAL-EXECUTABLE-ABI/V3\0",
+        "inert-nominal-source-abi-v3",
+        budget,
+    )
+}
+
+// Content encoding only. The consuming owner validates source/final lineage.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn encode_subject(
+    roots: &[TypedDescriptorRootV1],
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    module: &Module,
+    canonical_bytes: &[u8],
+    formal_count: usize,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    pointer_width: u16,
+    executable_domain: &[u8],
+    producer_version: &str,
+    budget: &mut Budget<'_>,
+) -> R<Vec<u8>> {
     scoped(budget, |budget| {
         budget.charge_work(5)?;
-        let source = formal.semantic_kir();
-        let semantic = source.semantic().semantic();
-        let module = source.module();
         if roots.is_empty()
             || roots.len() > fe2o3_kernel_descriptor::MAX_KERNELS
             || roots.len() != semantic.roots().len()
             || roots.len() != module.kernels.len()
-            || roots.len() != formal.kernels().len()
+            || roots.len() != formal_count
         {
             return Err(E::Mismatch("complete typed/source/formal root roster"));
         }
-        if target.rustc_layout().default_pointer_width_bits() != 64 {
+        if pointer_width != 64 {
             return Err(E::Mismatch("retained 64-bit rustc target"));
         }
         budget.reserve_storage(
@@ -597,12 +627,7 @@ pub(crate) fn produce(
                 semantic.canonical_encoding(),
                 budget,
             )?;
-            let ir = evidence(
-                b"FE2O3/NOMINAL-EXECUTABLE-ABI/V3\0",
-                &binding,
-                source.canonical_kernel_ir_bytes(),
-                budget,
-            )?;
+            let ir = evidence(executable_domain, &binding, canonical_bytes, budget)?;
             root_rows.push(RootRow {
                 root,
                 symbol,
@@ -654,10 +679,10 @@ pub(crate) fn produce(
             }
         }
         // Covers text comparisons in the allocation-free borrowed capability visitor.
-        budget.charge_work(source.canonical_kernel_ir_bytes().len())?;
+        budget.charge_work(canonical_bytes.len())?;
         // Use the retained live rustc target, never an unverified capability tag.
         budget.charge_work(1)?;
-        let has_exact_diagnostic_target = match target.profile() {
+        let has_exact_diagnostic_target = match profile {
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942
             | fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => true,
         };
@@ -705,9 +730,9 @@ pub(crate) fn produce(
         );
         let producer = ProducerIdentityV1::new(
             text(RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1, budget)?,
-            text("inert-nominal-source-abi-v3", budget)?,
+            text(producer_version, budget)?,
         );
-        let target_name = target.profile().device_target();
+        let target_name = profile.device_target();
         budget.charge_work(target_name.len())?;
         let device_target = DeviceTargetV1::new(
             fe2o3_amd_target::AmdTargetId::parse(target_name)

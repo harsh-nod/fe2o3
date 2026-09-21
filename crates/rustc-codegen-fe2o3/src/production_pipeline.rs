@@ -50,6 +50,8 @@ pub(crate) mod fixed_checked_output_v1;
 pub(crate) mod native_checked_output_handoff_v1;
 #[path = "production_pipeline_nominal_abi_v3.rs"]
 mod nominal_abi_v3;
+#[path = "production_pipeline_nominal_policy4_v3.rs"]
+mod nominal_policy4_v3;
 #[cfg(test)]
 #[path = "production_pipeline_pre_ranked_observation_v1_tests.rs"]
 mod pre_ranked_observation_v1;

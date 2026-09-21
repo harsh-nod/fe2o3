@@ -132,6 +132,19 @@ fn check<T>(
 }
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    pub(super) fn import_nominal_ranked_v3(self) -> R<RankedVerifiedProductionCompilation> {
+        self.import_semantic_mir_with_nominal_v35(true)
+            .map_err(E::Pipeline)?
+            .construct_semantic_middle_end()
+            .map_err(E::Pipeline)?
+            .construct_semantic_ssa()
+            .map_err(E::Pipeline)?
+            .materialize_target_neutral()
+            .map_err(|error| E::Pipeline(*error))?
+            .verify_general_kernel_checks()
+            .map_err(E::Pipeline)
+    }
+
     /// Explicit opt-in actual rustc capture. The ordinary importer/default route
     /// is unchanged. Missing runtime, signing or native support is never success
     /// for those separate boundaries.
@@ -142,18 +155,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let floor = budget.storage();
         scoped(budget, |budget| {
             budget.charge_work(3)?;
-            let admitted = self
-                .import_semantic_mir_with_nominal_v35(true)
-                .map_err(E::Pipeline)?;
-            let ranked = admitted
-                .construct_semantic_middle_end()
-                .map_err(E::Pipeline)?
-                .construct_semantic_ssa()
-                .map_err(E::Pipeline)?
-                .materialize_target_neutral()
-                .map_err(|error| E::Pipeline(*error))?
-                .verify_general_kernel_checks()
-                .map_err(E::Pipeline)?;
+            let ranked = self.import_nominal_ranked_v3()?;
             let source_floor = ranked
                 .ranked
                 .materialized()

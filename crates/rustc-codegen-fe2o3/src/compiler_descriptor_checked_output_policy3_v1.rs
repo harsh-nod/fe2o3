@@ -7,6 +7,8 @@ use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1;
 
 #[path = "compiler_descriptor_native_worker_binding_v1.rs"]
 pub(crate) mod native_worker_binding_v1;
+#[path = "compiler_descriptor_nominal_policy4_v3.rs"]
+pub(crate) mod nominal_policy4_v3;
 #[path = "compiler_descriptor_checked_output_policy5_v1.rs"]
 pub(crate) mod policy5;
 #[path = "compiler_descriptor_checked_output_policy6_v1.rs"]
@@ -219,20 +221,35 @@ fn validate_checked_output_descriptor_evidence_v1(
     admitted: &CheckedDescriptorViewV1<'_>,
     target: &str,
 ) -> Result<Vec<crate::production_geometry_v1::ProductionGeometryV1>, CompilerDescriptorError> {
+    validate_checked_output_roster_length_v1(typed_roots, admitted)?;
+    let mut geometries = Vec::with_capacity(typed_roots.len());
+    validate_checked_output_descriptor_with_physical_matcher_v1(
+        typed_roots,
+        admitted,
+        target,
+        production_descriptor_argument_matches_kernel_type_v1,
+        &mut geometries,
+    )?;
+    Ok(geometries)
+}
+
+// The caller prepays the complete result capacity when using a canonical ledger.
+fn validate_checked_output_descriptor_with_physical_matcher_v1(
+    typed_roots: &[TypedDescriptorRootV1],
+    admitted: &CheckedDescriptorViewV1<'_>,
+    target: &str,
+    physical_matches: fn(DescriptorArgumentKindV1, AccessMode, &fe2o3_kernel_ir::Type) -> bool,
+    geometries: &mut Vec<crate::production_geometry_v1::ProductionGeometryV1>,
+) -> Result<(), CompilerDescriptorError> {
+    validate_checked_output_roster_length_v1(typed_roots, admitted)?;
     let module = admitted.output.module();
     let semantic = admitted.semantic;
     let source_launch = admitted.source_launch;
-    if typed_roots.is_empty()
-        || typed_roots.len() != semantic.roots().len()
-        || typed_roots.len() != module.kernels.len()
-        || typed_roots.len() != admitted.kernels.len()
-        || typed_roots.len() != source_launch.roots().len()
-    {
+    if !geometries.is_empty() || geometries.capacity() < typed_roots.len() {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "complete ordered typed/source/output/formal root roster",
+            "preallocated complete geometry roster",
         ));
     }
-    let mut geometries = Vec::with_capacity(typed_roots.len());
     for ((((root, semantic_root), kernel), obligations), launch_root) in typed_roots
         .iter()
         .zip(semantic.roots())
@@ -288,17 +305,37 @@ fn validate_checked_output_descriptor_evidence_v1(
         // Fresh O obligations are retained by the admitted owner. The same
         // per-root validator checks Global allocation/ownership, runtime bounds,
         // aliases and source launch; no N facts replace O facts here.
-        geometries.push(validate_production_v1_descriptor_root_evidence(
-            module,
-            root,
-            semantic,
-            function,
-            kernel,
-            obligations,
-            target,
-        )?);
+        geometries.push(
+            validate_production_descriptor_root_with_physical_matcher_v1(
+                module,
+                root,
+                semantic,
+                function,
+                kernel,
+                obligations,
+                target,
+                physical_matches,
+            )?,
+        );
     }
-    Ok(geometries)
+    Ok(())
+}
+
+fn validate_checked_output_roster_length_v1(
+    typed_roots: &[TypedDescriptorRootV1],
+    admitted: &CheckedDescriptorViewV1<'_>,
+) -> Result<(), CompilerDescriptorError> {
+    if typed_roots.is_empty()
+        || typed_roots.len() != admitted.semantic.roots().len()
+        || typed_roots.len() != admitted.output.module().kernels.len()
+        || typed_roots.len() != admitted.kernels.len()
+        || typed_roots.len() != admitted.source_launch.roots().len()
+    {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "complete ordered typed/source/output/formal root roster",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
