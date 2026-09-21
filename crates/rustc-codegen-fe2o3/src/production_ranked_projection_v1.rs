@@ -4898,7 +4898,7 @@ fn private_array_write_source_v1(
         }
         _ => return false,
     };
-    // Private-array reads still lack an exact attachment recipe. Keep this
+    // Mixed private reads and indexed writes still lack an exact recipe. Keep this
     // scalar destination subset closed independently of
     // the general RHS-before-destination projection order.
     let value_type = match value {
@@ -4962,6 +4962,9 @@ fn retained_ranked_access_source_v1(
     )
 }
 
+#[path = "production_ranked_projection_v1/private_array_read_source_v1.rs"]
+mod private_array_read_source_v1;
+
 fn production_access_sources(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -4983,10 +4986,30 @@ fn production_access_sources(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "ranked access correspondence is outside the projected graph",
             ))?;
-        if !retained_ranked_access_source_v1(source.memory_space, operation) {
+        if source.memory_space == MemorySpaceAttr::Private
+            && matches!(
+                operation,
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Read,
+                    ..
+                }
+            )
+        {
+            if !private_array_read_source_v1::retained_copy_read(types, function, source, facts)? {
+                continue;
+            }
+            if source
+                .semantic_site
+                .is_some_and(|site| ordinals.contains_key(&(site.block, site.statement)))
+            {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "private array copy read has duplicate source correspondence",
+                ));
+            }
+        } else if !retained_ranked_access_source_v1(source.memory_space, operation) {
             // Scalar indexed writes are final effects. Literal initializer
             // components contain no RHS slice queries; later sites reset the
-            // shared cursor. Keep ordinary private reads excluded.
+            // shared cursor. Other private reads remain excluded.
             if source.memory_space != MemorySpaceAttr::Private
                 || !matches!(
                     operation,

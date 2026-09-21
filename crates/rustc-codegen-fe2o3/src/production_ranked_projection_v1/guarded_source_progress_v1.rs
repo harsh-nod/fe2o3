@@ -962,6 +962,14 @@ impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_
         self.progress.check(self.facts)?;
         self.facts.private_array_initializer_count(block, statement)
     }
+    fn private_array_access_index_v1(
+        &mut self,
+        site: ProjectedSemanticAccessSiteV1,
+        role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+    ) -> Result<Option<u64>> {
+        self.progress.check(self.facts)?;
+        self.facts.private_array_access_index_v1(site, role)
+    }
     fn slice_access(
         &mut self,
         site: ProjectedSemanticAccessSiteV1,
