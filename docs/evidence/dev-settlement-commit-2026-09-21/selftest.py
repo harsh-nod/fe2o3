@@ -77,7 +77,7 @@ def main():
                 changed[checker.COMMIT] += '\nverus! { proof fn bypass() { assume(false); } }\n'
             try:
                 checker.audit_sources(module, changed, folder)
-            except ValueError:
+            except (ValueError, module.inherited().POLICY.ScanError):
                 if index == 0:
                     raise
             else:
