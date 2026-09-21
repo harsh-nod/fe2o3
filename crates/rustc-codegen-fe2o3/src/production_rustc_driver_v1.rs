@@ -1165,6 +1165,9 @@ mod gfx942_inline_reference_qualification_v30_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod gfx942_ordered_region_qualification_v31_tests;
 
+#[cfg(all(test, target_os = "linux"))]
+mod source_bitselect_feasibility_v1_tests;
+
 #[cfg(test)]
 #[path = "production_rustc_driver_v1_tests.rs"]
 mod tests;

@@ -369,6 +369,28 @@ pub(super) fn invocation_for_fixture(
     crate_name: &str,
     feature: Option<&str>,
 ) -> (Vec<String>, String, String) {
+    invocation_for_fixture_source(
+        directory,
+        fixture,
+        package_name,
+        crate_name,
+        feature,
+        &fixture.join("src/lib.rs"),
+        "gfx942",
+    )
+}
+
+/// Test-only explicit source root; installed before deriving invocation metadata.
+pub(super) fn invocation_for_fixture_source(
+    directory: &Path,
+    fixture: &Path,
+    package_name: &str,
+    crate_name: &str,
+    feature: Option<&str>,
+    source_root: &Path,
+    target_cpu: &str,
+) -> (Vec<String>, String, String) {
+    assert!(matches!(target_cpu, "gfx942" | "gfx950"));
     let fixture = fixture.canonicalize().unwrap();
     let manifest = fixture.join("Cargo.toml");
     let metadata: Value =
@@ -421,7 +443,7 @@ pub(super) fn invocation_for_fixture(
         sysroot.join("bin/rustc").to_str().unwrap().to_owned(),
         "--crate-name".into(),
         crate_name.into(),
-        fixture.join("src/lib.rs").to_str().unwrap().into(),
+        source_root.canonicalize().unwrap().to_str().unwrap().into(),
         "--edition=2024".into(),
         "--crate-type=lib".into(),
         "--target=amdgcn-amd-amdhsa".into(),
@@ -431,7 +453,7 @@ pub(super) fn invocation_for_fixture(
         "-Cembed-bitcode=no".into(),
         "-Cdebug-assertions=off".into(),
         "-Coverflow-checks=on".into(),
-        "-Ctarget-cpu=gfx942".into(),
+        format!("-Ctarget-cpu={target_cpu}"),
         "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32".into(),
         "-Zalways-encode-mir".into(),
         "-Zunstable-options".into(),

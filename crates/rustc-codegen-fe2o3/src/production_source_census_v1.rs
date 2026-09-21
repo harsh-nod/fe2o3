@@ -20,6 +20,10 @@ mod coordinates;
 #[path = "production_source_census_io_v1.rs"]
 mod output;
 
+#[cfg(test)]
+#[path = "source_bitselect_feasibility_v1_tests.rs"]
+pub(crate) mod bitselect_feasibility;
+
 pub(crate) const OUTPUT_ENV: &str = "FE2O3_DIAGNOSTIC_SOURCE_CENSUS_PATH_V1";
 pub(crate) const RUN_ID_ENV: &str = "FE2O3_DIAGNOSTIC_SOURCE_CENSUS_RUN_ID_V1";
 const MAX_FUNCTIONS: usize = 512;

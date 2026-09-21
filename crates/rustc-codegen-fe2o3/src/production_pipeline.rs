@@ -1704,6 +1704,45 @@ struct ExactDebugMapFunctionV1<'a> {
     block_ordinals: BTreeMap<fe2o3_kernel_ir::BlockId, usize>,
 }
 
+// Closed borrowed owners, not arbitrary executable/correspondence reconstruction.
+#[derive(Clone, Copy)]
+enum ExactDebugSourceOwnerV1<'a> {
+    Normal(&'a fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1),
+    #[cfg(test)]
+    Ordered(&'a fe2o3_lower_mir_kernel::ProductionOrderedProgramPreRankedKirOwnerV17),
+}
+
+impl<'a> ExactDebugSourceOwnerV1<'a> {
+    fn module(self) -> &'a fe2o3_kernel_ir::Module {
+        match self {
+            Self::Normal(owner) => owner.module(),
+            #[cfg(test)]
+            Self::Ordered(owner) => owner.executable().module(),
+        }
+    }
+    fn semantic(self) -> &'a fe2o3_pliron::ProductionSemanticMirOwnerV1 {
+        match self {
+            Self::Normal(owner) => owner.semantic(),
+            #[cfg(test)]
+            Self::Ordered(owner) => owner.semantic_ssa().source_owner(),
+        }
+    }
+    fn correspondence(self) -> &'a fe2o3_lower_mir_kernel::SemanticKirCorrespondenceV1 {
+        match self {
+            Self::Normal(owner) => owner.correspondence(),
+            #[cfg(test)]
+            Self::Ordered(owner) => owner.correspondence(),
+        }
+    }
+}
+
+// Private projection parts, not a wire document, subject, receipt or authority.
+struct ExactDebugSourceProjectionV1 {
+    files: Vec<fe2o3_kernel_ir::DebugSourceMapFileV1>,
+    sites: Vec<fe2o3_kernel_ir::DebugSourceMapSiteV1>,
+    eliminated: Vec<fe2o3_kernel_ir::DebugSourceMapSpanV1>,
+}
+
 fn exact_debug_map_functions_v1(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
 ) -> Result<
@@ -1713,6 +1752,21 @@ fn exact_debug_map_functions_v1(
             fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
         ),
         ExactDebugMapFunctionV1<'_>,
+    >,
+    ProductionPipelineError,
+> {
+    exact_debug_map_functions_from_owner_v1(ExactDebugSourceOwnerV1::Normal(lowered))
+}
+
+fn exact_debug_map_functions_from_owner_v1<'a>(
+    lowered: ExactDebugSourceOwnerV1<'a>,
+) -> Result<
+    BTreeMap<
+        (
+            fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+            fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+        ),
+        ExactDebugMapFunctionV1<'a>,
     >,
     ProductionPipelineError,
 > {
@@ -2002,7 +2056,24 @@ fn compiler_debug_source_map_v1(
     captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
     binding: fe2o3_kernel_ir::DebugSourceMapBindingV1,
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV1, ProductionPipelineError> {
-    let function_layouts = exact_debug_map_functions_v1(lowered)?;
+    let projection = compiler_debug_source_projection_v1(
+        ExactDebugSourceOwnerV1::Normal(lowered),
+        captured_files,
+    )?;
+    fe2o3_kernel_ir::DebugSourceMapDocumentV1::new(
+        binding,
+        projection.files,
+        projection.sites,
+        projection.eliminated,
+    )
+    .map_err(ProductionPipelineError::SimulationDebugMap)
+}
+
+fn compiler_debug_source_projection_v1(
+    lowered: ExactDebugSourceOwnerV1<'_>,
+    captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
+) -> Result<ExactDebugSourceProjectionV1, ProductionPipelineError> {
+    let function_layouts = exact_debug_map_functions_from_owner_v1(lowered)?;
 
     let mut mapped = BTreeMap::new();
     let mut eliminated = BTreeSet::new();
@@ -2175,13 +2246,11 @@ fn compiler_debug_source_map_v1(
                 .map_err(ProductionPipelineError::SimulationDebugMap)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    fe2o3_kernel_ir::DebugSourceMapDocumentV1::new(
-        binding,
+    Ok(ExactDebugSourceProjectionV1 {
         files,
         sites,
-        eliminated.into_iter().collect(),
-    )
-    .map_err(ProductionPipelineError::SimulationDebugMap)
+        eliminated: eliminated.into_iter().collect(),
+    })
 }
 
 fn compiler_debug_source_map_v2(
@@ -3866,6 +3935,11 @@ pub(crate) mod ordered_program_diagnostic_v32;
 pub(crate) mod ordered_region_diagnostic_v31;
 #[cfg(test)]
 pub(crate) mod ordered_region_qualification_v31;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod source_candidate_debug_join_v17_tests;
+
+#[cfg(test)]
+mod source_bitselect_feasibility_v1_tests;
 
 #[cfg(test)]
 mod tests {

@@ -200,7 +200,7 @@ compile_launcher() {
   run_watchdog /usr/bin/cc \
     -std=c11 -O2 -fPIE -static-pie \
     -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
-    -Wstack-protector -fstack-protector-strong -D_FORTIFY_SOURCE=3 \
+    -Wstack-protector -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 \
     -DFE2O3_AUTHORITY_TEST_ONLY=1 \
     "-DFE2O3_AUTHORITY_TEST_LAUNCHER_PATH=\"${output}\"" \
     "-DFE2O3_AUTHORITY_TEST_EXECUTABLE_PATH=\"${executable_path}\"" \
@@ -825,15 +825,15 @@ chmod 0555 "${FIXTURE_DIR}/mutate-elf.py"
 
 run_watchdog /usr/bin/cc \
   -std=c11 -O2 -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
-  -D_FORTIFY_SOURCE=3 -DFIXTURE_VERSION='"one"' \
+  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -DFIXTURE_VERSION='"one"' \
   "${FIXTURE_DIR}/cargo-fixture.c" -o "${EXECUTABLE}"
 run_watchdog /usr/bin/cc \
   -std=c11 -O2 -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
-  -D_FORTIFY_SOURCE=3 -DFIXTURE_VERSION='"two"' \
+  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -DFIXTURE_VERSION='"two"' \
   "${FIXTURE_DIR}/cargo-fixture.c" -o "${FIXTURE_DIR}/cargo-fe2o3-v2"
 run_watchdog /usr/bin/cc \
   -std=c11 -O2 -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
-  -D_FORTIFY_SOURCE=3 \
+  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 \
   "${FIXTURE_DIR}/process-state-shim.c" -o "${FIXTURE_DIR}/process-state-shim"
 chmod 0555 \
   "${EXECUTABLE}" "${FIXTURE_DIR}/cargo-fe2o3-v2" \

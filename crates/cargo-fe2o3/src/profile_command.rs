@@ -8002,6 +8002,10 @@ fn line_debug(output: &mut String, name: &str, value: impl std::fmt::Debug) {
 }
 
 #[cfg(test)]
+#[path = "profile_command_test_python.rs"]
+mod test_python;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use fe2o3_semantic_import::decode_profiler_bundle_v4;
@@ -9156,7 +9160,8 @@ Flags: interval pow2\n";
         .unwrap();
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
         let output = root.join("capture");
-        let python = discover_python().expect("test requires the reviewed native Python");
+        let python =
+            test_python::configured_python().expect("test requires the reviewed native Python");
         let base = vec![
             "--kind".to_owned(),
             "att".to_owned(),
@@ -9262,7 +9267,8 @@ Flags: interval pow2\n";
         let kir_path = root.join("generic.kir");
         fs::write(&kir_path, kir.canonical_bytes()).unwrap();
         let output = root.join("capture");
-        let python = discover_python().expect("test requires the reviewed native Python");
+        let python =
+            test_python::configured_python().expect("test requires the reviewed native Python");
         let args = [
             "--kind".to_owned(),
             "dispatch-json".to_owned(),
@@ -10185,7 +10191,8 @@ Flags: interval pow2\n";
         .unwrap();
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
         let output = root.join("capture");
-        let python = discover_python().expect("test requires the reviewed native Python");
+        let python =
+            test_python::configured_python().expect("test requires the reviewed native Python");
         let args = [
             "--kind".to_owned(),
             "dispatch-json".to_owned(),
@@ -10554,14 +10561,9 @@ Flags: interval pow2\n";
         fs::create_dir(&root).unwrap();
         let publication = root.join("descendant.identity");
         let release = root.join("descendant.release");
-        let monitor = monitor_test_process_publication_v1(
-            publication.clone(),
-            release.clone(),
-            ExpectedTestTopologyV1::EscapedSession {
-                expected_leader_session: current_test_session_v1(),
-            },
-        );
-        let python_path = discover_python().expect("test requires the reviewed native Python");
+        // Complete prerequisite preparation before starting the publication budget.
+        let python_path =
+            test_python::configured_python().expect("test requires the reviewed native Python");
         let python = FilePin::open(
             &python_path,
             "test Python interpreter",
@@ -10569,6 +10571,13 @@ Flags: interval pow2\n";
             true,
         )
         .unwrap();
+        let monitor = monitor_test_process_publication_v1(
+            publication.clone(),
+            release.clone(),
+            ExpectedTestTopologyV1::EscapedSession {
+                expected_leader_session: current_test_session_v1(),
+            },
+        );
         let mut child = Command::new(python.execution_path())
             .arg0(&python.canonical_path)
             .args([

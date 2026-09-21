@@ -19,6 +19,7 @@ use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Output};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -322,6 +323,7 @@ fn assert_test_descendant_is_terminated(process: &PinnedTestProcess) {
 struct Fixture {
     root: PathBuf,
     tool: PathBuf,
+    python: Option<OsString>,
 }
 
 impl Fixture {
@@ -346,7 +348,13 @@ raise SystemExit(subprocess.run(target, check=False).returncode)
 "#
                     };
                     write_tool(&tool, behavior);
-                    return Self { root, tool };
+                    let mut fixture = Self {
+                        root,
+                        tool,
+                        python: None,
+                    };
+                    fixture.python = configured_fixture_python(&fixture);
+                    return fixture;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => panic!("failed to create fixture: {error}"),
@@ -356,6 +364,10 @@ raise SystemExit(subprocess.run(target, check=False).returncode)
 
     fn output(&self, name: &str) -> PathBuf {
         self.root.join(name)
+    }
+
+    fn profile_command(&self) -> Command {
+        fixture_profile_command(self.python.clone())
     }
 
     fn plan(&self, output: &Path, target_args: &[&str]) -> Output {
@@ -378,8 +390,8 @@ raise SystemExit(subprocess.run(target, check=False).returncode)
         program: &Path,
         target_args: &[&str],
     ) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
-        command.args(["profile", "--tool", self.tool.to_str().unwrap()]);
+        let mut command = self.profile_command();
+        command.args(["--tool", self.tool.to_str().unwrap()]);
         command.args(profile_options);
         command.args([
             "--output-dir",
@@ -392,6 +404,84 @@ raise SystemExit(subprocess.run(target, check=False).returncode)
 
     fn replace_behavior(&self, behavior: &str) {
         write_tool(&self.tool, behavior);
+    }
+}
+
+fn fixture_profile_command(python: Option<OsString>) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command.arg("profile");
+    if let Some(python) = python {
+        command.arg("--python").arg(python);
+    }
+    command
+}
+
+fn configured_fixture_python(fixture: &Fixture) -> Option<OsString> {
+    static CONFIGURATION: OnceLock<Option<OsString>> = OnceLock::new();
+    CONFIGURATION
+        .get_or_init(|| {
+            let python = env::var_os("FE2O3_TEST_NATIVE_PYTHON");
+            let output = fixture.output("python-prerequisite-plan");
+            assert!(!output.exists());
+            let plan = fixture_profile_command(python.clone())
+                .arg("--tool")
+                .arg(&fixture.tool)
+                .arg("--output-dir")
+                .arg(&output)
+                .args(["--", "/bin/true"])
+                .output()
+                .unwrap();
+            assert!(
+                plan.status.success(),
+                "test requires the reviewed native Python: {}",
+                String::from_utf8_lossy(&plan.stderr)
+            );
+            assert!(!output.exists(), "prerequisite plan must remain inert");
+            // Cache immutable arguments only; every real CLI call validates again.
+            python
+        })
+        .clone()
+}
+
+#[test]
+fn fixture_python_absence_preserves_default_cli_arguments() {
+    let command = fixture_profile_command(None);
+    assert_eq!(
+        command.get_args().map(OsString::from).collect::<Vec<_>>(),
+        [OsString::from("profile")]
+    );
+}
+
+#[test]
+fn fixture_python_override_precedes_target_boundary_without_splitting() {
+    let python = OsString::from("/reviewed install/bin/python3.12");
+    let mut command = fixture_profile_command(Some(python.clone()));
+    command.args(["--", "/bin/true", "target argument"]);
+    assert_eq!(
+        command.get_args().map(OsString::from).collect::<Vec<_>>(),
+        [
+            OsString::from("profile"),
+            OsString::from("--python"),
+            python,
+            OsString::from("--"),
+            OsString::from("/bin/true"),
+            OsString::from("target argument"),
+        ]
+    );
+}
+
+#[test]
+fn fixture_python_invalid_override_is_forwarded_without_fallback() {
+    for python in ["", "python3.12", "/reviewed/bin/python3"] {
+        let command = fixture_profile_command(Some(OsString::from(python)));
+        assert_eq!(
+            command.get_args().map(OsString::from).collect::<Vec<_>>(),
+            [
+                OsString::from("profile"),
+                OsString::from("--python"),
+                OsString::from(python),
+            ]
+        );
     }
 }
 
@@ -639,9 +729,8 @@ fn collect_program_with_options(
     program: &Path,
     target_args: &[&str],
 ) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let mut command = fixture.profile_command();
     command.args([
-        "profile",
         "--collect",
         "--authorize-collection",
         auth,
@@ -1128,9 +1217,8 @@ raise SystemExit(subprocess.run(target, check=False).returncode)
     assert!(!without_ack.status.success());
     assert!(!output_directory.exists());
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let mut command = fixture.profile_command();
     command.args([
-        "profile",
         "--collect",
         "--authorize-collection",
         &authorization(&plan),
@@ -1525,9 +1613,9 @@ fn existing_symlink_output_and_symlink_tool_are_rejected() {
     fs::create_dir(&linked_directory).unwrap();
     let tool_link = linked_directory.join("rocprofv3");
     symlink(&fixture.tool, &tool_link).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+    let output = fixture
+        .profile_command()
         .args([
-            "profile",
             "--tool",
             tool_link.to_str().unwrap(),
             "--output-dir",
@@ -1606,8 +1694,7 @@ fn duplicates_and_bounds_fail_before_any_output_creation() {
         ],
     ];
     for prefix in prefixes {
-        let mut arguments = vec!["profile".to_owned()];
-        arguments.extend(prefix);
+        let mut arguments = prefix;
         arguments.extend(
             [
                 "--tool",
@@ -1620,10 +1707,7 @@ fn duplicates_and_bounds_fail_before_any_output_creation() {
             .into_iter()
             .map(str::to_owned),
         );
-        let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
-            .args(arguments)
-            .output()
-            .unwrap();
+        let output = fixture.profile_command().args(arguments).output().unwrap();
         assert!(!output.status.success());
         assert!(!output_directory.exists());
     }

@@ -114,5 +114,5 @@ PATH="${TEST_ROOT}/fake-bin:/usr/bin:/bin" DCO_TEST_VERIFIED=true \
 PATH="${TEST_ROOT}/fake-bin:/usr/bin:/bin" DCO_TEST_VERIFIED=false \
   expect_failure 'missing exact trailer Signed-off-by: dependabot[bot]' "${dependabot}"
 
-python3 -I "${ROOT}/scripts/tests/check_dco_exceptions.py"
+python3 -I -B "${ROOT}/scripts/tests/check_dco_exceptions.py"
 printf '%s\n' 'DCO range tests passed'

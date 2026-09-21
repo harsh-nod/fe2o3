@@ -285,8 +285,15 @@ pub fn prepare_ordered_program_materialization_v1(
         request.registers.inputs,
     )
     .map_err(|_| OrderedProgramMaterializationErrorV1::InvalidRegisters)?;
-    let program = bitselect_program()?;
-    let (expression, statement) = render(&request.source, registers)?;
+    let (program, expression) = render_bitselect_expression_v1(
+        [
+            request.source.inputs[0].identifier.as_str(),
+            request.source.inputs[1].identifier.as_str(),
+            request.source.inputs[2].identifier.as_str(),
+        ],
+        registers,
+    )?;
+    let statement = render_statement(&request.source, &expression)?;
     bounded_report(OrderedProgramMaterializationPlanV1 {
         schema: "fe2o3-ordered-program-materialization-plan-v1",
         baseline: snapshot.summary(),
@@ -383,10 +390,25 @@ fn bitselect_program() -> Result<Gfx942U32ProgramV1> {
     .map_err(|_| OrderedProgramMaterializationErrorV1::InvalidProgramContract)
 }
 
-fn render(
-    source: &OrderedProgramSourceBindingV1,
+/// Renders only the fixed u32 expression `b ^ ((a ^ b) & mask)`.
+///
+/// The three bounded, distinct identifiers are supplied in a, b, mask order.
+/// Checked register roles and a checked instruction program prevent malformed
+/// text, but do not authenticate these names against Rust/HIR or any SSA owner.
+/// This inert formatter performs no source editing or compiler admission and
+/// grants no proof, production-resume, load, or launch authority.
+pub fn render_bitselect_expression_v1(
+    inputs: [&str; 3],
     registers: Gfx942OrderedProgramRegistersV1,
-) -> Result<(String, String)> {
+) -> Result<(Gfx942U32ProgramV1, String)> {
+    if inputs
+        .iter()
+        .enumerate()
+        .any(|(index, name)| !valid_helper_name(name) || inputs[..index].contains(name))
+    {
+        return Err(OrderedProgramMaterializationErrorV1::InvalidSourceIdentifier);
+    }
+    let program = bitselect_program()?;
     let mut text = BoundedText::new(MAX_AUTHORING_SOURCE_BYTES_V1);
     writeln!(text, "fe2o3_device::amdgpu_ordered_program! {{")
         .map_err(|_| AuthoringErrorV1::ResourceLimit)?;
@@ -398,13 +420,16 @@ fn render(
         registers.output()
     )
     .map_err(|_| AuthoringErrorV1::ResourceLimit)?;
-    for (register, input) in registers.inputs().iter().zip(&source.inputs) {
-        writeln!(text, "    in({register}) = {};", input.identifier)
+    for (register, input) in registers.inputs().iter().zip(inputs) {
+        writeln!(text, "    in({register}) = {input};")
             .map_err(|_| AuthoringErrorV1::ResourceLimit)?;
     }
     text.write_str("    xor(scratch, input0, input1);\n    and(scratch, scratch, input2);\n    xor(out, input1, scratch);\n}")
         .map_err(|_| AuthoringErrorV1::ResourceLimit)?;
-    let expression = text.text;
+    Ok((program, text.text))
+}
+
+fn render_statement(source: &OrderedProgramSourceBindingV1, expression: &str) -> Result<String> {
     let mut statement = BoundedText::new(MAX_AUTHORING_SOURCE_BYTES_V1);
     writeln!(
         statement,
@@ -412,7 +437,7 @@ fn render(
         source.output.identifier
     )
     .map_err(|_| AuthoringErrorV1::ResourceLimit)?;
-    Ok((expression, statement.text))
+    Ok(statement.text)
 }
 
 fn validate_baseline(
@@ -474,3 +499,7 @@ fn span_offset(value: &str) -> Result<u32> {
 #[cfg(test)]
 #[path = "ordered_program_materialization_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ordered_program_expression_v1_tests.rs"]
+mod expression_tests;

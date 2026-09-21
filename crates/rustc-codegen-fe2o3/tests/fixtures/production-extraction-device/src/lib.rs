@@ -14,6 +14,14 @@ mod loop_capture;
 
 #[cfg(feature = "redundant-store-policy7")]
 mod redundant_store_policy7;
+#[cfg(any(
+    feature = "source-bitselect-feasibility",
+    feature = "source-bitselect-ambiguous",
+    feature = "source-bitselect-local-alias",
+))]
+mod source_bitselect_feasibility;
+#[cfg(feature = "source-bitselect-normalized")]
+mod source_bitselect_normalized;
 
 #[cfg(any(
     feature = "redundant-store-policy7-i8",
@@ -139,6 +147,10 @@ mod ordered_program_v32;
     feature = "redundant-store-policy7-u32",
     feature = "redundant-store-policy7-i64",
     feature = "redundant-store-policy7-u64",
+    feature = "source-bitselect-feasibility",
+    feature = "source-bitselect-ambiguous",
+    feature = "source-bitselect-local-alias",
+    feature = "source-bitselect-normalized",
     feature = "integer-identity",
     feature = "wave64-capture",
     feature = "constant-shift",
