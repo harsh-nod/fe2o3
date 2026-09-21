@@ -5,6 +5,12 @@ use fe2o3_kernel_analysis::{
 };
 type Site = Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>;
 
+#[path = "production_checked_output_licm_sites_v1.rs"]
+mod licm_sites;
+pub(super) use licm_sites::check_licm_after_preheaders_sites;
+#[cfg(test)]
+pub(super) use licm_sites::exercise_licm_source_sites;
+
 pub(super) struct PromotionMapping<'v, 'o, 'r> {
     pub(super) input: &'v CanonicalKirInventoryV1<'o>,
     pub(super) output: &'v CanonicalKirInventoryV1<'o>,
@@ -139,6 +145,101 @@ pub(super) fn check_sites(
     budget: &mut AssertOriginBudgetV1<'_>,
     binding: &PromotionBinding,
 ) -> PResult<Box<[FormalMemoryObligations]>> {
+    census_sites::<false>(sites, budget, binding)
+}
+
+// Closed final-output adapter: neither detached sites nor a caller-selected
+// phase can authorize another graph. The independent complete neutral pair
+// authenticates all payloads/control and the unchanged kernel/report roster.
+pub(super) fn check_loop_preheader_sites(
+    sites: CheckedPromotedSites<'_, '_>,
+    pair: &fe2o3_kernel_analysis::CheckedCanonicalKirLoopPreheadersV1<'_>,
+    output: &CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
+    with_checked_loop_preheader_sites(
+        sites,
+        pair,
+        output,
+        budget,
+        binding,
+        |sites, budget, binding| census_sites::<true>(sites, budget, binding),
+    )
+}
+
+fn with_checked_loop_preheader_sites<'g, 'w, R>(
+    sites: CheckedPromotedSites<'_, '_>,
+    pair: &fe2o3_kernel_analysis::CheckedCanonicalKirLoopPreheadersV1<'_>,
+    output: &CanonicalKirInventoryV1<'g>,
+    budget: &mut AssertOriginBudgetV1<'w>,
+    binding: &PromotionBinding,
+    use_sites: impl for<'s> FnOnce(
+        CheckedPromotedSites<'s, 'g>,
+        &mut AssertOriginBudgetV1<'w>,
+        &PromotionBinding,
+    ) -> PResult<R>,
+) -> PResult<R> {
+    budget.charge_work(7)?;
+    if !std::ptr::eq(pair.input(), sites.output.owner())
+        || !std::ptr::eq(pair.output(), output.owner())
+        || sites.output.operations().len() != output.operations().len()
+        || sites.output_sites.len() != output.operations().len()
+        || sites.traps.len() != output.operations().len()
+        || sites.output.owner().module().kernels.len() != output.owner().module().kernels.len()
+    {
+        return Err(refused(
+            "neutral loop preheaders",
+            "exact pair/source/output custody",
+        )
+        .into());
+    }
+    for (before, after) in sites.output.operations().iter().zip(output.operations()) {
+        budget.charge_work(3)?;
+        if before.coordinate != after.coordinate {
+            return Err(refused(
+                "neutral loop preheaders",
+                "unchanged ordered operation coordinates",
+            )
+            .into());
+        }
+    }
+    binding.check(budget)?;
+    use_sites(
+        CheckedPromotedSites {
+            source: sites.source,
+            output,
+            output_sites: sites.output_sites,
+            traps: sites.traps,
+        },
+        budget,
+        binding,
+    )
+}
+
+fn census_sites<const PREHEADERS: bool>(
+    sites: CheckedPromotedSites<'_, '_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
+    census_sites_named(
+        sites,
+        if PREHEADERS {
+            "neutral loop preheaders"
+        } else {
+            "private-cell promotion"
+        },
+        budget,
+        binding,
+    )
+}
+
+fn census_sites_named(
+    sites: CheckedPromotedSites<'_, '_>,
+    stage: &'static str,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
     let source = sites.source();
     let output = sites.output();
     let output_sites = sites.statements();
@@ -163,7 +264,7 @@ pub(super) fn check_sites(
         &private,
         &division,
         &helpers,
-        "private-cell promotion",
+        stage,
         |ordinal, coordinate| {
             Ok(traps.get(ordinal).copied().unwrap_or(false)
                 && output

@@ -162,8 +162,18 @@ mod certificate_storage_v69_tests {
             };
             // S=19; charged=67; dominators=50; loops=120; parallel payloads=2976.
             // Retained=5586; scoped base temporary=120, plus payload owner19.
+            // Common-entry validation adds12*(48+(16+4*2)*4)=1728 work and
+            // the actual fixed Copy seed/source/type headers, with no heap.
             // Standalone adds12 verifier work and omits3 scoped-owner cells.
-            for (scoped, work, peak) in [(true, 3_289, 5_725), (false, 3_301, 5_722)] {
+            let entry_headers = (std::mem::size_of::<Option<pliron::value::Value>>()
+                + std::mem::size_of::<Option<usize>>()
+                + std::mem::size_of::<pliron::value::Value>()
+                + 2 * std::mem::size_of::<pliron::r#type::TypeHandle>())
+            .div_ceil(std::mem::size_of::<usize>());
+            for (scoped, work, peak) in [
+                (true, 5_017, 5_725 + entry_headers),
+                (false, 5_029, 5_722 + entry_headers),
+            ] {
                 let preflight = if scoped {
                     preflight_scoped_progress_resource_upper_bound_v1
                 } else {

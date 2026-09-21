@@ -92,3 +92,60 @@ function, including the unreachable-to-policy-excluded edge case.
   hardware differential evidence are absent.
 
 These gaps keep parity row 23 `Partial` rather than Complete.
+
+## Checked Primitive From Normalization
+
+The production semantic importer has a separate private checked-helper route
+for concrete pinned-core `From` integer widening implementations. This is not
+general user-MIR branch pruning and does not extend the V1 evidence format or
+its authority. It recognizes the actual core crate, `From` trait, `from_fn`
+associated item and concrete impl identities, not a function name or path.
+
+The admitted endpoints are fixed-width 8/16/32/64/128-bit unsigned-to-wider-
+unsigned, signed-to-wider-signed and unsigned-to-wider-signed pairs. Identity
+conversions, bool, char, floats, references, target-width integers, `TryFrom`
+and non-core wrappers are not candidates. The actual safe Rust signature and
+queried argument/return ABI layouts must agree with the endpoint types.
+
+A separate checker reads the actual queried body. It audits every raw block,
+including unselected calls, operands and `required_consts`, before following
+the selected execution. Fixed-width constant expressions use the existing
+checked integer evaluators. Constants are block-local; runtime input provenance
+is tracked separately and cannot prove a branch. Moves, overwrites and storage
+lifetime transitions consume that provenance. Aliases, projections, unsupported
+effects, unknown branches, selected calls and cycles refuse normalization. A
+successful path must return exactly the lossless input-to-output cast.
+
+Every scalar constant is evaluated through the pinned rustc fully monomorphized
+CTFE query after auditing its actual constant form and definition. This trusts
+rustc CTFE for the value; it does not recursively prove the source bodies of
+constant evaluation dependencies. Literal string arguments to unselected calls
+require actual immutable, initialized, provenance-free allocation bytes and
+valid UTF-8. Both original and resolved callees retain provider, safe Rust
+signature, queried ABI and device-FFI checks. There is no panic-name whitelist;
+the ordinary caller's panic and whole-source checks remain in place.
+
+Collection, closure revalidation, preflight and semantic body construction each
+rerun the checker using the existing cumulative validation-work callback. The
+fixed-size private recipe borrows the actual instance, body and ABI, and its
+commitment binds the actual body/signature/ABI alongside the existing source
+and target subjects. Construction verifies the same producers and preserves
+the caller's argument Copy/Move, destination and normal edge while emitting
+one ordinary semantic integer cast. Old intrinsic and shift discriminators
+and their normalization behavior are unchanged.
+
+Temporary facts, alias flags and visited blocks have fallibly reserved, fixed
+capacity. Requested and actual backing bytes, including vector headers, are
+checked against the invocation's existing `CanonicalBytes` numeric limit before
+initialization; arithmetic overflow, allocation refusal, structural limits and
+work denial remain distinct typed failures. Scratch is dropped before a recipe
+is returned and on errors or unwinds. This private scratch cap is not a new
+cumulative storage ledger, a refund mechanism, or canonical-wire accounting.
+Retained enum and recipe layouts are checked against the original field and
+variant rosters; allocator-specific capacity tests do not promise a Rust ABI.
+
+The regression tests query real rustc bodies for all 30 admitted endpoint pairs
+and exercise the actual four consuming methods, exact work/scratch boundaries,
+and separately labelled cloned-body hostiles. Those component tests do not
+replace authenticated kernel-root, signed-runtime, target-native or hardware
+qualification, and do not complete parity row 23 or any pending proof.

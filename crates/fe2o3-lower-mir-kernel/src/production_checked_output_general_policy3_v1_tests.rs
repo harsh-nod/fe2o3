@@ -1,5 +1,11 @@
 use super::*;
 
+#[path = "production_checked_output_licm_source_v1_tests.rs"]
+mod licm_source_tests;
+
+#[path = "production_checked_output_private_cfg_source_owner_v1_tests.rs"]
+mod private_cfg_source_owner_tests;
+
 #[path = "production_checked_output_private_memory_policy3_v1_tests.rs"]
 mod private_memory_tests;
 

@@ -1,3 +1,5 @@
+#![cfg(not(feature = "kernel-simt-gemm-general"))]
+
 use fe2o3_device::{DisjointSlice, Index1D, KernelMarkerV1, Tiled2D};
 use fe2o3_tiled_gemm_general_v1::{
     GENERAL_TILED_GEMM_PROTECTED_EXECUTION_BLOCKER_V1,

@@ -34,7 +34,7 @@ MAX_INPUT_BYTES = 256 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
 MAX_MANIFEST = 1024 * 1024
 MAX_SECONDS = 1200
-MAX_BATCH_SUITES = 12
+MAX_BATCH_SUITES = 14
 # Match the existing managed runner's pinned_executable::MAX_EXECUTABLE_BYTES.
 # This is an on-disk observation limit, not executed-image provenance.
 MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024
@@ -114,11 +114,55 @@ def relative_file(root: Path, spelling: Any) -> Path:
     return result
 
 
-def select_suite(manifest: dict[str, Any], arguments: list[str]) -> dict[str, Any]:
-    require((len(arguments) == 2 and arguments[1] == "lib")
-            or (len(arguments) == 3 and arguments[1] == "test"
+def parse_selection(arguments: list[str]) -> dict[str, Any]:
+    require(2 <= len(arguments) <= 6 and all(isinstance(item, str) for item in arguments),
+            "invalid host suite arguments")
+    require(arguments[1] == "lib"
+            or (len(arguments) >= 3 and arguments[1] == "test"
                 and re.fullmatch(r"[A-Za-z0-9_-]+", arguments[2]) is not None),
-            "expected <Cargo.toml> lib or <Cargo.toml> test <literal target>")
+            "expected <Cargo.toml> lib or <Cargo.toml> test <literal target> before feature options")
+    offset = 2 if arguments[1] == "lib" else 3
+    selection = {"defaultFeatures": True, "features": [], "profile": "test",
+                 "selector": arguments[1:offset]}
+    seen: set[str] = set()
+    while offset < len(arguments):
+        option = arguments[offset]
+        require(option in {"--no-default-features", "--features"} and option not in seen,
+                "duplicate or unsupported host feature option")
+        seen.add(option)
+        offset += 1
+        if option == "--no-default-features":
+            selection["defaultFeatures"] = False
+        else:
+            require(offset < len(arguments), "missing host feature names")
+            features = arguments[offset].split(",")
+            require(all(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*", item) is not None
+                        for item in features) and features == sorted(set(features)),
+                    "host features must be nonempty sorted unique local names")
+            selection["features"] = features
+            offset += 1
+    return selection
+
+
+def validate_features(manifest: Path, configuration: dict[str, Any]) -> None:
+    try:
+        document = tomllib.loads(read_regular(manifest).decode("utf-8"))
+    except (UnicodeError, tomllib.TOMLDecodeError) as error:
+        raise ObservationError(f"invalid host package manifest: {error}") from error
+    declared = document.get("features", {})
+    require(isinstance(declared, dict) and all(name in declared for name in configuration["features"]),
+            "undeclared local host feature")
+
+
+def feature_arguments(configuration: dict[str, Any]) -> list[str]:
+    result = [] if configuration["defaultFeatures"] else ["--no-default-features"]
+    if configuration["features"]:
+        result.extend(["--features", ",".join(configuration["features"])])
+    return result
+
+
+def select_suite(manifest: dict[str, Any], arguments: list[str]) -> dict[str, Any]:
+    configuration = parse_selection(arguments)
     matches = [suite for suite in manifest["qualification"]["suites"]
                if suite["gate"] == "cpu-reference"
                and suite["command"]["executable"] == WRAPPER
@@ -140,8 +184,7 @@ def select_suite(manifest: dict[str, Any], arguments: list[str]) -> dict[str, An
         "suiteId": suite["suiteId"], "declaredCommand": command, "coverage": suite["coverage"],
         "fixtureContracts": [{"fixtureId": item, "compilerInput": fixtures[item]["compilerInput"]}
                              for item in covered],
-        "hostConfiguration": {"defaultFeatures": True, "features": [], "profile": "test",
-                              "selector": arguments[1:]},
+        "hostConfiguration": configuration,
     }
 
 
@@ -163,7 +206,7 @@ def load_plan(root: Path, arguments: list[str]) -> tuple[dict[str, Any], Any]:
     plan = select_suite(manifest, arguments)
     plan["manifestSha256"] = digest(payload)
     plan["validatorSha256"] = digest(read_regular(validator_path))
-    relative_file(root, arguments[0])
+    validate_features(relative_file(root, arguments[0]), plan["hostConfiguration"])
     return plan, validator
 
 
@@ -222,7 +265,8 @@ def selected_target(root: Path, metadata: dict[str, Any], manifest: Path,
 
 def batch_plans(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     suites = [suite for suite in manifest["qualification"]["suites"] if suite["gate"] == "cpu-reference"]
-    require(1 <= len(suites) <= MAX_BATCH_SUITES, "batch requires between 1 and 12 declared CPU suites")
+    require(1 <= len(suites) <= MAX_BATCH_SUITES,
+            f"batch requires between 1 and {MAX_BATCH_SUITES} declared CPU suites")
     plans = []
     identities: set[str] = set()
     commands: set[tuple[str, ...]] = set()
@@ -256,7 +300,8 @@ def load_batch_plans(root: Path) -> tuple[list[dict[str, Any]], Any]:
     validator_hash = digest(read_regular(validator_path))
     for plan in plans:
         plan.update(manifestSha256=digest(payload), validatorSha256=validator_hash)
-        relative_file(root, plan["declaredCommand"]["arguments"][0])
+        validate_features(relative_file(root, plan["declaredCommand"]["arguments"][0]),
+                          plan["hostConfiguration"])
     return plans, validator
 
 
@@ -467,6 +512,7 @@ def revalidate_plan(root: Path, arguments: list[str], plan: dict[str, Any], vali
     except SystemExit as error:
         raise ObservationError(f"bound source contract refused: {error}") from error
     checked = select_suite(manifest, arguments)
+    validate_features(relative_file(root, arguments[0]), checked["hostConfiguration"])
     require(all(plan[key] == value for key, value in checked.items()), "selected contract changed")
     require(read_regular(manifest_path, MAX_MANIFEST) == payload
             and digest(read_regular(validator_path)) == plan["validatorSha256"],
@@ -650,15 +696,18 @@ def execute(root: Path, arguments: list[str], output: Path, started: float,
     phases = observation["phases"]
     tools, host = discover_tools(root, env, output, deadline, phases, plan)
     manifest = relative_file(root, arguments[0])
+    configuration = plan["hostConfiguration"]
+    features = feature_arguments(configuration)
     metadata_records = []
     for label, path in (("driver", root / "Cargo.toml"), ("suite", manifest)):
         data = child([str(tools["cargo"]), "metadata", "--locked", "--offline", "--format-version", "1",
-                      "--manifest-path", str(path), "--filter-platform", host],
+                      "--manifest-path", str(path), "--filter-platform", host,
+                      *(features if label == "suite" else [])],
                      root, env, output, label + "-metadata", deadline, phases)
         require_child_success(phases, label + " metadata")
         metadata_records.append(decode_json(data))
     driver_metadata, suite_metadata = metadata_records
-    expected = selected_target(root, suite_metadata, manifest, arguments[1:])
+    expected = selected_target(root, suite_metadata, manifest, configuration["selector"])
     plan["selectedTarget"] = expected
     plan["host"] = host
     for name, path in tools.items():
@@ -680,9 +729,10 @@ def execute(root: Path, arguments: list[str], output: Path, started: float,
     observation["inputs"] = before
     driver = bootstrap_driver(root, env, output, target_dir, tools, driver_metadata,
                               deadline, phases, plan)
-    selector = ["--lib"] if arguments[1] == "lib" else ["--test", arguments[2]]
+    selected = configuration["selector"]
+    selector = ["--lib"] if selected == ["lib"] else ["--test", selected[1]]
     command = [str(driver), "test", "--locked", "--offline", "--manifest-path", str(manifest),
-               *selector, "--message-format=json", "--", "-Z", "unstable-options", "--format=json", "--test-threads=1"]
+               *features, *selector, "--message-format=json", "--", "-Z", "unstable-options", "--format=json", "--test-threads=1"]
     error: BaseException | None = None
     try:
         data = child(command, root, env, output, "suite", deadline, phases)
@@ -855,13 +905,15 @@ def execute_batch(root: Path, output: Path, started: float, observation: dict[st
                 suite_env.update(CARGO_TARGET_DIR=str(suite_target), TMPDIR=str(suite_dir))
                 arguments = plan["declaredCommand"]["arguments"]
                 manifest = relative_file(root, arguments[0])
+                configuration = plan["hostConfiguration"]
+                features = feature_arguments(configuration)
                 record["attempted"] = True
                 data = child([str(tools["cargo"]), "metadata", "--locked", "--offline", "--format-version", "1",
-                              "--manifest-path", str(manifest), "--filter-platform", host],
+                              "--manifest-path", str(manifest), "--filter-platform", host, *features],
                              root, suite_env, suite_dir, "suite-metadata", until, record["phases"])
                 require_child_success(record["phases"], "suite metadata")
                 metadata = decode_json(data)
-                expected = selected_target(root, metadata, manifest, arguments[1:])
+                expected = selected_target(root, metadata, manifest, configuration["selector"])
                 plan["selectedTarget"] = expected
                 local_roots = sorted({Path(package["manifest_path"]).parent for package in metadata["packages"]
                                       if package.get("source") is None})
@@ -875,9 +927,10 @@ def execute_batch(root: Path, output: Path, started: float, observation: dict[st
                 check_configuration(until)
                 require(footprint(local_roots, suite_files, until) == before, "input drift during baseline validation")
                 record.update(inputs=before, configurationInputs=configs)
-                selector = ["--lib"] if arguments[1] == "lib" else ["--test", arguments[2]]
+                selected = configuration["selector"]
+                selector = ["--lib"] if selected == ["lib"] else ["--test", selected[1]]
                 command = [str(driver), "test", "--locked", "--offline", "--manifest-path", str(manifest),
-                           *selector, "--message-format=json", "--", "-Z", "unstable-options", "--format=json", "--test-threads=1"]
+                           *features, *selector, "--message-format=json", "--", "-Z", "unstable-options", "--format=json", "--test-threads=1"]
                 try:
                     data = child(command, root, suite_env, suite_dir, "suite", until, record["phases"])
                     record["tests"] = test_observation(data, expected, suite_target)

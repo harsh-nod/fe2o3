@@ -356,6 +356,10 @@ pub(crate) struct SourceClosureWorkV1 {
 }
 
 impl SourceClosureWorkV1 {
+    pub(crate) fn limits(&self) -> SemanticMirLimitsV1 {
+        self.limits
+    }
+
     #[cfg(test)]
     pub(crate) fn validation_work_for_test(&self) -> u64 {
         self.counts.validation_work
@@ -880,6 +884,46 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
                         Ok(None) => {}
                         Err(error) => {
                             remember_rejection(&mut first_rejection, error, site);
+                            continue;
+                        }
+                    }
+                    match crate::production_primitive_from_v1::check_primitive_from_v1(
+                        tcx,
+                        resolved,
+                        crate::production_primitive_from_v1::PrimitiveFromStageV1::Preflight,
+                        limits,
+                        &mut |amount| {
+                            counts.charge(SemanticMirResourceV1::ValidationWork, amount, limits)
+                        },
+                    ) {
+                        Ok(Some(checked)) => {
+                            if args.len() != 1 {
+                                remember_rejection(
+                                    &mut first_rejection,
+                                    "checked primitive From call arity",
+                                    site,
+                                );
+                                continue;
+                            }
+                            counts.charge(SemanticMirResourceV1::Statements, 1, limits)?;
+                            counts.charge(SemanticMirResourceV1::Operands, 1, limits)?;
+                            normalized_intrinsics.push(NormalizedRustcIntrinsicRecipeV1 {
+                                caller: function_id,
+                                block: block.index() as u32,
+                                operation: NormalizedCallV1::CheckedPrimitiveFrom(checked),
+                                element_type: checked.output_type(),
+                                instance: resolved,
+                                identities: canonical_function_identities_v1(tcx, resolved),
+                            });
+                            continue;
+                        }
+                        Ok(None) => {}
+                        Err(crate::production_primitive_from_v1::PrimitiveFromErrorV1::Work {
+                            source,
+                            ..
+                        }) => return Err(source),
+                        Err(error) => {
+                            remember_rejection(&mut first_rejection, error.to_string(), site);
                             continue;
                         }
                     }
@@ -3758,6 +3802,14 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
                 section.field(&rustc_fn_signature_sha256_v1(tcx, signature))?;
                 section.field(&rustc_fn_abi_sha256_v1(tcx, shift.abi()))?;
             }
+            NormalizedCallV1::CheckedPrimitiveFrom(checked) => {
+                section.field(b"fe2o3/checked-primitive-from/recipe/v1")?;
+                section.field(rustc_type_identity_v1(tcx, checked.input_type()).as_bytes())?;
+                let signature = source_signature_v1(tcx, recipe.instance)
+                    .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+                section.field(&rustc_fn_signature_sha256_v1(tcx, signature))?;
+                section.field(&rustc_fn_abi_sha256_v1(tcx, checked.abi()))?;
+            }
         }
         section.field(rustc_type_identity_v1(tcx, recipe.element_type).as_bytes())?;
         section.field(recipe.identities.function().as_bytes())?;
@@ -3804,6 +3856,9 @@ fn normalized_intrinsic_definition_sha256_v1<'tcx>(
         }
         NormalizedCallV1::SafeCoreShift(shift) => {
             borrowed_rustc_mir_body_sha256_v1(tcx, recipe.instance, shift.body())
+        }
+        NormalizedCallV1::CheckedPrimitiveFrom(checked) => {
+            borrowed_rustc_mir_body_sha256_v1(tcx, recipe.instance, checked.body())
         }
     }
 }

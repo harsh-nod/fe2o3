@@ -246,16 +246,28 @@ pub(crate) fn execute_compact_operation_v1(
     match operation {
         SoftFloatOperationV1::Convert(kind) => {
             require_arity(operands, 1)?;
-            let to = match kind {
-                FloatConversionKind::F16ToF32 | FloatConversionKind::Bf16ToF32 => ScalarType::F32,
-                FloatConversionKind::F32ToF16RoundTiesEven => ScalarType::F16,
-                FloatConversionKind::F32ToBf16RoundTiesEven => ScalarType::Bf16,
+            let (from, to) = match kind {
+                FloatConversionKind::F16ToF32 => (ScalarType::F16, ScalarType::F32),
+                FloatConversionKind::Bf16ToF32 => (ScalarType::Bf16, ScalarType::F32),
+                FloatConversionKind::F32ToF16RoundTiesEven => (ScalarType::F32, ScalarType::F16),
+                FloatConversionKind::F32ToBf16RoundTiesEven => (ScalarType::F32, ScalarType::Bf16),
             };
-            scalar(
-                to,
-                convert_float_bits(operands[0].ty(), operands[0].bits(), to)?,
-                target,
-            )
+            if operands[0].ty() != from {
+                return Err(SoftFloatErrorV1::InternalInvariant(
+                    "float conversion operand does not match its kind",
+                ));
+            }
+            let input = operands[0].bits();
+            // Canonical half widening preserves the device API's raw NaN bits;
+            // generic numeric casts deliberately retain APFloat's NaN quieting.
+            let bits = match kind {
+                FloatConversionKind::Bf16ToF32 => input << 16,
+                FloatConversionKind::F16ToF32 if input & 0x7c00 == 0x7c00 => {
+                    ((input & 0x8000) << 16) | 0x7f80_0000 | ((input & 0x03ff) << 13)
+                }
+                _ => convert_float_bits(from, input, to)?,
+            };
+            scalar(to, bits, target)
         }
         SoftFloatOperationV1::WidenedBinary(format, op) => {
             require_arity(operands, 2)?;
@@ -1392,6 +1404,238 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn canonical_half_widening_preserves_every_encoding() {
+        fn f16_expected(bits: u16) -> u32 {
+            let sign = u32::from(bits & 0x8000) << 16;
+            let exponent = (bits >> 10) & 0x1f;
+            let fraction = bits & 0x03ff;
+            if exponent == 31 {
+                return sign | 0x7f80_0000 | (u32::from(fraction) << 13);
+            }
+            // All finite binary16 values are exact normal binary32 values (or zero).
+            // Use their dyadic value, independently of APFloat's conversion algorithm.
+            let (significand, power) = if exponent == 0 {
+                (fraction, -24)
+            } else {
+                (1024 + fraction, i32::from(exponent) - 25)
+            };
+            let scale = f32::from_bits(u32::try_from(power + 127).unwrap() << 23);
+            sign | (f32::from(significand) * scale).to_bits()
+        }
+
+        for width in [crate::IndexWidthV1::Bits32, crate::IndexWidthV1::Bits64] {
+            let target = SimulationTargetV1::little_endian(width);
+            for (ty, name) in [
+                (ScalarType::F16, "__fe2o3_ir_float_v1_f16_to_f32"),
+                (ScalarType::Bf16, "__fe2o3_ir_float_v1_bf16_to_f32"),
+            ] {
+                let operation = operation(name);
+                let compact = operation_for_call_v1(&FunctionId::new(name), &[ValueId(0)]).unwrap();
+                for bits in 0..=u16::MAX {
+                    let input = ScalarBitsV1::new(ty, u128::from(bits), target).unwrap();
+                    let expected = if ty == ScalarType::F16 {
+                        f16_expected(bits)
+                    } else {
+                        u32::from(bits) << 16
+                    };
+                    let expected =
+                        ScalarBitsV1::new(ScalarType::F32, u128::from(expected), target).unwrap();
+                    assert_eq!(
+                        execute_operation_v1(&operation, &[input], target),
+                        Ok(expected),
+                        "{width:?} {ty:?} {bits:#06x} structured"
+                    );
+                    assert_eq!(
+                        execute_compact_operation_v1(compact, &[input], target),
+                        Ok(expected),
+                        "{width:?} {ty:?} {bits:#06x} compact"
+                    );
+                }
+                assert_eq!(
+                    ScalarBitsV1::new(ty, 0x1_0000, target),
+                    Err(crate::ScalarBitsErrorV1::OutOfRange { ty, bits: 0x1_0000 })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_conversions_require_exact_kind_types_and_arity() {
+        let scalar_types = [
+            ScalarType::Bool,
+            ScalarType::I8,
+            ScalarType::I16,
+            ScalarType::I32,
+            ScalarType::I64,
+            ScalarType::I128,
+            ScalarType::U8,
+            ScalarType::U16,
+            ScalarType::U32,
+            ScalarType::U64,
+            ScalarType::U128,
+            ScalarType::Index,
+            ScalarType::F16,
+            ScalarType::Bf16,
+            ScalarType::F32,
+            ScalarType::F64,
+        ];
+        for width in [crate::IndexWidthV1::Bits32, crate::IndexWidthV1::Bits64] {
+            let target = SimulationTargetV1::little_endian(width);
+            for (name, from, to) in [
+                (
+                    "__fe2o3_ir_float_v1_f16_to_f32",
+                    ScalarType::F16,
+                    ScalarType::F32,
+                ),
+                (
+                    "__fe2o3_ir_float_v1_bf16_to_f32",
+                    ScalarType::Bf16,
+                    ScalarType::F32,
+                ),
+                (
+                    "__fe2o3_ir_float_v1_f32_to_f16_rne",
+                    ScalarType::F32,
+                    ScalarType::F16,
+                ),
+                (
+                    "__fe2o3_ir_float_v1_f32_to_bf16_rne",
+                    ScalarType::F32,
+                    ScalarType::Bf16,
+                ),
+            ] {
+                let operation = operation(name);
+                let compact = operation_for_call_v1(&FunctionId::new(name), &[ValueId(0)]).unwrap();
+                for ty in scalar_types {
+                    let input = ScalarBitsV1::new(ty, 0, target).unwrap();
+                    let expected = if ty == from {
+                        Ok(ScalarBitsV1::new(to, 0, target).unwrap())
+                    } else {
+                        Err(SoftFloatErrorV1::InternalInvariant(
+                            "float conversion operand does not match its kind",
+                        ))
+                    };
+                    assert_eq!(
+                        execute_operation_v1(&operation, &[input], target),
+                        expected,
+                        "{width:?} {name} {ty:?} structured"
+                    );
+                    assert_eq!(
+                        execute_compact_operation_v1(compact, &[input], target),
+                        expected,
+                        "{width:?} {name} {ty:?} compact"
+                    );
+                }
+                let wrong = ScalarBitsV1::boolean(false);
+                for operands in [&[][..], &[wrong, wrong][..]] {
+                    let expected = Err(SoftFloatErrorV1::InternalInvariant(
+                        "software-float operation arity",
+                    ));
+                    assert_eq!(execute_operation_v1(&operation, operands, target), expected);
+                    assert_eq!(
+                        execute_compact_operation_v1(compact, operands, target),
+                        expected
+                    );
+                }
+                for arguments in [&[][..], &[ValueId(0), ValueId(1)][..]] {
+                    assert_eq!(
+                        operation_for_call_v1(&FunctionId::new(name), arguments),
+                        None
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_narrowing_retains_rounding_and_nan_quieting() {
+        for (name, ty, cases) in [
+            (
+                "__fe2o3_ir_float_v1_f32_to_f16_rne",
+                ScalarType::F16,
+                [
+                    (0x3f80_1000, 0x3c00),
+                    (0x3f80_3000, 0x3c02),
+                    (0x7f80_0001, 0x7e00),
+                ],
+            ),
+            (
+                "__fe2o3_ir_float_v1_f32_to_bf16_rne",
+                ScalarType::Bf16,
+                [
+                    (0x3f80_8000, 0x3f80),
+                    (0x3f81_8000, 0x3f82),
+                    (0x7f80_0001, 0x7fc0),
+                ],
+            ),
+        ] {
+            let operation = operation(name);
+            let compact = operation_for_call_v1(&FunctionId::new(name), &[ValueId(0)]).unwrap();
+            for (input, expected) in cases {
+                for sign in [0, 0x8000] {
+                    let input = value(ScalarType::F32, input | (sign << 16));
+                    let expected = value(ty, expected | sign);
+                    assert_eq!(
+                        execute_operation_v1(&operation, &[input], TARGET),
+                        Ok(expected)
+                    );
+                    assert_eq!(
+                        execute_compact_operation_v1(compact, &[input], TARGET),
+                        Ok(expected)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_widening_keeps_signaling_nans_distinct_from_numeric_casts() {
+        for (ty, name, input, exact, numeric) in [
+            (
+                ScalarType::F16,
+                "__fe2o3_ir_float_v1_f16_to_f32",
+                0x7c01,
+                0x7f80_2000,
+                0x7fc0_2000,
+            ),
+            (
+                ScalarType::F16,
+                "__fe2o3_ir_float_v1_f16_to_f32",
+                0xfc01,
+                0xff80_2000,
+                0xffc0_2000,
+            ),
+            (
+                ScalarType::Bf16,
+                "__fe2o3_ir_float_v1_bf16_to_f32",
+                0x7f82,
+                0x7f82_0000,
+                0x7fc2_0000,
+            ),
+            (
+                ScalarType::Bf16,
+                "__fe2o3_ir_float_v1_bf16_to_f32",
+                0xff82,
+                0xff82_0000,
+                0xffc2_0000,
+            ),
+        ] {
+            let input = value(ty, input);
+            assert_eq!(
+                execute_operation_v1(&operation(name), &[input], TARGET)
+                    .unwrap()
+                    .bits(),
+                exact
+            );
+            assert_eq!(
+                execute_cast_v1(CastKind::FloatExtend, input, ScalarType::F32, TARGET)
+                    .unwrap()
+                    .bits(),
+                numeric
+            );
         }
     }
 

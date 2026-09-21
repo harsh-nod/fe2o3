@@ -5,6 +5,9 @@ use crate::{
     ProductionPrivateCellPromotionContinuationErrorV1 as PromotionError,
 };
 
+#[path = "production_checked_output_loop_preheaders_direct_v1_tests.rs"]
+mod loop_preheader_tests;
+
 #[test]
 fn private_cell_direct_checked_metadata_scope_preserves_reports_resources_and_borrowed_cleanup() {
     for profile in [Profile::Gfx942, Profile::Gfx950] {
@@ -12,8 +15,12 @@ fn private_cell_direct_checked_metadata_scope_preserves_reports_resources_and_bo
         let sibling = vec![0xa5_u8; 113];
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
-        budget.reserve_storage(inherited + sibling.capacity()).unwrap();
-        let (owner, added) = prefix.continue_private_cell_promotion_v1(&mut budget).unwrap();
+        budget
+            .reserve_storage(inherited + sibling.capacity())
+            .unwrap();
+        let (owner, added) = prefix
+            .continue_private_cell_promotion_v1(&mut budget)
+            .unwrap();
         budget.reserve_storage(added.retained_storage()).unwrap();
         owner.exercise_checked_promoted_sites_scope_v1(budget.storage(), &sibling);
         owner.verify_equivalence(&mut budget).unwrap();
@@ -25,7 +32,9 @@ fn prefix8(profile: Profile, trap: bool) -> (Prefix8, usize) {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     budget.reserve_storage(inherited).unwrap();
-    let (prefix, added) = prefix.continue_commutative_bitwise_cse_v1(&mut budget).unwrap();
+    let (prefix, added) = prefix
+        .continue_commutative_bitwise_cse_v1(&mut budget)
+        .unwrap();
     (prefix, inherited + added.retained_storage())
 }
 
@@ -40,25 +49,40 @@ fn noop_prefix8(profile: Profile) -> (Prefix8, usize) {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-        ssa, launch, ProductionSemanticKirLimitsV1::default(), &mut budget,
-    ).unwrap();
+        ssa,
+        launch,
+        ProductionSemanticKirLimitsV1::default(),
+        &mut budget,
+    )
+    .unwrap();
     let input = fixture6_from_source(profile, source);
     let inherited = input.floor;
     let prefix = admit6(input, WORK, STORAGE).0.unwrap();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     budget.reserve_storage(inherited).unwrap();
-    let (prefix, seven) = prefix.continue_redundant_private_stores_v1(&mut budget).unwrap();
+    let (prefix, seven) = prefix
+        .continue_redundant_private_stores_v1(&mut budget)
+        .unwrap();
     budget.reserve_storage(seven.retained_storage()).unwrap();
-    let (prefix, eight) = prefix.continue_commutative_bitwise_cse_v1(&mut budget).unwrap();
-    (prefix, inherited + seven.retained_storage() + eight.retained_storage())
+    let (prefix, eight) = prefix
+        .continue_commutative_bitwise_cse_v1(&mut budget)
+        .unwrap();
+    (
+        prefix,
+        inherited + seven.retained_storage() + eight.retained_storage(),
+    )
 }
 
 fn trap_count(module: &Module) -> usize {
-    operations(module).filter(|op| matches!(&op.kind,
+    operations(module)
+        .filter(|op| {
+            matches!(&op.kind,
         OperationKind::Call { callee, arguments } if matches!(
             fe2o3_kernel_ir::AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
-            Some(fe2o3_kernel_ir::AmdGpuDiagnosticOperation::Trap)))).count()
+            Some(fe2o3_kernel_ir::AmdGpuDiagnosticOperation::Trap)))
+        })
+        .count()
 }
 
 #[test]
@@ -68,8 +92,15 @@ fn private_cell_direct_removes_real_cells_and_preserves_source_p8_and_traps_both
         for trap in [false, true] {
             let (prefix, inherited) = prefix8(profile, trap);
             let p8_bytes = prefix.output().canonical().canonical_bytes().as_ptr();
-            let n_bytes = prefix.prefix().prefix().source_semantic_kir()
-                .pre_ranked_executable().unwrap().canonical().canonical_bytes().as_ptr();
+            let n_bytes = prefix
+                .prefix()
+                .prefix()
+                .source_semantic_kir()
+                .pre_ranked_executable()
+                .unwrap()
+                .canonical()
+                .canonical_bytes()
+                .as_ptr();
             let before_counts = private_counts(prefix.output().module());
             let before_traps = trap_count(prefix.output().module());
             assert!(before_counts.0 > 0 && before_counts.1 > 0);
@@ -80,14 +111,41 @@ fn private_cell_direct_removes_real_cells_and_preserves_source_p8_and_traps_both
             let floor = inherited + 137;
             budget.reserve_storage(floor).unwrap();
             let ledger = budget.work_ledger_identity_v1();
-            let (owner, added) = prefix.continue_private_cell_promotion_v1(&mut budget).unwrap();
+            let (owner, added) = prefix
+                .continue_private_cell_promotion_v1(&mut budget)
+                .unwrap();
             assert_eq!(budget.storage(), floor);
-            assert_eq!(added.retained_storage(), owner.additional_retained_storage_v1());
+            assert_eq!(
+                added.retained_storage(),
+                owner.additional_retained_storage_v1()
+            );
             budget.reserve_storage(added.retained_storage()).unwrap();
-            assert_eq!(owner.retained_input_storage_floor_v1().unwrap(), minimum + added.retained_storage());
-            assert_eq!(p8_bytes, owner.prefix().output().canonical().canonical_bytes().as_ptr());
-            assert_eq!(n_bytes, owner.prefix().prefix().prefix().source_semantic_kir()
-                .pre_ranked_executable().unwrap().canonical().canonical_bytes().as_ptr());
+            assert_eq!(
+                owner.retained_input_storage_floor_v1().unwrap(),
+                minimum + added.retained_storage()
+            );
+            assert_eq!(
+                p8_bytes,
+                owner
+                    .prefix()
+                    .output()
+                    .canonical()
+                    .canonical_bytes()
+                    .as_ptr()
+            );
+            assert_eq!(
+                n_bytes,
+                owner
+                    .prefix()
+                    .prefix()
+                    .prefix()
+                    .source_semantic_kir()
+                    .pre_ranked_executable()
+                    .unwrap()
+                    .canonical()
+                    .canonical_bytes()
+                    .as_ptr()
+            );
             assert!(!owner.continuation().selected_allocations().is_empty());
             let after_counts = private_counts(owner.output().module());
             assert!(after_counts.0 < before_counts.0 && after_counts.1 < before_counts.1);
@@ -95,17 +153,31 @@ fn private_cell_direct_removes_real_cells_and_preserves_source_p8_and_traps_both
             assert_eq!(owner.kernels().len(), owner.output().module().kernels.len());
             assert!(!owner.grants_artifact_or_launch_authority());
             let (before, storage) = fe2o3_kernel_analysis::CanonicalKirInventoryV1::derive(
-                owner.prefix().output(), &mut budget,
-            ).unwrap();
+                owner.prefix().output(),
+                &mut budget,
+            )
+            .unwrap();
             budget.reserve_storage(storage.retained_storage()).unwrap();
-            let (after, storage) = fe2o3_kernel_analysis::CanonicalKirInventoryV1::derive(
-                owner.output(), &mut budget,
-            ).unwrap();
+            let (after, storage) =
+                fe2o3_kernel_analysis::CanonicalKirInventoryV1::derive(owner.output(), &mut budget)
+                    .unwrap();
             budget.reserve_storage(storage.retained_storage()).unwrap();
-            assert_eq!(owner.continuation().origins().len(), after.operations().len());
-            for (origin, output) in owner.continuation().origins().iter().zip(after.operations()) {
+            assert_eq!(
+                owner.continuation().origins().len(),
+                after.operations().len()
+            );
+            for (origin, output) in owner
+                .continuation()
+                .origins()
+                .iter()
+                .zip(after.operations())
+            {
                 assert_eq!(origin.output, output.coordinate);
-                let input = before.operations().iter().find(|op| op.coordinate == origin.input).unwrap();
+                let input = before
+                    .operations()
+                    .iter()
+                    .find(|op| op.coordinate == origin.input)
+                    .unwrap();
                 match origin.kind {
                     Origin::Retained => assert_eq!(input.operation, output.operation),
                     Origin::LoadCopy { stored_value, .. } => {
@@ -131,13 +203,21 @@ fn private_cell_direct_noop_still_owns_fresh_output_and_complete_origins_both_pr
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
         budget.reserve_storage(inherited).unwrap();
-        let (owner, added) = prefix.continue_private_cell_promotion_v1(&mut budget).unwrap();
+        let (owner, added) = prefix
+            .continue_private_cell_promotion_v1(&mut budget)
+            .unwrap();
         assert_eq!(budget.storage(), inherited);
         budget.reserve_storage(added.retained_storage()).unwrap();
         assert!(owner.continuation().selected_allocations().is_empty());
-        assert_eq!(owner.output().canonical().canonical_bytes(), owner.prefix().output().canonical().canonical_bytes());
+        assert_eq!(
+            owner.output().canonical().canonical_bytes(),
+            owner.prefix().output().canonical().canonical_bytes()
+        );
         assert!(!std::ptr::eq(owner.output(), owner.prefix().output()));
-        assert_eq!(owner.continuation().origins().len(), operations(owner.output().module()).count());
+        assert_eq!(
+            owner.continuation().origins().len(),
+            operations(owner.output().module()).count()
+        );
         owner.verify_equivalence(&mut budget).unwrap();
     }
 }
@@ -179,7 +259,9 @@ fn private_cell_direct_exact_one_short_and_zero_limits_cover_construction_and_re
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     budget.reserve_storage(inherited).unwrap();
-    let (owner, added) = prefix.continue_private_cell_promotion_v1(&mut budget).unwrap();
+    let (owner, added) = prefix
+        .continue_private_cell_promotion_v1(&mut budget)
+        .unwrap();
     let floor = inherited + added.retained_storage() + 43;
     let replay = |work_limit, storage_limit| {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
@@ -203,8 +285,10 @@ fn private_cell_direct_underpaid_prefix_fails_before_work_and_foreign_tail_canno
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     budget.reserve_storage(minimum - 1).unwrap();
-    assert!(matches!(prefix.continue_private_cell_promotion_v1(&mut budget),
-        Err(PromotionError::Resource(AssertOriginResourceV1::Accounting))));
+    assert!(matches!(
+        prefix.continue_private_cell_promotion_v1(&mut budget),
+        Err(PromotionError::Resource(AssertOriginResourceV1::Accounting))
+    ));
     assert_eq!((budget.storage(), budget.work()), (minimum - 1, 0));
 
     let (prefix, inherited) = prefix8(Profile::Gfx942, false);
@@ -212,7 +296,9 @@ fn private_cell_direct_underpaid_prefix_fails_before_work_and_foreign_tail_canno
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     budget.reserve_storage(inherited + foreign_floor).unwrap();
-    let (mut owner, added) = prefix.continue_private_cell_promotion_v1(&mut budget).unwrap();
+    let (mut owner, added) = prefix
+        .continue_private_cell_promotion_v1(&mut budget)
+        .unwrap();
     budget.reserve_storage(added.retained_storage()).unwrap();
     owner.exercise_private_cell_foreign_tail_refusal_v1(&foreign, &mut budget);
 }

@@ -776,6 +776,14 @@ impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_
         ) {
             return Ok(());
         }
+        if matches!(
+            induction.preheader_control,
+            ProjectedInductionPreheaderControlV1::Multiple(_)
+        ) {
+            return Err(mismatch(
+                "guarded U32 progress requires its historical single-entry source certificate",
+            ));
+        }
         let ProjectedSourceInductionUpdateV1::Checked {
             producer_block,
             producer_statement,
@@ -870,7 +878,7 @@ impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_
             || certificate.induction().ty() != progress.induction_type
             || certificate.header().block().index() as usize != induction.header
             || certificate.guard().statement() as usize != progress.header_statement
-            || certificate.preheader().block().index() as usize != induction.preheader
+            || certificate.preheader().block().index() as usize != induction.initializer_block
             || certificate.body_entry().block().index() as usize != induction.body_entry
             || certificate.exit().block().index() as usize != induction.exit
             || certificate.update().block().block().index() as usize != induction.latch

@@ -2,6 +2,15 @@
 mod progress_scoped_resource_v67_tests {
     use super::*;
 
+    fn entry_headers() -> usize {
+        use std::mem::size_of;
+        (size_of::<Option<pliron::value::Value>>()
+            + size_of::<Option<usize>>()
+            + size_of::<pliron::value::Value>()
+            + 2 * size_of::<pliron::r#type::TypeHandle>())
+        .div_ceil(size_of::<usize>())
+    }
+
     #[test]
     fn scoped_progress_has_literal_work_and_peak_boundaries() {
         let cases = [
@@ -30,11 +39,11 @@ mod progress_scoped_resource_v67_tests {
                     successors: 3,
                     ..ProductionAnalysisInputCensusV1::default()
                 },
-                3_289,
+                5_017,
                 5_586,
-                5_725,
-                3_301,
-                5_722,
+                5_725 + entry_headers(),
+                5_029,
+                5_722 + entry_headers(),
             ),
         ];
         for (census, work, retained, peak, old_work, old_peak) in cases {
@@ -86,8 +95,8 @@ mod progress_scoped_resource_v67_tests {
         assert!(size_of::<Vec<Value>>() <= 3 * size_of::<usize>());
         assert!(size_of::<Option<Vec<Value>>>() <= 3 * size_of::<usize>());
         for (operands, block_arguments, base_work, base_peak, work, peak) in [
-            (4, 2, 313, 5_706, 3_289, 5_725),
-            (0, 0, 243, 5_684, 2_163, 5_687),
+            (4, 2, 313, 5_706, 5_017, 5_725 + entry_headers()),
+            (0, 0, 243, 5_684, 2_739, 5_687 + entry_headers()),
         ] {
             let census = ProductionAnalysisInputCensusV1 {
                 blocks: 2,
@@ -108,11 +117,13 @@ mod progress_scoped_resource_v67_tests {
             .unwrap();
             assert_eq!(
                 bound.work_upper_bound(),
-                base_work + 24 * (8 + 24 * 3 + 11 * operands)
+                base_work
+                    + 24 * (8 + 24 * 3 + 11 * operands)
+                    + 12 * (48 + (16 + 4 * block_arguments) * operands)
             );
             assert_eq!(
                 bound.peak_storage_upper_bound(),
-                base_peak + 3 + 4 * operands
+                base_peak + 3 + 4 * operands + entry_headers()
             );
             for (limits, resource) in [
                 (

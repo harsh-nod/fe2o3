@@ -370,6 +370,20 @@ mod tests;
 #[path = "production_checked_output_private_cell_v1.rs"]
 mod private_cell;
 pub use private_cell::{
+    ProductionLicmErrorV1, ProductionLicmStorageV1, ProductionOwnedLicmContinuationV1,
+    ProductionOwnedUnitLocalLicmContinuationV1,
+};
+pub use private_cell::{
+    ProductionLoopInductionQueryErrorV1, ProductionLoopInductionQueryStorageV1,
+    ProductionLoopInductionQueryV1,
+};
+pub use private_cell::{
+    ProductionLoopPreheaderIncomingOriginV1, ProductionLoopPreheaderOriginV1,
+    ProductionLoopPreheaderParameterOriginV1, ProductionLoopPreheadersErrorV1,
+    ProductionLoopPreheadersStorageV1, ProductionOwnedLoopPreheadersContinuationV1,
+    ProductionOwnedUnitLocalLoopPreheadersContinuationV1,
+};
+pub use private_cell::{
     ProductionOwnedPrivateCellPromotionContinuationV1,
     ProductionOwnedUnitLocalPrivateCellPromotionContinuationV1,
     ProductionPrivateCellPromotionContinuationErrorV1,

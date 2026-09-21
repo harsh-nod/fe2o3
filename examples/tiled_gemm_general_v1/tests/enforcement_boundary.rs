@@ -79,7 +79,7 @@ fn all_fifteen_categories_have_one_stable_honest_owner() {
 
 #[test]
 fn rust_ui_cases_exist_but_do_not_replace_semantic_verification() {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("device-api");
     let mut typestate = 0;
     let mut hybrid = 0;
     let mut verifier = 0;

@@ -820,7 +820,7 @@ enum SemanticValueBindingV1 {
 
 fn project_enum_payload_field(
     selected_variant: u32,
-    payloads: &BTreeMap<u32, Vec<SemanticValueBindingV1>>,
+    mut payloads: BTreeMap<u32, Vec<SemanticValueBindingV1>>,
     field: u32,
 ) -> Result<SemanticValueBindingV1, &'static str> {
     if payloads
@@ -830,13 +830,13 @@ fn project_enum_payload_field(
     {
         return Err("execution bindings cannot be restored from enum payloads");
     }
-    let Some(fields) = payloads.get(&selected_variant) else {
+    let Some(mut fields) = payloads.remove(&selected_variant) else {
         return Ok(SemanticValueBindingV1::Unmaterialized);
     };
-    fields
-        .get(field as usize)
-        .cloned()
-        .ok_or("enum payload field is unavailable in this block")
+    if field as usize >= fields.len() {
+        return Err("enum payload field is unavailable in this block");
+    }
+    Ok(fields.swap_remove(field as usize))
 }
 
 fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {

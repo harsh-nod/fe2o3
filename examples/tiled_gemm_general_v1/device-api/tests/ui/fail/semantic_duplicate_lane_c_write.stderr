@@ -9,7 +9,7 @@ error[E0382]: use of moved value: `wave`
   |     ^^^^ value used here after move
   |
 note: `Gfx942TiledGemmWave64V1::<GemmReady>::store_c_fragment` takes ownership of the receiver `self`, which moves `wave`
- --> device-api/src/lib.rs
+ --> src/lib.rs
   |
   |         self,
   |         ^^^^

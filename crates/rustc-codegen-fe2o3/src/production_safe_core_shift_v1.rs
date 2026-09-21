@@ -190,6 +190,7 @@ impl<'tcx> SafeCoreShiftV1<'tcx> {
 pub(crate) enum NormalizedCallV1<'tcx> {
     Rustc(ProductionRustcIntrinsicOperationV1),
     SafeCoreShift(SafeCoreShiftV1<'tcx>),
+    CheckedPrimitiveFrom(crate::production_primitive_from_v1::CheckedPrimitiveFromV1<'tcx>),
 }
 
 impl NormalizedCallV1<'_> {
@@ -197,6 +198,7 @@ impl NormalizedCallV1<'_> {
         match self {
             Self::Rustc(_) => 1,
             Self::SafeCoreShift(_) => 3,
+            Self::CheckedPrimitiveFrom(_) => 1,
         }
     }
 
@@ -207,6 +209,7 @@ impl NormalizedCallV1<'_> {
                 DirectionV1::Left => 4,
                 DirectionV1::Right => 5,
             },
+            Self::CheckedPrimitiveFrom(_) => 7,
         }
     }
 }

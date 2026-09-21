@@ -57,6 +57,9 @@ use function_commitments_v29::{
     PendingFunctionCommitmentsV29, charge_construction_total_v1, construction_resource_error_v1,
 };
 use receiver_materialization_v1::{ReceiverLocalV1, ReceiverMaterializationV1};
+mod primitive_from_materialization_v1;
+#[cfg(test)]
+pub(crate) mod primitive_from_stage_tests;
 mod wrapping_materialization_v1;
 use wrapping_materialization_v1::WrappingMaterializationV1;
 
@@ -1286,6 +1289,16 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     binding.terminator_source,
                     &mut statements,
                 )?
+            } else if normalized_call.is_some_and(|call| {
+                matches!(call.operation, NormalizedCallV1::CheckedPrimitiveFrom(_))
+            }) {
+                let (statement, terminator) =
+                    self.construct_primitive_from(raw_block, &terminator.kind)?;
+                statements.push(SemanticStatementV1::new(
+                    binding.terminator_source,
+                    statement,
+                ));
+                terminator
             } else if normalized_call.is_some() {
                 let (statement, terminator) =
                     self.construct_normalized_intrinsic(raw_block, &terminator.kind)?;

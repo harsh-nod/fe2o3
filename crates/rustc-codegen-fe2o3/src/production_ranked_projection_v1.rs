@@ -24,6 +24,7 @@ pub(crate) mod conditional_bound_observation_v1_tests;
 pub(crate) mod conditional_output_observation_v1_tests;
 mod gfx942_inline_value_projection_v30;
 mod materialized_callable_effect_v1;
+mod multi_entry_induction_v1;
 mod ranked_projection_source_v1;
 mod saturating_integer_expression_v2;
 mod scalar_borrow_projection_v1;
@@ -38,9 +39,10 @@ pub(crate) use tests::{
     with_backend_checked_output_policy5_owned_v1, with_backend_checked_output_policy6_owned_v1,
     with_backend_checked_output_policy6_roster_v1, with_backend_erased_bound_v1,
     with_backend_erased_output_policy5_owned_v1, with_backend_erased_output_policy6_owned_v1,
-    with_backend_erased_roster_v1, with_backend_policy7_direct_prefix_v1,
-    with_backend_policy7_erased_prefix_v1, with_backend_policy8_direct_prefix_v1,
-    with_backend_policy8_erased_prefix_v1,
+    with_backend_erased_roster_v1, with_backend_licm_direct_prefix_v1,
+    with_backend_licm_erased_prefix_v1, with_backend_loop_preheaders_direct_prefix_v1,
+    with_backend_policy7_direct_prefix_v1, with_backend_policy7_erased_prefix_v1,
+    with_backend_policy8_direct_prefix_v1, with_backend_policy8_erased_prefix_v1,
 };
 
 use analysis_multi_split_v1::{
@@ -397,9 +399,10 @@ enum DeterministicScalarDefinitionV1 {
     Call { block: usize },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
 struct ProjectedUniformInductionV1 {
-    preheader: usize,
+    initializer_block: usize,
     preheader_control: ProjectedInductionPreheaderControlV1,
     header: usize,
     body_entry: usize,
@@ -416,7 +419,8 @@ struct ProjectedUniformInductionV1 {
 
 include!("production_ranked_projection_v1/induction_body_predicate_v1.rs");
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
 enum ProjectedInductionPreheaderControlV1 {
     Direct,
     Optional {
@@ -425,6 +429,7 @@ enum ProjectedInductionPreheaderControlV1 {
         explicit_target: usize,
         otherwise: usize,
     },
+    Multiple(Box<multi_entry_induction_v1::Entries>),
 }
 
 impl ProjectedUniformInductionV1 {
@@ -3314,6 +3319,35 @@ fn project_and_verify_ranked_root_with_singletons_v1(
     singletons: &[u8],
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    multi_entry_induction_v1::with_scope(assertion_facts, |scope, facts| {
+        project_and_verify_ranked_root_with_induction_scope_v1(
+            semantic,
+            callable_effects,
+            selection,
+            input,
+            source_root,
+            reference_bindings,
+            facts,
+            singletons,
+            borrows,
+            scope,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_and_verify_ranked_root_with_induction_scope_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    singletons: &[u8],
+    borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
+    induction_scope: &mut multi_entry_induction_v1::Scope,
+) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let logical_name = input.logical_name.as_str();
     let source_launch = &input.source_launch;
     let semantic_u32_induction =
@@ -3402,17 +3436,23 @@ fn project_and_verify_ranked_root_with_singletons_v1(
         )
     })?;
     projected_views.charge_private_array_work(extent_work)?;
-    let intrinsic = project_intrinsic_contracts(
-        semantic.callables(),
-        callable_effects,
-        semantic.types(),
-        function,
-        bounded_linear_launch_extent_v1(source_launch),
-        &constants,
-        &mut entry_operations,
-        &mut next_value,
-        &mut discarded_ir,
-    )?;
+    let intrinsic = projected_views.with_assertion_facts_v1(|facts| {
+        project_intrinsic_contracts_with_multi_entry_v1(
+            semantic.callables(),
+            callable_effects,
+            semantic.types(),
+            function,
+            bounded_linear_launch_extent_v1(source_launch),
+            &constants,
+            &mut entry_operations,
+            &mut next_value,
+            &mut discarded_ir,
+            Some(&mut multi_entry_induction_v1::Context {
+                scope: induction_scope,
+                facts,
+            }),
+        )
+    })?;
     let bounds_checks = project_rust_bounds_checks_with_ordinary_v1(
         semantic.types(),
         function,
@@ -3712,6 +3752,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
         entry_operations,
         projected_blocks,
         assertion_facts,
+        Some(induction_scope),
     )?;
     let (reference_writes, helper_expression_storage) = if reference_bindings.as_slice().is_empty()
     {
@@ -7867,16 +7908,21 @@ fn project_generated_terminator_effects_v1(
     Ok(projected)
 }
 
-fn project_intrinsic_contracts(
+#[cfg(test)]
+include!("production_ranked_projection_v1/multi_entry_legacy_wrappers_v1_tests.rs");
+
+#[allow(clippy::too_many_arguments)]
+fn project_intrinsic_contracts_with_multi_entry_v1(
     callables: &[SemanticCallableDeclV1],
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
-    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     linear_launch_upper_bound: Option<u64>,
     constants: &[Option<u64>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
     ranked_ir: &mut String,
+    mut multi: Option<&mut multi_entry_induction_v1::Context<'_, '_>>,
 ) -> Result<IntrinsicProjectionV1, ProductionRankedProjectionErrorV1> {
     reject_retired_production_intrinsics_v1(callables)?;
     let local_count = function.locals().len();
@@ -9594,7 +9640,7 @@ fn project_intrinsic_contracts(
             )?;
         }
     }
-    let mut uniform_inductions = project_uniform_inductions_v1(
+    let mut uniform_inductions = project_uniform_inductions_with_multi_entry_v1(
         callables,
         types,
         function,
@@ -9605,8 +9651,9 @@ fn project_intrinsic_contracts(
         &mut next_runtime_argument,
         operations,
         next_value,
+        multi.as_deref_mut(),
     )?;
-    reconcile_source_progress_and_emit_unsigned_casts_v1(
+    reconcile_source_progress_with_multi_entry_v1(
         types,
         function,
         constants,
@@ -9616,6 +9663,7 @@ fn project_intrinsic_contracts(
         &mut uniform_inductions,
         operations,
         next_value,
+        multi,
     )?;
     project_induction_body_predicates_v1(
         types,
@@ -12026,7 +12074,11 @@ fn bind_optional_induction_preheaders_v1(
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     let mut special_roles = HashSet::new();
     for induction in inductions {
-        for block in [induction.preheader, induction.header, induction.latch] {
+        for block in [
+            induction.initializer_block,
+            induction.header,
+            induction.latch,
+        ] {
             if !special_roles.insert(block) {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "uniform inductions have ambiguous preheader, header, or latch ownership",
@@ -12042,7 +12094,7 @@ fn bind_optional_induction_preheaders_v1(
         else {
             continue;
         };
-        let raw = function.blocks().get(induction.preheader).ok_or(
+        let raw = function.blocks().get(induction.initializer_block).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
                 "an optional uniform induction preheader is outside the semantic CFG",
             ),
@@ -12082,7 +12134,7 @@ fn bind_optional_induction_preheaders_v1(
             ));
         }
         let projected = deterministic_switches
-            .get(induction.preheader)
+            .get(induction.initializer_block)
             .and_then(Option::as_ref)
             .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                 "an optional uniform induction preheader lacks one exact deterministic switch",
@@ -12145,9 +12197,39 @@ fn source_induction_update_v1<'a>(
     Option<(ProjectedSourceInductionUpdateV1, &'a SemanticOperandV1)>,
     ProductionRankedProjectionErrorV1,
 > {
+    source_induction_update_parts_v1(
+        function,
+        graph,
+        assertion_proofs,
+        topology.latch,
+        &topology.loop_blocks,
+        induction,
+        latch_statement,
+        local_definitions,
+        assignment_sites,
+        alias_work,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn source_induction_update_parts_v1<'a>(
+    function: &'a SemanticFunctionDeclV1,
+    graph: &ProjectedLoopCfgV1,
+    assertion_proofs: &mut SemanticAssertProofsV1<'_>,
+    latch_block: usize,
+    loop_blocks: &[usize],
+    induction: SemanticLocalIdV1,
+    latch_statement: usize,
+    local_definitions: &[u8],
+    assignment_sites: &[Option<ScalarAssignmentSiteV1>],
+    alias_work: &mut usize,
+) -> Result<
+    Option<(ProjectedSourceInductionUpdateV1, &'a SemanticOperandV1)>,
+    ProductionRankedProjectionErrorV1,
+> {
     let Some(latch) = function
         .blocks()
-        .get(topology.latch)
+        .get(latch_block)
         .and_then(|block| block.statements().get(latch_statement))
     else {
         return Ok(None);
@@ -12169,7 +12251,7 @@ fn source_induction_update_v1<'a>(
             right,
         } => (
             ProjectedSourceInductionUpdateV1::Ordinary,
-            topology.latch,
+            latch_block,
             latch_statement,
             left,
             right,
@@ -12179,7 +12261,7 @@ fn source_induction_update_v1<'a>(
         {
             (
                 ProjectedSourceInductionUpdateV1::Unchecked,
-                topology.latch,
+                latch_block,
                 latch_statement,
                 unchecked.left(),
                 unchecked.right(),
@@ -12203,7 +12285,7 @@ fn source_induction_update_v1<'a>(
             }
             let Some(authenticated) = assertion_proofs.authenticated_checked_binary_value_v1(
                 result,
-                topology.latch,
+                latch_block,
                 latch_statement,
             )?
             else {
@@ -12231,14 +12313,13 @@ fn source_induction_update_v1<'a>(
                 ));
             }
             if producer_statement + 1 != function.blocks()[producer_block].statements().len()
-                || topology.loop_blocks.binary_search(&producer_block).is_err()
+                || loop_blocks.binary_search(&producer_block).is_err()
             {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a checked induction producer is not the final statement inside its loop",
                 ));
             }
-            if graph.predecessors.get(topology.latch).map(Vec::as_slice) != Some(&[producer_block])
-            {
+            if graph.predecessors.get(latch_block).map(Vec::as_slice) != Some(&[producer_block]) {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a checked induction latch does not have one exact producer predecessor",
                 ));
@@ -12251,7 +12332,7 @@ fn source_induction_update_v1<'a>(
                 ));
             };
             if authenticated.assertion_block != producer_block
-                || target.target().index() as usize != topology.latch
+                || target.target().index() as usize != latch_block
             {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a checked induction overflow assertion does not authenticate its exact Add result and success edge",
@@ -12365,9 +12446,9 @@ fn exact_optional_induction_selector_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn project_uniform_inductions_v1(
+fn project_uniform_inductions_with_multi_entry_v1(
     callables: &[SemanticCallableDeclV1],
-    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     constants: &[Option<u64>],
     stable_argument_origins: &[Option<u32>],
@@ -12376,6 +12457,7 @@ fn project_uniform_inductions_v1(
     next_argument: &mut usize,
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
+    mut multi: Option<&mut multi_entry_induction_v1::Context<'_, '_>>,
 ) -> Result<Vec<ProjectedUniformInductionV1>, ProductionRankedProjectionErrorV1> {
     let graph = projected_loop_cfg_graph_v1(function)?;
     let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
@@ -12384,6 +12466,7 @@ fn project_uniform_inductions_v1(
     let mut graph_work = 0_usize;
     let mut alias_work = 0_usize;
     let mut inductions = Vec::new();
+    let mut has_multi_entry = false;
     for (header, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::SwitchInt {
             discriminant,
@@ -12452,7 +12535,7 @@ fn project_uniform_inductions_v1(
                 "a uniform induction successor outside the semantic CFG",
             ));
         }
-        let Some(topology) = project_natural_loop_topology_v1(
+        let Some(mut topology) = project_natural_loop_topology_v1(
             callables,
             function,
             &graph,
@@ -12460,10 +12543,15 @@ fn project_uniform_inductions_v1(
             body_entry,
             exit,
             &mut graph_work,
+            multi.as_deref_mut().map(|context| (induction, context)),
         )?
         else {
             continue;
         };
+        has_multi_entry |= matches!(
+            topology.preheader_control,
+            ProjectedInductionPreheaderControlV1::Multiple(_)
+        );
         let induction_index = induction.index() as usize;
         if local_definitions.get(induction_index).copied() != Some(2) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -12498,7 +12586,7 @@ fn project_uniform_inductions_v1(
             ))?
             .ty();
         let mut initial = None;
-        for statement in function.blocks()[topology.preheader].statements() {
+        for statement in function.blocks()[topology.initializer_block].statements() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
@@ -12581,6 +12669,15 @@ fn project_uniform_inductions_v1(
                 "a uniform induction without exact initial and latch definitions",
             ));
         };
+        if matches!(
+            topology.preheader_control,
+            ProjectedInductionPreheaderControlV1::Multiple(_)
+        ) && !matches!(update, ProjectedSourceInductionUpdateV1::Ordinary)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "multi-entry induction requires an ordinary range-proved Add recurrence",
+            ));
+        }
         let step_value = positive_unsigned_constant_operand_v1(step, constants, types).ok_or(
             ProductionRankedProjectionErrorV1::Incomplete(
                 "a uniform induction whose positive step is not statically established",
@@ -12601,6 +12698,17 @@ fn project_uniform_inductions_v1(
                 "a uniform induction with a lane-varying initial value",
             ));
         };
+        if let ProjectedInductionPreheaderControlV1::Multiple(entries) =
+            &mut topology.preheader_control
+        {
+            let context =
+                multi
+                    .as_deref_mut()
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "multi-entry initialization requires live canonical facts",
+                    ))?;
+            multi_entry_induction_v1::bind_initial(entries, initial, context)?;
+        }
         let Some(bound) = project_pure_uniform_index_operand_v1(
             types,
             function,
@@ -12658,7 +12766,7 @@ fn project_uniform_inductions_v1(
             ranked_step: step,
         };
         inductions.push(ProjectedUniformInductionV1 {
-            preheader: topology.preheader,
+            initializer_block: topology.initializer_block,
             preheader_control: topology.preheader_control,
             header,
             body_entry,
@@ -12699,13 +12807,23 @@ fn project_uniform_inductions_v1(
     }
     let mut special_roles = HashSet::new();
     for induction in &inductions {
-        for block in [induction.preheader, induction.header, induction.latch] {
+        for block in [
+            induction.initializer_block,
+            induction.header,
+            induction.latch,
+        ] {
             if !special_roles.insert(block) {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "uniform inductions have ambiguous preheader, header, or latch ownership",
                 ));
             }
         }
+    }
+    if has_multi_entry {
+        let context = multi.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "multi-entry role replay requires live canonical facts",
+        ))?;
+        multi_entry_induction_v1::check_roles(&inductions, context)?;
     }
     Ok(inductions)
 }
@@ -12721,7 +12839,7 @@ fn unsigned_bit_width_for_maximum_v1(maximum: u128) -> Option<u16> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reconcile_source_progress_and_emit_unsigned_casts_v1(
+fn reconcile_source_progress_with_multi_entry_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     constants: &[Option<u64>],
@@ -12731,6 +12849,7 @@ fn reconcile_source_progress_and_emit_unsigned_casts_v1(
     inductions: &mut [ProjectedUniformInductionV1],
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
+    mut multi: Option<&mut multi_entry_induction_v1::Context<'_, '_>>,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     let mut reconciled = BTreeMap::new();
     let graph = projected_loop_cfg_graph_v1(function)?;
@@ -12809,23 +12928,63 @@ fn reconcile_source_progress_and_emit_unsigned_casts_v1(
                 "a compiler-derived source induction latch is no longer an assignment",
             ));
         };
-        let topology = ProjectedNaturalLoopTopologyV1 {
-            preheader: induction.preheader,
-            preheader_control: induction.preheader_control.clone(),
-            latch: induction.latch,
-            loop_blocks: induction.loop_blocks.clone(),
+        let replayed = if let ProjectedInductionPreheaderControlV1::Multiple(entries) =
+            &induction.preheader_control
+        {
+            let context =
+                multi
+                    .as_deref_mut()
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "multi-entry source replay requires live canonical facts",
+                    ))?;
+            multi_entry_induction_v1::replay(
+                entries,
+                function,
+                &graph,
+                induction.header,
+                induction.latch,
+                source.induction,
+                context,
+            )?;
+            if entries.initialization.block != induction.initializer_block
+                || !matches!(source.update, ProjectedSourceInductionUpdateV1::Ordinary)
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "multi-entry source initializer or recurrence family changed",
+                ));
+            }
+            source_induction_update_parts_v1(
+                function,
+                &graph,
+                &mut semantic_ranges,
+                induction.latch,
+                &induction.loop_blocks,
+                source.induction,
+                source.latch_statement,
+                local_definitions,
+                &assignment_sites,
+                &mut alias_work,
+            )?
+        } else {
+            let topology = ProjectedNaturalLoopTopologyV1 {
+                initializer_block: induction.initializer_block,
+                preheader_control: induction.preheader_control.clone_single_v1()?,
+                latch: induction.latch,
+                loop_blocks: induction.loop_blocks.clone(),
+            };
+            source_induction_update_v1(
+                function,
+                &graph,
+                &mut semantic_ranges,
+                &topology,
+                source.induction,
+                source.latch_statement,
+                local_definitions,
+                &assignment_sites,
+                &mut alias_work,
+            )?
         };
-        let (replayed_update, replayed_step) = source_induction_update_v1(
-            function,
-            &graph,
-            &mut semantic_ranges,
-            &topology,
-            source.induction,
-            source.latch_statement,
-            local_definitions,
-            &assignment_sites,
-            &mut alias_work,
-        )?
+        let (replayed_update, replayed_step) = replayed
         .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
             "a compiler-derived source induction latch is no longer an authenticated Add recurrence",
         ))?;
@@ -13103,7 +13262,7 @@ struct ProjectedLoopCfgV1 {
 
 #[derive(Debug)]
 struct ProjectedNaturalLoopTopologyV1 {
-    preheader: usize,
+    initializer_block: usize,
     preheader_control: ProjectedInductionPreheaderControlV1,
     latch: usize,
     loop_blocks: Vec<usize>,
@@ -13248,7 +13407,7 @@ impl UnsignedRangeProofV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ScalarAssignmentSiteV1 {
     block: usize,
     statement: usize,
@@ -17866,6 +18025,10 @@ fn project_natural_loop_topology_v1(
     body_entry: usize,
     exit: usize,
     work: &mut usize,
+    mut multi: Option<(
+        SemanticLocalIdV1,
+        &mut multi_entry_induction_v1::Context<'_, '_>,
+    )>,
 ) -> Result<Option<ProjectedNaturalLoopTopologyV1>, ProductionRankedProjectionErrorV1> {
     if !graph.reachable.get(header).copied().unwrap_or(false) {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -17909,13 +18072,13 @@ fn project_natural_loop_topology_v1(
             "a uniform induction without one unique dominated backedge",
         ));
     }
-    if preheaders.len() != 1 {
+    if preheaders.len() != 1 && (preheaders.is_empty() || multi.is_none()) {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(
             "a uniform induction without one unique preheader",
         ));
     }
     let latch = backedges[0];
-    let preheader = preheaders[0];
+    let mut preheader = preheaders[0];
     let latch_is_exact = matches!(
         function.blocks()[latch].terminator().kind(),
         SemanticTerminatorKindV1::Goto(edge)
@@ -17927,45 +18090,82 @@ fn project_natural_loop_topology_v1(
             "a uniform induction preheader or latch has non-canonical control",
         ));
     }
-    let preheader_control = match function.blocks()[preheader].terminator().kind() {
-        SemanticTerminatorKindV1::Goto(edge)
-            if edge.role() == SemanticEdgeRoleV1::Goto
-                && edge.target().index() as usize == header
-                && graph.successors[preheader].as_slice() == [header] =>
-        {
-            ProjectedInductionPreheaderControlV1::Direct
-        }
-        SemanticTerminatorKindV1::SwitchInt {
-            discriminant,
-            targets,
-        } if targets.values().len() == 1 => {
-            let explicit = targets.values()[0];
-            let explicit_target = explicit.edge().target().index() as usize;
-            let otherwise = targets.otherwise().target().index() as usize;
-            if explicit.edge().role() != SemanticEdgeRoleV1::SwitchValue
-                || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
-                || explicit_target == otherwise
-                || !((explicit_target == header && otherwise == exit)
-                    || (explicit_target == exit && otherwise == header))
-                || graph.successors[preheader].as_slice() != [header.min(exit), header.max(exit)]
+    let preheader_control = if preheaders.len() > 1 {
+        let (induction, context) =
+            multi
+                .as_mut()
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "multi-entry induction requires live canonical facts",
+                ))?;
+        let entries = multi_entry_induction_v1::build(
+            function,
+            graph,
+            &reachable_without_header,
+            header,
+            latch,
+            *induction,
+            &preheaders,
+            context,
+        )?;
+        preheader = entries.initialization.block;
+        ProjectedInductionPreheaderControlV1::Multiple(entries)
+    } else {
+        match function.blocks()[preheader].terminator().kind() {
+            SemanticTerminatorKindV1::Goto(edge)
+                if edge.role() == SemanticEdgeRoleV1::Goto
+                    && edge.target().index() as usize == header
+                    && graph.successors[preheader].as_slice() == [header] =>
             {
+                ProjectedInductionPreheaderControlV1::Direct
+            }
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } if targets.values().len() == 1 => {
+                let explicit = targets.values()[0];
+                let explicit_target = explicit.edge().target().index() as usize;
+                let otherwise = targets.otherwise().target().index() as usize;
+                if explicit.edge().role() != SemanticEdgeRoleV1::SwitchValue
+                    || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
+                    || explicit_target == otherwise
+                    || !((explicit_target == header && otherwise == exit)
+                        || (explicit_target == exit && otherwise == header))
+                    || graph.successors[preheader].as_slice()
+                        != [header.min(exit), header.max(exit)]
+                {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "an optional uniform induction preheader is not one exact header-or-exit switch",
+                    ));
+                }
+                ProjectedInductionPreheaderControlV1::Optional {
+                    discriminant: discriminant.clone(),
+                    explicit_value: explicit.value(),
+                    explicit_target,
+                    otherwise,
+                }
+            }
+            _ => {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "an optional uniform induction preheader is not one exact header-or-exit switch",
                 ));
             }
-            ProjectedInductionPreheaderControlV1::Optional {
-                discriminant: discriminant.clone(),
-                explicit_value: explicit.value(),
-                explicit_target,
-                otherwise,
-            }
-        }
-        _ => {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "an optional uniform induction preheader is not one exact header-or-exit switch",
-            ));
         }
     };
+    if matches!(
+        preheader_control,
+        ProjectedInductionPreheaderControlV1::Multiple(_)
+    ) {
+        let (_, context) = multi
+            .as_mut()
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "multi-entry induction requires live canonical facts",
+            ))?;
+        multi_entry_induction_v1::prepay_header_entry_searches(
+            header_predecessors.len(),
+            preheaders.len(),
+            context,
+        )?;
+    }
     let mut in_loop = vec![false; graph.successors.len()];
     in_loop[header] = true;
     in_loop[latch] = true;
@@ -18003,7 +18203,12 @@ fn project_natural_loop_topology_v1(
         for &predecessor in &graph.predecessors[block] {
             if graph.reachable[predecessor]
                 && !in_loop[predecessor]
-                && !(block == header && predecessor == preheader)
+                && !(block == header
+                    && if preheaders.len() == 1 {
+                        predecessor == preheader
+                    } else {
+                        preheaders.binary_search(&predecessor).is_ok()
+                    })
             {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a uniform induction region has more than one entry",
@@ -18048,7 +18253,7 @@ fn project_natural_loop_topology_v1(
         .filter_map(|(block, inside)| inside.then_some(block))
         .collect();
     Ok(Some(ProjectedNaturalLoopTopologyV1 {
-        preheader,
+        initializer_block: preheader,
         preheader_control,
         latch,
         loop_blocks,
@@ -20438,6 +20643,7 @@ fn build_ranked_cfg(
     entry_operations: Vec<ProductionRankedOperationV1>,
     mut projected_blocks: Vec<ProjectedSemanticBlockV1>,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    induction_scope: Option<&mut multi_entry_induction_v1::Scope>,
 ) -> Result<
     (
         Vec<ProductionRankedBlockV1>,
@@ -20453,7 +20659,12 @@ fn build_ranked_cfg(
     }
     let mut proved_assertions = SemanticAssertProofsV1::analyze(types, function)?;
     let body_predicates = indexed_induction_body_predicates_v1(function, uniform_inductions)?;
+    let mut has_multi_entry = false;
     for induction in uniform_inductions {
+        has_multi_entry |= matches!(
+            induction.preheader_control,
+            ProjectedInductionPreheaderControlV1::Multiple(_)
+        );
         assertion_facts.require_guarded_source_progress_v1(
             types,
             function,
@@ -20473,6 +20684,19 @@ fn build_ranked_cfg(
             ),
         )?;
         *proved = true;
+    }
+    if has_multi_entry {
+        let scope = induction_scope.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "multi-entry ranked emission requires live canonical facts",
+        ))?;
+        multi_entry_induction_v1::before_emission(
+            function,
+            uniform_inductions,
+            &mut multi_entry_induction_v1::Context {
+                scope,
+                facts: assertion_facts,
+            },
+        )?;
     }
     let terminators = (0..function.blocks().len())
         .map(|index| {
@@ -20743,10 +20967,16 @@ fn build_ranked_cfg(
                 }
             }
         }
-        if let Some((induction_index, induction)) = uniform_inductions
-            .iter()
-            .enumerate()
-            .find(|(_, induction)| induction.preheader == semantic_index)
+        if let Some((induction_index, induction)) =
+            uniform_inductions
+                .iter()
+                .enumerate()
+                .find(|(_, induction)| match &induction.preheader_control {
+                    ProjectedInductionPreheaderControlV1::Multiple(entries) => {
+                        entries.contains(semantic_index)
+                    }
+                    _ => induction.initializer_block == semantic_index,
+                })
         {
             let block = ranked_block_id(current)?;
             let target_live = &live_inductions[induction.header];
@@ -20795,7 +21025,8 @@ fn build_ranked_cfg(
             }
             let terminator = match (&induction.preheader_control, terminator) {
                 (
-                    ProjectedInductionPreheaderControlV1::Direct,
+                    ProjectedInductionPreheaderControlV1::Direct
+                    | ProjectedInductionPreheaderControlV1::Multiple(_),
                     ProjectedCfgTerminatorV1::Branch(target),
                 ) if target == induction.header => ProductionRankedTerminatorV1::BranchArgs {
                     arguments,
@@ -20849,6 +21080,11 @@ fn build_ranked_cfg(
                 (ProjectedInductionPreheaderControlV1::Direct, _) => {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
                         "a direct uniform induction preheader changed after topology binding",
+                    ));
+                }
+                (ProjectedInductionPreheaderControlV1::Multiple(_), _) => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a multi-entry induction changed its exact source entry edge",
                     ));
                 }
             };
@@ -24824,12 +25060,17 @@ mod cold_compile_error_tests;
 
 #[cfg(test)]
 mod tests {
+    include!("production_ranked_projection_v1/multi_entry_induction_fixture_v1_tests.rs");
     include!("production_ranked_projection_v1/projection_01_tests.rs");
     include!("production_ranked_projection_v1/checked_output_admission_policy3_v1_fixture.rs");
     include!("production_ranked_projection_v1/production_ranked_policy5_fixture_v1_tests.rs");
     include!("production_ranked_projection_v1/production_ranked_policy6_fixture_v1_tests.rs");
     include!("production_ranked_projection_v1/production_ranked_policy7_fixture_v1_tests.rs");
     include!("production_ranked_projection_v1/production_ranked_policy8_fixture_v1_tests.rs");
+    include!(
+        "production_ranked_projection_v1/production_ranked_loop_preheaders_fixture_v1_tests.rs"
+    );
+    include!("production_ranked_projection_v1/production_ranked_licm_fixture_v1_tests.rs");
 
     #[test]
     fn pipeline_scalar_rejection_trace_has_exact_bounded_numeric_fields() {
@@ -25090,6 +25331,7 @@ mod tests {
             entry_operations,
             projected_blocks,
             &mut ComponentDynamicAssertionFactsV1,
+            None,
         )
     }
 
@@ -36973,7 +37215,7 @@ mod tests {
             assert_eq!(inductions.len(), 2);
             let inner = inductions
                 .iter()
-                .find(|induction| induction.preheader == 2)
+                .find(|induction| induction.initializer_block == 2)
                 .expect("the nested optional induction must be retained");
             assert_eq!((inner.header, inner.latch, inner.exit), (3, 4, 5));
 
@@ -37512,7 +37754,7 @@ mod tests {
         let predicates = vec![None; function.locals().len()];
         let mut collided = inductions.clone();
         let mut second = collided[0].clone();
-        second.preheader = collided[0].header;
+        second.initializer_block = collided[0].header;
         collided.push(second);
         assert_incomplete(
             bind_optional_induction_preheaders_v1(&function, &predicates, &switches, &collided),

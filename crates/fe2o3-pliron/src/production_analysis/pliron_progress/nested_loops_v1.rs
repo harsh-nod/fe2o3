@@ -113,6 +113,7 @@ fn run_pliron_progress_after_verification_v1(
             &blocks,
             &block_indices,
             &inventory.root_operation_blocks,
+            &dominators,
             &graph.predecessors,
             &graph.edges,
             &graph.incoming,
@@ -236,16 +237,30 @@ fn prove_nested_positive_induction_loops_v1(
             .copied()
             .filter(|predecessor| !natural_loop.contains(predecessor))
             .collect::<Vec<_>>();
-        let [entry] = entries.as_slice() else {
-            return Err(());
-        };
-        let entry_arguments = progress_edge_arguments_v1(context, blocks[*entry], header)?;
-        if entry_arguments
-            .get(induction_argument)
-            .and_then(|value| index_constant(context, *value))
-            != Some(0)
-        {
-            return Err(());
+        if let [entry] = entries.as_slice() {
+            let entry_arguments = progress_edge_arguments_v1(context, blocks[*entry], header)?;
+            if entry_arguments
+                .get(induction_argument)
+                .and_then(|value| index_constant(context, *value))
+                != Some(0)
+            {
+                return Err(());
+            }
+        } else {
+            let initial = progress_multi_entry_initial_v1(
+                context,
+                blocks,
+                block_indices,
+                operation_blocks,
+                dominators,
+                &natural_loop,
+                header_index,
+                &entries,
+                induction_argument,
+            )?;
+            if index_constant(context, initial) != Some(0) {
+                return Err(());
+            }
         }
         if branch
             .rhs(context)
@@ -391,6 +406,8 @@ fn progress_edge_arguments_v1(
     source: Ptr<BasicBlock>,
     target: Ptr<BasicBlock>,
 ) -> Result<Vec<pliron::value::Value>, ()> {
+    #[cfg(test)]
+    multi_entry_query_tests::record();
     let terminator = source.deref(context).get_terminator(context).ok_or(())?;
     let operation = Operation::get_op_dyn(terminator, context);
     let mut arguments = None;
@@ -413,6 +430,11 @@ fn progress_edge_arguments_v1(
         arguments = Some(candidate);
     }
     arguments.ok_or(())
+}
+
+#[cfg(test)]
+mod multi_entry_query_tests {
+    include!("multi_entry_query_v1_tests.rs");
 }
 
 fn progress_index_offset_v1(

@@ -148,6 +148,7 @@ enum MultiBlockCase {
     GuardedResetFork,
     ExternalIntermediateEntry,
     MultipleHeaderEntries,
+    DistinctHeaderSeeds,
     InvocationLatchUpdate,
 }
 
@@ -217,7 +218,10 @@ fn multi_block_loop(
             append(context, entry, &cast);
         }
     }
-    if matches!(case, MultiBlockCase::MultipleHeaderEntries) {
+    if matches!(
+        case,
+        MultiBlockCase::MultipleHeaderEntries | MultiBlockCase::DistinctHeaderSeeds
+    ) {
         let first_entry = block(context, &function, "first_entry");
         let second_entry = block(context, &function, "second_entry");
         let split = IndexLessThanBranchArgsOp::new(
@@ -230,7 +234,13 @@ fn multi_block_loop(
             second_entry,
         );
         let first_enter = BranchArgsOp::new(context, vec![start.result(context)], header);
-        let second_enter = BranchArgsOp::new(context, vec![start.result(context)], header);
+        let second_seed = if matches!(case, MultiBlockCase::DistinctHeaderSeeds) {
+            // Equal literals do not substitute for the same dominating SSA value.
+            zero.result(context)
+        } else {
+            start.result(context)
+        };
+        let second_enter = BranchArgsOp::new(context, vec![second_seed], header);
         append(context, entry, &split);
         append(context, first_entry, &first_enter);
         append(context, second_entry, &second_enter);

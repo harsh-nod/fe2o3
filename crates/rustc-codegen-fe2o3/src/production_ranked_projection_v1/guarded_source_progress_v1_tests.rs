@@ -6,6 +6,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 
 #[path = "guarded_source_progress_cast_v1_tests.rs"]
 mod cast_tests;
+#[path = "multi_entry_guarded_refusal_v1_tests.rs"]
+mod multi_entry_tests;
 #[path = "guarded_source_progress_resources_v1_tests.rs"]
 mod resource_tests;
 
@@ -625,7 +627,7 @@ fn candidate(snapshot: bool) -> ProjectedUniformInductionV1 {
     let bound = ProductionRankedValueV1::Argument(0);
     let step = ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(1));
     ProjectedUniformInductionV1 {
-        preheader: 0,
+        initializer_block: 0,
         preheader_control: ProjectedInductionPreheaderControlV1::Direct,
         header: 1,
         body_entry: 2,
@@ -764,7 +766,7 @@ fn substituted_actual_candidate_coordinates_operands_and_ranked_values_are_refus
                 8 => candidate.source_progress.step_value = 2,
                 9 => candidate.bound = ProductionRankedValueV1::Argument(9),
                 10 => candidate.step = ProductionRankedValueV1::Argument(9),
-                11 => candidate.preheader = 4,
+                11 => candidate.initializer_block = 4,
                 12 => candidate.body_entry = 3,
                 13 => candidate.exit = 3,
                 14 => {

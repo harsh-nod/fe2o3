@@ -803,6 +803,8 @@ mod name_census_tests {
         assert!(run_pliron_ranked_race_check_v1(&context, &function).is_clean());
     }
 
+    include!("resource_tests/race_cfg_tests.rs");
+
     #[test]
     fn race_name_scan_arithmetic_overflow_refuses_before_query() {
         let mut context = context();
@@ -1138,7 +1140,7 @@ mod status_tests {
         assert_eq!(bound.retained_storage_upper_bound(), PER_FINDING);
         assert_eq!(
             bound.peak_storage_upper_bound(),
-            64 * (8 + 16 + 32_768 + 64) + 385 * 11 + 64 * 8 + 2 * PER_FINDING + 2 * 32_832 + 16
+            64 * (8 + 16 + 32_768 + 64) + 23_200 + 64 * 8 + 2 * PER_FINDING + 2 * 32_832 + 16
         );
         assert!(
             race_resource_upper_bound_for_shape_v1(census, names, Some((2, 1)), None, limits)

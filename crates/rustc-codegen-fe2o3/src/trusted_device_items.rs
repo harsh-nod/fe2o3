@@ -32,7 +32,9 @@ use dialect_amdgcn::{
 use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
+mod primitive_from_v1;
 mod wave64_shuffle_provider_v1;
+pub(crate) use primitive_from_v1::primitive_from_candidate_v1;
 #[cfg(test)]
 pub(crate) use wave64_shuffle_provider_v1::check_actual_sealed_trait_chain_paths_v1;
 pub(crate) use wave64_shuffle_provider_v1::{

@@ -674,7 +674,7 @@ fn execution_bindings_cannot_flatten_or_resurrect_through_enums() {
         assert!(nested.values().is_err());
         assert!(!semantic_binding_can_restore_from_unique_source_v1(&nested));
         let payloads = BTreeMap::from([(0, vec![nested])]);
-        assert!(project_enum_payload_field(0, &payloads, 0).is_err());
+        assert!(project_enum_payload_field(0, payloads.clone(), 0).is_err());
         let mut enum_binding = SemanticValueBindingV1::Enum {
             discriminant: ValueId(20),
             discriminant_ty: Type::Scalar(ScalarType::U32),
@@ -729,7 +729,7 @@ fn moved_execution_tombstone_remains_nominal_after_last_role_moves() {
         (1, vec![SemanticValueBindingV1::Unit]),
     ]);
     for variant in [0, 1] {
-        assert!(project_enum_payload_field(variant, &payloads, 0).is_err());
+        assert!(project_enum_payload_field(variant, payloads.clone(), 0).is_err());
     }
     let mut binding = SemanticValueBindingV1::Enum {
         discriminant: ValueId(21),

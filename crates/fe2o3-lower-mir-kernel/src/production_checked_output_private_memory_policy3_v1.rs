@@ -1,5 +1,10 @@
 use super::*;
 
+#[path = "production_checked_output_private_cfg_v1.rs"]
+mod physical_cfg;
+#[path = "production_checked_output_private_source_cfg_v1.rs"]
+mod source_cfg;
+
 #[derive(Clone, Copy)]
 struct Address {
     allocation: usize,
@@ -209,6 +214,7 @@ pub(super) fn check<'a, 'g>(
     let mut latest = scratch::<Option<usize>>(cells, budget)?;
     charge(budget, cells)?;
     latest.resize(cells, None);
+    let mut cross_block = false;
     for block in inventory.blocks() {
         charge(budget, cells.checked_add(1).ok_or_else(arithmetic)?)?;
         latest.fill(None);
@@ -266,10 +272,7 @@ pub(super) fn check<'a, 'g>(
                 if write {
                     latest[cell] = Some(ordinal);
                 } else if latest[cell].is_none() {
-                    return Err(refused(
-                        "private",
-                        "Load requires a same-block latest Store",
-                    ));
+                    cross_block = true;
                 } else {
                     latest_stores[ordinal] = latest[cell];
                 }
@@ -303,6 +306,9 @@ pub(super) fn check<'a, 'g>(
                 return Err(refused("private", "no private pointer control transport"));
             }
         }
+    }
+    if cross_block {
+        physical_cfg::check(inventory, &addresses, &mut latest_stores, budget)?;
     }
     Ok(PrivateMemory {
         inventory,
@@ -547,28 +553,33 @@ pub(super) fn source_lifetimes_from_sites(
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
     let mut kills = None;
+    let mut cross_block = false;
     for (read, store) in proof.latest_stores.iter().enumerate() {
         charge(budget, 4)?;
         let Some(store) = store else {
             continue;
         };
-        let Some((function, block, first)) = sites[*store] else {
+        let Some((function, block, first)) = sites.get(*store).copied().flatten() else {
             return Err(refused(
                 "private source",
                 "initializing Store has an actual source statement",
             ));
         };
-        let Some((read_function, read_block, last)) = sites[read] else {
+        let Some((read_function, read_block, last)) = sites.get(read).copied().flatten() else {
             return Err(refused(
                 "private source",
                 "Load has an actual source statement",
             ));
         };
-        if (function, block) != (read_function, read_block) || first > last {
+        if function != read_function || (block == read_block && first > last) {
             return Err(refused(
                 "private source",
                 "same-block ordered source Store/Load",
             ));
+        }
+        if block != read_block {
+            cross_block = true;
+            continue;
         }
         let function_id = function;
         let function = semantic
@@ -623,6 +634,9 @@ pub(super) fn source_lifetimes_from_sites(
                 "no source lifetime or Move invalidation between Store and Load",
             ));
         }
+    }
+    if cross_block {
+        source_cfg::check(semantic, proof, sites, budget)?;
     }
     Ok(())
 }
@@ -778,6 +792,7 @@ mod tests {
                         && proof.operation(5)
                         && proof.operation(6)
                 );
+                assert_eq!(proof.latest_stores[6], Some(5));
                 drop(proof);
             }
             Some(expected) => assert!(
@@ -799,7 +814,7 @@ mod tests {
             .swap(5, 6);
         check_component(
             uninitialized,
-            Some("Load requires a same-block latest Store"),
+            Some("Load requires one exact reaching Store"),
         );
         let mut other_cell = component();
         let operations = &mut other_cell.functions[0].body.as_mut().unwrap().blocks[0].operations;
@@ -808,7 +823,7 @@ mod tests {
             unreachable!()
         };
         *pointer = ValueId(1);
-        check_component(other_cell, Some("Load requires a same-block latest Store"));
+        check_component(other_cell, Some("Load requires one exact reaching Store"));
     }
 
     #[test]
@@ -834,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn private_census_refuses_dynamic_address_and_cross_block_initialization() {
+    fn private_census_refuses_dynamic_address() {
         let mut dynamic = component();
         dynamic.functions[0]
             .signature
@@ -847,6 +862,10 @@ mod tests {
             offset: ValueId(9),
         };
         check_component(dynamic, Some("constant exact element offset"));
+    }
+
+    #[test]
+    fn private_census_admits_unique_cross_block_initialization() {
         let mut crossing = component();
         let body = crossing.functions[0].body.as_mut().unwrap();
         let mut second = BasicBlock::new(BlockId(77));
@@ -857,7 +876,7 @@ mod tests {
             arguments: vec![],
         });
         body.blocks.push(second);
-        check_component(crossing, Some("Load requires a same-block latest Store"));
+        check_component(crossing, None);
     }
 
     #[test]
