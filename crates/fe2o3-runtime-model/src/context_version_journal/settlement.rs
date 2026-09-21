@@ -80,26 +80,7 @@ impl ContextVersionJournalV1 {
 
         // All touched custody and return capacity are validated under this borrow.
         settlement_scratch::shared_settlement_scratch_stage_v1(self, head, count);
-        for index in 0..count {
-            self.count_indexed_access();
-            let plan = self.scratch[index]
-                .take()
-                .expect("complete settlement plan");
-            self.count_indexed_access();
-            let allocation = self.allocations[plan.allocation.slot]
-                .as_mut()
-                .expect("validated exact retained allocation");
-            if success {
-                allocation.content_lineage = plan.attempt_epoch;
-            }
-            allocation.pending_member = None;
-            self.count_indexed_access();
-            self.members[plan.member_slot] = None;
-            self.count_indexed_access();
-            self.member_free.push(plan.member_slot);
-        }
-        self.store_slot(writer.slot, None);
-        self.push_free(writer.slot);
+        settlement_commit::shared_settlement_commit_v1(self, writer, count, success);
         Ok(())
     }
 }

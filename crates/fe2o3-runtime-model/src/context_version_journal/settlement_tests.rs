@@ -9,6 +9,9 @@ mod retained;
 #[path = "settlement_scratch_tests.rs"]
 mod scratch;
 
+#[path = "settlement_commit_tests.rs"]
+mod commit;
+
 type Write = ContextAllocationWriteV1;
 type Success = ContextWriterSuccessEvidenceV1;
 type NoEffect = ContextWriterNoEffectEvidenceV1;
@@ -957,10 +960,8 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
             "settlement contains {forbidden}"
         );
     }
-    assert_eq!(source.matches("for index in 0..count").count(), 1);
-    assert_eq!(source.matches("for ").count(), 1);
-    assert_eq!(source.matches(".push(").count(), 1);
-    assert!(source.contains("self.member_free.push(plan.member_slot)"));
+    assert_eq!(source.matches("for ").count(), 0);
+    assert_eq!(source.matches(".push(").count(), 0);
     assert!(source.contains("self.settle_retained(writer, evidence.writer, true)"));
     assert!(source.contains("self.settle_retained(writer, evidence.writer, false)"));
 
@@ -973,6 +974,11 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
             .find("self.preflight_settlement(writer, evidence)?")
             .unwrap()
             < plan
+    );
+    assert!(
+        plan < release
+            .find("settlement_commit::shared_settlement_commit_v1(self, writer, count, success)")
+            .unwrap()
     );
     let preflight = source
         .split("fn preflight_settlement(")
@@ -1050,25 +1056,6 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
         assert!(!body.contains(forbidden));
         assert!(!storage.contains(forbidden));
     }
-    let commit = release.find("allocation.pending_member = None").unwrap();
-    assert!(plan < commit);
-    assert!(
-        commit
-            < release
-                .find("self.member_free.push(plan.member_slot)")
-                .unwrap()
-    );
-    assert!(
-        release
-            .find("self.member_free.push(plan.member_slot)")
-            .unwrap()
-            < release.find("self.store_slot(writer.slot, None)").unwrap()
-    );
-    assert!(
-        release.find("self.store_slot(writer.slot, None)").unwrap()
-            < release.find("self.push_free(writer.slot)").unwrap()
-    );
-
     let unknown = source
         .split("pub fn mark_unknown(")
         .nth(1)
