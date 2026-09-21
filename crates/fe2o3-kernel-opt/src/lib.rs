@@ -10,9 +10,20 @@
 //! neither establishes target binding nor changes those historical endpoints.
 
 #![forbid(unsafe_code)]
+mod loop_unroll_history_decode_v1;
+mod loop_unroll_history_rows_v1;
+mod loop_unroll_history_wire_v1;
 mod refined_forwarding_history_decode_v1;
 mod refined_forwarding_history_rows_v1;
 mod refined_forwarding_history_wire_v1;
+pub use loop_unroll_history_decode_v1::*;
+pub use loop_unroll_history_wire_v1::{
+    InertLoopUnrollHistoryBytesV1, InertLoopUnrollHistoryRefV1, LOOP_UNROLL_HISTORY_MAGIC_V1,
+    LoopUnrollHistoryInputsV1, LoopUnrollHistoryWireErrorV1, LoopUnrollHistoryWireStorageV1,
+    MAX_LOOP_UNROLL_HISTORY_BYTES_V1, MAX_LOOP_UNROLL_HISTORY_GRAPH_BYTES_V1,
+    MAX_LOOP_UNROLL_HISTORY_ROW_BYTES_V1, MAX_LOOP_UNROLL_HISTORY_ROWS_V1,
+    MAX_LOOP_UNROLL_HISTORY_STORAGE_V1, encode_loop_unroll_history_v1, read_loop_unroll_history_v1,
+};
 pub use refined_forwarding_history_decode_v1::*;
 pub use refined_forwarding_history_wire_v1::*;
 
@@ -35,6 +46,7 @@ mod checked_optimization_receipt_v1;
 mod checked_optimization_v1;
 mod checked_redundant_store_v1;
 mod checked_refined_forwarding_history_v1;
+mod checked_scalar_fixed_point_v1;
 mod checked_store_forwarding_v1;
 mod checked_u32_local_order_v1;
 mod optimization_v2;
@@ -68,6 +80,12 @@ pub use checked_optimization_receipt_v1::*;
 pub use checked_optimization_v1::*;
 pub use checked_redundant_store_v1::*;
 pub use checked_refined_forwarding_history_v1::*;
+pub use checked_scalar_fixed_point_v1::{
+    CheckedScalarFixedPointErrorV1, CheckedScalarFixedPointOwnerV1, CheckedScalarFixedPointRoundV1,
+    SCALAR_FIXED_POINT_EXECUTION_BYTES_V1, SCALAR_FIXED_POINT_MAX_ROUNDS_V1,
+    SCALAR_FIXED_POINT_POLICY_ID_V1, ScalarFixedPointExecutionV1,
+    prepare_checked_scalar_fixed_point_v1,
+};
 pub use checked_store_forwarding_v1::*;
 pub use checked_u32_local_order_v1::*;
 pub use optimization_v2::*;

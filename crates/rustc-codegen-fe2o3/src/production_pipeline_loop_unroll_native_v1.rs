@@ -1,5 +1,7 @@
 //! Actual source F-to-U before the first LLVM emission. No wire/default authority.
 use super::*;
+#[path = "production_pipeline_nominal_loop_unroll_native_v3.rs"]
+pub(crate) mod nominal_v3;
 use super::history::ActualFinalFSourceRefV1 as FinalSource;
 use crate::compiler_descriptor::checked_output_policy3_v1::refined_forwarding_v1::loop_unroll_v1::{
     LoopUnrollDescriptorErrorV1, UnrolledOwnerV1, validate_unrolled_descriptor_evidence_v1,

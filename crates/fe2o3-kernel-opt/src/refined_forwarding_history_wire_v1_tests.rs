@@ -68,7 +68,7 @@ fn module(nonempty: bool) -> Module {
 fn with_history<T>(nonempty: bool, run: impl FnOnce(Inputs<'_>, usize) -> T) -> T {
     with_history_module(&module(nonempty), usize::from(nonempty), run)
 }
-fn with_history_module<T>(
+pub(crate) fn with_history_module<T>(
     module: &Module,
     expected_p8_pairs: usize,
     run: impl FnOnce(Inputs<'_>, usize) -> T,

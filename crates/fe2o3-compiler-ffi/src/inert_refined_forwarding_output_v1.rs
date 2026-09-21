@@ -206,7 +206,7 @@ fn number<E>(bytes: &[u8]) -> Result<usize, Error<E>> {
     let value = u64::from_le_bytes(bytes.try_into().map_err(|_| Error::Length)?);
     usize::try_from(value).map_err(|_| Error::Arithmetic)
 }
-fn fields<'w, E, const N: usize>(
+pub(super) fn fields<'w, E, const N: usize>(
     wire: &'w [u8],
     magic: &[u8; 8],
     route: u8,
@@ -244,9 +244,9 @@ fn fields<'w, E, const N: usize>(
     Ok(result)
 }
 
-struct Cursor<'a> {
-    bytes: &'a [u8],
-    pos: usize,
+pub(super) struct Cursor<'a> {
+    pub(super) bytes: &'a [u8],
+    pub(super) pos: usize,
 }
 impl<'a> Cursor<'a> {
     fn take<E>(&mut self, n: usize) -> Result<&'a [u8], Error<E>> {
@@ -286,7 +286,7 @@ impl<'a> Cursor<'a> {
         }
         Ok(value)
     }
-    fn root<E>(&mut self) -> Result<InertRefinedForwardingRootRefV1<'a>, Error<E>> {
+    pub(super) fn root<E>(&mut self) -> Result<InertRefinedForwardingRootRefV1<'a>, Error<E>> {
         let semantic_root = self.word()?;
         let semantic_function_identity = self.digest()?;
         let descriptor_ordinal = self.word()?;
@@ -330,7 +330,7 @@ impl<'a> Cursor<'a> {
 }
 
 // Whole field work is prepaid by the caller, including both UTF-8/name scans.
-fn roots<E>(bytes: &[u8]) -> Result<u32, Error<E>> {
+pub(super) fn roots<E>(bytes: &[u8]) -> Result<u32, Error<E>> {
     let mut c = Cursor { bytes, pos: 0 };
     let count = c.word()?;
     if count == 0 || count as usize > MAX_INERT_REFINED_FORWARDING_ROOTS_V1 {

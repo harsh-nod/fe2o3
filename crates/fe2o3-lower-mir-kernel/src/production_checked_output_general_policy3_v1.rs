@@ -33,6 +33,12 @@ type R<T> = Result<T, E>;
 include!("production_checked_output_general_source_context_v1.rs");
 include!("production_checked_output_erased_general_v1.rs");
 include!("production_checked_output_integer_continuation_v1.rs");
+include!("production_checked_output_expanded_source_v1.rs");
+#[path = "production_checked_output_expanded_policy_v1.rs"]
+pub(super) mod expanded_policy;
+#[cfg(test)]
+#[path = "production_checked_output_expanded_source_v1_tests.rs"]
+pub(in crate::production_semantic_kir_v1) mod expanded_source_tests;
 
 fn inventory_error(error: fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1) -> E {
     E::SourceOutput(ProductionSourceOutputErrorV1::Inventory(error))
@@ -96,6 +102,20 @@ fn check_inner(
     checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<Box<[FormalMemoryObligations]>> {
+    check_actual_source_output_v1(
+        source,
+        bound,
+        GeneralOutputSubjectV1::Owned(checked),
+        budget,
+    )
+}
+
+fn check_actual_source_output_v1(
+    source: GeneralSourceContextV1<'_>,
+    bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    subject: GeneralOutputSubjectV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Box<[FormalMemoryObligations]>> {
     source.replay_and_census(budget)?;
     charge(budget, 3)?;
     let original = source.neutral()?;
@@ -111,7 +131,7 @@ fn check_inner(
         .map_err(E::Resource)?;
     let bytes = bound.canonical().canonical_bytes();
     charge(budget, bytes.len().checked_add(1).ok_or_else(arithmetic)?)?;
-    if bytes != checked.native_input_audit_bytes() {
+    if bytes != subject.audit_bytes() {
         return Err(E::SourceOutput(ProductionSourceOutputErrorV1::InputCustody));
     }
     let (input, storage) =
@@ -120,11 +140,11 @@ fn check_inner(
         .reserve_storage(storage.retained_storage())
         .map_err(E::Resource)?;
     let (output, storage) =
-        CanonicalKirInventoryV1::derive(checked.owner(), budget).map_err(inventory_error)?;
+        CanonicalKirInventoryV1::derive(subject.output(), budget).map_err(inventory_error)?;
     budget
         .reserve_storage(storage.retained_storage())
         .map_err(E::Resource)?;
-    let candidate = checked.occurrences().candidate();
+    let candidate = subject.rows();
     let (transition, storage) = fe2o3_kernel_analysis::check_canonical_kir_transition_v1(
         &input, &output, candidate, budget,
     )
@@ -141,16 +161,36 @@ fn check_inner(
     let source = match source {
         GeneralSourceContextV1::Direct(source) => source,
         GeneralSourceContextV1::Erased(source) => {
-            return check_erased_source_outputs_v1(
-                source,
-                &coordinates,
-                checked,
-                &transition,
-                &control,
-                &input,
-                &output,
-                budget,
-            );
+            return match subject {
+                GeneralOutputSubjectV1::Owned(checked) => check_erased_source_outputs_v1(
+                    source,
+                    &coordinates,
+                    checked,
+                    &transition,
+                    &control,
+                    &input,
+                    &output,
+                    budget,
+                ),
+                GeneralOutputSubjectV1::ActualPair {
+                    output: actual,
+                    rows,
+                    audit,
+                    required,
+                } => check_erased_source_pair_outputs_v1(
+                    source,
+                    &coordinates,
+                    actual,
+                    rows,
+                    audit,
+                    required,
+                    &transition,
+                    &control,
+                    &input,
+                    &output,
+                    budget,
+                ),
+            };
         }
     };
     let (_assertions, storage) =
@@ -226,7 +266,7 @@ fn check_inner(
         GeneralSourceContextV1::Direct(source),
         &input,
         &output,
-        checked,
+        candidate,
         &private_input,
         &traps,
         budget,
@@ -237,12 +277,11 @@ fn check_native_outputs_v1(
     source: GeneralSourceContextV1<'_>,
     input: &CanonicalKirInventoryV1<'_>,
     output: &CanonicalKirInventoryV1<'_>,
-    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+    candidate: fe2o3_kernel_ir::CanonicalKirTransitionCandidateV1<'_>,
     private_input: &private_memory::PrivateMemory<'_, '_>,
     traps: &[u8],
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<Box<[FormalMemoryObligations]>> {
-    let candidate = checked.occurrences().candidate();
     let private_output = private_memory::check(output, source.limits().max_operations, budget)?;
     let target = source.semantic().target();
     let input_division = unsigned_division::check(input, target, budget)?;
@@ -282,7 +321,7 @@ fn check_native_outputs_v1(
         budget,
     )?;
     let kernels = derive_checked_output_guarded_obligations_v1(
-        checked.owner(),
+        output.owner(),
         source.limits().max_operations,
     )
     .map_err(E::Formal)?;

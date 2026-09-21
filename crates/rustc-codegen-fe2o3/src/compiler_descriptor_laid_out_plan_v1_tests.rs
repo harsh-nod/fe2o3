@@ -325,10 +325,6 @@ fn laid_out_capture_checks_the_actual_bounded_argument_roster() {
         "scalar packing actual argument count",
     );
     assert_eq!(rows, before);
-    mismatch_is(
-        capture(&mut []).unwrap_err(),
-        "scalar packing actual argument count",
-    );
     let mut cursor = Cursor {
         end: u64::MAX,
         alignment: 8,
@@ -345,6 +341,22 @@ fn laid_out_capture_checks_the_actual_bounded_argument_roster() {
         cursor.advance(8, 8).unwrap_err(),
         "scalar packing explicit byte limit",
     );
+}
+
+#[test]
+fn empty_argument_roster_keeps_fixed_abi_without_nominal_packing() {
+    assert_eq!(capture(&mut []).unwrap(), None);
+    let retained = root(
+        Vec::new(),
+        Extent {
+            bytes: 0,
+            alignment: 1,
+        },
+    );
+    check(&retained).unwrap();
+    assert!(retained.arguments.as_slice().is_empty());
+    assert_eq!(retained.explicit_argument_bytes, 0);
+    assert_eq!(retained.kernarg_alignment_bytes, 1);
 }
 
 #[test]

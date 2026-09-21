@@ -198,11 +198,6 @@ pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
             signature.output()
         )));
     }
-    if signature.inputs().is_empty() {
-        return Err(GeneralTypedExtractError::new(
-            "general typed kernels require at least one argument",
-        ));
-    }
     if signature.inputs().len() > MAX_ABI_FIELDS {
         return Err(GeneralTypedExtractError::new(format!(
             "general typed kernel argument count {} exceeds maximum {MAX_ABI_FIELDS}",
@@ -1262,6 +1257,28 @@ mod tests {
             abi,
             &launch(),
         )
+    }
+
+    #[test]
+    fn zero_arguments_reconstruct_exact_empty_abi_and_bound_identity() {
+        let abi = build_abi(&[]).unwrap();
+        let expected = AbiLayout::new(0, 1, PointerWidth::Bits64, Vec::new()).unwrap();
+        assert_eq!(abi, expected);
+        assert_eq!(abi.size(), 0);
+        assert_eq!(abi.alignment(), 1);
+        assert!(abi.fields().is_empty());
+        let empty_identity = identity("empty", &[]);
+        assert_eq!(empty_identity, identity_with_abi("empty", &expected));
+        assert_ne!(empty_identity, identity("renamed", &[]));
+        assert_ne!(
+            empty_identity,
+            identity(
+                "empty",
+                &[argument(GeneralTypedArgumentKindV3::Scalar(
+                    RustScalarElementTypeV1::U64,
+                ))],
+            )
+        );
     }
 
     #[test]

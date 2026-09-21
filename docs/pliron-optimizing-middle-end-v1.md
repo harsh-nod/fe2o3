@@ -980,6 +980,35 @@ Policy6 remains a checked extraction route. It does not activate the
 protected default publisher, supply a missing signed source-proof producer,
 qualify every tutorial kernel or establish LLVM/GPU execution equivalence.
 
+### Reusable scalar fixed point
+
+The [checked scalar fixed-point core](../crates/fe2o3-kernel-opt/src/checked_scalar_fixed_point_v1.rs)
+composes the existing integer continuation and Policy3 without changing either
+historical policy. Every complete round runs this closed schedule:
+
+```text
+integer neutral canonicalization -> DCE
+  -> SCCP -> CFG simplification -> select-same canonicalization -> DCE
+  -> local pure CSE -> dominance pure CSE -> DCE -> CFG simplification
+```
+
+It compares complete canonical bytes after each round. An already fixed input
+still executes one full terminal round. The limit is 16 rounds, including the
+unchanged terminal round; a changed last round returns an error and discards
+the candidate instead of publishing a partially optimized fallback. This is a
+fixed point of the composite schedule, not a universal normal form or a claim
+that every possible program converges within the limit.
+
+The move-only owner retains every adjacent checked graph, occurrence relation,
+transformation map and execution record. Replay independently checks those
+relations without running the optimizer. All rounds use one cumulative ledger;
+the full returned storage receipt must remain reserved while the history lives.
+This component does not add SROA, general GVN or inlining, and it does not change
+the default pipeline. Production integration must preserve typed source/trap
+provenance through every rewrite, rerun final analyses on its actual output and
+lower that same final subject to LLVM. The roadmap also still requires moving
+general optimization and neutral verification before exact target binding.
+
 ### Native continuation and final receipts
 
 The fixed facade has a consuming native-preparation endpoint. It retains the
@@ -1243,11 +1272,22 @@ independently replayed F-to-U relation, never a relabeled F. Descriptor evidence
 uses U's signatures and fresh formal reports with the original source/root/ABI
 joins. Complete borrowed headers, live owners and new backing share the existing
 cumulative budget, without extending inherited engine accounting to a whole-
-compiler RSS claim. This is a nondefault component: its U descriptor evidence
-has no wire encoding, signed worker handoff, publication or launch authority.
-The final-F wire described below remains a distinct contract. Full source/SIM,
+compiler RSS claim. This remains a nondefault component, without a complete
+signed U worker handoff, publication or launch authority. Full source/SIM,
 strict resource phases, protected production and tutorial qualification must
 be recorded for the exact integrated revision rather than inferred from wiring.
+
+The inert [U history encoding](../crates/fe2o3-kernel-opt/src/loop_unroll_history_wire_v1.rs)
+retains the complete unchanged F history, actual U bytes, unroll limits and all
+six ordered origin families. Its bounded decoder separately checks framing,
+admits both graphs and independently replays the F/U relation. The
+[U output frame](../crates/fe2o3-compiler-ffi/src/inert_loop_unroll_output_v1.rs)
+and [independent U consumer](../crates/fe2o3-verifier/src/compiler_loop_unroll_output_v1.rs)
+join that history to an independently admitted original signed source, complete
+root/ABI/launch records, fresh final formal analysis and exact native text.
+The frame does not reconstruct the missing original signed source packet.
+This consumer still uses the V1 physical descriptor contract, not the separate
+nominal V3 path. Neither inert decoding nor component replay activates production.
 
 The [complete forwarding history](../crates/fe2o3-kernel-opt/src/checked_refined_forwarding_history_v1.rs)
 composes B/C/S/O/I/J/K/P/H/L/R/F and their actual transformation records.
@@ -1288,9 +1328,11 @@ receipts remain typed refusals, never unsigned fallback or successful skips.
 This entry's genuine ordinary-rustc parent requires all eight Direct/UnitLocal,
 motion/no-op and target-profile children. Their source, four-graph SIM and
 factory/replay resource phases are NOT_RUN pending root execution. The entry's
-sixteen P-1 observations, and the source-unroll continuation's sixteen P-1
-observations, require closed runs and strict typed-phase successors before
-resource qualification. Normal component/protocol tests do not qualify those
+sixteen P-1 observations still require closed runs and strict typed-phase
+successors before resource qualification. The constructed source-unroll and
+actual-U native suites now have strict sixteen-case resource checks against
+independent public-prefix/first-emitter references; these do not replace the
+ordinary-source entry gate. Normal component/protocol tests do not qualify those
 source paths or provide a missing protected runtime.
 
 The live final-F worker, consumer and bounded history/output encodings remain
@@ -1344,3 +1386,31 @@ Callers prepay the exported view/query/scratch extents and their live backing.
 V1/V2 decoding and identities remain unchanged. This codec admits inert content,
 not an authenticated source ABI, signed native output or executable artifact;
 the independent source join, host packer and production handoff remain separate.
+
+The [independent nominal source join](../crates/fe2o3-verifier/src/compiler_nominal_abi_v3.rs)
+checks V3 logical arguments against the retained semantic source and original
+Direct or UnitLocal-erased graph, including nominal kind, layout, ownership and
+ordered roots. The [source-only backend](../crates/rustc-codegen-fe2o3/src/production_pipeline_nominal_abi_v3.rs)
+uses the actual rustc collector and authenticated target. The separate
+[nominal native continuation](../crates/rustc-codegen-fe2o3/src/production_pipeline_nominal_loop_unroll_native_v3.rs)
+retains the complete source/F/U history, emits LLVM from actual U and reproduces
+its V3 descriptor from fresh final reports. It is not an embedded, signed or
+default worker output. Its current requirement envelope is Wave64 with zero LDS;
+matrix, subgroup, workgroup-memory and atomic requirements remain explicit
+refusals, not tutorial-wide admission. Generic diagnostic support is derived from
+the retained target profile; conflicting processor claims and unsupported
+capabilities still fail. The source ABI checker keeps function-specific FnAbi
+layout identity distinct from target data-layout identity. Ordinary-source
+qualification remains incomplete and is tracked in
+[issue #271](https://github.com/harsh-nod/fe2o3/issues/271).
+
+The move-only [V3 descriptor source](../crates/fe2o3-compiler-ffi/src/descriptor_source_v3.rs)
+takes ownership of canonical zero-digest bytes without copying their backing.
+It exposes bounded borrowed queries and a distinct content identity; exported
+storage extents do not reserve a caller's budget or confer compiler authority.
+The [nominal host packer](../crates/fe2o3-host/src/generated_nominal_argument_plan_v3.rs)
+checks source distinctions and writes scalar/slice metadata into caller-owned
+storage, but pointer components remain zero placeholders. Those bytes are not
+runtime kernargs and must not be submitted for device execution. Native embedding,
+signed worker transport, finalization/recovery and actual host dispatch remain
+required before this nominal route can become production-default.

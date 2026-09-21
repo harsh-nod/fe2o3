@@ -57,6 +57,9 @@ use fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1 as Semantic;
 #[path = "compiler_refined_forwarding_output_joins_v1.rs"]
 mod joins;
 
+#[path = "compiler_loop_unroll_output_v1.rs"]
+pub(crate) mod loop_unroll;
+
 /// Bytes cannot construct this input: both variants retain independently imported
 /// signed ranked evidence and their connected original source owners.
 #[derive(Clone, Copy)]
@@ -304,6 +307,25 @@ impl<'a> Source<'a> {
     }
 }
 
+fn original_root_count(
+    root_count: u32,
+    inputs: &Inputs<'_>,
+    source: Source<'_>,
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    let count = inputs.semantic.roots().len();
+    if count == 0 || count != source.signed_count() || count != root_count as usize {
+        return Err(E::Mismatch("complete signed source roster"));
+    }
+    for ordinal in 0..count {
+        budget.charge_work(1)?;
+        if !source.has_signed_root(ordinal) {
+            return Err(E::Mismatch("signed source root"));
+        }
+    }
+    Ok(())
+}
+
 fn input_floor(frame: &Frame<'_>, history: &History<'_, '_>, source: Source<'_>) -> R<usize> {
     // The history frame borrows the History field inside the outer wire, so its
     // bytes are counted once. Independently allocated decoded graphs are separate.
@@ -440,16 +462,7 @@ pub fn check_compiler_refined_forwarding_output_v1<'a, 'h, 'w>(
         let checked_history = history.check_semantics(budget).map_err(E::History)?;
         budget.reserve_storage(checked_history.storage().retained_storage())?;
         let inputs = source.inputs(budget)?;
-        let count = inputs.semantic.roots().len();
-        if count == 0 || count != source.signed_count() || count != frame.root_count() as usize {
-            return Err(E::Mismatch("complete signed source roster"));
-        }
-        for ordinal in 0..count {
-            budget.charge_work(1)?;
-            if !source.has_signed_root(ordinal) {
-                return Err(E::Mismatch("signed source root"));
-            }
-        }
+        original_root_count(frame.root_count(), &inputs, source, budget)?;
         bytes(
             frame.field(Field::SemanticMir),
             inputs.semantic.canonical_encoding(),

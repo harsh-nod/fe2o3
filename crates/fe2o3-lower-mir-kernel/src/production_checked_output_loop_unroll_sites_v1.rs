@@ -49,7 +49,7 @@ impl ProductionLoopUnrollOriginV1 {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in super::super) fn check_loop_unroll_sites(
+pub(in super::super) fn with_checked_loop_unroll_sites<'w, T>(
     sites: CheckedPromotedSites<'_, '_>,
     intermediate: &CanonicalKirInventoryV1<'_>,
     refinement: &RefinementPair<'_>,
@@ -57,9 +57,19 @@ pub(in super::super) fn check_loop_unroll_sites(
     pair: &Pair<'_, '_, '_>,
     output: &CanonicalKirInventoryV1<'_>,
     origins: &mut Vec<ProductionLoopUnrollOriginV1>,
-    budget: &mut AssertOriginBudgetV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'w>,
     binding: &PromotionBinding,
-) -> PResult<Box<[FormalMemoryObligations]>> {
+    next: impl FnOnce(
+        CheckedPromotedSites<'_, '_>,
+        &CanonicalKirInventoryV1<'_>,
+        &CanonicalKirInventoryV1<'_>,
+        &RefinementPair<'_>,
+        &ForwardingPair<'_>,
+        &Pair<'_, '_, '_>,
+        &mut AssertOriginBudgetV1<'w>,
+        &PromotionBinding,
+    ) -> PResult<T>,
+) -> PResult<T> {
     budget.charge_work(12)?;
     let input = sites.output();
     let count = output.operations().len();
@@ -146,7 +156,7 @@ pub(in super::super) fn check_loop_unroll_sites(
         }
     }
     binding.check(budget)?;
-    census_loop_unroll_sites(
+    next(
         CheckedPromotedSites {
             source: sites.source,
             output,

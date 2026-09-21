@@ -1,5 +1,7 @@
 //! Constructed source admission is not an authenticated ordinary-rustc wrapper.
 use super::*;
+#[path = "production_pipeline_nominal_loop_unroll_native_v3_tests.rs"]
+mod nominal_v3;
 use crate::production_ranked_projection_v1::{
     AuthenticatedRankedVerificationRosterV1, prepare_backend_unroll_direct_prefix_v1,
     prepare_backend_unroll_erased_prefix_v1, with_backend_unroll_direct_prefix_v1,

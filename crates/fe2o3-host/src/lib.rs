@@ -175,6 +175,13 @@ pub use fe2o3_kfd::{
     KfdWithAdmittedUapi, OpenedKfd,
 };
 #[doc(hidden)]
+pub use generated_argument_plan::nominal_v3::{
+    GeneratedNominalArgumentPlanV3, GeneratedNominalArgumentRefV3, GeneratedNominalBindingV3,
+    GeneratedNominalPackErrorV3, GeneratedNominalPackedArgumentsV3, GeneratedNominalStorageV3,
+    NOMINAL_ARGUMENT_PLAN_STORAGE_V3, NOMINAL_ARGUMENT_REF_STORAGE_V3,
+    NOMINAL_BIND_SCRATCH_STORAGE_V3, NOMINAL_PACK_SCRATCH_STORAGE_V3,
+};
+#[doc(hidden)]
 pub use generated_argument_plan::{
     CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,

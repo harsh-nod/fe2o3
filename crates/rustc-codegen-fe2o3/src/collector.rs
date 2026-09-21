@@ -58,7 +58,7 @@ pub(crate) mod semantic_import_observation_v1_tests;
 pub(crate) use production_importer_v1::{
     AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
     ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1,
-    construct_production_semantic_mir_v1,
+    construct_production_semantic_mir_nominal_v35, construct_production_semantic_mir_v1,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,9 +68,6 @@ pub(crate) struct TypedArgumentListV1<T> {
 
 impl<T> TypedArgumentListV1<T> {
     pub(crate) fn new(arguments: Vec<T>) -> Result<Self, TypedArgumentListError> {
-        if arguments.is_empty() {
-            return Err(TypedArgumentListError::Empty);
-        }
         if arguments.len() > MAX_ARGUMENTS_PER_KERNEL {
             return Err(TypedArgumentListError::TooMany {
                 actual: arguments.len(),
@@ -91,14 +88,12 @@ impl<T> TypedArgumentListV1<T> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TypedArgumentListError {
-    Empty,
     TooMany { actual: usize, maximum: usize },
 }
 
 impl fmt::Display for TypedArgumentListError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Empty => formatter.write_str("typed kernel argument list must not be empty"),
             Self::TooMany { actual, maximum } => write!(
                 formatter,
                 "typed kernel argument count {actual} exceeds maximum {maximum}"
@@ -3907,20 +3902,22 @@ mod tests {
 
     #[test]
     fn typed_argument_lists_are_owned_and_not_fixed_to_three_arguments() {
+        let empty = TypedArgumentListV1::<TypeIdentity>::new(Vec::new()).unwrap();
         let one = TypedArgumentListV1::new(vec![type_identity(1)]).unwrap();
         let two = TypedArgumentListV1::new(vec![type_identity(2), type_identity(3)]).unwrap();
 
+        assert_eq!(empty.len(), 0);
+        assert!(empty.as_slice().is_empty());
         assert_eq!(one.len(), 1);
         assert_eq!(two.len(), 2);
         assert_ne!(one.as_slice(), two.as_slice());
     }
 
     #[test]
-    fn typed_argument_lists_reject_empty_and_oversized_collections() {
-        assert_eq!(
-            TypedArgumentListV1::<TypeIdentity>::new(Vec::new()),
-            Err(TypedArgumentListError::Empty)
-        );
+    fn typed_argument_lists_accept_the_limit_and_reject_oversized_collections() {
+        let maximum =
+            TypedArgumentListV1::new(vec![type_identity(7); MAX_ARGUMENTS_PER_KERNEL]).unwrap();
+        assert_eq!(maximum.len(), MAX_ARGUMENTS_PER_KERNEL);
         assert!(matches!(
             TypedArgumentListV1::new(vec![type_identity(7); MAX_ARGUMENTS_PER_KERNEL + 1]),
             Err(TypedArgumentListError::TooMany { actual, maximum })

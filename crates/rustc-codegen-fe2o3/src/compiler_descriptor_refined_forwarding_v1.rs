@@ -148,18 +148,23 @@ fn scoped<'w, T>(
     }
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
-    let result = match catch_unwind(AssertUnwindSafe(|| run(budget))) {
+    let mut payloads = [None, None];
+    let mut result = match catch_unwind(AssertUnwindSafe(|| run(budget))) {
         Ok(result) => result,
         Err(payload) => {
-            drop(payload);
+            payloads[0] = Some(payload);
             Err(Error::Panicked)
         }
     };
-    if budget.work_ledger_identity_v1() != ledger || budget.storage() < floor {
-        drop(result);
-        return Err(Resource::Accounting.into());
+    let valid = budget.work_ledger_identity_v1() == ledger && budget.storage() >= floor;
+    if !valid {
+        let rejected = std::mem::replace(&mut result, Err(Resource::Accounting.into()));
+        payloads[1] = catch_unwind(AssertUnwindSafe(|| drop(rejected))).err();
     }
-    budget.release_storage(budget.storage() - floor)?;
+    if valid {
+        budget.release_storage(budget.storage() - floor)?;
+    }
+    drop(payloads);
     result
 }
 
@@ -301,6 +306,145 @@ pub(crate) mod fixtures {
         RustTypeEvidenceV1,
     };
     use fe2o3_kernel_ir::{AddressSpace, ScalarType, Type};
+
+    #[test]
+    fn final_f_descriptor_scope_preserves_success_and_ordinary_panic_charges() {
+        for panic in [false, true] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(128);
+            let mut budget = Budget::new(&mut work, 128);
+            budget.charge_work(17).unwrap();
+            budget.reserve_storage(53).unwrap();
+            let result = scoped(53, &mut budget, |budget| {
+                budget.charge_work(3)?;
+                budget.reserve_storage(19)?;
+                if panic {
+                    panic!("ordinary descriptor unwind");
+                }
+                Ok(41)
+            });
+            if panic {
+                assert!(matches!(result, Err(Error::Panicked)));
+            } else {
+                assert_eq!(result.unwrap(), 41);
+            }
+            assert_eq!(
+                (budget.work(), budget.storage(), budget.peak_storage()),
+                (20, 53, 72)
+            );
+            assert_eq!(budget.failed_storage(), None);
+        }
+    }
+
+    #[test]
+    fn final_f_descriptor_scope_refunds_before_payload_destructor_panics() {
+        struct Payload;
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                panic!("descriptor payload destructor");
+            }
+        }
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(128);
+        let mut budget = Budget::new(&mut work, 128);
+        budget.charge_work(17).unwrap();
+        budget.reserve_storage(53).unwrap();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _: Result<()> = scoped(53, &mut budget, |budget| {
+                budget.charge_work(3)?;
+                budget.reserve_storage(19)?;
+                std::panic::panic_any(Payload);
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(
+            (budget.work(), budget.storage(), budget.peak_storage()),
+            (20, 53, 72)
+        );
+        assert_eq!(budget.failed_storage(), None);
+    }
+
+    #[test]
+    fn final_f_descriptor_scope_never_refunds_a_foreign_ledger() {
+        for panic in [false, true] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(128);
+            let mut other_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(128);
+            let mut budget = Budget::new(&mut work, 128);
+            let mut other = Budget::new(&mut other_work, 128);
+            budget.charge_work(17).unwrap();
+            budget.reserve_storage(53).unwrap();
+            other.charge_work(11).unwrap();
+            other.reserve_storage(37).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let other_ledger = other.work_ledger_identity_v1();
+            let result: Result<()> = scoped(53, &mut budget, |budget| {
+                budget.charge_work(3)?;
+                budget.reserve_storage(19)?;
+                std::mem::swap(budget, &mut other);
+                if panic {
+                    panic!("foreign descriptor ledger");
+                }
+                Ok(())
+            });
+            assert!(matches!(result, Err(Error::Resource(Resource::Accounting))));
+            assert!(budget.work_ledger_identity_v1() == other_ledger);
+            assert!(other.work_ledger_identity_v1() == ledger);
+            assert_eq!(
+                (budget.work(), budget.storage(), budget.peak_storage()),
+                (11, 37, 37)
+            );
+            assert_eq!(
+                (other.work(), other.storage(), other.peak_storage()),
+                (20, 72, 72)
+            );
+            std::mem::swap(&mut budget, &mut other);
+            budget.release_storage(19).unwrap();
+            assert_eq!((budget.storage(), other.storage()), (53, 37));
+        }
+    }
+
+    #[test]
+    fn final_f_descriptor_scope_preserves_first_denial_history() {
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(128);
+        let mut budget = Budget::new(&mut work, 60);
+        budget.charge_work(17).unwrap();
+        budget.reserve_storage(53).unwrap();
+        for (amount, actual, accepted) in [(8, 61, 20), (9, 62, 23)] {
+            let result = scoped(53, &mut budget, |budget| {
+                budget.charge_work(3)?;
+                budget.reserve_storage(amount).map_err(Error::from)
+            });
+            match result {
+                Err(Error::Resource(Resource::Storage(error))) => {
+                    assert_eq!((error.actual(), error.limit()), (actual, 60));
+                }
+                _ => panic!("exact first reserve refusal"),
+            }
+            assert_eq!(
+                (budget.work(), budget.storage(), budget.peak_storage()),
+                (accepted, 53, 53)
+            );
+            assert_eq!(budget.failed_storage(), Some(61));
+        }
+        let mut short_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(18);
+        let mut short = Budget::new(&mut short_work, 128);
+        short.charge_work(17).unwrap();
+        short.reserve_storage(53).unwrap();
+        let result: Result<()> = scoped(53, &mut short, |budget| {
+            budget.charge_work(2)?;
+            budget.reserve_storage(19)?;
+            Ok(())
+        });
+        match result {
+            Err(Error::Resource(Resource::Work(error))) => {
+                assert_eq!((error.actual(), error.limit()), (19, 18));
+            }
+            _ => panic!("exact first work refusal"),
+        }
+        assert_eq!(
+            (short.work(), short.storage(), short.peak_storage()),
+            (17, 53, 53)
+        );
+        assert_eq!(short.failed_storage(), None);
+    }
 
     pub(crate) fn typed_roots(owner: FinalOwnerV1<'_>) -> Vec<TypedDescriptorRootV1> {
         let view = owner.view().unwrap();

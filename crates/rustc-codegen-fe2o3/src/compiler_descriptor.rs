@@ -49,6 +49,8 @@ use std::{
 };
 
 const ADMITTED_PRODUCTION_PROCESSORS: [&str; 2] = ["gfx942", "gfx950"];
+#[path = "compiler_descriptor_nominal_v3.rs"]
+pub(crate) mod nominal_v3;
 #[cfg(test)]
 const WORKGROUP_X: u32 = 256;
 
@@ -534,6 +536,32 @@ fn validate_production_v1_descriptor_root_evidence(
     obligations: &fe2o3_kernel_ir::FormalMemoryObligations,
     device_target: &str,
 ) -> Result<crate::production_geometry_v1::ProductionGeometryV1, CompilerDescriptorError> {
+    validate_production_descriptor_root_with_physical_matcher_v1(
+        module,
+        root,
+        semantic,
+        semantic_function,
+        kernel,
+        obligations,
+        device_target,
+        production_descriptor_argument_matches_kernel_type_v1,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Shared exact per-root descriptor join."
+)]
+fn validate_production_descriptor_root_with_physical_matcher_v1(
+    module: &Module,
+    root: &TypedDescriptorRootV1,
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    semantic_function: &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1,
+    kernel: &fe2o3_kernel_ir::Kernel,
+    obligations: &fe2o3_kernel_ir::FormalMemoryObligations,
+    device_target: &str,
+    physical_match: fn(DescriptorArgumentKindV1, AccessMode, &fe2o3_kernel_ir::Type) -> bool,
+) -> Result<crate::production_geometry_v1::ProductionGeometryV1, CompilerDescriptorError> {
     use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1};
     use fe2o3_kernel_ir::{
         AccessMode as KirAccessMode, AddressSpace, FormalMemoryAccessKind, FormalParameterKind,
@@ -586,11 +614,8 @@ fn validate_production_v1_descriptor_root_evidence(
         .zip(&entry.signature.parameters)
         .enumerate()
     {
-        let exact_kernel_type = production_descriptor_argument_matches_kernel_type_v1(
-            root_argument.kind,
-            root_argument.access,
-            kernel_type,
-        );
+        let exact_kernel_type =
+            physical_match(root_argument.kind, root_argument.access, kernel_type);
         if !exact_kernel_type {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "typed descriptor/Kernel IR argument correspondence",

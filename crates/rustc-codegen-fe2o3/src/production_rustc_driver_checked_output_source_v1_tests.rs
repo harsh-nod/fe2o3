@@ -3,6 +3,8 @@ use super::*;
 
 #[path = "production_rustc_driver_guarded_loop_read_source_v1_tests.rs"]
 mod guarded_loop_read;
+#[path = "production_rustc_driver_nominal_abi_v3_tests.rs"]
+mod nominal_abi_v3;
 use crate::production_pipeline::checked_output_policy4_v1::snapshots;
 use fe2o3_kernel_ir::OperationKind;
 use fe2o3_rustc_invocation::{

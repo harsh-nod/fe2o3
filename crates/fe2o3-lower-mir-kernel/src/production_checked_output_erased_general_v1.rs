@@ -19,52 +19,103 @@ fn check_erased_source_outputs_v1(
         control,
         budget,
         |view, budget| {
-            // Preserve the typed admission error rather than stringifying it
-            // into an occurrence error; this scope authenticates its own view.
-            Ok(erased_general_scratch_v1(budget, |budget| {
-                let map = view.coordinates();
-                erased_source_associations_v1(source, map, budget)?;
-                for row in source.original_source().correspondence.blocks() {
-                    charge(budget, 1)?;
-                    match view
-                        .block(
-                            row.correspondence_owner(),
-                            row.semantic_function(),
-                            row.semantic_block(),
-                            budget,
-                        )
-                        .map_err(E::SourceOutput)?
-                    {
-                        ErasedSourceBlockV1::Retained { .. }
-                        | ErasedSourceBlockV1::DeletedLocalHelper { .. } => {}
-                        ErasedSourceBlockV1::NotMaterialized => {
-                            return Err(refused(
-                                "erased source",
-                                "complete materialized block mapping",
-                            ));
-                        }
-                    }
-                }
-                let traps = erased_source_spans_v1(source, map, input, budget)?;
-                let private_input = private_memory::check(
-                    input,
-                    source.original_source().limits.max_operations,
-                    budget,
-                )?;
-                private_memory::source_lifetimes_erased(source, map, &private_input, budget)?;
-                check_native_outputs_v1(
-                    GeneralSourceContextV1::Erased(source),
-                    input,
-                    output,
-                    checked,
-                    &private_input,
-                    &traps,
-                    budget,
-                )
-            }))
+            Ok(check_erased_source_view_outputs_v1(
+                source,
+                view,
+                checked.occurrences().candidate(),
+                input,
+                output,
+                budget,
+            ))
         },
     )
     .map_err(E::SourceOutput)?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_erased_source_pair_outputs_v1(
+    source: &ProductionUnitLocalErasedSourceOwnerV1,
+    coordinates: &fe2o3_kernel_analysis::CheckedCanonicalKirCoordinatePreservationV1<'_, '_>,
+    actual: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    rows: fe2o3_kernel_ir::CanonicalKirTransitionCandidateV1<'_>,
+    audit: &[u8],
+    required: usize,
+    transition: &fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV1<'_, '_, '_, '_>,
+    control: &fe2o3_kernel_analysis::CheckedCanonicalKirControlIndexV1<'_, '_, '_>,
+    input: &CanonicalKirInventoryV1<'_>,
+    output: &CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Box<[FormalMemoryObligations]>> {
+    with_erased_source_output_pair_v1(
+        source,
+        coordinates,
+        actual,
+        rows,
+        audit,
+        required,
+        transition,
+        control,
+        budget,
+        |view, budget| {
+            Ok(check_erased_source_view_outputs_v1(
+                source, view, rows, input, output, budget,
+            ))
+        },
+    )
+    .map_err(E::SourceOutput)?
+}
+
+fn check_erased_source_view_outputs_v1(
+    source: &ProductionUnitLocalErasedSourceOwnerV1,
+    view: &ErasedSourceOutputOccurrencesV1<'_>,
+    rows: fe2o3_kernel_ir::CanonicalKirTransitionCandidateV1<'_>,
+    input: &CanonicalKirInventoryV1<'_>,
+    output: &CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Box<[FormalMemoryObligations]>> {
+    // The owning and decoded routes share the genuine erasure callback. No
+    // producer witness, empty catalog or source permission predicate is forged.
+    erased_general_scratch_v1(budget, |budget| {
+        let map = view.coordinates();
+        erased_source_associations_v1(source, map, budget)?;
+        for row in source.original_source().correspondence.blocks() {
+            charge(budget, 1)?;
+            match view
+                .block(
+                    row.correspondence_owner(),
+                    row.semantic_function(),
+                    row.semantic_block(),
+                    budget,
+                )
+                .map_err(E::SourceOutput)?
+            {
+                ErasedSourceBlockV1::Retained { .. }
+                | ErasedSourceBlockV1::DeletedLocalHelper { .. } => {}
+                ErasedSourceBlockV1::NotMaterialized => {
+                    return Err(refused(
+                        "erased source",
+                        "complete materialized block mapping",
+                    ));
+                }
+            }
+        }
+        let traps = erased_source_spans_v1(source, map, input, budget)?;
+        let private_input = private_memory::check(
+            input,
+            source.original_source().limits.max_operations,
+            budget,
+        )?;
+        private_memory::source_lifetimes_erased(source, map, &private_input, budget)?;
+        check_native_outputs_v1(
+            GeneralSourceContextV1::Erased(source),
+            input,
+            output,
+            rows,
+            &private_input,
+            &traps,
+            budget,
+        )
+    })
 }
 
 fn erased_source_associations_v1(

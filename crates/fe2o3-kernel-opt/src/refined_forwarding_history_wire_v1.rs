@@ -587,4 +587,4 @@ pub fn encode_refined_forwarding_history_v1(
 
 #[cfg(test)]
 #[path = "refined_forwarding_history_wire_v1_tests.rs"]
-mod tests;
+pub(crate) mod tests;

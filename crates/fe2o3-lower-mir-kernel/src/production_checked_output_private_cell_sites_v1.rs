@@ -7,7 +7,7 @@ type Site = Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>;
 #[path = "production_checked_output_loop_unroll_sites_v1.rs"]
 mod loop_unroll_sites;
 pub use loop_unroll_sites::ProductionLoopUnrollOriginV1;
-pub(super) use loop_unroll_sites::check_loop_unroll_sites;
+pub(super) use loop_unroll_sites::with_checked_loop_unroll_sites;
 #[path = "production_checked_output_cross_block_forwarding_sites_v1.rs"]
 mod cross_block_forwarding_sites;
 pub use cross_block_forwarding_sites::ProductionCrossBlockForwardingOriginV1;
@@ -35,29 +35,9 @@ pub(super) struct PromotionMapping<'v, 'o, 'r> {
     pub(super) relation: &'v PromotionRelation<'r>,
 }
 
-// Only the complete replayed source/prefix/promotion path below constructs this
-// borrowed metadata. It is not a safety report or a detached source attachment.
-pub(super) struct CheckedPromotedSites<'s, 'g> {
-    source: GeneralSourceContextV1<'s>,
-    output: &'s CanonicalKirInventoryV1<'g>,
-    output_sites: &'s [Site],
-    traps: &'s [bool],
-}
-
-impl<'s, 'g> CheckedPromotedSites<'s, 'g> {
-    pub(super) fn source(&self) -> GeneralSourceContextV1<'s> {
-        self.source
-    }
-    pub(super) fn output(&self) -> &'s CanonicalKirInventoryV1<'g> {
-        self.output
-    }
-    pub(super) fn statements(&self) -> &'s [Site] {
-        self.output_sites
-    }
-    pub(super) fn traps(&self) -> &'s [bool] {
-        self.traps
-    }
-}
+// Keep the historical private path while sharing the checked source view with
+// the expanded owner. Its representation and old construction checks are intact.
+pub(super) use crate::production_semantic_kir_v1::checked_output_admission_policy3_v1::general::CheckedPromotedSites;
 
 pub(super) fn with_checked_sites<'g, 'w, R>(
     prefix: Prefix8<'_>,
@@ -164,6 +144,319 @@ pub(super) fn check_sites(
     binding: &PromotionBinding,
 ) -> PResult<Box<[FormalMemoryObligations]>> {
     census_sites::<false>(sites, budget, binding)
+}
+
+// Decode supplies independently checked *relations*, never an owning optimizer
+// witness. Recover source custody once at B/C, then use the same source-site
+// transport as the live path through every actual predecessor and output.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn check_decoded_expanded_sites_v1(
+    source: GeneralSourceContextV1<'_>,
+    history: &fe2o3_kernel_opt::CheckedLoopUnrollHistoryV1<'_>,
+    scalar: &fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1,
+    final_origins: &mut Vec<ProductionExpandedSourceOriginV1>,
+    required: usize,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
+    let p3 = history
+        .prefix()
+        .prefix()
+        .policy7_relation()
+        .policy6_relation()
+        .policy5_relation()
+        .policy4_relation()
+        .policy3_relation()
+        .semantic_receipt();
+    budget.charge_work(2)?;
+    if history.limits().loops.operations > source.limits().max_operations {
+        return Err(refused(
+            "decoded source unroll",
+            "unchanged source operation ceiling",
+        )
+        .into());
+    }
+    let report_bytes = p3
+        .output()
+        .module()
+        .kernels
+        .len()
+        .checked_mul(size_of::<FormalMemoryObligations>())
+        .ok_or(AssertOriginResourceV1::Arithmetic)?;
+    budget.reserve_storage(report_bytes)?;
+    let initial_reports = check_decoded_source_output_pair_v1(
+        source,
+        p3.input(),
+        p3.output(),
+        p3.receipt().candidate(),
+        p3.input().canonical().canonical_bytes(),
+        required,
+        budget,
+    )?;
+    binding.check(budget)?;
+    drop(initial_reports);
+    let (coordinates, storage) =
+        fe2o3_kernel_analysis::check_canonical_kir_coordinate_preservation_v1(
+            source.neutral()?,
+            p3.input(),
+            budget,
+        )
+        .map_err(E::Coordinates)?;
+    binding.check(budget)?;
+    budget.reserve_storage(storage.retained_storage())?;
+    let (bound, storage) =
+        CanonicalKirInventoryV1::derive(p3.input(), budget).map_err(inventory_error)?;
+    binding.check(budget)?;
+    budget.reserve_storage(storage.retained_storage())?;
+    match source {
+        GeneralSourceContextV1::Direct(original) => {
+            let sites = private_memory::source_statement_sites_v1(original, &bound, budget)?;
+            binding.check(budget)?;
+            decoded_expanded_from_bound_sites_v1(
+                source,
+                history,
+                &bound,
+                &sites,
+                scalar,
+                final_origins,
+                budget,
+                binding,
+            )
+        }
+        GeneralSourceContextV1::Erased(original) => original
+            .with_checked_erasure_v1(budget, |erasure, budget| {
+                Ok(promotion_scoped(
+                    budget.storage(),
+                    budget,
+                    |budget, inner| {
+                        binding.check(budget)?;
+                        if !std::ptr::eq(erasure.output(), coordinates.input()) {
+                            return Err(E::SourceOutput(
+                                ProductionSourceOutputErrorV1::InputCustody,
+                            )
+                            .into());
+                        }
+                        let map = ErasedSourceCoordinateMapV1 {
+                            deletion: erasure,
+                            floor: budget.storage(),
+                        };
+                        let sites = private_memory::erased_source_statement_sites_v1(
+                            original, &map, &bound, budget,
+                        )?;
+                        inner.check(budget)?;
+                        decoded_expanded_from_bound_sites_v1(
+                            source,
+                            history,
+                            &bound,
+                            &sites,
+                            scalar,
+                            final_origins,
+                            budget,
+                            inner,
+                        )
+                    },
+                ))
+            })
+            .map_err(E::Source)?,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decoded_expanded_from_bound_sites_v1(
+    source: GeneralSourceContextV1<'_>,
+    history: &fe2o3_kernel_opt::CheckedLoopUnrollHistoryV1<'_>,
+    bound: &CanonicalKirInventoryV1<'_>,
+    bound_sites: &[Site],
+    scalar: &fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1,
+    final_origins: &mut Vec<ProductionExpandedSourceOriginV1>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
+    let f = history.prefix();
+    budget.reserve_storage(
+        size_of::<PromotionMapping<'_, '_, '_>>()
+            .checked_add(size_of::<CheckedPromotedSites<'_, '_>>())
+            .ok_or(AssertOriginResourceV1::Arithmetic)?,
+    )?;
+    let p8 = f.prefix();
+    let p7 = p8.policy7_relation();
+    let p6 = p7.policy6_relation();
+    let p5 = p6.policy5_relation();
+    let p3 = p5.policy4_relation().policy3_relation().semantic_receipt();
+    macro_rules! inventory {
+        ($owner:expr) => {{
+            let (inventory, storage) =
+                CanonicalKirInventoryV1::derive($owner, budget).map_err(inventory_error)?;
+            binding.check(budget)?;
+            budget.reserve_storage(storage.retained_storage())?;
+            inventory
+        }};
+    }
+    let c = inventory!(p3.output());
+    let o = inventory!(p5.output());
+    let i = inventory!(p6.continuation().output());
+    let j = inventory!(p7.continuation().relation().output());
+    let k = inventory!(p8.output());
+    let p = inventory!(f.promotion().output());
+    let h = inventory!(f.preheaders().output());
+    let l = inventory!(f.licm().output());
+    let r = inventory!(f.refinement().output());
+    let forwarded = inventory!(f.output());
+    let u = inventory!(history.output());
+    // P4/P5 are coordinate-preserving, independently checked complete history
+    // relations. P3/P6/P8 use their own checked complete occurrence rows.
+    let c_sites = sites::retained_sites(
+        bound,
+        &c,
+        bound_sites,
+        p3.receipt().candidate().operations,
+        budget,
+    )?;
+    let o_sites = sites::coordinate_sites(&c, &o, &c_sites, budget)?;
+    let i_sites = sites::retained_sites(
+        &o,
+        &i,
+        &o_sites,
+        p6.continuation().receipt().candidate().operations,
+        budget,
+    )?;
+    let mut j_sites = scratch::<Site>(j.operations().len(), budget)?;
+    let j_origins = p7.continuation().relation().retained_operations();
+    budget.charge_work(1)?;
+    if j_origins.len() != j.operations().len() {
+        return Err(refused("decoded source prefix", "complete actual J origins").into());
+    }
+    for (row, actual) in j_origins.iter().zip(j.operations()) {
+        budget.charge_work(8)?;
+        if row.output != actual.coordinate {
+            return Err(refused("decoded source prefix", "actual J origin coordinate").into());
+        }
+        j_sites.push(i_sites[operation_ordinal(&i, row.input)?]);
+    }
+    let k_sites = sites::retained_sites(
+        &j,
+        &k,
+        &j_sites,
+        p8.continuation().claims().occurrences.operations,
+        budget,
+    )?;
+    let (p_sites, p_traps) = promoted_sites_and_traps(
+        &PromotionMapping {
+            input: &k,
+            output: &p,
+            relation: f.promotion(),
+        },
+        &k_sites,
+        budget,
+    )?;
+    let mut refinement_origins =
+        scratch::<ProductionInductionRefinementOriginV1>(l.operations().len(), budget)?;
+    let mut forwarding_origins =
+        scratch::<ProductionCrossBlockForwardingOriginV1>(r.operations().len(), budget)?;
+    let mut unroll_origins = scratch::<ProductionLoopUnrollOriginV1>(
+        history.continuation().origins().operations.len(),
+        budget,
+    )?;
+    binding.check(budget)?;
+    with_licm_after_preheaders_sites(
+        CheckedPromotedSites {
+            source,
+            output: &p,
+            output_sites: &p_sites,
+            traps: &p_traps,
+        },
+        f.preheaders(),
+        f.licm(),
+        &h,
+        &l,
+        budget,
+        binding,
+        |sites, budget, binding| {
+            with_checked_induction_refinement_sites(
+                sites,
+                f.refinement(),
+                &r,
+                &mut refinement_origins,
+                budget,
+                binding,
+                |sites, budget, binding| {
+                    with_checked_cross_block_forwarding_sites(
+                        sites,
+                        f.forwarding(),
+                        &forwarded,
+                        &mut forwarding_origins,
+                        budget,
+                        binding,
+                        |sites, budget, binding| {
+                            with_checked_loop_unroll_sites(
+                                sites,
+                                &r,
+                                f.refinement(),
+                                f.forwarding(),
+                                history.continuation(),
+                                &u,
+                                &mut unroll_origins,
+                                budget,
+                                binding,
+                                |sites,
+                                 intermediate,
+                                 input,
+                                 refinement,
+                                 forwarding,
+                                 unroll,
+                                 budget,
+                                 binding| {
+                                    // A borrowed checked view is not an owning producer witness.
+                                    // Re-run the old actual-U census before the final scalar census.
+                                    let report_bytes = u
+                                        .owner()
+                                        .module()
+                                        .kernels
+                                        .len()
+                                        .checked_mul(size_of::<FormalMemoryObligations>())
+                                        .ok_or(AssertOriginResourceV1::Arithmetic)?;
+                                    budget.reserve_storage(report_bytes)?;
+                                    budget
+                                        .reserve_storage(
+                                            size_of::<CheckedPromotedSites<'_, '_>>(),
+                                        )?;
+                                    let reports = census_loop_unroll_sites(
+                                        CheckedPromotedSites {
+                                            source: sites.source(),
+                                            output: sites.output(),
+                                            output_sites: sites.statements(),
+                                            traps: sites.traps(),
+                                        },
+                                        intermediate,
+                                        input,
+                                        refinement,
+                                        forwarding,
+                                        unroll,
+                                        budget,
+                                        binding,
+                                    )?;
+                                    binding.check(budget)?;
+                                    drop(reports);
+                                    check_expanded_source_v1(
+                                        sites,
+                                        intermediate,
+                                        input,
+                                        refinement,
+                                        forwarding,
+                                        unroll,
+                                        scalar,
+                                        final_origins,
+                                        budget,
+                                    )
+                                    .map_err(PError::from)
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        },
+    )
 }
 
 // Closed final-output adapter: neither detached sites nor a caller-selected
@@ -298,7 +591,7 @@ pub(super) fn census_refined_forwarding_sites(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn census_loop_unroll_sites(
+pub(super) fn census_loop_unroll_sites(
     sites: CheckedPromotedSites<'_, '_>,
     intermediate: &CanonicalKirInventoryV1<'_>,
     final_input: &CanonicalKirInventoryV1<'_>,

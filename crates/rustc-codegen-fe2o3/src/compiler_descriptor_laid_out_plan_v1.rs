@@ -178,7 +178,7 @@ fn inspect(
     arguments: &[Argument],
     check_offsets: bool,
 ) -> Result<Option<Extent>, CompilerDescriptorError> {
-    if arguments.is_empty() || arguments.len() > MAX_ABI_FIELDS {
+    if arguments.len() > MAX_ABI_FIELDS {
         return Err(mismatch("scalar packing actual argument count"));
     }
     let mut nominal = false;

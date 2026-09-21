@@ -38,7 +38,7 @@ struct ErasedSourceOutputOccurrencesV1<'s> {
     #[cfg_attr(not(test), allow(dead_code))]
     bound: &'s fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
     #[cfg_attr(not(test), allow(dead_code))]
-    checked: &'s fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+    checked: Option<&'s fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1>,
     blocks: Vec<ErasedSourceBlockRowV1>,
     #[cfg_attr(not(test), allow(dead_code))]
     assertion_indices: Vec<Option<usize>>,
@@ -68,7 +68,9 @@ impl ErasedSourceOutputOccurrencesV1<'_> {
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> ErasedOccurrenceResultV1<&fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1> {
         self.coordinates.live(budget)?;
-        Ok(self.checked)
+        // Decoded actual-pair custody is not a producer execution witness.
+        self.checked
+            .ok_or(ProductionSourceOutputErrorV1::InputCustody)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -267,11 +269,96 @@ fn with_erased_source_output_occurrences_v1<'w, R>(
             AssertOriginResourceV1::Accounting,
         ));
     }
-    let submitted = checked.occurrences().candidate();
+    erased_source_output_pair_custody_v1(
+        source,
+        coordinates,
+        checked.owner(),
+        checked.occurrences().candidate(),
+        checked.native_input_audit_bytes(),
+        transition,
+        control,
+        budget,
+    )?;
+    source
+        .with_checked_erasure_v1(budget, |deletion, budget| {
+            Ok(erased_source_output_scope_v1(
+                deletion,
+                coordinates,
+                Some(checked),
+                transition,
+                control,
+                budget,
+                next,
+            ))
+        })
+        .map_err(ProductionSourceOutputErrorV1::SourceReplay)?
+}
+
+// Numeric prepayment is only a caller storage contract, never semantic or
+// execution authority. Graphs, all nine row slices, indexes, audit bytes and
+// callback result/captures stay paid on this ledger throughout the callback.
+#[allow(clippy::too_many_arguments)]
+fn with_erased_source_output_pair_v1<'w, R>(
+    source: &ProductionUnitLocalErasedSourceOwnerV1,
+    coordinates: &fe2o3_kernel_analysis::CheckedCanonicalKirCoordinatePreservationV1<'_, '_>,
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    submitted: fe2o3_kernel_ir::CanonicalKirTransitionCandidateV1<'_>,
+    historical: &[u8],
+    required: usize,
+    transition: &fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV1<'_, '_, '_, '_>,
+    control: &CheckedCanonicalKirControlIndexV1<'_, '_, '_>,
+    budget: &mut AssertOriginBudgetV1<'w>,
+    next: impl for<'s> FnOnce(
+        &ErasedSourceOutputOccurrencesV1<'s>,
+        &mut AssertOriginBudgetV1<'w>,
+    ) -> ErasedOccurrenceResultV1<R>,
+) -> ErasedOccurrenceResultV1<R> {
+    erased_occurrence_charge_v1(budget, 20)?;
+    if required < source.retained_storage_floor_v1() || budget.storage() < required {
+        return Err(ProductionSourceOutputErrorV1::Resource(
+            AssertOriginResourceV1::Accounting,
+        ));
+    }
+    erased_source_output_pair_custody_v1(
+        source,
+        coordinates,
+        output,
+        submitted,
+        historical,
+        transition,
+        control,
+        budget,
+    )?;
+    source
+        .with_checked_erasure_v1(budget, |deletion, budget| {
+            Ok(erased_source_output_scope_v1(
+                deletion,
+                coordinates,
+                None,
+                transition,
+                control,
+                budget,
+                next,
+            ))
+        })
+        .map_err(ProductionSourceOutputErrorV1::SourceReplay)?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn erased_source_output_pair_custody_v1(
+    source: &ProductionUnitLocalErasedSourceOwnerV1,
+    coordinates: &fe2o3_kernel_analysis::CheckedCanonicalKirCoordinatePreservationV1<'_, '_>,
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    submitted: fe2o3_kernel_ir::CanonicalKirTransitionCandidateV1<'_>,
+    historical: &[u8],
+    transition: &fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV1<'_, '_, '_, '_>,
+    control: &CheckedCanonicalKirControlIndexV1<'_, '_, '_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> ErasedOccurrenceResultV1<()> {
     let accepted = transition.rows();
     if !std::ptr::eq(source.erased(), coordinates.input())
         || !std::ptr::eq(coordinates.output(), control.input().owner())
-        || !std::ptr::eq(checked.owner(), control.output().owner())
+        || !std::ptr::eq(output, control.output().owner())
         || !std::ptr::eq(transition.input(), control.input())
         || !std::ptr::eq(transition.output(), control.output())
         || !std::ptr::eq(accepted.functions, submitted.functions)
@@ -288,7 +375,6 @@ fn with_erased_source_output_occurrences_v1<'w, R>(
     }
     let bound = coordinates.output();
     let bytes = bound.canonical().canonical_bytes();
-    let historical = checked.native_input_audit_bytes();
     erased_occurrence_charge_v1(budget, 1)?;
     let bytes_work = bytes.len().checked_add(historical.len()).ok_or(
         ProductionSourceOutputErrorV1::Resource(AssertOriginResourceV1::Arithmetic),
@@ -297,25 +383,13 @@ fn with_erased_source_output_occurrences_v1<'w, R>(
     if bytes != historical {
         return Err(ProductionSourceOutputErrorV1::InputCustody);
     }
-    source
-        .with_checked_erasure_v1(budget, |deletion, budget| {
-            Ok(erased_source_output_scope_v1(
-                deletion,
-                coordinates,
-                checked,
-                transition,
-                control,
-                budget,
-                next,
-            ))
-        })
-        .map_err(ProductionSourceOutputErrorV1::SourceReplay)?
+    Ok(())
 }
 
 fn erased_source_output_scope_v1<'w, R>(
     deletion: &CheckedUnitLocalCallDeletionV1<'_>,
     coordinates: &fe2o3_kernel_analysis::CheckedCanonicalKirCoordinatePreservationV1<'_, '_>,
-    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+    checked: Option<&fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1>,
     transition: &fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV1<'_, '_, '_, '_>,
     control: &CheckedCanonicalKirControlIndexV1<'_, '_, '_>,
     budget: &mut AssertOriginBudgetV1<'w>,

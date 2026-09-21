@@ -4,6 +4,20 @@ use gpu_device::{Blocked, DisjointSlice, Index1D, kernel};
     typed,
     namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
 )]
+pub fn empty() {}
+
+#[kernel(
+    typed,
+    namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
+pub fn empty_result() -> gpu_device::KernelResult {
+    Ok(())
+}
+
+#[kernel(
+    typed,
+    namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
 pub fn transform(factor: f32, source: &[f32], destination: DisjointSlice<f32>) {
     let _ = (factor, source, destination);
 }
@@ -65,6 +79,10 @@ pub fn assert_generated_adapters() {
     {
     }
 
+    assert_kfd_adapter::<empty_gpu::Marker, empty_gpu::Arguments>();
+    assert_kfd_adapter::<empty_result_gpu::Marker, empty_result_gpu::Arguments>();
+    let _: empty_gpu::Arguments = empty_gpu::Arguments::new();
+    let _: empty_result_gpu::Arguments = empty_result_gpu::Arguments::new();
     assert_kfd_adapter::<transform_gpu::Marker, transform_gpu::Arguments<'static>>();
     assert_kfd_adapter::<combine_gpu::Marker, combine_gpu::Arguments<'static>>();
     assert_kfd_adapter::<

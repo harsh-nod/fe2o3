@@ -2787,12 +2787,6 @@ fn validate_general_typed_function_shape_v1(input: &ItemFn) -> syn::Result<()> {
             "general typed V1 requires the unit return type or KernelResult",
         ));
     }
-    if signature.inputs.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &signature.inputs,
-            "general typed V1 requires at least one kernel argument",
-        ));
-    }
     Ok(())
 }
 
@@ -4592,10 +4586,11 @@ mod tests {
         validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
     };
     use fe2o3_artifacts::{
-        AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
-        PointerWidth, RustLayoutEvidenceV1, RustPhysicalComponentKindV1, RustPhysicalComponentV1,
-        RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
-        ScalarType,
+        AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+        Mutability, PointerWidth, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
+        RustPhysicalComponentV1, RustScalarElementTypeV1, RustSourceTypeShapeV1,
+        RustTypeEvidenceV1, RustcAbiClassV1, ScalarType,
+        derive_generated_host_contract_identity_v1,
     };
     use proc_macro_crate::FoundCrate;
     use quote::{ToTokens, quote};
@@ -6293,9 +6288,6 @@ mod tests {
             parse_quote! {
                 pub fn unsupported_third(a: &[f32], b: &[f32], c: *mut f32) {}
             },
-            parse_quote! {
-                pub fn empty() {}
-            },
         ];
 
         for input in cases {
@@ -6311,6 +6303,140 @@ mod tests {
                 input.sig.ident
             );
         }
+    }
+
+    #[test]
+    fn general_typed_zero_arguments_have_an_empty_abi_and_bound_identity() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let binding = [0x43; 32];
+        let abi = AbiLayout::new(0, 1, PointerWidth::Bits64, Vec::new()).unwrap();
+        for input in [
+            parse_quote!(
+                pub fn empty() {}
+            ),
+            parse_quote!(
+                pub fn empty() -> () {}
+            ),
+            parse_quote!(
+                pub fn empty() -> KernelResult {
+                    Ok(())
+                }
+            ),
+        ] {
+            validate_typed_kernel_profile_v1(&input, &options).unwrap();
+            let model = model_general_typed_signature_v1(&input, &options, binding).unwrap();
+            assert!(model.arguments.is_empty());
+            assert_eq!(model.abi, abi);
+            assert_eq!(model.launch.rank(), 1);
+            assert_eq!(
+                model.launch.block_size(),
+                BlockSize::Exact(fe2o3_artifacts::Dimensions::new(256, 1, 1).unwrap())
+            );
+            assert_eq!(
+                model.generated_host_contract_identity,
+                derive_generated_host_contract_identity_v1(
+                    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                    binding,
+                    "empty",
+                    "empty",
+                    &abi,
+                    &model.launch,
+                )
+            );
+            let arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
+            let arguments: syn::File = syn::parse2(arguments).unwrap();
+            let fields = arguments
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Struct(item) if item.ident == "Arguments" => Some(&item.fields),
+                    _ => None,
+                })
+                .expect("generated argument structure");
+            assert!(fields.is_empty());
+        }
+    }
+
+    #[test]
+    fn general_typed_zero_argument_identity_binds_name_launch_and_namespace() {
+        let input: ItemFn = parse_quote!(
+            pub fn empty() {}
+        );
+        let renamed: ItemFn = parse_quote!(
+            pub fn renamed() {}
+        );
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let wave = parse_kernel_options(quote!(typed, launch(required = [64, 1, 1]))).unwrap();
+        let identity = |input: &ItemFn, options: &KernelOptions, binding| {
+            model_general_typed_signature_v1(input, options, binding)
+                .unwrap()
+                .generated_host_contract_identity
+        };
+        let expected = identity(&input, &options, [0x43; 32]);
+        assert_ne!(expected, identity(&renamed, &options, [0x43; 32]));
+        assert_ne!(expected, identity(&input, &wave, [0x43; 32]));
+        assert_ne!(expected, identity(&input, &options, [0x44; 32]));
+    }
+
+    #[test]
+    fn general_typed_zero_arguments_preserve_function_shape_rejections() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let cases: Vec<ItemFn> = vec![
+            parse_quote!(
+                fn private() {}
+            ),
+            parse_quote!(
+                pub(crate) fn restricted() {}
+            ),
+            parse_quote!(
+                pub unsafe fn unsafe_kernel() {}
+            ),
+            parse_quote!(
+                pub const fn constant() {}
+            ),
+            parse_quote!(
+                pub async fn asynchronous() {}
+            ),
+            parse_quote!(
+                pub extern "C" fn foreign() {}
+            ),
+            parse_quote!(
+                pub fn generic<T>() {}
+            ),
+            parse_quote!(
+                pub fn lifetime<'a>() {}
+            ),
+            parse_quote!(
+                pub fn constrained()
+                where
+                    (): Copy,
+                {
+                }
+            ),
+            parse_quote!(
+                pub fn result() -> u32 {
+                    1
+                }
+            ),
+            parse_quote!(
+                pub fn never() -> ! {
+                    loop {}
+                }
+            ),
+        ];
+        for input in cases {
+            assert!(model_general_typed_signature_v1(&input, &options, [0x43; 32]).is_err());
+            assert!(validate_typed_kernel_profile_v1(&input, &options).is_err());
+        }
+        let input: ItemFn = parse_quote!(
+            pub fn empty() {}
+        );
+        let wrong_rank = parse_kernel_options(quote!(
+            typed,
+            launch(required = [64, 1, 1], max_grid = [1, 2, 1])
+        ))
+        .unwrap();
+        assert!(validate_typed_kernel_profile_v1(&input, &wrong_rank).is_err());
     }
 
     #[test]
@@ -7037,9 +7163,6 @@ mod tests {
                 pub fn result(value: u32) -> u32 {
                     value
                 }
-            ),
-            parse_quote!(
-                pub fn empty() {}
             ),
             parse_quote!(
                 pub fn raw(value: *const u32) {}

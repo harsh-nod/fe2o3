@@ -132,10 +132,6 @@ pub(crate) fn construct_production_semantic_types_v1<'tcx>(
 
 /// Preserves actual normalized rustc usize/isize classification without replacing
 /// its source identity, structural integer shape, or target-resolved layout.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "V35 nominal ABI continuation is integrated in B2")
-)]
 pub(crate) fn construct_production_semantic_types_nominal_v35<'tcx>(
     tcx: TyCtxt<'tcx>,
     producers: &[RetainedSemanticTypeProducerV1<'tcx>],

@@ -237,6 +237,53 @@ fn check_actual(
     budget: &mut AssertOriginBudgetV1<'_>,
     binding: &PromotionBinding,
 ) -> UResult<Box<[FormalMemoryObligations]>> {
+    let kernels = with_actual_unrolled_sites_v1(
+        prefix,
+        tail,
+        limits,
+        origins,
+        budget,
+        binding,
+        |sites, intermediate, input, refinement, forwarding, pair, budget, binding| {
+            promotion_sites::census_loop_unroll_sites(
+                sites,
+                intermediate,
+                input,
+                refinement,
+                forwarding,
+                pair,
+                budget,
+                binding,
+            )
+        },
+    )?;
+    budget.charge_work(2)?;
+    if kernels.len() != tail.output().module().kernels.len() {
+        return Err(UError::Admission(Box::new(PError::from(E::Formal(
+            crate::ProductionFormalMemoryErrorV1::ObligationMismatch,
+        )))));
+    }
+    Ok(kernels)
+}
+#[allow(clippy::too_many_arguments)]
+fn with_actual_unrolled_sites_v1<'w>(
+    prefix: FinalPrefix<'_>,
+    tail: &UnrollTail,
+    limits: UnrollLimits,
+    origins: &mut Vec<UnrollOrigin>,
+    budget: &mut AssertOriginBudgetV1<'w>,
+    binding: &PromotionBinding,
+    next: impl FnOnce(
+        CheckedPromotedSites<'_, '_>,
+        &CanonicalKirInventoryV1<'_>,
+        &CanonicalKirInventoryV1<'_>,
+        &fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>,
+        &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'_>,
+        &fe2o3_kernel_analysis::CheckedCanonicalKirLoopUnrollPairV1<'_, '_, '_>,
+        &mut AssertOriginBudgetV1<'w>,
+        &PromotionBinding,
+    ) -> PResult<Box<[FormalMemoryObligations]>>,
+) -> UResult<Box<[FormalMemoryObligations]>> {
     budget.charge_work(7)?;
     check_limits(prefix, limits, budget)?;
     if tail.limits() != limits {
@@ -264,7 +311,7 @@ fn check_actual(
         budget,
         binding,
         |sites, intermediate, refinement, forwarding, budget, binding| {
-            promotion_sites::check_loop_unroll_sites(
+            promotion_sites::with_checked_loop_unroll_sites(
                 sites,
                 intermediate,
                 refinement,
@@ -274,6 +321,7 @@ fn check_actual(
                 origins,
                 budget,
                 binding,
+                next,
             )
         },
     )
@@ -288,12 +336,6 @@ fn check_actual(
         if fresh != old {
             return Err(UError::OriginsMismatch);
         }
-    }
-    budget.charge_work(2)?;
-    if kernels.len() != tail.output().module().kernels.len() {
-        return Err(UError::Admission(Box::new(PError::from(E::Formal(
-            crate::ProductionFormalMemoryErrorV1::ObligationMismatch,
-        )))));
     }
     Ok(kernels)
 }
@@ -325,6 +367,38 @@ fn prepare_data(
     data.added = added(&data, header)?;
     budget.charge_work(1)?;
     Ok(data)
+}
+
+impl ProductionOwnedLoopUnrollContinuationV1 {
+    // Namespace-only private facade to the shared promotion/source helpers.
+    // No live-U owner, sealed producer witness or source boolean is fabricated.
+    pub(crate) fn check_decoded_expanded_sites_v1(
+        source: CanonicalOutputFormalSourceAnchorV1<'_>,
+        history: &fe2o3_kernel_opt::CheckedLoopUnrollHistoryV1<'_>,
+        scalar: &fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1,
+        origins: &mut Vec<ProductionExpandedSourceOriginV1>,
+        required: usize,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> UResult<Box<[FormalMemoryObligations]>> {
+        scoped(required, budget, |budget, binding| {
+            let source = match source {
+                CanonicalOutputFormalSourceAnchorV1::Direct(v) => GeneralSourceContextV1::Direct(v),
+                CanonicalOutputFormalSourceAnchorV1::Erased(v) => GeneralSourceContextV1::Erased(v),
+            };
+            let reports = scalar
+                .output()
+                .module()
+                .kernels
+                .len()
+                .checked_mul(size_of::<FormalMemoryObligations>())
+                .ok_or(AssertOriginResourceV1::Arithmetic)?;
+            budget.reserve_storage(reports)?;
+            promotion_sites::check_decoded_expanded_sites_v1(
+                source, history, scalar, origins, required, budget, binding,
+            )
+            .map_err(|error| UError::Admission(Box::new(error)))
+        })
+    }
 }
 fn replay_data(
     prefix: FinalPrefix<'_>,
@@ -401,6 +475,84 @@ macro_rules! owner {
             }
         }
         impl $owner {
+            pub(crate) fn expanded_source_anchor_v1(
+                &self,
+            ) -> CanonicalOutputFormalSourceAnchorV1<'_> {
+                let source = FinalPrefix::$variant(&self.prefix)
+                    .refined()
+                    .licm()
+                    .preheaders()
+                    .promoted()
+                    .p8()
+                    .historical()
+                    .source();
+                match source {
+                    GeneralSourceContextV1::Direct(source) => {
+                        CanonicalOutputFormalSourceAnchorV1::Direct(source)
+                    }
+                    GeneralSourceContextV1::Erased(source) => {
+                        CanonicalOutputFormalSourceAnchorV1::Erased(source)
+                    }
+                }
+            }
+            pub(crate) fn check_expanded_source_v1(
+                &self,
+                core: &fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1,
+                final_origins: &mut Vec<ProductionExpandedSourceOriginV1>,
+                budget: &mut AssertOriginBudgetV1<'_>,
+            ) -> UResult<Box<[FormalMemoryObligations]>> {
+                scoped(
+                    self.retained_input_storage_floor_v1()?,
+                    budget,
+                    |budget, binding| {
+                        self.verify_equivalence(budget)?;
+                        binding_check(binding, budget)?;
+                        budget.reserve_storage(size_of::<Vec<UnrollOrigin>>())?;
+                        let mut origins = rows(self.origins().len(), budget)?;
+                        let reports = with_actual_unrolled_sites_v1(
+                            FinalPrefix::$variant(&self.prefix),
+                            &self.data.tail,
+                            self.data.limits,
+                            &mut origins,
+                            budget,
+                            binding,
+                            |sites,
+                             intermediate,
+                             input,
+                             refinement,
+                             forwarding,
+                             pair,
+                             budget,
+                             binding| {
+                                let reports = check_expanded_source_v1(
+                                    sites,
+                                    intermediate,
+                                    input,
+                                    refinement,
+                                    forwarding,
+                                    pair,
+                                    core,
+                                    final_origins,
+                                    budget,
+                                )?;
+                                binding.check(budget)?;
+                                Ok(reports)
+                            },
+                        )?;
+                        budget.charge_work(
+                            origins
+                                .len()
+                                .checked_mul(size_of::<UnrollOrigin>())
+                                .and_then(|n| n.checked_add(1))
+                                .ok_or(AssertOriginResourceV1::Arithmetic)?,
+                        )?;
+                        if origins != self.data.origins {
+                            return Err(UError::OriginsMismatch);
+                        }
+                        Ok(reports)
+                    },
+                )
+            }
             /// Actual consumed source-bearing final-F owner, retained once.
             pub const fn prefix(&self) -> &$prefix {
                 &self.prefix

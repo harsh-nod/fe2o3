@@ -14,7 +14,7 @@ use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 
 // Framing-only fields. These deliberately opaque graph/source bytes may test the
 // exact V4 join, but cannot construct History or an independent signed Source.
-fn fields() -> [Vec<u8>; 14] {
+pub(super) fn fields() -> [Vec<u8>; 14] {
     let mut fields = std::array::from_fn(|i| vec![i as u8 + 1]);
     fields[5].clear();
     let mut h = vec![0u8; 275];
@@ -318,21 +318,21 @@ mod fixture_support;
 
 // This exercises the complete structural root join using genuine public source
 // materialization. The unsigned roster is component input, never a Source proof.
-struct RootFixture {
-    source: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
-    catalog: Catalog,
-    middle: Roster,
-    descriptor: Descriptor,
-    native: Native,
-    fields: [Vec<u8>; 14],
-    source_storage: usize,
+pub(super) struct RootFixture {
+    pub(super) source: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    pub(super) catalog: Catalog,
+    pub(super) middle: Roster,
+    pub(super) descriptor: Descriptor,
+    pub(super) native: Native,
+    pub(super) fields: [Vec<u8>; 14],
+    pub(super) source_storage: usize,
 }
 
 impl RootFixture {
     fn new(seed: u8) -> Self {
         Self::from_source(fixture_support::plain_source(seed))
     }
-    fn from_source(source: fe2o3_pliron::ProductionSemanticMirOwnerV1) -> Self {
+    pub(super) fn from_source(source: fe2o3_pliron::ProductionSemanticMirOwnerV1) -> Self {
         use fe2o3_compiler_lineage::{
             MultiRootProofRosterInputsV3, MultiRootProofRosterKindV3,
             MultiRootProofRosterRootInputV3,

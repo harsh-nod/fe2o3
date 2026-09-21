@@ -1,4 +1,6 @@
 use super::*;
+#[path = "production_checked_output_expanded_policy_v1_tests.rs"]
+mod expanded_policy_tests;
 use crate::{
     ProductionLoopUnrollErrorV1 as Error, ProductionLoopUnrollStorageV1 as Receipt,
     ProductionOwnedLoopUnrollContinuationV1 as DirectU,

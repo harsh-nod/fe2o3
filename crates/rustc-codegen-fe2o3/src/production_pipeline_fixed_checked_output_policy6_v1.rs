@@ -177,6 +177,15 @@ impl FixedCheckedOutputProductionCompilationPolicy6V1 {
         }
     }
 
+    /// Actual binder input: original N for Direct, retained E after erasure.
+    #[cfg(test)]
+    pub(crate) fn test_prebind_owner_v1(&self) -> &Owner {
+        match &self.stage {
+            Stage::Direct(stage) => direct_native_source(stage.output()),
+            Stage::Erased(stage) => stage.output().erased(),
+        }
+    }
+
     /// Actual retained original N, not an owner reconstructed from its bytes.
     #[cfg(test)]
     pub(crate) fn test_original_owner_v1(&self) -> &Owner {

@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "scalar-fixed-point")]
+mod scalar_fixed_point;
+
 #[cfg(any(
     feature = "guarded-loop-read",
     feature = "guarded-loop-read-control",
@@ -140,6 +143,7 @@ mod ordered_region_v31;
 mod ordered_program_v32;
 
 #[cfg(not(any(
+    feature = "scalar-fixed-point",
     feature = "guarded-loop-read",
     feature = "guarded-loop-read-control",
     feature = "guarded-loop-read-stale",

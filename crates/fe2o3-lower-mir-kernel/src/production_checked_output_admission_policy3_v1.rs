@@ -1,4 +1,12 @@
 use super::*;
+pub use general::ProductionExpandedSourceOriginV1;
+pub use general::expanded_policy::{
+    ProductionExpandedHistoryV1, ProductionExpandedPolicyErrorV1,
+    ProductionExpandedPolicyStorageV1, ProductionExpandedPrefixV1,
+    ProductionOwnedExpandedContinuationV1,
+};
+#[cfg(test)]
+pub(super) use general::expanded_source_tests;
 pub use general::redundant_store::{
     ProductionCrossBlockForwardingErrorV1, ProductionCrossBlockForwardingOriginV1,
     ProductionCrossBlockForwardingStorageV1, ProductionInductionRefinementErrorV1,

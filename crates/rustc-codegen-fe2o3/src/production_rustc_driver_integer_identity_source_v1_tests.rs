@@ -13,6 +13,8 @@ mod dominance;
 mod graph;
 #[path = "production_rustc_driver_masked_shift_fixed6_source_v1_tests.rs"]
 mod masked;
+#[path = "production_rustc_driver_scalar_fixed_point_source_v1_tests.rs"]
+mod scalar_fixed_point_source;
 
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::integer_identity_source::integer_identity_source_child";
 const REQUEST: &str = "FE2O3_TEST_POLICY6_SOURCE_REQUEST_V1";

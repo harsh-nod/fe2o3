@@ -352,6 +352,7 @@ pub(super) fn native(
         None,
         None,
         None,
+        None,
         budget,
     )
 }
@@ -376,6 +377,7 @@ pub(super) fn native_with_induction_refinement(
         phase,
         authorized_trap,
         Some(&allowed),
+        None,
         None,
         None,
         budget,
@@ -411,6 +413,7 @@ pub(super) fn native_with_refinement_forwarding(
         authorized_trap,
         None,
         Some(&allowed),
+        None,
         None,
         budget,
     )
@@ -450,6 +453,58 @@ pub(super) fn native_with_loop_unroll(
         None,
         None,
         Some(&allowed),
+        None,
+        budget,
+    )
+}
+
+// The same historical U proof is queried only through independently composed
+// retained-operation lineage. No final sum/false adjacency is assumed.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn native_with_expanded_source_v1(
+    inventory: &CanonicalKirInventoryV1<'_>,
+    private: &private_memory::PrivateMemory<'_, '_>,
+    division: &unsigned_division::UnsignedDivision<'_, '_>,
+    helpers: &scalar_helpers::RawEmptyScalarHelpers<'_, '_>,
+    transport: &CheckedExpandedOriginsV1<'_, '_, '_>,
+    refinement: &fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>,
+    forwarding: &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'_>,
+    intermediate: &CanonicalKirInventoryV1<'_>,
+    final_input: &CanonicalKirInventoryV1<'_>,
+    unroll: &fe2o3_kernel_analysis::CheckedCanonicalKirLoopUnrollPairV1<'_, '_, '_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
+    budget
+        .reserve_storage(std::mem::size_of::<
+            loop_unroll::CheckedUnrolledAdds<'_, '_, '_, '_, '_, '_>,
+        >())
+        .map_err(E::Resource)?;
+    let previous = loop_unroll::CheckedUnrolledAdds::new(
+        refinement,
+        forwarding,
+        intermediate,
+        final_input,
+        unroll,
+        transport.seed.output(),
+        budget,
+    )?;
+    let mut traps = scratch::<bool>(inventory.operations().len(), budget)?;
+    for ordinal in 0..inventory.operations().len() {
+        traps.push(transport.trap(ordinal, budget)?);
+    }
+    native_inner(
+        inventory,
+        private,
+        division,
+        helpers,
+        "expanded final",
+        |ordinal, coordinate| {
+            Ok(traps[ordinal] && inventory.operations()[ordinal].coordinate == coordinate)
+        },
+        None,
+        None,
+        None,
+        Some((&previous, transport)),
         budget,
     )
 }
@@ -465,6 +520,10 @@ fn native_inner(
     allowed: Option<&induction_refinement::CheckedAdds<'_, '_, '_>>,
     forwarded: Option<&refined_forwarding::CheckedForwardedAdds<'_, '_, '_>>,
     unrolled: Option<&loop_unroll::CheckedUnrolledAdds<'_, '_, '_, '_, '_, '_>>,
+    expanded: Option<(
+        &loop_unroll::CheckedUnrolledAdds<'_, '_, '_, '_, '_, '_>,
+        &CheckedExpandedOriginsV1<'_, '_, '_>,
+    )>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
     charge(budget, 2)?;
@@ -592,7 +651,17 @@ fn native_inner(
                     Some(allowed) => allowed.operation(inventory, ordinal, budget)?,
                     None => match unrolled {
                         Some(allowed) => allowed.operation(inventory, ordinal, budget)?,
-                        None => false,
+                        None => match expanded {
+                            Some((previous, transport)) => {
+                                match transport.original_operation(inventory, ordinal, budget)? {
+                                    Some(old) => {
+                                        previous.operation(transport.seed.output(), old, budget)?
+                                    }
+                                    None => false,
+                                }
+                            }
+                            None => false,
+                        },
                     },
                 },
             } =>

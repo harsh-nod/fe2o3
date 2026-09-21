@@ -124,6 +124,12 @@ mod value_origin_v1;
 pub use slice_view_v1::*;
 include!("production_optimized_assert_origins_v1.rs");
 include!("production_source_output_catalog_v1.rs");
+#[path = "production_source_catalog_callback_v1.rs"]
+mod source_catalog_callback_v1;
+pub use source_catalog_callback_v1::{
+    CheckedSourcePipelineCatalogV1, SourcePipelineCatalogCallbackErrorV1,
+    with_checked_source_pipeline_catalog_v1,
+};
 include!("production_source_output_occurrences_v1.rs");
 include!("production_source_output_erased_v1.rs");
 include!("production_source_output_private_arrays_v1.rs");
@@ -26792,6 +26798,9 @@ mod shared_slice_helper_parameter_tests {
 
 #[cfg(test)]
 mod resource_tests {
+    mod source_catalog_callback_tests {
+        include!("production_source_catalog_callback_v1_tests.rs");
+    }
     mod gfx942_inline_scalar_correspondence_v30_tests {
         use super::*;
         include!("production_semantic_kir_v1/gfx942_inline_scalar_correspondence_v30_tests.rs");

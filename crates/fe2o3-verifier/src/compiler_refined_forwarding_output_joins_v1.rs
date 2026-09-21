@@ -72,21 +72,47 @@ fn copy(bytes: &[u8], budget: &mut Budget<'_>) -> R<Vec<u8>> {
 }
 
 pub(super) fn association(frame: &Frame<'_>, budget: &mut Budget<'_>) -> R<()> {
+    association_fields(
+        frame.field(Field::OriginalInputV4),
+        frame.field(Field::OriginalVerus),
+        frame.field(Field::SemanticMir),
+        frame.field(Field::OriginalMiddleEnd),
+        frame.field(Field::OriginalNative),
+        frame.field(Field::OriginalCorrespondence),
+        frame.field(Field::OriginalFormalMemory),
+        budget,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed seven borrowed association fields preserve the existing F charge and header contract"
+)]
+pub(super) fn association_fields(
+    original_input: &[u8],
+    original_verus: &[u8],
+    semantic_mir: &[u8],
+    original_middle: &[u8],
+    original_native: &[u8],
+    original_correspondence: &[u8],
+    original_formal: &[u8],
+    budget: &mut Budget<'_>,
+) -> R<()> {
     scoped(budget, |budget| {
-        let wire = frame.field(Field::OriginalInputV4);
+        let wire = original_input;
         codec::<Association>(wire.len(), budget)?;
         let association = Association::decode(wire).map_err(E::Association)?;
         bytes(
             association.verus_execution_evidence(),
-            frame.field(Field::OriginalVerus),
+            original_verus,
             "V4 exact signed Verus bytes",
             budget,
         )?;
         let declared = association.inputs();
         macro_rules! identity {
-            ($receipt:ty, $field:ident, $wanted:expr) => {{
+            ($receipt:ty, $field:ident, $raw:expr, $wanted:expr) => {{
                 scoped(budget, |budget| {
-                    let raw = frame.field(Field::$field);
+                    let raw = $raw;
                     codec::<$receipt>(raw.len(), budget)?;
                     budget.reserve_storage(HASH_STORAGE)?;
                     // All five pinned V3 domains are shorter than 64 bytes;
@@ -113,22 +139,31 @@ pub(super) fn association(frame: &Frame<'_>, budget: &mut Budget<'_>) -> R<()> {
         identity!(
             InertCanonicalSemanticMirReceiptV3,
             SemanticMir,
+            semantic_mir,
             declared.semantic_mir()
         );
         identity!(
             InertMiddleEndReceiptV3,
             OriginalMiddleEnd,
+            original_middle,
             declared.middle_end()
         );
-        identity!(InertKernelIrReceiptV3, OriginalNative, declared.kernel_ir());
+        identity!(
+            InertKernelIrReceiptV3,
+            OriginalNative,
+            original_native,
+            declared.kernel_ir()
+        );
         identity!(
             InertMirToKirCorrespondenceReceiptV3,
             OriginalCorrespondence,
+            original_correspondence,
             declared.mir_to_kir_correspondence()
         );
         identity!(
             InertFormalMemoryReceiptV3,
             OriginalFormalMemory,
+            original_formal,
             declared.formal_memory()
         );
         drop(association);
@@ -431,18 +466,17 @@ pub(super) fn capabilities(
         .map_err(E::Capabilities)
 }
 
-pub(super) fn roots(
-    frame: &Frame<'_>,
+pub(super) fn root_header(
+    root_count: u32,
     inputs: &Inputs<'_>,
     output: &Graph,
     native: &Native,
     descriptor: &Descriptor,
-    budget: &mut Budget<'_>,
-) -> R<()> {
+) -> R<usize> {
     let count = inputs.semantic.roots().len();
     let table = descriptor.table();
     if !(1..=MAX_ROOTS).contains(&count)
-        || frame.root_count() as usize != count
+        || root_count as usize != count
         || inputs.original.module().kernels.len() != count
         || output.module().kernels.len() != count
         || table.kernels().len() != count
@@ -453,7 +487,16 @@ pub(super) fn roots(
     {
         return Err(E::Mismatch("complete four-axis root/target roster"));
     }
-    let scan = inputs
+    Ok(count)
+}
+
+pub(super) fn root_scan(
+    inputs: &Inputs<'_>,
+    output: &Graph,
+    native: &Native,
+    descriptor: &Descriptor,
+) -> R<usize> {
+    inputs
         .original
         .canonical()
         .canonical_bytes()
@@ -462,7 +505,147 @@ pub(super) fn roots(
         .and_then(|n| n.checked_add(inputs.semantic.canonical_encoding().len()))
         .and_then(|n| n.checked_add(descriptor.canonical_bytes().len()))
         .and_then(|n| n.checked_add(native.symbol_manifest().canonical_bytes().len()))
-        .ok_or(Resource::Arithmetic)?;
+        .ok_or(Resource::Arithmetic.into())
+}
+
+pub(super) fn root_row(
+    ordinal: usize,
+    row: &fe2o3_compiler_ffi::InertRefinedForwardingRootRefV1<'_>,
+    inputs: &Inputs<'_>,
+    output: &Graph,
+    table: &Table,
+    seen: &mut [[bool; MAX_ROOTS]; 3],
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    let count = inputs.semantic.roots().len();
+    let n = row.original_kernel_ordinal as usize;
+    let f = row.final_kernel_ordinal as usize;
+    let d = row.descriptor_ordinal as usize;
+    if [n, f, d].into_iter().any(|i| i >= count) || seen[0][n] || seen[1][f] || seen[2][d] {
+        return Err(E::Mismatch("four-axis root permutation"));
+    }
+    seen[0][n] = true;
+    seen[1][f] = true;
+    seen[2][d] = true;
+    let semantic_id = inputs.semantic.roots()[ordinal];
+    let semantic = inputs
+        .semantic
+        .functions()
+        .get(semantic_id.index() as usize)
+        .ok_or(E::Mismatch("semantic root ordinal"))?;
+    let source = semantic
+        .kernel_entry()
+        .ok_or(E::Mismatch("semantic kernel entry"))?;
+    let launch = inputs.launch.roots()[ordinal];
+    let layout = launch.layout();
+    let signed = inputs
+        .middle
+        .root(ordinal)
+        .ok_or(E::Mismatch("signed root"))?;
+    let original = &inputs.original.module().kernels[n];
+    let final_kernel = &output.module().kernels[f];
+    let descriptor = &table.kernels()[d];
+    let original_function = inputs
+        .original
+        .module()
+        .functions
+        .get(row.original_function as usize)
+        .ok_or(E::Mismatch("original function ordinal"))?;
+    let final_function = output
+        .module()
+        .functions
+        .get(row.final_function as usize)
+        .ok_or(E::Mismatch("final function ordinal"))?;
+    if row.semantic_root != semantic_id.index()
+        || row.semantic_function_identity != *semantic.identity().as_bytes()
+        || row.semantic_function_identity != *launch.semantic_root_identity().as_bytes()
+        || row.source_kernel_binding != *source.kernel_binding_identity().as_bytes()
+        || row.source_kernel_binding != launch.kernel_binding()
+        || row.descriptor_kernel_id != row.source_kernel_binding
+        || descriptor.kernel_id().as_bytes() != &row.descriptor_kernel_id
+        || row.source_rank != launch.source_rank()
+        || row.exact_workgroup != launch.source_launch().exact_workgroup()
+        || row.exact_workgroup != Some(signed.workgroup())
+        || row.source_max_grid != launch.source_launch().max_grid()
+        || row.grid_identity != layout.grid_identity()
+        || row.global_extents != layout.global_extents()
+        || row.workgroup_extents != layout.workgroup_extents()
+        || row.subgroup_size != layout.subgroup_size()
+        || row.full_physical_workgroups != layout.full_physical_workgroups()
+        || row.export_name.as_bytes() != source.export_symbol().as_bytes()
+        || row.export_name != signed.export_symbol()
+        || row.logical_name != signed.logical_name()
+        || row.export_name != original.id.as_str()
+        || row.export_name != final_kernel.id.as_str()
+        || original.entry != original_function.id
+        || final_kernel.entry != final_function.id
+        || original_function.role != FunctionRole::KernelEntry
+        || final_function.role != FunctionRole::KernelEntry
+        || row.export_name != descriptor.entry_name().as_str()
+        || row.logical_name != descriptor.logical_name().as_str()
+        || descriptor.descriptor_symbol().as_str().strip_suffix(".kd") != Some(row.export_name)
+        || inputs.middle.canonical_kernel_order().get(d).copied() != Some(ordinal as u32)
+    {
+        return Err(E::Mismatch("exact semantic/N/F/descriptor root axes"));
+    }
+    let wg = row
+        .exact_workgroup
+        .ok_or(E::Mismatch("exact source workgroup"))?;
+    let descriptor_launch = descriptor.launch();
+    let BlockSizeV1::Exact(block) = descriptor_launch.block_size() else {
+        return Err(E::Mismatch("exact descriptor workgroup"));
+    };
+    let grid = descriptor_launch.max_grid();
+    let static_resources = source
+        .source_contract()
+        .resources()
+        .map(|r| {
+            (
+                r.static_shared_memory_bytes(),
+                r.max_dynamic_shared_memory_bytes(),
+            )
+        })
+        .unwrap_or_default();
+    if descriptor_launch.rank() != row.source_rank
+        || [block.x(), block.y(), block.z()] != wg
+        || [grid.x(), grid.y(), grid.z()] != row.source_max_grid
+        || descriptor_launch.max_flat_workgroup_size()
+            != wg
+                .into_iter()
+                .try_fold(1u32, u32::checked_mul)
+                .ok_or(Resource::Arithmetic)?
+        || (
+            descriptor_launch.static_shared_memory_bytes(),
+            descriptor_launch.max_dynamic_shared_memory_bytes(),
+        ) != static_resources
+        || final_kernel.domain.rank() != row.source_rank
+        || final_kernel.workgroup_size.map(|w| [w.x, w.y, w.z]) != Some(wg)
+    {
+        return Err(E::Mismatch("exact source/descriptor/F launch"));
+    }
+    arguments(
+        table,
+        descriptor,
+        inputs.semantic,
+        semantic,
+        original_function,
+        final_function,
+        budget,
+    )?;
+    Ok(())
+}
+
+pub(super) fn roots(
+    frame: &Frame<'_>,
+    inputs: &Inputs<'_>,
+    output: &Graph,
+    native: &Native,
+    descriptor: &Descriptor,
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    let count = root_header(frame.root_count(), inputs, output, native, descriptor)?;
+    let table = descriptor.table();
+    let scan = root_scan(inputs, output, native, descriptor)?;
     // The root reader's working extent and returned row coexist with our seen
     // tables. The enclosing scope refunds only after every borrowed row drops.
     let root_working = READ_STORAGE
@@ -480,125 +663,17 @@ pub(super) fn roots(
         let row = frame
             .root(ordinal as u32, limit, |w| budget.charge_work(w))
             .map_err(E::Framing)?;
-        let n = row.original_kernel_ordinal as usize;
-        let f = row.final_kernel_ordinal as usize;
-        let d = row.descriptor_ordinal as usize;
-        if [n, f, d].into_iter().any(|i| i >= count) || seen[0][n] || seen[1][f] || seen[2][d] {
-            return Err(E::Mismatch("four-axis root permutation"));
-        }
-        seen[0][n] = true;
-        seen[1][f] = true;
-        seen[2][d] = true;
-        let semantic_id = inputs.semantic.roots()[ordinal];
-        let semantic = inputs
-            .semantic
-            .functions()
-            .get(semantic_id.index() as usize)
-            .ok_or(E::Mismatch("semantic root ordinal"))?;
-        let source = semantic
-            .kernel_entry()
-            .ok_or(E::Mismatch("semantic kernel entry"))?;
-        let launch = inputs.launch.roots()[ordinal];
-        let layout = launch.layout();
-        let signed = inputs
-            .middle
-            .root(ordinal)
-            .ok_or(E::Mismatch("signed root"))?;
-        let original = &inputs.original.module().kernels[n];
-        let final_kernel = &output.module().kernels[f];
-        let descriptor = &table.kernels()[d];
-        let original_function = inputs
-            .original
-            .module()
-            .functions
-            .get(row.original_function as usize)
-            .ok_or(E::Mismatch("original function ordinal"))?;
-        let final_function = output
-            .module()
-            .functions
-            .get(row.final_function as usize)
-            .ok_or(E::Mismatch("final function ordinal"))?;
-        if row.semantic_root != semantic_id.index()
-            || row.semantic_function_identity != *semantic.identity().as_bytes()
-            || row.semantic_function_identity != *launch.semantic_root_identity().as_bytes()
-            || row.source_kernel_binding != *source.kernel_binding_identity().as_bytes()
-            || row.source_kernel_binding != launch.kernel_binding()
-            || row.descriptor_kernel_id != row.source_kernel_binding
-            || descriptor.kernel_id().as_bytes() != &row.descriptor_kernel_id
-            || row.source_rank != launch.source_rank()
-            || row.exact_workgroup != launch.source_launch().exact_workgroup()
-            || row.exact_workgroup != Some(signed.workgroup())
-            || row.source_max_grid != launch.source_launch().max_grid()
-            || row.grid_identity != layout.grid_identity()
-            || row.global_extents != layout.global_extents()
-            || row.workgroup_extents != layout.workgroup_extents()
-            || row.subgroup_size != layout.subgroup_size()
-            || row.full_physical_workgroups != layout.full_physical_workgroups()
-            || row.export_name.as_bytes() != source.export_symbol().as_bytes()
-            || row.export_name != signed.export_symbol()
-            || row.logical_name != signed.logical_name()
-            || row.export_name != original.id.as_str()
-            || row.export_name != final_kernel.id.as_str()
-            || original.entry != original_function.id
-            || final_kernel.entry != final_function.id
-            || original_function.role != FunctionRole::KernelEntry
-            || final_function.role != FunctionRole::KernelEntry
-            || row.export_name != descriptor.entry_name().as_str()
-            || row.logical_name != descriptor.logical_name().as_str()
-            || descriptor.descriptor_symbol().as_str().strip_suffix(".kd") != Some(row.export_name)
-            || inputs.middle.canonical_kernel_order().get(d).copied() != Some(ordinal as u32)
-        {
-            return Err(E::Mismatch("exact semantic/N/F/descriptor root axes"));
-        }
-        let wg = row
-            .exact_workgroup
-            .ok_or(E::Mismatch("exact source workgroup"))?;
-        let descriptor_launch = descriptor.launch();
-        let BlockSizeV1::Exact(block) = descriptor_launch.block_size() else {
-            return Err(E::Mismatch("exact descriptor workgroup"));
-        };
-        let grid = descriptor_launch.max_grid();
-        let static_resources = source
-            .source_contract()
-            .resources()
-            .map(|r| {
-                (
-                    r.static_shared_memory_bytes(),
-                    r.max_dynamic_shared_memory_bytes(),
-                )
-            })
-            .unwrap_or_default();
-        if descriptor_launch.rank() != row.source_rank
-            || [block.x(), block.y(), block.z()] != wg
-            || [grid.x(), grid.y(), grid.z()] != row.source_max_grid
-            || descriptor_launch.max_flat_workgroup_size()
-                != wg
-                    .into_iter()
-                    .try_fold(1u32, u32::checked_mul)
-                    .ok_or(Resource::Arithmetic)?
-            || (
-                descriptor_launch.static_shared_memory_bytes(),
-                descriptor_launch.max_dynamic_shared_memory_bytes(),
-            ) != static_resources
-            || final_kernel.domain.rank() != row.source_rank
-            || final_kernel.workgroup_size.map(|w| [w.x, w.y, w.z]) != Some(wg)
-        {
-            return Err(E::Mismatch("exact source/descriptor/F launch"));
-        }
-        arguments(
-            table,
-            descriptor,
-            inputs.semantic,
-            semantic,
-            original_function,
-            final_function,
-            budget,
-        )?;
+        root_row(ordinal, &row, inputs, output, table, &mut seen, budget)?;
     }
     symbols(output, native, table, budget)
 }
 
-fn symbols(output: &Graph, native: &Native, table: &Table, budget: &mut Budget<'_>) -> R<()> {
+pub(super) fn symbols(
+    output: &Graph,
+    native: &Native,
+    table: &Table,
+    budget: &mut Budget<'_>,
+) -> R<()> {
     let manifest = native.symbol_manifest();
     budget.reserve_storage(size_of::<[usize; 5]>())?;
     let mut counts = [0usize; 5];

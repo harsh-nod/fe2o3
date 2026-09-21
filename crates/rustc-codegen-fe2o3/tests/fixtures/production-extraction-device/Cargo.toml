@@ -8,6 +8,7 @@ rust-version.workspace = true
 publish = false
 
 [features]
+scalar-fixed-point = []
 guarded-loop-read = []
 guarded-loop-read-control = []
 guarded-loop-read-stale = []
