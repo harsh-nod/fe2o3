@@ -779,6 +779,7 @@ impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_
         if matches!(
             induction.preheader_control,
             ProjectedInductionPreheaderControlV1::Multiple(_)
+                | ProjectedInductionPreheaderControlV1::DistantDirect(_)
         ) {
             return Err(mismatch(
                 "guarded U32 progress requires its historical single-entry source certificate",

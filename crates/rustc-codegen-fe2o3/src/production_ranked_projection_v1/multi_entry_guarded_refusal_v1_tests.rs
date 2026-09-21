@@ -2,6 +2,15 @@ use super::*;
 
 #[test]
 fn actual_u32_multi_entry_source_keeps_guarded_certificate_route_closed() {
+    actual_u32_entry_source_keeps_guarded_certificate_route_closed(false);
+}
+
+#[test]
+fn actual_u32_distant_initializer_keeps_guarded_certificate_route_closed() {
+    actual_u32_entry_source_keeps_guarded_certificate_route_closed(true);
+}
+
+fn actual_u32_entry_source_keeps_guarded_certificate_route_closed(distant: bool) {
     let (ssa, launch) = fixture::source_with(30, target(false), |function| {
         let edge = |role, target| {
             SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
@@ -27,7 +36,7 @@ fn actual_u32_multi_entry_source_keeps_guarded_certificate_route_closed() {
             )
             .unwrap()
         };
-        let blocks = vec![
+        let mut blocks = vec![
             block(
                 211,
                 vec![assign(2, U32, SemanticRvalueKindV1::Use(constant(0)))],
@@ -63,6 +72,11 @@ fn actual_u32_multi_entry_source_keeps_guarded_certificate_route_closed() {
             ),
             block(216, vec![], SemanticTerminatorKindV1::Return),
         ];
+        if distant {
+            blocks[1] = block(212, vec![], goto(6));
+            blocks[2] = block(213, vec![], goto(6));
+            blocks.push(block(217, vec![], goto(3)));
+        }
         vec![
             SemanticFunctionDeclV1::new(
                 function.identity(),
@@ -81,7 +95,10 @@ fn actual_u32_multi_entry_source_keeps_guarded_certificate_route_closed() {
             .with_kernel_entry(function.kernel_entry().unwrap().clone()),
         ]
     });
-    assert_eq!(ssa.source_semantic().functions()[0].blocks().len(), 6);
+    assert_eq!(
+        ssa.source_semantic().functions()[0].blocks().len(),
+        6 + usize::from(distant)
+    );
     let mut work = Work::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     let sibling = [0x57_u8; FLOOR];
