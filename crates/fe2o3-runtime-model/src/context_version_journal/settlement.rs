@@ -66,12 +66,7 @@ impl ContextVersionJournalV1 {
             scratch_len: self.scratch.len(),
         }
         .check(count)?;
-        for index in 0..count {
-            self.count_indexed_access();
-            if self.scratch[index].is_some() {
-                return Err(ContextVersionJournalErrorV1::InvalidState);
-            }
-        }
+        settlement_scratch::shared_settlement_scratch_scan_v1(self, count)?;
         Ok((head, count))
     }
 
@@ -81,24 +76,10 @@ impl ContextVersionJournalV1 {
         evidence: ContextWriterReferenceV1,
         success: bool,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        let (mut head, count) = self.preflight_settlement(writer, evidence)?;
+        let (head, count) = self.preflight_settlement(writer, evidence)?;
 
         // All touched custody and return capacity are validated under this borrow.
-        for index in 0..count {
-            let slot = head.expect("validated complete retained chain");
-            self.count_indexed_access();
-            let member = self.members[slot].expect("validated retained member");
-            self.store_plan(
-                index,
-                BeginMemberPlanV1 {
-                    member_slot: slot,
-                    allocation: member.allocation,
-                    prior_lineage: member.prior_lineage,
-                    attempt_epoch: member.attempt_epoch,
-                },
-            );
-            head = member.next;
-        }
+        settlement_scratch::shared_settlement_scratch_stage_v1(self, head, count);
         for index in 0..count {
             self.count_indexed_access();
             let plan = self.scratch[index]

@@ -12,6 +12,7 @@ use core::cell::Cell;
 mod allocation_lifecycle;
 mod retained;
 mod settlement;
+mod settlement_scratch;
 mod settlement_storage;
 pub use allocation_lifecycle::ContextAllocationEnrollmentV1;
 use settlement_storage::SettlementReturnStorageV1;

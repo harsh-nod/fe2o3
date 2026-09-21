@@ -6,6 +6,9 @@ mod disposal;
 #[path = "retained_tests.rs"]
 mod retained;
 
+#[path = "settlement_scratch_tests.rs"]
+mod scratch;
+
 type Write = ContextAllocationWriteV1;
 type Success = ContextWriterSuccessEvidenceV1;
 type NoEffect = ContextWriterNoEffectEvidenceV1;
@@ -954,15 +957,17 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
             "settlement contains {forbidden}"
         );
     }
-    assert_eq!(source.matches("for index in 0..count").count(), 3);
-    assert_eq!(source.matches("for ").count(), 3);
+    assert_eq!(source.matches("for index in 0..count").count(), 1);
+    assert_eq!(source.matches("for ").count(), 1);
     assert_eq!(source.matches(".push(").count(), 1);
     assert!(source.contains("self.member_free.push(plan.member_slot)"));
     assert!(source.contains("self.settle_retained(writer, evidence.writer, true)"));
     assert!(source.contains("self.settle_retained(writer, evidence.writer, false)"));
 
     let release = source.split("fn settle_retained(").nth(1).unwrap();
-    let plan = release.find("self.store_plan(").unwrap();
+    let plan = release
+        .find("settlement_scratch::shared_settlement_scratch_stage_v1(self, head, count)")
+        .unwrap();
     assert!(
         release
             .find("self.preflight_settlement(writer, evidence)?")
@@ -985,7 +990,7 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
         "self.validate_retained_chain(writer, head, count)?",
         "SettlementReturnStorageV1 {",
         ".check(count)?",
-        "self.scratch[index].is_some()",
+        "settlement_scratch::shared_settlement_scratch_scan_v1(self, count)?",
     ] {
         let position = preflight.find(validation).unwrap();
         assert!(position >= previous, "out-of-order preflight: {validation}");
