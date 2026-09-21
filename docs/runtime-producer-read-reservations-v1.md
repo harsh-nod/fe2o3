@@ -85,7 +85,7 @@ The [signed-source custody qualification](evidence/dev-producer-read-custody-ver
 records the accepted dedicated campaign and the full registered proof run,
 including all 691 standalone negative files and portable evidence validation.
 
-`context_producer_read_lifecycle_v1.rs` adds 73 obligations to the 180 inherited
+`context_producer_read_lifecycle_v1.rs` adds 74 obligations to the 180 inherited
 obligations. Executable logical status, lookup, capacity and ordered preflight
 functions match their exact decisions, including error precedence. Acquire and
 release commit loops implement exact contents relations; rejection frames the

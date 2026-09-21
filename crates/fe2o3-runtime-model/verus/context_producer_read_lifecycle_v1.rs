@@ -1264,6 +1264,32 @@ pub open spec fn producer_acquired_counts_v1(before: ProducerReadContentsV1, req
         (before.counts@[a] + producer_request_count_v1(requests.take(count as int), a as usize)) as usize)
 }
 
+pub proof fn producer_acquired_counts_step_v1(before: ProducerReadContentsV1, requests: Seq<ProducerReadV1>, count: nat)
+    requires before.counts@.len() <= usize::MAX, 0 < count <= requests.len(),
+        requests[count - 1].read.allocation.slot < before.counts@.len(),
+        before.counts@[requests[count - 1].read.allocation.slot as int]
+            + producer_request_count_v1(requests.take(count as int), requests[count - 1].read.allocation.slot) <= usize::MAX,
+    ensures producer_acquired_counts_v1(before, requests, (count - 1) as nat)[requests[count - 1].read.allocation.slot as int] < usize::MAX,
+        producer_acquired_counts_v1(before, requests, count)
+        == producer_acquired_counts_v1(before, requests, (count - 1) as nat).update(
+            requests[count - 1].read.allocation.slot as int,
+            (producer_acquired_counts_v1(before, requests, (count - 1) as nat)[requests[count - 1].read.allocation.slot as int] + 1) as usize),
+{
+    let n = (count - 1) as nat;
+    let request = requests[n as int];
+    let counts = producer_acquired_counts_v1(before, requests, n);
+    assert(requests.take(count as int) =~= requests.take(n as int).push(request));
+    producer_request_count_push_v1(requests.take(n as int), request, request.read.allocation.slot);
+    assert(counts[request.read.allocation.slot as int] < usize::MAX);
+    assert forall|a: int| 0 <= a < counts.len() implies #[trigger] producer_acquired_counts_v1(before, requests, count)[a]
+        == counts.update(request.read.allocation.slot as int, (counts[request.read.allocation.slot as int] + 1) as usize)[a] by {
+        producer_request_count_push_v1(requests.take(n as int), request, a as usize);
+    }
+    assert(producer_acquired_counts_v1(before, requests, count) =~=
+        counts.update(request.read.allocation.slot as int, (counts[request.read.allocation.slot as int] + 1) as usize));
+}
+
+#[verifier::spinoff_prover]
 pub proof fn producer_acquire_arena_prefix_v1(before: ProducerReadContentsV1, consumer: WriterKeyV1, requests: Seq<ProducerReadV1>, count: nat)
     requires producer_invariant_v1(before), producer_acquire_commit_ready_v1(before, requests), count <= requests.len(),
         consumer.context_generation == before.stable.journal.context_generation, issuable_id_v1(consumer.local),
@@ -1292,15 +1318,9 @@ pub proof fn producer_acquire_arena_prefix_v1(before: ProducerReadContentsV1, co
         producer_fresh_entry_valid_v1(before.stable.journal, consumer, entry.request, reference.slot,
             reference.incarnation, (before.next_incarnation + count) as u64);
         producer_status_projection_v1(before.stable.journal, entry.request);
+        producer_acquired_counts_step_v1(before, requests, count);
         producer_arena_insert_v1(before.stable.journal, reservations, free, counts, (before.next_incarnation + n) as u64, entry);
         assert(free.drop_last() =~= before.free@.take(before.free@.len() - count));
-        assert(producer_acquired_counts_v1(before, requests, count) =~=
-            counts.update(entry.request.read.allocation.slot as int, (counts[entry.request.read.allocation.slot as int] + 1) as usize)) by {
-            assert forall|a: int| 0 <= a < counts.len() implies #[trigger] producer_acquired_counts_v1(before, requests, count)[a]
-                == counts.update(entry.request.read.allocation.slot as int, (counts[entry.request.read.allocation.slot as int] + 1) as usize)[a] by {
-                producer_request_count_push_v1(requests.take(n as int), entry.request, a as usize);
-            }
-        }
     }
 }
 

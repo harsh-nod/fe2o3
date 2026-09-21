@@ -17,7 +17,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 PINS = HERE / "pins"
-POSITIVE_COUNT = 253
+POSITIVE_COUNT = 254
 INHERITED_COUNT = 180
 HEADER = """// Producer-read lifecycle candidate: logical execution, not Rust/native refinement.
 mod custody {

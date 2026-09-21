@@ -23,7 +23,7 @@ The [signed-source qualification](../../../docs/evidence/dev-producer-read-custo
 records the complete registered run and an independently retained dedicated
 campaign, with exact inputs, receipts and portable offline evidence validation.
 
-`context_producer_read_lifecycle_v1.rs` adds 73 obligations to those 180 inherited
+`context_producer_read_lifecycle_v1.rs` adds 74 obligations to those 180 inherited
 obligations. It proves exact executable logical status, preflight and error
 precedence, acquire/release commit contents, unchanged-on-error state/output,
 arena/count/incarnation/shared-budget preservation, stable-wrapper composition,
@@ -33,9 +33,9 @@ reuse/stale references, and release after all four legitimate producer statuses.
 
 `check-producer-read-lifecycle.py` authenticates the literal custody module header
 and recursively audits all five inherited sources without widening the global
-import policy. Whole-crate positives must report 253 verified obligations. Each
+import policy. Whole-crate positives must report 254 verified obligations. Each
 of 19 executable-body mutations must report exactly its intended postcondition
-failure with 252 other obligations verified. No synthetic subject is appended.
+failure with 253 other obligations verified. No synthetic subject is appended.
 Counts overlap across importing campaigns and must not be summed.
 
 The strong chain graph is a reachable-state premise, not a whole-arena check

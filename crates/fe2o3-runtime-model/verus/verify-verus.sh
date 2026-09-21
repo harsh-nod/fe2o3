@@ -4048,7 +4048,7 @@ transcript="$transcript reader_preflight_obligations=103 reader_preflight_inheri
 transcript="$transcript reader_commit_obligations=127 reader_commit_inherited=103 reader_commit_new=24 reader_commit_executable_mutations=15"
 transcript="$transcript reader_invariant_obligations=155 reader_invariant_inherited=127 reader_invariant_new=28 reader_invariant_test_obligations=1 reader_invariant_mutations=16"
 transcript="$transcript producer_read_invariant_obligations=180 producer_read_invariant_inherited=155 producer_read_invariant_new=25 producer_read_invariant_test_obligations=1 producer_read_invariant_mutations=12"
-transcript="$transcript producer_read_lifecycle_obligations=253 producer_read_lifecycle_inherited=180 producer_read_lifecycle_new=73 producer_read_lifecycle_executable_mutations=19"
+transcript="$transcript producer_read_lifecycle_obligations=254 producer_read_lifecycle_inherited=180 producer_read_lifecycle_new=74 producer_read_lifecycle_executable_mutations=19"
 actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2
