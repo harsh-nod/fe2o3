@@ -240,6 +240,22 @@ Source-consistent non-exit diagnostic spans and substituted adapters are rejecte
 by the evidence checker. Physical pointer/capacity preservation remains CPU-test
 evidence, not a theorem from modeled-content equality.
 
+Settlement scratch-prefix scanning and staging now also use shared executable
+Rust/Verus bodies in `settlement_scratch_bodies.rs`. Scalar return admission still
+precedes scanning, and complete preflight still precedes staging under one borrow.
+The stage retains its existing weak readiness precondition: no global-validity,
+issued-provenance, uniqueness, terminal-head or physical-spare-capacity premise
+was added. Exact intermediate plans and non-scratch/tail framing are proved even
+for admitted bounded repeated prefixes. The [shared scratch development packet](evidence/dev-shared-settlement-scratch-2026-09-21/README.md)
+retains two 392/0 whole-crate positives and ten 391/1 executable controls: five exact
+loop-invariant failures and five exact postcondition failures. Its 382 inherited
+obligations overlap prior packets. All 840 unit tests and 27 doctests passed;
+new direct staging tests inspect nonzero prior lineage before commit erases scratch,
+linked slot/field identity, malformed untouched state, dirty tails, zero-count
+identity, cyclic prefixes and exact access counts. The final settlement commit
+still has separate production/model bodies, and pointer/capacity identity remains
+CPU evidence rather than a physical-storage theorem.
+
 These are scoped logical/shared-body proofs with invariant-conditional custody composition,
 not whole-wrapper verification.
 Complete retained-chain coverage is preserved by logical enrollment and Begin;
@@ -255,10 +271,10 @@ Before enabling runtime admission, the remaining work is:
 
 1. Finish production Rust correspondence for enrollment, Begin, settlement,
    Unknown marking and the proved logical admission/release and unread guards.
-   Shared executable source now covers the settlement scalar return guard and
-   retained-chain admission/Unknown transition. Remaining bodies include
-   construction/enrollment and sorting/search, Begin, settlement scratch scanning,
-   staging/commit, stable/producer reader admission/release and unread guards.
+   Shared executable source now covers the settlement scalar return guard,
+   retained-chain admission/Unknown transition and settlement scratch scan/staging.
+   Remaining bodies include construction/enrollment and sorting/search, Begin,
+   final settlement commit, stable/producer reader admission/release and unread guards.
    Complete type/view correspondence, physical storage and fallible-allocation
    contracts, and explicit normal/unwind semantics remain open before treating
    the logical lifecycle as full-wrapper refinement.

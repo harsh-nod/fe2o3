@@ -1,0 +1,15 @@
+{
+  "development_checks_passed": true,
+  "positive_obligations": 392,
+  "inherited_obligations": 382,
+  "negative_cases": 10,
+  "loop_invariant_negatives": 5,
+  "postcondition_negatives": 5,
+  "shared_scratch_scan_and_staging": true,
+  "unchanged_raw_staging_precondition": true,
+  "logical_settlement_composition": true,
+  "issued_custody_preservation": true,
+  "allocator_or_machine_refinement": false,
+  "full_runtime_refinement": false,
+  "native_or_performance_acceptance": false
+}
