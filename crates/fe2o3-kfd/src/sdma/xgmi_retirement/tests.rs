@@ -840,10 +840,19 @@ fn public_operation_families_guard_before_effectful_route_validation() {
         .split("impl Gfx942NativeXgmiSdmaQueueV1 {")
         .nth(1)
         .unwrap();
+    let method_body = |method: &str| {
+        queue
+            .split(method)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{method}: missing method"))
+            .split("\n    }\n")
+            .next()
+            .unwrap()
+    };
     for (method, effect) in [
         (
-            "pub fn begin_batch",
-            "source.validate_gfx942_xgmi_route_with_peer",
+            "fn begin_batch_timed",
+            "source.validate_gfx942_xgmi_route_with_peer_timed",
         ),
         (
             "fn submit_with_currentness",
@@ -864,16 +873,29 @@ fn public_operation_families_guard_before_effectful_route_validation() {
             "Self::validate_route_currentness",
         ),
     ] {
-        let body = queue
-            .split(method)
-            .nth(1)
-            .unwrap()
-            .split("\n    }\n")
-            .next()
-            .unwrap();
+        let body = method_body(method);
+        let guard = body
+            .find("self.require_live_queue_state_v1()")
+            .unwrap_or_else(|| panic!("{method}: missing live-state guard"));
+        let effect = body
+            .find(effect)
+            .unwrap_or_else(|| panic!("{method}: missing route effect"));
+        assert!(guard < effect, "{method}");
+    }
+    for (method, mode) in [
+        ("pub fn begin_batch<'a>", "Disabled"),
+        (
+            "pub fn begin_batch_currentness_diagnostic_v1<'a>",
+            "Enabled",
+        ),
+    ] {
+        let body = method_body(method);
         assert!(
-            body.find("self.require_live_queue_state_v1()").unwrap() < body.find(effect).unwrap(),
+            body.contains(&format!(
+                "self.begin_batch_timed::<crate::currentness_diagnostic::{mode}>(source, destination)"
+            )),
             "{method}"
         );
+        assert!(!body.contains("validate_gfx942_xgmi_route"), "{method}");
     }
 }

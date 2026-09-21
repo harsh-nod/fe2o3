@@ -217,6 +217,11 @@ far from performance parity. Nine scalar-wait CPU tests and six ordered-runtime
 tests qualify deadline forwarding, completion handling, and ownership behavior;
 they are not native fault injection or executable formal refinement.
 
+Replay that immutable packet from archive commit
+`67227bfb404a3e9518a91e446181b729ec0642b6`. The subsequent retirement
+source-wiring test correction changes its selected test-source inventory, not
+the runtime implementation or the measured release ELF.
+
 ## Remaining Work
 
 - Expand matched useful-segment testing to the remaining seven payload/count
