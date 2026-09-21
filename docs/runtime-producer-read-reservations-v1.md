@@ -289,7 +289,17 @@ sequence-view decision; independent bridges establish exact historical decision
 correspondence without assuming an allocated historical journal exists. Raw
 malformed-state behavior is preserved. Qualification records two 465/0 whole-crate
 positives, ten scoped one-function negatives, 855 unit tests and 27 doctests.
-Actual-typed mutation and full-wrapper correspondence remain open.
+That admission slice does not cover mutation or full-wrapper correspondence.
+
+The [production Unknown packet](evidence/dev-journal-unknown-execution-2026-09-21/README.md)
+now proves the shared Pending-to-Unknown mutation on actual journal declarations,
+with an unconditional exact result and complete sequence frame. Rejected and
+already-Unknown calls preserve contents; already-Unknown calls still revalidate
+their chains. Historical correspondence explicitly factors out the old no-write
+identity conditions instead of inferring opaque Vec equality from equal views.
+Qualification records two 472/0 whole-crate positives, seven executable mutation
+controls and two identity-specification controls, 859 unit tests and 27 doctests.
+Actual-typed settlement mutation and full-wrapper correspondence remain open.
 
 These are scoped logical/shared-body proofs with invariant-conditional custody composition,
 not whole-wrapper verification.
@@ -305,14 +315,14 @@ intermediate machine state or atomicity under panic/unwind.
 Before enabling runtime admission, the remaining work is:
 
 1. Finish production Rust correspondence for enrollment, Begin, settlement,
-   Unknown marking and the proved logical admission/release and unread guards.
+   and the proved logical admission/release and unread guards.
    Shared executable source now covers the settlement scalar return guard,
    retained-chain admission/Unknown transition and settlement scratch scan/staging/commit.
    Remaining bodies include construction/enrollment and sorting/search, Begin,
    stable/producer reader admission/release and unread guards.
    Core journal declarations and content views are now shared and related, but
-   only the explicit comparisons and retained admission bodies have actual-typed
-   operation correspondence so far. Actual-typed Unknown/settlement mutation,
+   only the explicit comparisons, retained admission and Unknown mutation have
+   actual-typed operation correspondence so far. Actual-typed settlement mutation,
    remaining type/trait/wrapper correspondence, physical storage and fallible-allocation
    contracts, and explicit normal/unwind semantics remain open before treating
    the logical lifecycle as full-wrapper refinement.

@@ -6,6 +6,9 @@ mod disposal;
 #[path = "retained_tests.rs"]
 mod retained;
 
+#[path = "unknown_tests.rs"]
+mod unknown;
+
 #[path = "settlement_scratch_tests.rs"]
 mod scratch;
 
