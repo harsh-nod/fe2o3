@@ -1,0 +1,833 @@
+{
+  "func-details": {
+    "vstd::seq::lemma_seq_ext_equal_deep": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_entry_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::AllocationKeyV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_reference_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::VecAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::kind_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextAllocationReferenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::member_entry_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_requires": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_key_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::EnrollmentErrorV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::Clone::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::concrete_contents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::error_variant_anchors": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::journal_error_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::AllocationEntryV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%27::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_entry_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_entry_slot_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_key_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::impl&%0::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%19::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::new": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_entry_slot_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextVersionJournalErrorV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::member_entry_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::production_writer_key_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::View::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::begin_plan_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_index_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_reference_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_key_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%31::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_entry_slot_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::enrollment_error_embed": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::enrollment_error_project": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextWriterSuccessEvidenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::device_key_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%3::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextWriterStateV1::arrow_Pending_member_count": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::recover_contents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::SliceAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::WriterEntryV1::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_entry_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::begin_plan_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_key_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::device_key_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::WriterEntryV1::arrow_Unknown_key": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::member_entry_slot_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::device_key_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_none": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::member_entry_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%9::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_key_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::WriterEntryV1::arrow_Pending_key": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextWriterKindV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_index_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%7::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::read_error_embed": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::member_entry_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::error_domains_are_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::journal_error_lift_commutes": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_key_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextAllocationKeyV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::WriterEntryV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::read_error_project": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::same_key_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::len%returns_clause_autospec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::journal_error_project": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%47::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::same_kind_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::sequence_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_entry_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextWriterStateV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%8::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::ReadErrorV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%1::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::AllocationReferenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_key_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::historical_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%6::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::impls::impl&%6::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::enrollment_error_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::production_allocation_less": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::begin_plan_slot_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::logical_contents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::represents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::DeepView::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::member_entry_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%4::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::device_key_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::impls::impl&%9::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "verus_builtin::impl&%7::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::map": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::boxed::impl&%15::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::vec_clone_trigger": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextAllocationStateV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_reference_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::WriterEntryV1::arrow_Pending_head": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::journal_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%12::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::journal_view_is_lossless": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%18::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_entry_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::pervasive::strictly_cloned": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::begin_plan_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_key_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_reference_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_ensures": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::kind_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_entry_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_decreases_to_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::vec_clone_deep_view_proof": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_entry_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::spec_vec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_reference_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%30::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%14::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextWriterKeyV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::impls::impl&%41::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::AllocationWriteV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextWriterStateV1::arrow_Unknown_member_count": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_reference_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%49::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%5::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::MemberEntryV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextWriterNoEffectEvidenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%1::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_entry_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::WriterEntryV1::arrow_Pending_count": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::DeviceKeyV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::WriterEntryV1::arrow_Unknown_head": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_entry_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_entry_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::member_entry_slot_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::OptionAdditionalFns::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::kind_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::MemberEntryV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%3::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextWriterReferenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%6::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_reference_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::begin_plan_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%15::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "verus_builtin::impl&%9::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::lift_error_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_reference_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::WriterKindV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::BeginMemberPlanV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_write_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::WriterEntryV1::arrow_Reserved_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::kind_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::enrollment_key_less_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::begin_plan_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::begin_plan_slot_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::AllocationEntryV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::project_contents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::JournalErrorV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_write_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::read_error_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::WriterEntryV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::journal_error_embed": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_some": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextAllocationWriteV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::WriterKeyV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_write_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%17::deep_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::writer_entry_slot_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::BeginMemberPlanV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::spec_unwrap": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::ContextJournalDeviceKeyV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%16::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::pervasive::cloned": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%46::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::impl&%0::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::WriterEntryV1::arrow_Unknown_count": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%48::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::journal_projection_exact": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%26::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::issuance::WriterReferenceV1::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_representation_v1::production::allocation_write_round_trip": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::clone::impls::impl&%17::clone": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    }
+  },
+  "verification-results": {
+    "encountered-error": true,
+    "encountered-vir-error": false,
+    "verified": 0,
+    "errors": 1,
+    "is-verifying-entire-crate": false
+  },
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  }
+}

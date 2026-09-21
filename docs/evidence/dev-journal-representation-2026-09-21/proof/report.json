@@ -1,0 +1,13 @@
+{
+  "development_checks_passed": true,
+  "whole_crate_positive_obligations": 452,
+  "inherited_obligations": 398,
+  "targeted_negative_controls": 12,
+  "negative_verification_scope": "one named production-module function per control",
+  "shared_production_declarations": true,
+  "lossless_sequence_views": true,
+  "derived_trait_refinement": false,
+  "physical_storage_refinement": false,
+  "full_runtime_refinement": false,
+  "native_or_performance_acceptance": false
+}
