@@ -1,0 +1,19 @@
+[
+  {
+    "result": {
+      "descriptor_count": 65,
+      "formal_refinement": false,
+      "ordered_lists": 2,
+      "owned_cleanup": true,
+      "pending_dataflow": "refused_before_submission",
+      "performance_acceptance": false,
+      "schema": "fe2o3.runtime.xgmi-segments-owner.v1",
+      "unique_ids": [
+        13239087366709656974,
+        1198613695807612694
+      ],
+      "version_journal": true
+    },
+    "trial": "owner"
+  }
+]

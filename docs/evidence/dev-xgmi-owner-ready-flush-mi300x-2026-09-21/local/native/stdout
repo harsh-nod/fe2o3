@@ -1,0 +1,11 @@
+{"phase": "rocm", "exit": 0, "error": null, "group_absent": true}
+{"phase": "kernel", "exit": 0, "error": null, "group_absent": true}
+{"phase": "owner-before-gpu5", "exit": 0, "error": null, "group_absent": true}
+{"phase": "owner-before-gpu6", "exit": 0, "error": null, "group_absent": true}
+{"phase": "owner", "exit": 0, "error": null, "group_absent": true}
+{"phase": "owner-settled-gpu5", "exit": 0, "error": null, "group_absent": true}
+{"phase": "owner-settled-gpu6", "exit": 0, "error": null, "group_absent": true}
+{"phase": "owner-delayed-gpu5", "exit": 0, "error": null, "group_absent": true}
+{"phase": "owner-delayed-gpu6", "exit": 0, "error": null, "group_absent": true}
+{"phase": "after-rocm", "exit": 0, "error": null, "group_absent": true}
+{"phase": "after-kernel", "exit": 0, "error": null, "group_absent": true}

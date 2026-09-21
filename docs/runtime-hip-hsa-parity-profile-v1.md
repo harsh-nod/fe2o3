@@ -630,6 +630,25 @@ Rust/device-language support; authenticated GPU execution profiling; broader
 target and reset qualification; and concrete Rust/native refinement. The
 normative gates below remain open.
 
+## Ordered Copy Owner Qualification
+
+Signed source `c44625e12a1567204e1cb186b9f4da867244f686` passed one
+journal-enabled owner-engine XGMI trial on freshly admitted MI300X GPUs 5 and 6.
+It covers two successful 65-descriptor lists, both directions, pre-submission
+cancellation, timeout identity, observer abandonment with continued progress,
+ordered byte/canary validation and complete shutdown. The
+[source-bound packet](evidence/dev-xgmi-owner-ready-flush-mi300x-2026-09-21/README.md)
+also contains GNU/musl CPU qualification and all six endpoint observations.
+
+The same trial confirms a remaining journal limitation: a consumer reading its
+pending producer's allocation is refused before submission even with an explicit
+event dependency. The positive path explicitly completes the producer first.
+Bounded ready-prefix flush reduces repeated full-currentness boundaries only
+when descriptors complete immediately; it is not multi-packet publication or a
+wall-clock bound. No HIP/HSA comparator or performance gain was measured here,
+and existing abstract R74 proofs are not executable Rust/native refinement.
+This evidence does not close G2, G3, G6 or G7 as complete gates.
+
 ## Required Gates
 
 ### G1: API and ownership
@@ -668,8 +687,11 @@ The additive runtime async progress mode is one declared portable mechanism for
 Send-capable backends: a bounded registered-stream roster receives bounded,
 cyclic `flush_stream` attempts on the owner thread while event observation keeps
 its independent budget. Ordinary async-engine construction remains
-observation-only. Direct in-process KFD is thread-affine and therefore still
-requires caller-driven flush. A dedicated Worker V5 child can retain KFD on its
+observation-only. Direct in-process KFD remains thread-affine; caller-driven
+Context use requires explicit progress, while the owned engine can create and
+retain KFD on its dedicated thread and drive registered work. The owner trial
+above qualifies only its stated ordered-copy lifecycle, not arbitrary pending
+dataflow. A dedicated Worker V5 child can retain KFD on its
 main thread while exposing a Send-capable address-free adapter to the progress
 engine. The R24 ignored native test passed once on an idle gfx942 device at
 commit `0631c5be`, covering its exact 63+2 completion and data result. Host

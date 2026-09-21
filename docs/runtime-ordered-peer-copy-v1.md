@@ -156,6 +156,11 @@ after fresh shared-host identity/activity admission.
 
 ## CPU Qualification
 
+The following counts describe the initial ordered-copy qualification. The
+[owner/ready-prefix packet](evidence/dev-xgmi-owner-ready-flush-mi300x-2026-09-21/README.md)
+records the later signed-source GNU/musl run: 1221 runtime tests passed with 20
+hardware-specific tests ignored per target, plus three owner-example tests.
+
 With pinned nightly `2026-04-03`, all features, optimization level 1, debug
 assertions and overflow checks enabled, the GNU and musl runtime library suites
 each passed 1190 tests, with 20 ignored hardware-specific tests. The musl smoke
@@ -206,6 +211,14 @@ is not a performance comparison, an exclusive reservation, fault injection, or
 formal refinement. Native qualification is separate from its CPU plan tests.
 The runner's `native_execution` flag means the whole campaign qualified; a
 false value does not imply the workload never ran before a postflight failure.
+
+Signed source `c44625e12a1567204e1cb186b9f4da867244f686` passed this owner
+fixture on freshly admitted GPUs 5 and 6. All six endpoint observations,
+byte-exact collection, and owned file/process cleanup passed. The
+[source-bound packet](evidence/dev-xgmi-owner-ready-flush-mi300x-2026-09-21/README.md)
+includes raw CPU/native receipts, offline replay, and mutation tests. It confirms
+the supported completed-event path and the pending-input refusal; it does not
+close pending dataflow, performance parity or executable refinement.
 
 ## Performance Qualification Plan
 
@@ -362,3 +375,13 @@ qualification remains separate from this caller-driven Context workload.
 - More permissive scheduling-domain coexistence and native multi-packet
   publication are separate optimizations. This serial version still publishes
   and waits once per descriptor and does not claim optimal packet throughput.
+
+Pending-input admission requires a distinct producer-bound read reservation,
+not weaker stable-reader validation. It must retain the exact writer incarnation,
+attempt epoch, event/submission relationship and promised successful lineage;
+exclude intervening writes/reuse; and remain releasable through producer failure,
+unknown completion and consumer cancellation. Consumer-first observation must
+reconcile the retained producer through its own backend result and ordinary
+journal settlement, never infer producer success from consumer success. Existing
+XGMI backend dependency custody is useful but does not supply these journal
+invariants, producer progress registration, or GPU-side dependency packets.
