@@ -1,92 +1,113 @@
-# Context Batch Enrollment Prerequisites V1
+# Context Batch Enrollment V1
 
-This development packet addresses two executable portions of
-`ContextVersionJournalV1::enroll_allocations`: its ordered admission prefix and
-its final allocation-write/truncate loop. It does not verify the complete batch
-operation or advance a native runtime acceptance milestone.
+The current development candidate verifies a complete executable enrollment
+operation over logical journal contents. It composes admission, replay search,
+capacity and free-slot checks, temporary output sorting, rollback, canonical
+restoration and commit. It preserves the combined producer, stable-reader,
+pending-chain custody and writer-issuance invariant without an idle-state premise.
+This is not production Rust correspondence or native runtime acceptance.
 
-The proof includes the pinned J4 reader invariant, J3 commit, J2
-preflight and J1 issuance sources. It introduces no authority, allocation-key
-issuance mechanism or native operation.
+The root includes the pinned producer-journal issuance composition and its five
+dependencies: 201 inherited obligations and 62 local obligations, for 263 in
+each whole-crate positive run. Counts overlap importing campaigns and must not
+be summed. It introduces no authority, allocation-key issuance mechanism or
+native operation.
 
-## Admission Prefix
+## Complete Logical Execution
 
-`enrollment_header_exec_v1` follows the production order through the guard on
-the free-list length, before allocation replay search:
+`enrollment_journal_exec_v1` requires no reader or custody invariant. Its exact
+decision relation covers malformed logical states as well as admitted ones:
 
 - Roster capacity and output length precede output-vacancy validation.
 - Each entry checks both contexts before allocation ID, device ID and extent.
 - Entry metadata is checked before its canonical-order comparison.
 - Caller order determines the first failing entry.
 - An empty batch returns successfully before checking free-list length.
-- Every return preserves the complete caller output.
+- The nonempty free-length guard precedes full-key replay, then capacity.
+- Selected slots must be in range and vacant before writing temporary output.
+- Duplicate selected slots and selected/retained-prefix collisions reject.
+- Every rejection leaves the entire logical journal and caller output unchanged.
+- Success restores the exact canonical key/reversed-free-suffix association,
+  installs zero-epoch/zero-lineage entries, and retains the exact free prefix.
 
 Canonical comparison is lexicographic by `context_generation`, then `local`,
 matching the declaration order used by Rust's derived `Ord` for
-`ContextAllocationKeyV1`.
+`ContextAllocationKeyV1`. Replay compares that full key, not just the local ID.
+Unrelated corruption in the retained free prefix is deliberately not rejected
+unless it overlaps a selected slot; this preserves the existing API behavior.
 
-Success means only that this prefix accepts. It does not establish available
-allocation capacity, absence of replay, free-slot uniqueness, a final output
-roster or permission to commit.
+The executable helpers implement a constant-extra-storage max-heapsort and two
+lower-bound searches. Heap construction, hole repair, root maximality, sorted
+suffix growth, complete-reference permutation, bounds and termination are
+proved. No external sorting contract, permutation oracle or quadratic scan is
+assumed. Equal-slot ordering is unobservable: duplicates reject and restore the
+original all-None output. Success has unique physical slots.
 
-## Conditional Commit
+## Custody And Issuance
 
-`enrollment_output_bound_v1` states a sufficient subset of the middle-phase
-properties: exact entry-to-output identities, reversed free-suffix selection,
-in-range vacant selected allocation slots, distinct selected slots and the
-remaining free-prefix length. No function in this packet claims that production
-sorting or replay search establishes this predicate. It does not require
-selected-versus-retained-prefix disjointness, absence of replay, canonical
-admission or allocation-arena reachability. Reader preservation needs none of
-those additional properties; the resulting allocation free partition is not
-proved.
+`enrollment_issued_exec_v1` wraps the raw logical execution. Given the existing
+combined invariant, it preserves allocation/free partition, all old occupied
+entries, retained Pending/Unknown chains, stable-reader and producer reservation
+storage, count equations, incarnation fields, combined reader budget, reserved
+writer count, registration watermark and the same writer history.
 
-Under that predicate and the existing reader invariant,
-`enrollment_commit_suffix_exec_v1` executes the production final loop: install
-each entry with epoch and lineage zero and no pending member, then truncate the
-allocation free stack. Its postcondition binds the exact recursive sequence of
-allocation writes, the exact retained free prefix, all untouched journal fields
-and unchanged reader storage contents.
+Every previously valid producer request retains its exact status: Pending,
+Unknown, Success or NoEffect. Resolved requests do not require their old writer
+slot to remain live. These are final-state invariants; they are not asserted
+during the allocation-write loop before the free stack is truncated.
 
-`vacant_allocation_has_no_readers_v1` derives zero reader count from the J4
-invariant and actual vacancy. Prefix induction then proves that none of these
-writes modifies a positively read allocation. The J4 field-frame theorem derives
-reader-invariant preservation; positive-reader framing is not assumed as a
-commit precondition.
+The constructor witness actually calls construction, two-item enrollment,
+replay rejection, a later enrollment with a lower unused key, and writer
+registration. It checks exact output slots and metadata. This is not yet a
+constructor-to-Pending witness, nor a nonempty enrollment witness starting with
+all four active producer statuses; the preservation theorem is parameterized
+over such valid prestates, not restricted to the constructor fixture.
 
-This conditional result neither proves the allocation/member arena invariant
-nor connects the admission prefix to the commit suffix.
+There is no allocation-key watermark. Historical freshness after retirement
+remains the caller's responsibility. No proof turns inert identities or modeled
+completion facts into native authority.
 
-## Sorting Boundary
+## Production Boundary
 
 The installed pinned Verus library supplies ghost `Seq::sort_by` and a proof of
 its ordering and multiset properties. It supplies no executable specification
 for Rust slice `sort_unstable_by_key` or `binary_search_by_key`. A ghost sorting
 theorem is not a refinement of those production library calls.
 
-The production middle phase scans existing allocations with binary search,
-temporarily writes and sorts output references by physical slot, detects both
-selected-slot duplicates and overlap with the retained free prefix, restores
-all-None output on rejection, and restores canonical key/slot associations from
-the unchanged reversed free suffix in a linear pass.
-Those operations, including the error restoration, still require executable
-correspondence. This packet does not replace them with a different sorting
-algorithm, repeated single enrollment, an assumed permutation oracle or an
-external-body contract.
+Production still uses those standard-library operations. The new verified
+heapsort/search helpers are in the executable Verus model only; they have not
+replaced the Rust helpers. Source correspondence, differential CPU tests and
+scoped cost measurements must precede that integration. This is not literal
+same-source compilation or machine-code refinement.
 
 The final restoration formerly used a second sort. Its replacement makes that
 step O(k), without changing the whole-operation asymptotic bound. CPU qualification
 covers every permutation of five free slots and all six batch sizes, with an
 existing allocation and distinct incoming metadata: 720 cases. This is a tested
-optimization, not a formal refinement of the missing middle phase or a measured
+optimization, not a formal refinement of the production middle phase or a measured
 performance claim.
 
-Consequently there is no end-to-end enrollment-based reader witness yet. Full
-membership, settlement, retirement and Unknown-disposal trace composition,
-freshness of caller-supplied allocation identities, physical storage/capacity,
-unwind behavior and production Rust/native refinement remain separate work.
+Full begin-write, settlement, retirement and Unknown-disposal trace composition,
+physical storage/capacity, fallible allocation, unwind behavior and production
+Rust/native refinement remain separate work. The candidate does not advance a
+native milestone or establish HIP/HSA parity or performance.
 
 ## Qualification
+
+The standalone `check-journal-enrollment.py` now requires two whole-crate
+263/0 positives and 21 body-only mutations, each with 262 verified and exactly
+one intended postcondition failure. It authenticates the six inherited sources,
+checker chain and complete pinned Verus distribution; captured pinned bytes
+produce the solver inputs. Input identities are checked around every case.
+Partial runs, other diagnostics, compiler failures and timeouts are rejected.
+The local classifier self-test rejects 43 adverse results, and the source-audit
+self-test rejects 15 adverse sources in addition to inherited self-tests.
+This remains a standalone campaign, not part of the shared verification runner.
+
+Qualification evidence for the new candidate is published separately when its
+signed-source campaign completes. Development solver runs are not that evidence.
+
+### Historical Prerequisites
 
 The [2026-09-21 qualification](evidence/dev-enrollment-qualification-2026-09-21/README.md)
 records 814 passing model tests, two intentionally ignored benchmark-style tests,
@@ -127,6 +148,5 @@ partial receipts remain separate and do not count as a successful campaign.
 The preliminary checker bytes and controller terminal output were not retained;
 its two cases receive offline reanalysis under the retained corrected checker.
 
-The historical J1-J4 pins and campaigns remain unchanged. This focused checker
-is not yet part of the shared verification runner. No Cargo or GPU test was run
-for this packet.
+The historical J1-J4 pins and archived campaigns retain their original scope.
+No Cargo or GPU test was run for the 2026-09-18 prerequisite packet.

@@ -68,9 +68,20 @@ postcondition failures, and the complete registered runner with updated inherite
 campaigns and all 691 standalone negatives. The archive supports portable offline
 validation and includes adverse-evidence tests; this is not native acceptance.
 
+The standalone `context_version_journal_enrollment_v1.rs` candidate adds 62
+obligations to those 201 inherited obligations. It connects exact logical
+admission, full-key replay, free-slot validation, proved heapsort and searches,
+unchanged-on-error rollback, canonical restoration and journal commit. Its issued
+wrapper preserves all four existing producer statuses, custody, reader storage,
+counts and the same issuance history without an idle-state premise. A constructor
+witness exercises nonempty enrollment, replay, a lower unused key and registration.
+The standalone checker requires 263/0 positives and 21 exact 262/1 body controls.
+Production still uses standard-library sorting/search; their correspondence and
+integration remain open. See `docs/runtime-context-version-enrollment-v1.md`.
+
 The strong chain graph is a reachable-state premise, not a whole-arena check
-performed by Rust settlement. Enrollment, begin-write and settlement composition
-with issuance history, physical storage, fallible allocation, panic/unwind behavior
+performed by Rust settlement. Begin-write and settlement composition
+with issuance history, production enrollment correspondence, physical storage, fallible allocation, panic/unwind behavior
 and production Rust/native refinement remain open. The unread guard is proved for
 the logical executable model, not production mutator integration. Observed release
 capacity is not yet bound to Rust Vec capacity; intermediate incarnation induction
