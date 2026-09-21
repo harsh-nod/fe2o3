@@ -1,0 +1,33 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "fe2o3-runtime-model",
+    "--release",
+    "search_performance",
+    "--",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "CARGO_TARGET_DIR": "/home/harsh/.codex-tmp/fe2o3-enrollment-ordering-20260921.C1w7xdQl/target",
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790034781806927500,
+  "group_absent": true,
+  "pid": 4054498,
+  "started_ns": 1790034780633725458,
+  "stderr_sha256": "574c1f71eb7a841b368149845eeb0a6aac1e435b38b6bf807db66aec02645b9a",
+  "stdin_sha256": null,
+  "stdout_sha256": "8eb46ef44b215e048682a1abe59bfbfec20f08201b3a32bd2594c4f43b965ffa",
+  "timeout_seconds": 300
+}
