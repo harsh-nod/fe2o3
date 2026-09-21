@@ -104,7 +104,18 @@ impl ContextVersionJournalV1 {
             output.fill(None);
             return Err(E::InvalidState);
         }
-        output.sort_unstable_by_key(|reference| reference.unwrap().key);
+        // Restore canonical key/slot associations from the unchanged free stack
+        // in linear time, rather than sorting the temporary output a second time.
+        for ((entry, out), &slot) in canonical
+            .iter()
+            .zip(output.iter_mut())
+            .zip(self.allocation_free[remaining..].iter().rev())
+        {
+            *out = Some(ContextAllocationReferenceV1 {
+                slot,
+                key: entry.key,
+            });
+        }
         // All fallible validation precedes the journal commit.
         for (entry, reference) in canonical.iter().zip(output.iter()) {
             self.allocations[reference.unwrap().slot] = Some(AllocationEntryV1 {

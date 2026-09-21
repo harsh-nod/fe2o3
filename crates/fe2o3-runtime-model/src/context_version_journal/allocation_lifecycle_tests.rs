@@ -62,6 +62,69 @@ fn batch_enrollment_preserves_key_coordinates_across_permuted_slots_and_out_of_o
 }
 
 #[test]
+fn batch_enrollment_restores_exact_output_for_every_small_free_stack_permutation() {
+    fn check(order: &[usize]) -> usize {
+        for count in 0..=order.len() {
+            let mut journal = Journal::new(7, order.len() + 1, 2).unwrap();
+            let existing = enroll(&mut journal, &[1000]);
+            assert_eq!(existing[0].slot, 0);
+            journal.allocation_free.copy_from_slice(order);
+            let entries: Vec<_> = (0..count)
+                .map(|index| {
+                    let mut value = entry(10 + index as u64 * 10);
+                    value.device.local += index as u64;
+                    value.byte_extent += index as u64;
+                    value
+                })
+                .collect();
+            let mut expected = snapshot(&journal);
+            let expected_output: Vec<_> = entries
+                .iter()
+                .zip(order.iter().rev())
+                .map(|(entry, &slot)| {
+                    expected.allocations[slot] = Some(AllocationEntryV1 {
+                        key: entry.key,
+                        device: entry.device,
+                        byte_extent: entry.byte_extent,
+                        attempt_epoch: 0,
+                        content_lineage: 0,
+                        pending_member: None,
+                    });
+                    Some(ContextAllocationReferenceV1 {
+                        slot,
+                        key: entry.key,
+                    })
+                })
+                .collect();
+            expected.allocation_free.truncate(order.len() - count);
+            let mut output = vec![None; count];
+            let output_storage = (output.as_ptr(), output.capacity());
+            assert_eq!(journal.enroll_allocations(&entries, &mut output), Ok(()));
+            assert_eq!(output, expected_output, "free stack {order:?}");
+            assert_eq!((output.as_ptr(), output.capacity()), output_storage);
+            assert_eq!(snapshot(&journal), expected, "free stack {order:?}");
+            audit(&journal);
+        }
+        order.len() + 1
+    }
+
+    fn permutations(order: &mut [usize], offset: usize) -> usize {
+        if offset == order.len() {
+            return check(order);
+        }
+        let mut cases = 0;
+        for index in offset..order.len() {
+            order.swap(offset, index);
+            cases += permutations(order, offset + 1);
+            order.swap(offset, index);
+        }
+        cases
+    }
+
+    assert_eq!(permutations(&mut [1, 2, 3, 4, 5], 0), 720);
+}
+
+#[test]
 fn batch_enrollment_rejects_each_bad_coordinate_without_partial_changes() {
     for index in 0..3 {
         for case in 0..6 {
