@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect a fixed six-trial diagnostic and clean only its owned remote tree."""
+"""Collect a fixed matched-copy or host-attribution campaign with owned cleanup."""
 
 import sys
 
@@ -52,14 +52,14 @@ def settle_remote(control, *, collected, native_attempted):
     return not failures, failures
 
 
-def control_bytes():
+def control_bytes(prefix=N.PREFIX):
     source = Path(B.__file__).read_bytes()
     H.need(H.sha(Path(B.__file__)) == H.BASE_SHA, "pinned process controller")
     return ("import hashlib\n" + f"source = {source!r}\n"
             + f"assert hashlib.sha256(source).hexdigest() == {H.BASE_SHA!r}\n"
             + "scope = {'__name__': 'owned_control'}\n"
             + "exec(compile(source, 'owned_control', 'exec'), scope)\n"
-            + f"scope['PREFIX'] = {N.PREFIX!r}\n"
+            + f"scope['PREFIX'] = {prefix!r}\n"
             + "scope['main']()\n").encode("ascii")
 
 
@@ -69,7 +69,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-dir", type=Path, required=True)
     parser.add_argument("--device", action="append", required=True, help="index,pci-bdf,unique-id; exactly two")
+    parser.add_argument("--host-attribution", action="store_true", help="KFD-only same-binary off/on/on/off host attribution")
     args = parser.parse_args()
+    native = N
+    if args.host_attribution:
+        spec = importlib.util.spec_from_file_location("segments_diagnostic_native", HERE / "xgmi_peer_segments_diagnostic_native.py")
+        native = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(native)
+    source_paths = ["benchmarks/runtime_gfx942/copy-host-observe.py"] if args.host_attribution else SOURCE_FILES
+    feature_args = ["--features", "hardware-diagnostic"] if args.host_attribution else []
     devices = []
     for value in args.device:
         index, bdf, uid = value.split(",")
@@ -95,11 +103,15 @@ def main():
     rec.run("source-signature", ["git", "-c", "gpg.ssh.allowedSignersFile=" + SIGNERS, "verify-commit", commit], 30)
     for name, command in [("rustc", ["rustc", "-vV"]), ("cargo", ["cargo", "-V"]),
                           ("build-kfd", ["cargo", "build", "--locked", "--release", "-q", "-p", "fe2o3-runtime",
-                                         "--target", "x86_64-unknown-linux-musl", "--example", "gfx942-runtime-xgmi-segments-benchmark"])]:
+                                         "--target", "x86_64-unknown-linux-musl", "--example", "gfx942-runtime-xgmi-segments-benchmark", *feature_args])]:
         rec.run(name, command, 1200, env=env)
     binary = target / "x86_64-unknown-linux-musl/release/examples/gfx942-runtime-xgmi-segments-benchmark"
     copies = {"native.py": HERE / "xgmi_peer_segments_native.py", "results.py": HERE / "xgmi_peer_segments_results.py",
               "hot.py": Path(H.__file__), "base.py": Path(B.__file__), "kfd-segments": binary}
+    if args.host_attribution:
+        copies.update({"native.py": HERE / "xgmi_peer_segments_diagnostic_native.py",
+                       "results.py": HERE / "xgmi_peer_segments_diagnostic_results.py",
+                       "xgmi_peer_segments_results.py": HERE / "xgmi_peer_segments_results.py"})
     for name, path in copies.items():
         H.sha(path)
         shutil.copy2(path, payload / name)
@@ -108,24 +120,27 @@ def main():
         for stream in ("stdout", "stderr"):
             H.need(H.sha(folder / stream) == H.sha(rec.output / name.removeprefix("after-") / stream), "unchanged local toolchain")
     rec.run("rust-tests", ["cargo", "test", "--locked", "--release", "-q", "-p", "fe2o3-runtime",
-        "--target", "x86_64-unknown-linux-musl", "--example", "gfx942-runtime-xgmi-segments-benchmark"], 1200, env=env)
-    for name in ("test_xgmi_peer_segments.py", "test_xgmi_peer_segments_results.py", "test_xgmi_peer_segments_campaign.py"):
+        "--target", "x86_64-unknown-linux-musl", "--example", "gfx942-runtime-xgmi-segments-benchmark", *feature_args], 1200, env=env)
+    tests = ["test_xgmi_peer_segments.py", "test_xgmi_peer_segments_results.py", "test_xgmi_peer_segments_campaign.py"]
+    if args.host_attribution:
+        tests += ["test_xgmi_peer_segments_diagnostic_results.py", "test_xgmi_peer_segments_diagnostic_campaign.py"]
+    for name in tests:
         rec.run(name, ["/usr/bin/python3", "-I", "-B", str(HERE / name)], 120,
                 env={**env, "FE2O3_SEGMENTS_RUST_BINARY": str(binary)})
     H.need(not subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT), "clean source after build")
     H.need(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip() == commit, "same commit after build")
     H.need(source_identity() == source_before, "unchanged KFD and comparator source after build")
-    source_files = {name: H.sha(ROOT / name) for name in SOURCE_FILES}
+    source_files = {name: H.sha(ROOT / name) for name in source_paths}
     with tarfile.open(payload / "source.tar.gz", "w:gz") as archive:
-        for name in SOURCE_FILES:
+        for name in source_paths:
             archive.add(ROOT / name, arcname=name, recursive=False)
     binding = {"commit": commit, "git_tree": tree, "local_source_files": source_before,
                "payload": B.inventory(payload), "source_files": source_files, "devices": devices,
-               "controls": N.CONTROLS, "order": list(N.ORDER), "target": "x86_64-unknown-linux-musl",
-               "profile": "release default opt-level=3", "features": "default", "local_build_environment": env,
-               "source_archive_scope": "remote comparator and observer inputs; KFD uses signed full source checkpoint"}
+               "controls": native.CONTROLS, "order": list(native.ORDER), "target": "x86_64-unknown-linux-musl",
+               "profile": "release default opt-level=3", "features": "default,hardware-diagnostic" if args.host_attribution else "default", "local_build_environment": env,
+               "source_archive_scope": "remote observer input; KFD uses signed full source checkpoint" if args.host_attribution else "remote comparator and observer inputs; KFD uses signed full source checkpoint"}
     B.write_json(output / "binding.json", binding)
-    marker = {"path": N.PREFIX + secrets.token_hex(8), "commit": commit, "binding_sha256": H.sha(output / "binding.json")}
+    marker = {"path": native.PREFIX + secrets.token_hex(8), "commit": commit, "binding_sha256": H.sha(output / "binding.json")}
     B.write_json(output / "owner.json", marker)
     serialized = json.dumps(marker, sort_keys=True, separators=(",", ":"))
     created = False
@@ -136,13 +151,13 @@ def main():
 
     def control(name):
         return rec.run(name, ["ssh", "-T", *SSH, "mi300x", shlex.join(["/usr/bin/python3", "-I", "-B", "-", name, serialized])],
-                       120, stdin=control_bytes())
+                       120, stdin=control_bytes(native.PREFIX))
 
     try:
         # A failed create can leave its private marker behind; attempt scoped recovery.
         created = True
         control("create")
-        rec.run("upload", ["scp", "-q", *SSH, "--", *(str(payload / name) for name in sorted(N.PAYLOAD)),
+        rec.run("upload", ["scp", "-q", *SSH, "--", *(str(payload / name) for name in sorted(native.PAYLOAD)),
                            str(output / "binding.json"), "mi300x:" + marker["path"] + "/"], 120)
         native_attempted = True
         rec.run("native", ["ssh", "-T", *SSH, "mi300x", shlex.join(["/usr/bin/python3", "-I", "-B",

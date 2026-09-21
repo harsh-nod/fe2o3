@@ -96,8 +96,13 @@ mod drain_capture;
 mod xgmi_batch;
 mod xgmi_batch_diagnostic;
 mod xgmi_segments;
+mod xgmi_segments_diagnostic;
 #[cfg(feature = "hardware-diagnostic")]
 pub use directional_wait_diagnostic::KfdRuntimeDirectionalWaitObservationV1;
+#[cfg(feature = "hardware-diagnostic")]
+pub use xgmi_segments_diagnostic::{
+    KfdRuntimeXgmiSegmentsObservationV1, KfdRuntimeXgmiSegmentsTimingV1,
+};
 #[cfg(feature = "hardware-diagnostic")]
 mod xgmi_diagnostic;
 #[cfg(test)]
@@ -7744,6 +7749,8 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     xgmi_diagnostic: Option<xgmi_diagnostic::Recorder>,
     #[cfg(feature = "hardware-diagnostic")]
     xgmi_aggregate_diagnostic: Option<xgmi_batch_diagnostic::Recorder>,
+    #[cfg(feature = "hardware-diagnostic")]
+    xgmi_segments_diagnostic: Option<xgmi_segments_diagnostic::Recorder>,
     terminal: bool,
     shutdown: bool,
     next_handle: u64,
@@ -9290,6 +9297,8 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             xgmi_diagnostic: None,
             #[cfg(feature = "hardware-diagnostic")]
             xgmi_aggregate_diagnostic: None,
+            #[cfg(feature = "hardware-diagnostic")]
+            xgmi_segments_diagnostic: None,
             terminal: false,
             shutdown: false,
             next_handle: 1,
@@ -9868,6 +9877,10 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         if let Some(recorder) = self.xgmi_aggregate_diagnostic.as_mut() {
             recorder.invalidate();
         }
+        #[cfg(feature = "hardware-diagnostic")]
+        if let Some(recorder) = self.xgmi_segments_diagnostic.as_mut() {
+            recorder.invalidate();
+        }
         let mut active_batch = Vec::new();
         let mut requests = Vec::new();
         active_batch.try_reserve_exact(batch_len).map_err(|_| {
@@ -10052,6 +10065,10 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         &mut self,
         mut active: XgmiRuntimeSubmissionV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        #[cfg(feature = "hardware-diagnostic")]
+        if let Some(recorder) = self.xgmi_segments_diagnostic.as_mut() {
+            recorder.invalidate();
+        }
         if let Some(ticket) = active.ticket.take() {
             #[cfg(feature = "hardware-diagnostic")]
             if let Some(recorder) = self.xgmi_aggregate_diagnostic.as_mut() {
@@ -10601,6 +10618,10 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         })?;
         if active.sequence.is_some() {
             return self.progress_peer_segments(submission, Instant::now(), true);
+        }
+        #[cfg(feature = "hardware-diagnostic")]
+        if let Some(recorder) = self.xgmi_segments_diagnostic.as_mut() {
+            recorder.invalidate();
         }
         if xgmi_submission_has_failed_dependency_v1(active, &self.submissions) {
             let active = self
@@ -11193,6 +11214,12 @@ impl RuntimeFlushBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 )),
             };
         }
+        #[cfg(feature = "hardware-diagnostic")]
+        if self.active_by_direction[direction] != 0
+            && let Some(recorder) = self.xgmi_segments_diagnostic.as_mut()
+        {
+            recorder.invalidate();
+        }
         let failed = self
             .active_stream_owners
             .get(&stream)
@@ -11294,6 +11321,10 @@ impl RuntimeCancellationBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 ));
             }
             XgmiCancellationDispositionV1::CancelPrepublication => {}
+        }
+        #[cfg(feature = "hardware-diagnostic")]
+        if let Some(recorder) = self.xgmi_segments_diagnostic.as_mut() {
+            recorder.invalidate();
         }
         let mut active = self
             .active

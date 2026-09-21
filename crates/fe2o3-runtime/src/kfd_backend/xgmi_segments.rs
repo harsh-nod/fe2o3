@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+use super::xgmi_batch_diagnostic::Phase;
+use super::xgmi_segments_diagnostic::Timer;
 use super::*;
 use crate::{RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsBackendV1};
 use fe2o3_kfd::{Gfx942NativeXgmiSdmaBatchV1, Gfx942SdmaErrorV1, Gfx942XgmiWaitFailureV1};
@@ -78,12 +80,31 @@ fn step(cursor: &mut OrderedPeerCopyCursorV1, action: Action) {
 /// One initial publication/scan is allowed even at expiry. After a completion,
 /// the same deadline gates every subsequent publication. Poll uses a one-step
 /// budget; wait may consume the complete bounded roster within its deadline.
+#[cfg(test)]
 fn execute<S: Scope>(
+    scope: S,
+    sequence: &mut Sequence,
+    custody: Custody<S::Pair, S::Ticket>,
+    deadline: Instant,
+    one_step: bool,
+) -> Execution<S::Pair, S::Ticket, S::Error> {
+    execute_profiled::<S, false>(
+        scope,
+        sequence,
+        custody,
+        deadline,
+        one_step,
+        &mut Timer::new(),
+    )
+}
+
+fn execute_profiled<S: Scope, const PROFILE: bool>(
     mut scope: S,
     sequence: &mut Sequence,
     mut custody: Custody<S::Pair, S::Ticket>,
     deadline: Instant,
     one_step: bool,
+    timer: &mut Timer<PROFILE>,
 ) -> Execution<S::Pair, S::Ticket, S::Error> {
     step(&mut sequence.cursor, Action::Open);
     let (error, terminal) = loop {
@@ -91,12 +112,16 @@ fn execute<S: Scope>(
         let observation = match custody {
             Custody::Pair(pair) => {
                 step(&mut sequence.cursor, Action::Publish);
-                match scope.submit(pair, segment) {
-                    Ok(ticket) => scope.wait(ticket, segment.byte_len, deadline),
+                match timer.measure(Phase::Submission, || scope.submit(pair, segment)) {
+                    Ok(ticket) => timer.measure(Phase::Wait, || {
+                        scope.wait(ticket, segment.byte_len, deadline)
+                    }),
                     Err(observation) => observation,
                 }
             }
-            Custody::Ticket(ticket) => scope.wait(ticket, segment.byte_len, deadline),
+            Custody::Ticket(ticket) => timer.measure(Phase::Wait, || {
+                scope.wait(ticket, segment.byte_len, deadline)
+            }),
         };
         match observation {
             Observation::Completed(pair) => {
@@ -127,7 +152,7 @@ fn execute<S: Scope>(
             }
         }
     };
-    let closing = scope.finish(terminal);
+    let closing = timer.measure(Phase::Closing, || scope.finish(terminal));
     if closing.is_err() {
         step(&mut sequence.cursor, Action::CloseFailed);
     } else {
@@ -254,6 +279,115 @@ impl Scope for NativeScope<'_> {
     }
 }
 
+#[cfg(feature = "hardware-diagnostic")]
+trait CurrentnessFinish: Scope {
+    type Detail;
+    fn finish_currentness(self, terminal: bool) -> Result<Self::Detail, Self::Error>;
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+impl CurrentnessFinish for NativeScope<'_> {
+    type Detail = fe2o3_kfd::Gfx942XgmiPairCurrentnessDiagnosticsV1;
+
+    fn finish_currentness(self, terminal: bool) -> Result<Self::Detail, Self::Error> {
+        if terminal {
+            self.0.finish_terminal_currentness_diagnostic_v1()
+        } else {
+            self.0.finish_currentness_diagnostic_v1()
+        }
+    }
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+struct CurrentnessScope<'a, S: CurrentnessFinish> {
+    inner: S,
+    closing: &'a mut Option<S::Detail>,
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+impl<S: CurrentnessFinish> Scope for CurrentnessScope<'_, S> {
+    type Pair = S::Pair;
+    type Ticket = S::Ticket;
+    type Error = S::Error;
+
+    fn submit(
+        &mut self,
+        pair: Self::Pair,
+        segment: RuntimePeerCopySegmentV1,
+    ) -> Result<Self::Ticket, ScopedObservation<Self>> {
+        self.inner.submit(pair, segment)
+    }
+
+    fn wait(
+        &mut self,
+        ticket: Self::Ticket,
+        bytes: u64,
+        deadline: Instant,
+    ) -> ScopedObservation<Self> {
+        self.inner.wait(ticket, bytes, deadline)
+    }
+
+    fn finish(self, terminal: bool) -> Result<(), Self::Error> {
+        let detail = self.inner.finish_currentness(terminal)?;
+        *self.closing = Some(detail);
+        Ok(())
+    }
+}
+
+type NativeCustody = Custody<Pair, Gfx942SdmaCopyTicketV1>;
+type NativeAttempt = Result<
+    Execution<Pair, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1>,
+    (Gfx942SdmaErrorV1, NativeCustody),
+>;
+
+#[allow(clippy::result_large_err)] // Failed opening must return mapping/ticket custody inline.
+fn open_and_execute<const PROFILE: bool>(
+    queue: &mut Gfx942NativeXgmiSdmaQueueV1,
+    sessions: (&mut SharedGttMemorySessionV1, &mut SharedGttMemorySessionV1),
+    sequence: &mut Sequence,
+    custody: NativeCustody,
+    deadline: Instant,
+    one_step: bool,
+    timer: &mut Timer<PROFILE>,
+) -> NativeAttempt {
+    let (source, destination) = sessions;
+    #[cfg(feature = "hardware-diagnostic")]
+    if PROFILE {
+        return match timer.measure(Phase::Opening, || {
+            queue.begin_batch_currentness_diagnostic_v1(source, destination)
+        }) {
+            Ok((inner, opening)) => {
+                let mut closing = None;
+                let execution = execute_profiled(
+                    CurrentnessScope {
+                        inner: NativeScope(inner),
+                        closing: &mut closing,
+                    },
+                    sequence,
+                    custody,
+                    deadline,
+                    one_step,
+                    timer,
+                );
+                timer.currentness = [Some(opening), closing];
+                Ok(execution)
+            }
+            Err(error) => Err((error, custody)),
+        };
+    }
+    match timer.measure(Phase::Opening, || queue.begin_batch(source, destination)) {
+        Ok(scope) => Ok(execute_profiled(
+            NativeScope(scope),
+            sequence,
+            custody,
+            deadline,
+            one_step,
+            timer,
+        )),
+        Err(error) => Err((error, custody)),
+    }
+}
+
 impl RuntimePeerCopySegmentsBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
     fn peer_copy_segments_v1(
         &mut self,
@@ -363,6 +497,66 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         deadline: Instant,
         one_step: bool,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        #[cfg(feature = "hardware-diagnostic")]
+        {
+            if let Some(recorder) = self.xgmi_diagnostic.as_mut() {
+                recorder.invalidate();
+            }
+            if let Some(recorder) = self.xgmi_aggregate_diagnostic.as_mut() {
+                recorder.invalidate();
+            }
+            if self.xgmi_segments_diagnostic.is_some() {
+                // Capture enrollment is not operational admission or authority.
+                let identity = self.active.get(&id).and_then(|active| {
+                    let sequence = active.sequence.as_ref()?;
+                    Some(xgmi_segments_diagnostic::Identity {
+                        submission: id,
+                        direction: active.direction,
+                        descriptors: sequence.cursor.count(),
+                        useful_bytes: sequence
+                            .segments
+                            .iter()
+                            .try_fold(0u64, |sum, segment| sum.checked_add(segment.byte_len))?,
+                        fresh: !sequence.ever_published()
+                            && sequence.cursor.completed() == 0
+                            && active.ticket.is_none(),
+                    })
+                });
+                let armed = self
+                    .xgmi_segments_diagnostic
+                    .as_mut()
+                    .unwrap()
+                    .begin(identity, one_step);
+                if armed {
+                    let identity = identity.expect("armed identity");
+                    let start = Instant::now();
+                    let mut timer = Timer::<true>::new();
+                    let result =
+                        self.progress_peer_segments_profiled(id, deadline, one_step, &mut timer);
+                    let observed = if matches!(result, Ok(BackendPollV1::Succeeded)) {
+                        timer.finish(start, identity.descriptors)
+                    } else {
+                        None
+                    };
+                    self.xgmi_segments_diagnostic
+                        .as_mut()
+                        .unwrap()
+                        .finish(identity, observed);
+                    return result;
+                }
+            }
+        }
+        self.progress_peer_segments_profiled(id, deadline, one_step, &mut Timer::<false>::new())
+    }
+
+    fn progress_peer_segments_profiled<const PROFILE: bool>(
+        &mut self,
+        id: u64,
+        deadline: Instant,
+        one_step: bool,
+        timer: &mut Timer<PROFILE>,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let admission_start = timer.start();
         self.require_live()?;
         let active = &self.active[&id];
         if xgmi_submission_has_failed_dependency_v1(active, &self.submissions) {
@@ -411,27 +605,21 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         if !valid {
             return Err(self.terminal_error("ordered XGMI cursor or custody corruption"));
         }
-        #[cfg(feature = "hardware-diagnostic")]
-        {
-            if let Some(recorder) = self.xgmi_diagnostic.as_mut() {
-                recorder.invalidate();
-            }
-            if let Some(recorder) = self.xgmi_aggregate_diagnostic.as_mut() {
-                recorder.invalidate();
-            }
-        }
+        timer.end(Phase::Admission, admission_start);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_peer_segments(id, deadline, one_step)
+            self.run_peer_segments(id, deadline, one_step, timer)
         }));
         super::xgmi_batch::finish_native_attempt(result, &mut self.terminal)
     }
 
-    fn run_peer_segments(
+    fn run_peer_segments<const PROFILE: bool>(
         &mut self,
         id: u64,
         deadline: Instant,
         one_step: bool,
+        timer: &mut Timer<PROFILE>,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let preparation_start = timer.start();
         let active = &self.active[&id];
         let (direction, source_id, destination_id) =
             (active.direction, active.source, active.destination);
@@ -455,22 +643,20 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 }
             }
         };
+        timer.end(Phase::Preparation, preparation_start);
         let result = {
             let (source, destination) = Self::session_pair(&mut self.sessions, direction);
             let queue = self.queues[direction].as_mut().unwrap();
-            match queue.begin_batch(source, destination) {
-                Ok(scope) => {
-                    let sequence = self.active.get_mut(&id).unwrap().sequence.as_mut().unwrap();
-                    Ok(execute(
-                        NativeScope(scope),
-                        sequence,
-                        custody,
-                        deadline,
-                        one_step,
-                    ))
-                }
-                Err(error) => Err((error, custody)),
-            }
+            let sequence = self.active.get_mut(&id).unwrap().sequence.as_mut().unwrap();
+            open_and_execute(
+                queue,
+                (source, destination),
+                sequence,
+                custody,
+                deadline,
+                one_step,
+                timer,
+            )
         };
         let execution = match result {
             Ok(execution) => execution,
@@ -493,6 +679,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 );
             }
         };
+        let settlement_start = timer.start();
         self.restore_sequence_custody(id, execution.custody, execution.terminal);
         if execution.terminal {
             self.batch_quarantine(direction);
@@ -506,13 +693,15 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             return Ok(self.finish_failed(active));
         }
         let sequence = self.active.get_mut(&id).unwrap().sequence.as_mut().unwrap();
-        if sequence.cursor.completed() == sequence.cursor.count() {
+        let status = if sequence.cursor.completed() == sequence.cursor.count() {
             step(&mut sequence.cursor, Action::Succeed);
             let active = self.active.remove(&id).unwrap();
-            Ok(self.settle_submission(active, BackendPollV1::Succeeded))
+            self.settle_submission(active, BackendPollV1::Succeeded)
         } else {
-            Ok(BackendPollV1::Pending)
-        }
+            BackendPollV1::Pending
+        };
+        timer.end(Phase::Settlement, settlement_start);
+        Ok(status)
     }
 
     fn restore_sequence_custody(

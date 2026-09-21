@@ -1049,6 +1049,10 @@ impl RuntimePeerCopyBatchBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         deadline: Instant,
     ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<Self::Error>> {
         #[cfg(feature = "hardware-diagnostic")]
+        if let Some(recorder) = self.xgmi_segments_diagnostic.as_mut() {
+            recorder.invalidate();
+        }
+        #[cfg(feature = "hardware-diagnostic")]
         if self.xgmi_aggregate_diagnostic.is_some() {
             // This lookup identifies a diagnostic candidate only. Operational
             // admission below still validates the complete roster and custody.

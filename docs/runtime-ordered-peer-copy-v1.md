@@ -222,6 +222,47 @@ Replay that immutable packet from archive commit
 source-wiring test correction changes its selected test-source inventory, not
 the runtime implementation or the measured release ELF.
 
+## Ordered Host Attribution
+
+The opt-in `hardware-diagnostic` API now provides bounded, success-only host
+phase attribution through `enable_xgmi_segments_diagnostics_v1` and
+`finish_xgmi_segments_diagnostics_v1`. Enable it before resource creation and
+extract only after successful explicit logical/native shutdown. It excludes
+the existing single-copy and aggregate diagnostic modes.
+
+One fresh ordered list must complete within one backend wait (or drain) call,
+in increasing backend submission-ID order. Poll/flush, ordinary or aggregate
+progress, accepted cancellation, pending/retry, failure, or incomplete teardown
+make the capture unavailable without changing execution results. Records are
+preallocated and contain the full descriptor count and total useful bytes.
+
+The shared execution loop records admission, preparation, opening currentness,
+summed submission, summed wait, closing currentness, and settlement intervals.
+Opening and closing include nested native currentness intervals. Nested times
+overlap their outer phase and must not be added to it. Enrollment/record append,
+facade enqueue/settlement, and submission release are outside backend timing.
+The ordinary const-disabled timer reads no clocks and allocates no records.
+Enabled timing can consume deadline budget; it does not extend deadlines.
+
+The benchmark flag `--diagnose-ordered-segments` emits a separate strict schema
+before the unchanged ordinary receipt, after validating the entire joined
+roster and teardown. CPU tests cover disabled clocks, repeated span accounting,
+timing overflow/containment, invalidation, extraction, and scripted equivalence
+of operation order, custody, retry deadlines, native-error handling and generic
+panic payloads. Native authority-crossing unwinds remain abort-only. These are
+implementation tests, not executable formal refinement or GPU timing evidence.
+
+The existing campaign's `--host-attribution` switch selects KFD-only
+off/on/on/off trials with one feature-enabled release ELF and the fixed
+64 KiB/65-descriptor geometry. Its mode-bound parser retains the ordinary
+receipt checks and rejects missing/reordered identities, incorrect call counts,
+noncanonical/overflowing durations, and inconsistent phase/nested totals. Each
+trial retains fresh admission and settled/delayed postflight checks. Idle
+observations are not a reservation, and this protocol does not establish
+speedup, causal instrumentation overhead, HIP/HSA parity or performance acceptance.
+This new diagnostic mode has CPU qualification only; source-bound native phase
+measurements remain pending. The earlier native packets do not qualify it.
+
 ## Remaining Work
 
 - Expand matched useful-segment testing to the remaining seven payload/count

@@ -15,6 +15,10 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Context = RuntimeContextV1<KfdNativeXgmiRuntimeBackendV1>;
 const TIMEOUT: Duration = Duration::from_secs(60);
 
+#[cfg(feature = "hardware-diagnostic")]
+#[path = "support/xgmi_segments_diagnostic.rs"]
+mod diagnostic;
+
 #[derive(Debug)]
 struct Plan {
     useful: usize,
@@ -267,8 +271,21 @@ impl Direction {
     }
 }
 
-fn run(ids: [u64; 2], plan: &Plan) -> Result<()> {
+fn run(ids: [u64; 2], plan: &Plan, diagnose: bool) -> Result<()> {
+    if diagnose && !cfg!(feature = "hardware-diagnostic") {
+        return Err("ordered attribution requires hardware-diagnostic".into());
+    }
     let backend = KfdNativeXgmiRuntimeBackendV1::open_default(ids[0], ids[1])?;
+    #[cfg(feature = "hardware-diagnostic")]
+    let backend = {
+        let mut backend = backend;
+        if diagnose {
+            backend
+                .enable_xgmi_segments_diagnostics_v1(plan.bands * 2)
+                .map_err(error)?;
+        }
+        backend
+    };
     let mut context =
         RuntimeContextV1::open_with_version_journal_v1(backend, 16, 8).map_err(error)?;
     let devices = [context.devices()[0].id(), context.devices()[1].id()];
@@ -290,6 +307,16 @@ fn run(ids: [u64; 2], plan: &Plan) -> Result<()> {
     }
     let mut backend = context.shutdown().map_err(error)?;
     backend.shutdown_native_v1().map_err(error)?;
+    #[cfg(feature = "hardware-diagnostic")]
+    if diagnose {
+        let records = backend
+            .finish_xgmi_segments_diagnostics_v1()
+            .map_err(error)?;
+        // Validate the entire joined roster before printing any timing rows.
+        for row in diagnostic::rows(records, ids, plan, &times)? {
+            println!("{row}");
+        }
+    }
     for band in 0..plan.bands {
         let population = if band == 0 {
             "prime"
@@ -320,6 +347,19 @@ fn run(ids: [u64; 2], plan: &Plan) -> Result<()> {
     Ok(())
 }
 
+fn diagnostic_mode(args: &[String]) -> Result<bool> {
+    match args.len() {
+        6 => Ok(false),
+        7 if args[6] == "--diagnose-ordered-segments" => {
+            if !cfg!(feature = "hardware-diagnostic") {
+                return Err("ordered attribution requires hardware-diagnostic".into());
+            }
+            Ok(true)
+        }
+        _ => Err("usage: gfx942-runtime-xgmi-segments-benchmark <uid-0> <uid-1> <useful-bytes> <segments> <warmups> <samples> [--diagnose-ordered-segments]".into()),
+    }
+}
+
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() == 5 && args[0] == "--describe-plan" {
@@ -332,9 +372,7 @@ fn main() -> Result<()> {
         println!("{}", plan.describe());
         return Ok(());
     }
-    if args.len() != 6 {
-        return Err("usage: gfx942-runtime-xgmi-segments-benchmark <uid-0> <uid-1> <useful-bytes> <segments> <warmups> <samples>".into());
-    }
+    let diagnose = diagnostic_mode(&args)?;
     let ids = [uid(&args[0])?, uid(&args[1])?];
     if ids[0] == ids[1] {
         return Err("distinct devices required".into());
@@ -345,7 +383,7 @@ fn main() -> Result<()> {
         decimal(&args[4])?,
         decimal(&args[5])?,
     )?;
-    if let Err(failure) = run(ids, &plan) {
+    if let Err(failure) = run(ids, &plan, diagnose) {
         // Context/native owners retain ambiguous resources; emit no timing rows.
         eprintln!("ordered peer benchmark failed: {failure}");
         std::process::exit(3);
@@ -356,6 +394,28 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_mode_requires_one_exact_trailing_feature_gated_flag() {
+        let base: Vec<_> = ["1", "2", "65536", "65", "2", "10"]
+            .map(str::to_owned)
+            .into();
+        assert!(!diagnostic_mode(&base).unwrap());
+        let mut enabled = base.clone();
+        enabled.push("--diagnose-ordered-segments".into());
+        assert_eq!(
+            diagnostic_mode(&enabled).is_ok(),
+            cfg!(feature = "hardware-diagnostic")
+        );
+        enabled.push("--diagnose-ordered-segments".into());
+        assert!(diagnostic_mode(&enabled).is_err());
+        for flag in ["--diagnose", "", "--diagnose-ordered-segments=true"] {
+            let mut args = base.clone();
+            args.push(flag.into());
+            assert!(diagnostic_mode(&args).is_err());
+        }
+        assert!(diagnostic_mode(&base[..5]).is_err());
+    }
 
     #[test]
     fn plan_is_bounded_ragged_disjoint_and_has_exact_useful_size() {

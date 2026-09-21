@@ -397,6 +397,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         self.require_live()?;
         if self.xgmi_aggregate_diagnostic.is_some()
             || self.xgmi_diagnostic.is_some()
+            || self.xgmi_segments_diagnostic.is_some()
             || self.next_handle != 1
             || self.queues.iter().any(Option::is_some)
             || !self.logical_resource_counts().permits_shutdown()
@@ -428,7 +429,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         Vec<KfdRuntimeXgmiAggregateCallObservationV1>,
         RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
     > {
-        let (terminal, quiescent) = self.aggregate_diagnostic_teardown_state();
+        let (terminal, quiescent) = self.xgmi_diagnostic_teardown_state();
         take_records(
             &mut self.xgmi_aggregate_diagnostic,
             terminal,
@@ -446,7 +447,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         Vec<KfdRuntimeXgmiAggregateCurrentnessObservationV1>,
         RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
     > {
-        let (terminal, quiescent) = self.aggregate_diagnostic_teardown_state();
+        let (terminal, quiescent) = self.xgmi_diagnostic_teardown_state();
         match take_storage(
             &mut self.xgmi_aggregate_diagnostic,
             terminal,
@@ -461,7 +462,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
     }
 
-    fn aggregate_diagnostic_teardown_state(&self) -> (bool, bool) {
+    pub(super) fn xgmi_diagnostic_teardown_state(&self) -> (bool, bool) {
         let terminal = self.terminal
             || self
                 .queue_creation_roots

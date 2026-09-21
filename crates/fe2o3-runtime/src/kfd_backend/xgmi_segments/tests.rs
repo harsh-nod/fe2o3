@@ -19,11 +19,19 @@ enum Inject {
     WaitPair,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Call {
+    Submit(usize, RuntimePeerCopySegmentV1),
+    Wait(usize, Instant),
+    Close(bool),
+}
+
+#[derive(Default, Debug, Eq, PartialEq)]
 struct Log {
     submits: Vec<RuntimePeerCopySegmentV1>,
     waits: Vec<(usize, Instant)>,
     closes: Vec<bool>,
+    calls: Vec<Call>,
 }
 
 struct Ticket {
@@ -58,6 +66,10 @@ impl Scope for Script {
     ) -> Result<Ticket, Observation<Box<u64>, Ticket, Fault>> {
         let ordinal = self.log.borrow().submits.len();
         self.log.borrow_mut().submits.push(segment);
+        self.log
+            .borrow_mut()
+            .calls
+            .push(Call::Submit(ordinal, segment));
         if let Some((at, inject)) = self.inject
             && ordinal == at
         {
@@ -90,6 +102,10 @@ impl Scope for Script {
     ) -> Observation<Box<u64>, Ticket, Fault> {
         assert_eq!(bytes, self.log.borrow().submits[ticket.ordinal].byte_len);
         self.log.borrow_mut().waits.push((ticket.ordinal, deadline));
+        self.log
+            .borrow_mut()
+            .calls
+            .push(Call::Wait(ticket.ordinal, deadline));
         if let Some((at, inject)) = self.inject
             && ticket.ordinal == at
         {
@@ -117,6 +133,7 @@ impl Scope for Script {
 
     fn finish(self, terminal: bool) -> Result<(), Fault> {
         self.log.borrow_mut().closes.push(terminal);
+        self.log.borrow_mut().calls.push(Call::Close(terminal));
         if self.close_failure {
             Err(Fault::Close)
         } else {
@@ -333,3 +350,5 @@ fn native_wait_forwards_the_absolute_deadline_without_singleton_rosters() {
     assert!(wait.contains("u64::from(completed.copy_bytes()) != bytes"));
     assert!(wait.contains("Gfx942XgmiWaitFailureV1::CompletedCurrentnessIndeterminate"));
 }
+
+mod profile_equivalence;
