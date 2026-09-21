@@ -18,7 +18,7 @@ PREFIX = (
     "// The production sorting/search middle phase is not refined by this packet.\n"
 )
 INCLUDE = 'include!("context_read_invariant_v1.rs");\n'
-COUNT = 168
+COUNT = 169
 DEPENDENCIES = {
     "context_read_invariant_v1.rs": "CONTEXT_READ_INVARIANT_SHA256",
     "context_read_commit_v1.rs": "CONTEXT_READ_COMMIT_SHA256",
@@ -306,7 +306,7 @@ def campaign(args):
     report = {
         "scope": "admission prefix and conditional commit suffix only",
         "positive_obligations": COUNT,
-        "inherited_obligations": 155,
+        "inherited_obligations": 156,
         "negative_cases": len(cases) - 2,
         "full_batch_enrollment_verified": False,
         "rust_sorting_search_refined": False,
