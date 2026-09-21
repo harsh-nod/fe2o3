@@ -282,6 +282,15 @@ semantics, operation preservation of the content relation and physical storage
 remain distinct obligations; declaration/view correspondence is not full-runtime
 refinement.
 
+The next [production retained-admission packet](evidence/dev-journal-retained-execution-2026-09-21/README.md)
+instantiates allocation/header/member lookup and bounded chain traversal on those
+actual declarations. Unconditional contracts relate each shared body to a pure
+sequence-view decision; independent bridges establish exact historical decision
+correspondence without assuming an allocated historical journal exists. Raw
+malformed-state behavior is preserved. Qualification records two 465/0 whole-crate
+positives, ten scoped one-function negatives, 855 unit tests and 27 doctests.
+Actual-typed mutation and full-wrapper correspondence remain open.
+
 These are scoped logical/shared-body proofs with invariant-conditional custody composition,
 not whole-wrapper verification.
 Complete retained-chain coverage is preserved by logical enrollment and Begin;
@@ -302,6 +311,8 @@ Before enabling runtime admission, the remaining work is:
    Remaining bodies include construction/enrollment and sorting/search, Begin,
    stable/producer reader admission/release and unread guards.
    Core journal declarations and content views are now shared and related, but
+   only the explicit comparisons and retained admission bodies have actual-typed
+   operation correspondence so far. Actual-typed Unknown/settlement mutation,
    remaining type/trait/wrapper correspondence, physical storage and fallible-allocation
    contracts, and explicit normal/unwind semantics remain open before treating
    the logical lifecycle as full-wrapper refinement.

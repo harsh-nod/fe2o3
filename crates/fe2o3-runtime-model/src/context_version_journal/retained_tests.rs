@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_version_journal::retained as runtime_retained;
 
 fn retained_fixture(count: usize, unknown: bool) -> (Journal, Reference, Vec<usize>) {
     let (mut journal, writer, _) = pending(count);
@@ -217,4 +218,135 @@ fn retained_wrappers_share_bounded_guards_and_the_single_unknown_store() {
     ] {
         assert_eq!(compact.matches(expansion).count(), 1);
     }
+}
+
+#[test]
+fn raw_empty_chain_does_not_authenticate_a_writer_header() {
+    let (mut j, mut writer, _) = pending(0);
+    j.writers.clear();
+    j.members.clear();
+    j.allocations.clear();
+    j.allocation_capacity = 0;
+    writer.slot = usize::MAX;
+    writer.key.context_generation = u64::MAX;
+    writer.key.local = 0;
+    let before = snapshot(&j);
+    j.indexed_accesses.set(0);
+    assert_eq!(
+        runtime_retained::shared_retained_chain_v1(&j, writer, None, 0),
+        Ok(())
+    );
+    assert_eq!(j.indexed_accesses.get(), 0);
+    assert_eq!(snapshot(&j), before);
+    assert_eq!(
+        runtime_retained::shared_retained_header_v1(&j, writer, true),
+        Err(Error::InvalidReference)
+    );
+}
+
+#[test]
+fn raw_header_returns_malformed_payload_before_chain_validation() {
+    for unknown in [false, true] {
+        for (head, count) in [(None, usize::MAX), (Some(usize::MAX), 0)] {
+            let (mut j, writer, _) = pending(0);
+            j.writers[writer.slot] = Some(if unknown {
+                WriterEntryV1::Unknown {
+                    key: writer.key,
+                    head,
+                    count,
+                }
+            } else {
+                WriterEntryV1::Pending {
+                    key: writer.key,
+                    head,
+                    count,
+                }
+            });
+            let before = snapshot(&j);
+            for allow_unknown in [false, true] {
+                assert_eq!(
+                    runtime_retained::shared_retained_header_v1(&j, writer, allow_unknown),
+                    if unknown && !allow_unknown {
+                        Err(Error::InvalidReference)
+                    } else {
+                        Ok((head, count, unknown))
+                    }
+                );
+            }
+            assert_eq!(
+                runtime_retained::shared_retained_chain_v1(&j, writer, head, count),
+                Err(Error::InvalidState)
+            );
+            assert_eq!(snapshot(&j), before);
+        }
+    }
+}
+
+#[test]
+fn raw_nonempty_chain_preserves_unrelated_malformed_contents() {
+    let (mut j, mut writer, slots) = retained_fixture(1, false);
+    writer.slot = usize::MAX;
+    writer.key.context_generation = u64::MAX;
+    writer.key.local = 0;
+    j.members[slots[0]].as_mut().unwrap().writer = writer;
+    let allocation_slot = j.members[slots[0]].unwrap().allocation.slot;
+    let allocation = j.allocations[allocation_slot].as_mut().unwrap();
+    allocation.device.context_generation = 0;
+    allocation.device.local = 0;
+    allocation.byte_extent = 0;
+    j.writers.clear();
+    j.free = vec![usize::MAX, usize::MAX];
+    j.member_free.clear();
+    j.allocation_free = vec![allocation_slot, allocation_slot];
+    j.scratch.clear();
+    j.writer_capacity = 0;
+    j.reserved_count = usize::MAX;
+    let before = snapshot(&j);
+    j.indexed_accesses.set(0);
+    assert_eq!(
+        runtime_retained::shared_retained_chain_v1(&j, writer, Some(slots[0]), 1),
+        Ok(())
+    );
+    assert_eq!(j.indexed_accesses.get(), 2);
+    assert_eq!(snapshot(&j), before);
+}
+
+#[test]
+fn raw_chain_rejects_capacity_overflow_and_nonterminal_tail_without_mutation() {
+    for tail in [false, true] {
+        let (mut j, writer, slots) = retained_fixture(1, false);
+        if tail {
+            j.members[slots[0]].as_mut().unwrap().next = Some(usize::MAX);
+        } else {
+            j.allocation_capacity = 0;
+        }
+        let before = snapshot(&j);
+        j.indexed_accesses.set(0);
+        assert_eq!(
+            runtime_retained::shared_retained_chain_v1(&j, writer, Some(slots[0]), 1),
+            Err(Error::InvalidState)
+        );
+        assert_eq!(j.indexed_accesses.get(), if tail { 2 } else { 0 });
+        assert_eq!(snapshot(&j), before);
+    }
+}
+
+#[test]
+fn production_retained_proof_uses_actual_declarations_and_shared_bodies() {
+    let root = include_str!("../../verus/context_journal_retained_execution_v1.rs");
+    let proof = include_str!("../../verus/context_journal_retained_bodies_v1.rs");
+    assert!(root.contains("include!(\"../src/context_version_journal/declarations.rs\")"));
+    assert!(root.contains("include!(\"context_journal_content_views_v1.rs\")"));
+    assert!(root.contains("include!(\"context_journal_retained_decisions_v1.rs\")"));
+    assert!(root.contains("include!(\"context_journal_retained_bodies_v1.rs\")"));
+    for expansion in [
+        "retained_allocation_body!(journal, reference)",
+        "retained_header_body!(journal, writer, allow_unknown)",
+        "retained_member_body!(journal, writer, head, previous)",
+        "retained_chain_body!(verus_exec_expr, journal, writer, initial, count, head, previous, index, [",
+    ] {
+        assert_eq!(proof.matches(expansion).count(), 1);
+    }
+    assert!(!proof.contains("assume("));
+    assert!(!proof.contains("external_body"));
 }
