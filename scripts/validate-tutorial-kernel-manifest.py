@@ -23,6 +23,7 @@ import argparse
 from collections.abc import Callable
 import hashlib
 import importlib.util
+import math
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -1897,16 +1898,31 @@ def reject_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]
     return result
 
 
-def load_manifest(path: Path, maximum_bytes: int = MAX_CARGO_MANIFEST_BYTES) -> Any:
+def finite_json_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        fail(f"non-finite JSON number: {value}")
+    return number
+
+
+def load_manifest(
+    path: Path, maximum_bytes: int = MAX_CARGO_MANIFEST_BYTES, *, with_sha256: bool = False,
+) -> Any:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > maximum_bytes:
         fail("manifest must be a bounded regular file")
     try:
-        return json.loads(
-            path.read_text(encoding="utf-8"),
+        with path.open("rb") as stream:
+            raw = stream.read(maximum_bytes + 1)
+        if len(raw) > maximum_bytes:
+            fail("manifest exceeds byte bound")
+        value = json.loads(
+            raw.decode("utf-8"),
             object_pairs_hook=reject_duplicate_json_object,
+            parse_float=finite_json_float,
             parse_constant=lambda value: fail(f"non-finite JSON constant: {value}"),
         )
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        return (value, hashlib.sha256(raw).hexdigest()) if with_sha256 else value
+    except (OSError, UnicodeError, ValueError, RecursionError) as error:
         fail(f"cannot read manifest: {error}")
 
 
@@ -2058,6 +2074,70 @@ def _encode_kernel_pair_report(report: dict[str, Any]) -> str:
     return "".join(chunks)
 
 
+def _bind_ordinary_source_report(
+    projection: dict[str, Any], fixtures: dict[str, Any], corpus: Any, manifest_sha256: str,
+) -> None:
+    """Bind diagnostic fixture observations, never kernel qualification or authority."""
+    def canonical(value: Any) -> str:
+        return json.dumps(value, sort_keys=True, allow_nan=False)
+
+    corpus = require_object(corpus, "ordinary-source report")
+    header = {
+        "schema": "fe2o3-ordinary-source-policy4-extraction-corpus-v1",
+        "manifest_sha256": manifest_sha256,
+        "configurations": len(fixtures),
+        "distinct_expected_roots": len({
+            symbol for fixture in fixtures.values()
+            for symbol in fixture["compilerInput"]["kernelSymbols"]
+        }),
+        "default_pipeline_activated": False,
+        "grants_artifact_or_launch_authority": False,
+    }
+    require_exact_keys(corpus, set(header) | {"cases", "all_checked_output_passed"}, "ordinary-source report")
+    if any(canonical(corpus[key]) != canonical(value) for key, value in header.items()):
+        fail("ordinary-source report header differs from manifest or diagnostic scope")
+    cases = corpus["cases"]
+    if not isinstance(cases, list) or len(cases) != len(fixtures):
+        fail("ordinary-source report requires the complete fixture roster")
+    indices = {}
+    for index, value in enumerate(cases):
+        case = require_object(value, "ordinary-source case")
+        actual = require_object(case.get("fixture"), "ordinary-source fixture")
+        key = require_string(actual.get("fixtureId"), "ordinary-source fixtureId")
+        if key in indices or key not in fixtures:
+            fail("duplicate or unknown ordinary-source fixture")
+        expected = {
+            "fixtureId": key, "target": fixtures[key]["target"],
+            "compilerInput": {k: v for k, v in fixtures[key]["compilerInput"].items() if k != "contractSha256"},
+        }
+        if canonical(actual) != canonical(expected):
+            fail("ordinary-source fixture/input/target differs from manifest")
+        if not {"status", "observation", "refusal", "compiler_artifacts"} <= case.keys():
+            fail("ordinary-source case is incomplete")
+        if not isinstance(case["compiler_artifacts"], list) or not all(
+            isinstance(path, str) for path in case["compiler_artifacts"]
+        ):
+            fail("ordinary-source artifact observations must be strings")
+        for field in ("observation", "refusal", "callback_progress"):
+            if case.get(field) is not None and not isinstance(case[field], dict):
+                fail(f"ordinary-source {field} must be an object or null")
+        passed = (isinstance(case["observation"], dict)
+                  and case["refusal"] is None and case["compiler_artifacts"] == [])
+        if (case["status"] not in ("blocked", "checked-output-pass")
+                or (case["status"] == "checked-output-pass") != passed
+                or (case["status"] == "blocked" and not isinstance(case["refusal"], dict))):
+            fail("ordinary-source case status contradicts its outcome")
+        indices[key] = index
+    if corpus["all_checked_output_passed"] is not all(case["status"] == "checked-output-pass" for case in cases):
+        fail("ordinary-source aggregate contradicts its cases")
+    for row in projection["fixtureSelections"]:
+        row["ordinarySourceCaseIndex"] = indices[row["fixtureId"]]
+    projection.update(
+        stageStatus="fixture-source-observations-bound",
+        ordinarySourceObservations={"diagnosticOnly": True, "report": corpus},
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -2068,9 +2148,14 @@ def main() -> None:
     parser.add_argument("--require-qualified", action="store_true")
     parser.add_argument("--require-curriculum", action="store_true")
     parser.add_argument("--site-inventory", type=Path)
+    parser.add_argument("--ordinary-source-report", type=Path)
     arguments = parser.parse_args()
+    if arguments.ordinary_source_report and not arguments.emit_kernel_pairs:
+        fail("--ordinary-source-report requires --emit-kernel-pairs")
     root = arguments.repo_root.resolve()
-    manifest = load_manifest(arguments.manifest or root / "config/tutorial-kernel-manifest-v1.json")
+    manifest, manifest_sha256 = load_manifest(
+        arguments.manifest or root / "config/tutorial-kernel-manifest-v1.json", with_sha256=True,
+    )
     curriculum_gaps: dict[str, list[str]] = {}
     fixtures = validate_manifest(root, manifest, curriculum_gaps=curriculum_gaps)
     if arguments.require_curriculum or arguments.site_inventory or arguments.emit_kernel_pairs:
@@ -2085,7 +2170,11 @@ def main() -> None:
     if arguments.require_qualified:
         fail("qualification receipts and policy/final-graph evidence are not implemented by source contracts")
     if arguments.emit_kernel_pairs:
-        print(_encode_kernel_pair_report(_kernel_pair_report(manifest, fixtures, curriculum_gaps, inventory, repo_root=root)))
+        report = _kernel_pair_report(manifest, fixtures, curriculum_gaps, inventory, repo_root=root)
+        if arguments.ordinary_source_report:
+            corpus = load_manifest(arguments.ordinary_source_report, MAX_SITE_INVENTORY_BYTES)
+            _bind_ordinary_source_report(report, fixtures, corpus, manifest_sha256)
+        print(_encode_kernel_pair_report(report))
     elif arguments.emit_matrix:
         records = [fixture for fixture in fixtures.values() if fixture["target"] == arguments.emit_matrix]
         if not records:
