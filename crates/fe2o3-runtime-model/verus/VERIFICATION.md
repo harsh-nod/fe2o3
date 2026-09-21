@@ -3,12 +3,29 @@
 ## Producer Read Candidate
 
 `src/context_producer_reads.rs` adds a concrete producer-bound reservation wrapper
-around the stable-reader journal. Its Rust tests do not extend the authenticated
-Verus inventory below. Outer arena/count preservation, producer-settlement
-composition and executable correspondence remain unproved; RuntimeContext does
-not yet use this candidate. See `docs/runtime-producer-read-reservations-v1.md`
-for its exact lifecycle, shared capacity and integration gates. Existing stable
-reader proofs must not be cited as proving this wrapper.
+around the stable-reader journal. RuntimeContext does not yet use it.
+`context_producer_read_invariant_v1.rs` adds 25 logical-content obligations to 155
+inherited obligations: constructor and nonempty two-consumer witness, exact
+pending-chain custody, Success/NoEffect and Unknown preservation, stable-reader
+and outer-storage framing, resolved status independent of retired writer/member
+slots, and positive combined count for a retained reservation.
+
+`check-producer-read-invariant.py` registers whole-crate positive-before/after
+runs with one appended test obligation and 12 invariant-sensitivity mutations.
+Each negative must report exactly its designated postcondition failure with 180
+other obligations verified; compiler errors, partial runs, other diagnostics and
+timeouts are not acceptance. All four inherited sources and their checker chain
+are pinned. Captured pinned bytes determine the generated solver inputs.
+The standalone negative-file roster remains 691; preseal authority bindings are
+1535. The twelve generated mutations are not standalone negative files or
+transition-implementation mutation proofs.
+
+The strong chain graph is a reachable-state premise, not a whole-arena check
+performed by Rust settlement. Base issuance/history and exact reserved-count
+composition, acquisition/release preservation, arithmetic bounds for concrete
+counts, physical storage, precise errors and executable Rust/native refinement
+remain open. The positive-count lemma does not prove concrete mutator rejection.
+See `docs/runtime-producer-read-reservations-v1.md` for the full integration gates.
 
 ## R74 Ordered Peer Copy
 

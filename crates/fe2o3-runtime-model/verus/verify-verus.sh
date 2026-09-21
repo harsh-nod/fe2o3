@@ -11,6 +11,7 @@ journal_issuance_proof="$script_dir/context_version_journal_issuance_v1.rs"
 read_preflight_proof="$script_dir/context_read_preflight_v1.rs"
 read_commit_proof="$script_dir/context_read_commit_v1.rs"
 read_invariant_proof="$script_dir/context_read_invariant_v1.rs"
+producer_read_invariant_proof="$script_dir/context_producer_read_invariant_v1.rs"
 lifecycle_proof="$script_dir/runtime_lifecycle_v1.rs"
 identity_proof="$script_dir/device_identity_generation_v1.rs"
 projection_proof="$script_dir/device_projection_refinement_v1.rs"
@@ -776,7 +777,8 @@ journal_issuance_checker="$script_dir/check-journal-issuance.py"
 read_preflight_checker="$script_dir/check-read-preflight.py"
 read_commit_checker="$script_dir/check-read-commit.py"
 read_invariant_checker="$script_dir/check-read-invariant.py"
-\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker read_invariant_checker
+producer_read_invariant_checker="$script_dir/check-producer-read-invariant.py"
+\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker read_invariant_checker producer_read_invariant_checker
 verus_bin=${VERUS:-verus}
 
 if [ "$#" -ne 0 ]; then
@@ -805,6 +807,8 @@ expected_read_commit=$(read_pin "$pin_dir/CONTEXT_READ_COMMIT_SHA256")
 expected_read_commit_checker=$(read_pin "$pin_dir/READ_COMMIT_CHECKER_SHA256")
 expected_read_invariant=$(read_pin "$pin_dir/CONTEXT_READ_INVARIANT_SHA256")
 expected_read_invariant_checker=$(read_pin "$pin_dir/READ_INVARIANT_CHECKER_SHA256")
+expected_producer_read_invariant=$(read_pin "$pin_dir/CONTEXT_PRODUCER_READ_INVARIANT_SHA256")
+expected_producer_read_invariant_checker=$(read_pin "$pin_dir/PRODUCER_READ_INVARIANT_CHECKER_SHA256")
 expected_identity=$(read_pin "$pin_dir/DEVICE_IDENTITY_MODEL_SHA256")
 expected_projection=$(read_pin "$pin_dir/DEVICE_PROJECTION_REFINEMENT_SHA256")
 expected_memory=$(read_pin "$pin_dir/MEMORY_LIFECYCLE_SHA256")
@@ -1599,6 +1603,8 @@ check_digest() {
 check_sources() {
     check_digest "$expected_read_invariant" "$read_invariant_proof"
     check_digest "$expected_read_invariant_checker" "$read_invariant_checker"
+    check_digest "$expected_producer_read_invariant" "$producer_read_invariant_proof"
+    check_digest "$expected_producer_read_invariant_checker" "$producer_read_invariant_checker"
     check_digest "$expected_read_commit" "$read_commit_proof"
     check_digest "$expected_read_commit_checker" "$read_commit_checker"
     check_digest "$expected_read_preflight" "$read_preflight_proof"
@@ -3258,6 +3264,11 @@ check_positive "$journal_issuance_proof" 'verification results:: 69 verified, 0 
     "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \
     /usr/bin/python3 -I "$read_invariant_checker" \
     "$read_invariant_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-invariant"
+/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$producer_read_invariant_checker" --self-test "$producer_read_invariant_proof"
+/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \
+    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \
+    /usr/bin/python3 -I "$producer_read_invariant_checker" \
+    "$producer_read_invariant_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/producer-read-invariant"
 
 check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' lifecycle
 check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
@@ -4025,6 +4036,7 @@ transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obliga
 transcript="$transcript reader_preflight_obligations=103 reader_preflight_inherited=69 reader_preflight_new=34 reader_preflight_executable_mutations=21"
 transcript="$transcript reader_commit_obligations=127 reader_commit_inherited=103 reader_commit_new=24 reader_commit_executable_mutations=15"
 transcript="$transcript reader_invariant_obligations=155 reader_invariant_inherited=127 reader_invariant_new=28 reader_invariant_test_obligations=1 reader_invariant_mutations=16"
+transcript="$transcript producer_read_invariant_obligations=180 producer_read_invariant_inherited=155 producer_read_invariant_new=25 producer_read_invariant_test_obligations=1 producer_read_invariant_mutations=12"
 actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

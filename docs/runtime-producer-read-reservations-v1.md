@@ -1,7 +1,8 @@
 # Producer-Bound Read Reservations V1
 
 Status: concrete Rust model candidate. Not yet wired into RuntimeContext, Worker
-transport or a native backend, and not covered by the registered Verus campaign.
+transport or a native backend. Conditional custody proofs are registered in the
+Verus campaign; full wrapper lifecycle and Rust/native refinement remain open.
 Pending journaled producer-to-consumer requests still return `ContextReserved`.
 
 ## Ownership Model
@@ -65,12 +66,36 @@ These are executable tests, not a formal refinement or hardware qualification.
 The [signed-source CPU qualification](evidence/dev-producer-read-model-cpu-2026-09-21/README.md)
 records the GNU/musl model, doctest and runtime regression results.
 
+`context_producer_read_invariant_v1.rs` adds 25 obligations to the 155 inherited
+reader/journal obligations. It specifies exact arena partitions, live reference
+identity/incarnation, per-allocation counts, and the shared active-read ceiling.
+It proves logical construction, a two-consumer nonempty witness, and conditional
+preservation under Success/NoEffect settlement and Pending-to-Unknown marking
+(including idempotent Unknown). Settlement frames stable readers and the outer
+reservation storage. Resolved status depends on the protected allocation, not
+retention of the old writer/member slots. A retained reservation contributes a
+positive combined reader count; concrete mutation rejection is not yet refined.
+
+The dedicated pinned checker runs the whole importing crate before and after
+12 invariant-sensitivity mutations, requiring each negative to fail exactly the
+named postcondition. These mutations test the invariant, not implementations of
+acquisition, release, or settlement. The checker authenticates the recursive
+source/tool closure and binds solver inputs to captured pinned bytes.
+
+These are conditional logical-content proofs, not whole-wrapper verification.
+Complete retained-chain coverage is a premise whose reachability across all
+base-journal transitions remains to be established. The custody predicate does
+not yet compose exact `reserved_count` or issuance history. Physical Vec storage,
+fallible allocation, exact error precedence, scratch/preflight execution,
+panic/unwind behavior, and production Rust correspondence remain separate.
+
 Before enabling runtime admission, the remaining work is:
 
-1. Prove outer arena partition, unique references, combined count/capacity,
-   atomic admission/release, settlement preservation and inner stable-reader
-   framing; add authenticated negative controls. The old allocation-frame
-   lemma is not a proof of this new wrapper's concrete settlement composition.
+1. Prove invariant preservation across outer and wrapped stable admission/release,
+   canonical atomic commit and unchanged-on-error output, exact count bounds for
+   concrete arithmetic, and base-custody reachability/issuance composition. Prove
+   Rust correspondence and concrete mutation guards before treating the logical
+   settlement theorem as full-wrapper refinement.
 2. Retain an exact Context event-to-producer writer/member binding and a distinct
    producer-reader root, with preallocated capacity before backend entry.
    Include it in Context cleanup, generated-operation exclusion and usage.

@@ -658,11 +658,14 @@ reservations or scanning consumers, and shares the existing active-read budget.
 The [CPU packet](evidence/dev-producer-read-model-cpu-2026-09-21/README.md)
 records GNU/musl model, doctest and runtime regression qualification.
 
-This candidate is not wired into Context or a backend and is not in the formal
-proof inventory. Pending journaled producer inputs still return `ContextReserved`.
-Exact settlement composition, Context dependency authentication and result
-custody, consumer-driven dependency progress, and native qualification remain
-required. No parity gate or performance claim is closed by these CPU tests.
+This candidate is not wired into Context or a backend. A registered conditional
+custody proof adds 25 obligations and 12 invariant-sensitivity controls; it covers
+logical construction and Success/NoEffect/Unknown preservation, not the full
+wrapper lifecycle or executable refinement. Pending journaled producer inputs
+still return `ContextReserved`. Admission/release and base-graph reachability
+proofs, Context dependency authentication and result custody, consumer-driven
+dependency progress, and native qualification remain required. No parity gate
+or performance claim is closed by these CPU tests or conditional model proofs.
 
 ## Required Gates
 
