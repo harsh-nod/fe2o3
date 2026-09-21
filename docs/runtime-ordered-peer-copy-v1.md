@@ -204,11 +204,24 @@ for HSA, and 0.344-0.350 ms for HIP. These are whole-list host latencies, not
 confidence intervals or link bandwidth. KFD is not at performance parity on
 this workload; the full-currentness and serial publication costs remain in scope.
 
+### Scalar-Wait Qualification
+
+The [scalar-wait source packet](evidence/dev-xgmi-ordered-segments-scalar-wait-mi300x-2026-09-20/README.md)
+reran the same six-trial geometry after removing singleton wait rosters. All
+120 samples, 36 endpoint observations, byte validation, explicit teardown, and
+owned cleanup passed. Per-trial/per-direction medians ranged from 25.240 to
+25.348 ms for KFD, 0.923 to 0.925 ms for HSA, and 0.344 to 0.352 ms for HIP.
+The KFD range overlaps the prior source's range; this separate historical run
+does not establish a speedup or attribute time to vector allocation. KFD remains
+far from performance parity. Nine scalar-wait CPU tests and six ordered-runtime
+tests qualify deadline forwarding, completion handling, and ownership behavior;
+they are not native fault injection or executable formal refinement.
+
 ## Remaining Work
 
 - Expand matched useful-segment testing to the remaining seven payload/count
-  geometries, and attribute the 65-segment cost before larger optimizations. No speedup
-  or parity claim follows from the completed first comparison.
+  geometries, and attribute the 65-segment cost before larger optimizations. No
+  speedup or parity claim follows from the completed comparisons.
 - Owner-engine convenience wrappers with descriptor budget accounting, graph
   sequence nodes, and explicit negotiated Worker transport support.
 - More permissive scheduling-domain coexistence and native multi-packet

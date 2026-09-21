@@ -1,0 +1,41 @@
+{
+  "command": [
+    "/home/harsh/fe2o3-xgmi-segments-20260920.08965854af62c86a/hsa-segments",
+    "0",
+    "1",
+    "65536",
+    "1",
+    "2",
+    "10",
+    "0xab83d2ffef0d3cdf",
+    "0xd2e26fef80cf5c33",
+    "--ordered-segments",
+    "65"
+  ],
+  "cwd": "/home/harsh/fe2o3-xgmi-segments-20260920.08965854af62c86a/source",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/fe2o3-xgmi-segments-20260920.08965854af62c86a/target",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "HSA_XNACK": "0",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/opt/rocm/bin:/usr/bin:/bin",
+    "ROCR_VISIBLE_DEVICES": "1,2",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "TMPDIR": "/home/harsh/fe2o3-xgmi-segments-20260920.08965854af62c86a/tmp",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789949042499802321,
+  "group_absent": true,
+  "pid": 51199,
+  "started_ns": 1789949041829582047,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "fa87d26b2fba45d30385f14300392a77be3957af09431e8d8f6976fc593f2304",
+  "timeout_seconds": 180
+}
