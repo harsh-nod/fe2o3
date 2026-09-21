@@ -127,6 +127,27 @@ pub(crate) fn construct_production_semantic_types_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     producers: &[RetainedSemanticTypeProducerV1<'tcx>],
 ) -> Result<ConstructedSemanticTypesV1, ProductionSemanticTypeErrorV1> {
+    construct_semantic_types_with_nominal_v35(tcx, producers, false)
+}
+
+/// Preserves actual normalized rustc usize/isize classification without replacing
+/// its source identity, structural integer shape, or target-resolved layout.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "V35 nominal ABI continuation is integrated in B2")
+)]
+pub(crate) fn construct_production_semantic_types_nominal_v35<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    producers: &[RetainedSemanticTypeProducerV1<'tcx>],
+) -> Result<ConstructedSemanticTypesV1, ProductionSemanticTypeErrorV1> {
+    construct_semantic_types_with_nominal_v35(tcx, producers, true)
+}
+
+fn construct_semantic_types_with_nominal_v35<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    producers: &[RetainedSemanticTypeProducerV1<'tcx>],
+    nominal: bool,
+) -> Result<ConstructedSemanticTypesV1, ProductionSemanticTypeErrorV1> {
     let mut ids = BTreeMap::new();
     for (index, producer) in producers.iter().enumerate() {
         let index = u32::try_from(index).map_err(|_| ProductionSemanticTypeErrorV1::Cardinality)?;
@@ -147,7 +168,19 @@ pub(crate) fn construct_production_semantic_types_v1<'tcx>(
             ids: &ids,
             parent: producer.identity,
         };
-        records.push(construct_type_v1(&context, producer)?);
+        let mut record = construct_type_v1(&context, producer)?;
+        if nominal {
+            record = match producer.ty.kind() {
+                TyKind::Uint(UintTy::Usize) => {
+                    record.with_rust_type_kind(SemanticRustTypeKindV1::Usize)
+                }
+                TyKind::Int(IntTy::Isize) => {
+                    record.with_rust_type_kind(SemanticRustTypeKindV1::Isize)
+                }
+                _ => record,
+            };
+        }
+        records.push(record);
     }
     Ok(ConstructedSemanticTypesV1 {
         records: records.into_boxed_slice(),

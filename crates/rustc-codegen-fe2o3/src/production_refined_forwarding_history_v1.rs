@@ -59,6 +59,46 @@ pub(super) struct AuthenticatedRefinedForwardingHistoryV1<'a> {
     retained: usize,
 }
 type Checked<'a> = AuthenticatedRefinedForwardingHistoryV1<'a>;
+
+/// A private borrow of the genuine F prefix, never an emitted-native surrogate.
+/// Its caller retains and pays the complete source and original P7 witness.
+#[derive(Clone, Copy)]
+pub(super) enum ActualFinalFSourceRefV1<'a> {
+    Direct(&'a DirectComposed),
+    Erased(&'a ErasedComposed),
+}
+impl<'a> ActualFinalFSourceRefV1<'a> {
+    pub(super) fn output(self) -> &'a Graph {
+        match self {
+            Self::Direct(v) => v.output(),
+            Self::Erased(v) => v.output(),
+        }
+    }
+    fn required(self) -> Result<usize> {
+        match self {
+            Self::Direct(v) => v.retained_input_storage_floor_v1(),
+            Self::Erased(v) => v.retained_input_storage_floor_v1(),
+        }
+        .map_err(admission)
+    }
+    fn replay(self, budget: &mut Budget<'_>) -> Result<()> {
+        match self {
+            Self::Direct(v) => v.verify_equivalence(budget),
+            Self::Erased(v) => v.verify_equivalence(budget),
+        }
+        .map_err(admission)
+    }
+    pub(super) fn history(self) -> Admitted7Ref<'a> {
+        match self {
+            Self::Direct(v) => {
+                Admitted7Ref::Direct(v.prefix().prefix().prefix().prefix().prefix().prefix())
+            }
+            Self::Erased(v) => {
+                Admitted7Ref::Erased(v.prefix().prefix().prefix().prefix().prefix().prefix())
+            }
+        }
+    }
+}
 impl Checked<'_> {
     pub(super) const fn retained_storage(&self) -> usize {
         self.retained
@@ -88,7 +128,199 @@ fn checked_header() -> Result<usize> {
         .ok_or_else(|| resource(Resource::Arithmetic))
 }
 
+macro_rules! final_f_inputs {
+    ($owner:expr, $claims:expr, $execution:expr) => {{
+        let f = $owner;
+        let r = f.prefix();
+        let l = r.prefix();
+        let h = l.prefix();
+        let p = h.prefix();
+        let k = p.prefix();
+        let j = k.prefix();
+        let i = j.prefix();
+        let checked = i.checked_output();
+        let p5 = checked.intermediate_policy5();
+        let p4 = p5.intermediate_policy4();
+        Inputs {
+            prefix: CanonicalPolicy8SemanticInputsV1 {
+                prefix: CanonicalPolicy7SemanticInputsV1 {
+                    prefix: CanonicalPolicy6SemanticInputsV1 {
+                        prefix: CanonicalPolicy5SemanticInputsV1 {
+                            input: i.bound(),
+                            intermediate: p4.intermediate_policy3().owner(),
+                            stored: p4.owner(),
+                            output: p5.owner(),
+                            policy4_wire: $claims.policy4.canonical_bytes(),
+                            policy5_record: p5.execution().canonical_bytes(),
+                            load_rows: p5.load_forwarding_rows(),
+                        },
+                        output: checked.owner(),
+                        continuation: CanonicalPolicy6ContinuationClaimsV1 {
+                            composition_record: checked.execution().canonical_bytes(),
+                            integer_record: checked.continuation().execution().canonical_bytes(),
+                            transition_wire: $claims.transition.canonical_bytes(),
+                        },
+                    },
+                    output: j.output(),
+                    continuation: CanonicalPolicy7ContinuationClaimsV1 {
+                        execution_record: $execution.canonical_bytes(),
+                        deletion_rows: j.continuation().rows(),
+                        retained_operations: j.continuation().retained_operations(),
+                    },
+                },
+                output: k.output(),
+                continuation: CanonicalPolicy8ContinuationClaimsV1 {
+                    pass_name: POLICY8_COMMUTATIVE_PASS_NAME_V1,
+                    input: Identity::from_verified(j.output().canonical().identity()),
+                    output: Identity::from_verified(k.output().canonical().identity()),
+                    occurrences: k.continuation().occurrences().candidate(),
+                },
+            },
+            promoted: p.output(),
+            selected_allocations: p.continuation().selected_allocations(),
+            promotion_origins: p.continuation().origins(),
+            preheaders: h.output(),
+            preheader_rows: h.continuation().preheaders(),
+            licm: l.output(),
+            licm_origins: l.continuation().origins(),
+            refined: r.output(),
+            refinement_origins: r.continuation().origins(),
+            output: f.output(),
+            forwarding_origins: f.continuation().origins(),
+            limits: HistoryLimits {
+                refinement: r.limits(),
+                forwarding: f.limits(),
+            },
+        }
+    }};
+}
+
+fn prepare_claims_from_prefix_v1(
+    source: Admitted7Ref<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<Claims> {
+    let header = claim_header()?;
+    budget.reserve_storage(header).map_err(resource)?;
+    budget.charge_work(16).map_err(resource)?;
+    let (bound, checked) = source.portable_prefix();
+    let p5 = checked.intermediate_policy5();
+    let policy4 = encode_checked_canonical_policy4_execution_receipt_v1(
+        bound,
+        p5.intermediate_policy4(),
+        budget,
+    )
+    .map_err(|e| history_error(RefinedForwardingHistoryErrorV1::Policy4(e)))?;
+    let p4_storage = policy4.storage().retained_storage();
+    budget.reserve_storage(p4_storage).map_err(resource)?;
+    let (transition, ts) = Transition::from_candidate_with_budget(
+        p5.owner().canonical().identity(),
+        checked.owner().canonical().identity(),
+        checked.continuation().occurrences().candidate(),
+        budget,
+    )
+    .map_err(|e| history_error(RefinedForwardingHistoryErrorV1::Transition(e)))?;
+    budget
+        .reserve_storage(ts.retained_storage())
+        .map_err(resource)?;
+    let retained = header
+        .checked_add(p4_storage)
+        .and_then(|n| n.checked_add(ts.retained_storage()))
+        .ok_or_else(|| resource(Resource::Arithmetic))?;
+    let claims = Claims {
+        policy4,
+        transition,
+        retained,
+    };
+    Ok(claims)
+}
+
 impl Claims {
+    pub(super) fn prepare_source_v1(
+        source: ActualFinalFSourceRefV1<'_>,
+        execution: &Policy7ExecutionWitnessV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self> {
+        let required = source
+            .required()?
+            .checked_add(execution.retained_storage())
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+        scoped(required, budget, |budget| {
+            budget
+                .reserve_storage(size_of::<ActualFinalFSourceRefV1<'_>>())
+                .map_err(resource)?;
+            source.replay(budget)?;
+            let claims = prepare_claims_from_prefix_v1(source.history(), budget)?;
+            claims.check_source_v1(source, execution, budget)?;
+            Ok(claims)
+        })
+    }
+
+    pub(super) fn source_inputs_v1<'a>(
+        &'a self,
+        source: ActualFinalFSourceRefV1<'a>,
+        execution: &'a Policy7ExecutionWitnessV1,
+    ) -> Inputs<'a> {
+        match source {
+            ActualFinalFSourceRefV1::Direct(owner) => final_f_inputs!(owner, self, execution),
+            ActualFinalFSourceRefV1::Erased(owner) => final_f_inputs!(owner, self, execution),
+        }
+    }
+
+    /// Checks the same actual P6/P7 and B-through-F engines without emitting F.
+    /// No borrowed authentication token escapes; U remains a separate relation.
+    pub(super) fn check_source_v1(
+        &self,
+        source: ActualFinalFSourceRefV1<'_>,
+        execution: &Policy7ExecutionWitnessV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        let required = source
+            .required()?
+            .checked_add(execution.retained_storage())
+            .and_then(|n| n.checked_add(self.retained))
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+        scoped(required, budget, |budget| {
+            let header = size_of::<ActualFinalFSourceRefV1<'_>>()
+                .checked_add(size_of::<Inputs<'_>>())
+                .ok_or_else(|| resource(Resource::Arithmetic))?;
+            budget.reserve_storage(header).map_err(resource)?;
+            source.replay(budget)?;
+            budget.charge_work(128).map_err(resource)?;
+            let inputs = self.source_inputs_v1(source, execution);
+            let p7 = inputs.prefix.prefix;
+            let p6 = p7.prefix;
+            let p5 = p6.prefix;
+            let (policy6, policy7) = check_portable_history_v1(
+                source.history(),
+                execution,
+                PortablePolicy7ClaimsV1 {
+                    policy4_wire: p5.policy4_wire,
+                    policy5_record: p5.policy5_record,
+                    load_rows: p5.load_rows,
+                    policy6: p6.continuation,
+                    policy7_record: p7.continuation.execution_record,
+                },
+                budget,
+            )?;
+            // The actual P6/P7 receipts are already reserved by the shared checker.
+            let semantic =
+                check_canonical_refined_forwarding_history_v1(inputs, budget).map_err(|e| {
+                    history_error(RefinedForwardingHistoryErrorV1::Semantics(Box::new(e)))
+                })?;
+            budget
+                .reserve_storage(semantic.storage().retained_storage())
+                .map_err(resource)?;
+            budget.charge_work(1).map_err(resource)?;
+            if !std::ptr::eq(semantic.output(), source.output()) {
+                return Err(mismatch("actual F history terminal before unroll"));
+            }
+            drop(semantic);
+            drop(policy7);
+            drop(policy6);
+            Ok(())
+        })
+    }
+
     pub(super) const fn retained_storage(&self) -> usize {
         self.retained
     }
@@ -109,38 +341,7 @@ impl Claims {
     ) -> Result<Self> {
         scoped(native.retained_storage_floor_v1(), budget, |budget| {
             native.verify_equivalence(budget)?;
-            let header = claim_header()?;
-            budget.reserve_storage(header).map_err(resource)?;
-            budget.charge_work(16).map_err(resource)?;
-            let (bound, checked) = native.owner.history().portable_prefix();
-            let p5 = checked.intermediate_policy5();
-            let policy4 = encode_checked_canonical_policy4_execution_receipt_v1(
-                bound,
-                p5.intermediate_policy4(),
-                budget,
-            )
-            .map_err(|e| history_error(RefinedForwardingHistoryErrorV1::Policy4(e)))?;
-            let p4_storage = policy4.storage().retained_storage();
-            budget.reserve_storage(p4_storage).map_err(resource)?;
-            let (transition, ts) = Transition::from_candidate_with_budget(
-                p5.owner().canonical().identity(),
-                checked.owner().canonical().identity(),
-                checked.continuation().occurrences().candidate(),
-                budget,
-            )
-            .map_err(|e| history_error(RefinedForwardingHistoryErrorV1::Transition(e)))?;
-            budget
-                .reserve_storage(ts.retained_storage())
-                .map_err(resource)?;
-            let retained = header
-                .checked_add(p4_storage)
-                .and_then(|n| n.checked_add(ts.retained_storage()))
-                .ok_or_else(|| resource(Resource::Arithmetic))?;
-            let claims = Self {
-                policy4,
-                transition,
-                retained,
-            };
+            let claims = prepare_claims_from_prefix_v1(native.owner.history(), budget)?;
             let checked = claims.check(native, budget)?;
             let retained = checked.retained_storage();
             budget.reserve_storage(retained).map_err(resource)?;
@@ -154,78 +355,9 @@ impl Claims {
         &'a self,
         native: &'a PreparedRefinedForwardingNativeOutputV1,
     ) -> Inputs<'a> {
-        macro_rules! inputs {
-            ($owner:expr) => {{
-                let f = $owner;
-                let r = f.prefix();
-                let l = r.prefix();
-                let h = l.prefix();
-                let p = h.prefix();
-                let k = p.prefix();
-                let j = k.prefix();
-                let i = j.prefix();
-                let checked = i.checked_output();
-                let p5 = checked.intermediate_policy5();
-                let p4 = p5.intermediate_policy4();
-                Inputs {
-                    prefix: CanonicalPolicy8SemanticInputsV1 {
-                        prefix: CanonicalPolicy7SemanticInputsV1 {
-                            prefix: CanonicalPolicy6SemanticInputsV1 {
-                                prefix: CanonicalPolicy5SemanticInputsV1 {
-                                    input: i.bound(),
-                                    intermediate: p4.intermediate_policy3().owner(),
-                                    stored: p4.owner(),
-                                    output: p5.owner(),
-                                    policy4_wire: self.policy4.canonical_bytes(),
-                                    policy5_record: p5.execution().canonical_bytes(),
-                                    load_rows: p5.load_forwarding_rows(),
-                                },
-                                output: checked.owner(),
-                                continuation: CanonicalPolicy6ContinuationClaimsV1 {
-                                    composition_record: checked.execution().canonical_bytes(),
-                                    integer_record: checked
-                                        .continuation()
-                                        .execution()
-                                        .canonical_bytes(),
-                                    transition_wire: self.transition.canonical_bytes(),
-                                },
-                            },
-                            output: j.output(),
-                            continuation: CanonicalPolicy7ContinuationClaimsV1 {
-                                execution_record: native.prefix_execution.canonical_bytes(),
-                                deletion_rows: j.continuation().rows(),
-                                retained_operations: j.continuation().retained_operations(),
-                            },
-                        },
-                        output: k.output(),
-                        continuation: CanonicalPolicy8ContinuationClaimsV1 {
-                            pass_name: POLICY8_COMMUTATIVE_PASS_NAME_V1,
-                            input: Identity::from_verified(j.output().canonical().identity()),
-                            output: Identity::from_verified(k.output().canonical().identity()),
-                            occurrences: k.continuation().occurrences().candidate(),
-                        },
-                    },
-                    promoted: p.output(),
-                    selected_allocations: p.continuation().selected_allocations(),
-                    promotion_origins: p.continuation().origins(),
-                    preheaders: h.output(),
-                    preheader_rows: h.continuation().preheaders(),
-                    licm: l.output(),
-                    licm_origins: l.continuation().origins(),
-                    refined: r.output(),
-                    refinement_origins: r.continuation().origins(),
-                    output: f.output(),
-                    forwarding_origins: f.continuation().origins(),
-                    limits: HistoryLimits {
-                        refinement: r.limits(),
-                        forwarding: f.limits(),
-                    },
-                }
-            }};
-        }
         match &native.owner {
-            Composed::Direct(owner) => inputs!(owner),
-            Composed::Erased(owner) => inputs!(owner),
+            Composed::Direct(owner) => final_f_inputs!(owner, self, native.prefix_execution),
+            Composed::Erased(owner) => final_f_inputs!(owner, self, native.prefix_execution),
         }
     }
 

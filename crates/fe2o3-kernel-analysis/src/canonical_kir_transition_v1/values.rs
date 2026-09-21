@@ -7,8 +7,51 @@ use crate::{
 };
 use fe2o3_kernel_ir::{
     BinaryOp, CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirUseCoordinateV1 as Use,
-    Constant, OperationKind, ScalarType, UnaryOp, scalar_ops_v2 as math,
+    ComparePredicate, Constant, OperationKind, ScalarType, UnaryOp, scalar_ops_v2 as math,
 };
+
+pub(super) fn integer_boundary_comparison(
+    ty: ScalarType,
+    predicate: ComparePredicate,
+    left: Option<Literal>,
+    right: Option<Literal>,
+) -> Option<bool> {
+    let (width, signed) = match ty {
+        ScalarType::U8 => (8, false),
+        ScalarType::U16 => (16, false),
+        ScalarType::U32 => (32, false),
+        ScalarType::U64 => (64, false),
+        ScalarType::U128 => (128, false),
+        ScalarType::I8 => (8, true),
+        ScalarType::I16 => (16, true),
+        ScalarType::I32 => (32, true),
+        ScalarType::I64 => (64, true),
+        ScalarType::I128 => (128, true),
+        _ => return None,
+    };
+    let mask = u128::MAX >> (128 - width);
+    if [left, right]
+        .into_iter()
+        .flatten()
+        .any(|value| value.ty != ty || value.bits > mask)
+    {
+        return None;
+    }
+    let minimum = if signed { 1u128 << (width - 1) } else { 0 };
+    let maximum = if signed { minimum - 1 } else { mask };
+    use ComparePredicate::{GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual};
+    match (predicate, left.map(|v| v.bits), right.map(|v| v.bits)) {
+        (LessThan, _, Some(v)) if v == minimum => Some(false),
+        (GreaterThanOrEqual, _, Some(v)) if v == minimum => Some(true),
+        (GreaterThan, _, Some(v)) if v == maximum => Some(false),
+        (LessThanOrEqual, _, Some(v)) if v == maximum => Some(true),
+        (GreaterThan, Some(v), _) if v == minimum => Some(false),
+        (LessThanOrEqual, Some(v), _) if v == minimum => Some(true),
+        (LessThan, Some(v), _) if v == maximum => Some(false),
+        (GreaterThanOrEqual, Some(v), _) if v == maximum => Some(true),
+        _ => None,
+    }
+}
 
 pub(super) fn literal(value: &Constant) -> Literal {
     let (ty, bits) = match *value {
@@ -189,7 +232,11 @@ impl State<'_, '_, '_, '_> {
             budget.charge_work(1)?;
             let definition = input.uses()[use_index].definition;
             let Some(value) = self.literal(definition, budget)? else {
-                return Ok(false);
+                return if matches!(row.operation.kind, OperationKind::Compare { .. }) {
+                    self.integer_boundary_fact(operation, budget)
+                } else {
+                    Ok(false)
+                };
             };
             arguments[slot] = scalar::Input {
                 value: SparseValue::Constant(SparseConstant {
@@ -286,6 +333,43 @@ impl State<'_, '_, '_, '_> {
             }
         }
         Ok(changed)
+    }
+
+    fn integer_boundary_fact(&mut self, operation: usize, budget: &mut Budget<'_>) -> Result<bool> {
+        // Fixed shape/type/extremum work precedes all inspections; alias lookups
+        // and publication additionally charge their existing variable costs.
+        budget.charge_work(24)?;
+        let input = self.input;
+        let row = &input.operations()[operation];
+        let OperationKind::Compare { predicate, .. } = row.operation.kind else {
+            return Ok(false);
+        };
+        if row.operands.len() != 2 || row.results.len() != 1 {
+            return Err(Error::Rule("integer boundary comparison arity"));
+        }
+        let left = input.uses()[row.operands.start].definition;
+        let right = input.uses()[row.operands.start + 1].definition;
+        let Some(ty) = input.definitions()[left].ty.as_scalar() else {
+            return Ok(false);
+        };
+        if input.definitions()[right].ty.as_scalar() != Some(ty)
+            || input.definitions()[row.results.start].ty.as_scalar() != Some(ScalarType::Bool)
+        {
+            return Ok(false);
+        }
+        let left = self.literal(left, budget)?;
+        let right = self.literal(right, budget)?;
+        let Some(value) = integer_boundary_comparison(ty, predicate, left, right) else {
+            return Ok(false);
+        };
+        self.publish_literal(
+            row.results.start,
+            Literal {
+                ty: ScalarType::Bool,
+                bits: u128::from(value),
+            },
+            budget,
+        )
     }
 
     fn expression_equal(&self, a: usize, b: usize, budget: &mut Budget<'_>) -> Result<bool> {

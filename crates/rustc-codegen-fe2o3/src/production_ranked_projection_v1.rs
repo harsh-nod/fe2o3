@@ -34,6 +34,7 @@ use slice_projection_v1::ProjectedViewsV1;
 
 #[cfg(test)]
 pub(crate) use tests::{
+    prepare_backend_unroll_direct_prefix_v1, prepare_backend_unroll_erased_prefix_v1,
     with_backend_checked_output_policy3_roster_v1, with_backend_checked_output_policy3_v1,
     with_backend_checked_output_policy4_owned_v1, with_backend_checked_output_policy4_v1,
     with_backend_checked_output_policy5_owned_v1, with_backend_checked_output_policy6_owned_v1,
@@ -43,7 +44,8 @@ pub(crate) use tests::{
     with_backend_licm_direct_prefix_v1, with_backend_licm_erased_prefix_v1,
     with_backend_loop_preheaders_direct_prefix_v1, with_backend_policy7_direct_prefix_v1,
     with_backend_policy7_erased_prefix_v1, with_backend_policy8_direct_prefix_v1,
-    with_backend_policy8_erased_prefix_v1,
+    with_backend_policy8_erased_prefix_v1, with_backend_unroll_direct_prefix_v1,
+    with_backend_unroll_erased_prefix_v1,
 };
 
 use analysis_multi_split_v1::{

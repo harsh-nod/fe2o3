@@ -1225,12 +1225,29 @@ This continuation reruns source lifetime, private-memory, native-operation and
 formal-memory admission on actual U. The source operation ceiling is checked,
 not widened or clamped. New retained headers, actual vector capacities and
 report extents use the same cumulative budget; inherited formal-engine and
-report-comparison accounting exclusions remain explicit. Source-fixture
-eligibility, full F/U SIM comparisons and source resource phases are NOT_RUN
-pending root execution. In particular, earlier scalar simplification may remove
-a literal zero-trip loop before this stage. A canonical-only unroll test cannot
-substitute for a genuine source rewrite. U is not yet connected to native LLVM
-emission, the final-F history/descriptor/wire fields, or the default pipeline.
+report-comparison accounting exclusions remain explicit. Induction derivation
+and independent replay each build a fresh sparse-constant analysis, so constants
+transported through preheader block parameters can establish literal bounds and
+seeds. Unknown, dynamic and conflicting inputs remain symbolic; existing
+no-wrap and normal-completion conditions are unchanged. Typed integer-extrema
+rules independently check CFG elimination such as unsigned `i < 0`. An earlier
+checked scalar/CFG pass can therefore remove a zero-trip loop before unrolling;
+that source path must show no remaining loops and an exact F/U no-op, not claim
+a selected zero-trip clone. Canonical selected-zero coverage remains separate.
+
+The [actual-U native continuation](../crates/rustc-codegen-fe2o3/src/production_pipeline_loop_unroll_native_v1.rs)
+consumes the same ranked/source prefix and emits its first LLVM text only after
+constructing U. It retains complete original source, target, ranked and launch
+custody. The fixed twelve-graph history still ends at actual F; U is a separate
+independently replayed F-to-U relation, never a relabeled F. Descriptor evidence
+uses U's signatures and fresh formal reports with the original source/root/ABI
+joins. Complete borrowed headers, live owners and new backing share the existing
+cumulative budget, without extending inherited engine accounting to a whole-
+compiler RSS claim. This is a nondefault component: its U descriptor evidence
+has no wire encoding, signed worker handoff, publication or launch authority.
+The final-F wire described below remains a distinct contract. Full source/SIM,
+strict resource phases, protected production and tutorial qualification must
+be recorded for the exact integrated revision rather than inferred from wiring.
 
 The [complete forwarding history](../crates/fe2o3-kernel-opt/src/checked_refined_forwarding_history_v1.rs)
 composes B/C/S/O/I/J/K/P/H/L/R/F and their actual transformation records.
@@ -1296,3 +1313,34 @@ source compilation must also satisfy ranked, memory, control-flow and final
 verification gates. The [actual-rustc layout regression](../crates/rustc-codegen-fe2o3/src/rust_type_layout_pointer_sized_v3_tests.rs)
 covers the new scalar/alias/nested cases and preserves pointer, enum, union,
 drop, oversized-array and unsupported-width refusals.
+
+Semantic MIR V35 adds explicit `Usize` and `Isize` kinds alongside their existing
+integer shape, rustc type identity and layout identity. The private opt-in rustc
+constructor derives these kinds from normalized rustc types, not from width or
+parameter names. V35 admits ordinary V15 content with those nominal types;
+specialized execution, wave and MFMA schemas remain separate closed contracts.
+Old semantic versions and the legacy constructor keep their original behavior.
+This semantic encoding is inert. It does not make a fixed-width U64/I64 source
+descriptor interchangeable with a pointer-sized Rust argument, or complete the
+descriptor, host packing, signed native handoff and default production route.
+
+The portable [nominal scalar declaration](../crates/fe2o3-artifacts/src/rust_nominal_layout_v3.rs)
+records a closed `Usize` or `Isize` kind and the admitted 64-bit pointer width.
+Its fixed-size type and layout payloads use separate V3 identity domains; equal
+physical size does not equate them with V1 `U64` or `I64` declarations. These
+content identities do not authenticate a rustc source type. Descriptor and host
+consumers must independently join the actual nominal source, target layout and
+physical ABI before admitting packing. Other pointer widths remain explicit
+refusals, and this declaration alone grants no artifact or launch authority.
+
+The inert [descriptor V3 codec](../crates/fe2o3-kernel-descriptor/src/nominal_v3.rs)
+preserves those nominal source distinctions while retaining the original V1
+physical-layout identities. Its source identity domain is distinct from the
+portable artifact declaration domain. A complete borrowed decoder checks all
+record identities, references, kernel arguments, launch constraints and target
+requirements before returning a move-only view. Queries borrow that view;
+encoding checks every input and work charge before modifying caller-owned output.
+Callers prepay the exported view/query/scratch extents and their live backing.
+V1/V2 decoding and identities remain unchanged. This codec admits inert content,
+not an authenticated source ABI, signed native output or executable artifact;
+the independent source join, host packer and production handoff remain separate.

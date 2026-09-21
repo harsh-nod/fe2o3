@@ -27,6 +27,91 @@ struct LayoutCallbacks {
     observed: bool,
 }
 
+fn observe_nominal_semantic_capture<'tcx>(tcx: TyCtxt<'tcx>, inputs: &[Ty<'tcx>]) {
+    use crate::production_semantic_types_v1::{
+        construct_production_semantic_types_nominal_v35, construct_production_semantic_types_v1,
+    };
+    use crate::rustc_semantic_adapter_v1::{
+        canonical_target_layout_v1, rustc_semantic_layout_identity_v1, rustc_type_identity_v1,
+        rustc_type_layout_sha256_v1,
+    };
+    use crate::rustc_semantic_plan_v1::RetainedSemanticTypeProducerV1;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticRustTypeKindV1 as Kind, SemanticScalarTypeV1, SemanticTypeShapeV1,
+    };
+
+    let target = crate::semantic_layout_bridge::rustc_semantic_layout_target_v1(tcx).unwrap();
+    let canonical_target = canonical_target_layout_v1(&target);
+    let layout_cx = LayoutCx::new(tcx, TypingEnv::fully_monomorphized());
+    let producer = |ty| {
+        let layout = layout_cx.layout_of(ty).unwrap();
+        RetainedSemanticTypeProducerV1 {
+            identity: rustc_type_identity_v1(tcx, ty),
+            ty,
+            layout,
+            rustc_layout_sha256: rustc_type_layout_sha256_v1(tcx, layout),
+            semantic_layout_identity: rustc_semantic_layout_identity_v1(
+                tcx,
+                canonical_target,
+                layout,
+            ),
+        }
+    };
+    let mut producers = [inputs[0], inputs[1], inputs[6], tcx.types.i64].map(&producer);
+    producers.sort_by_key(|producer| producer.identity);
+    let legacy = construct_production_semantic_types_v1(tcx, &producers)
+        .unwrap()
+        .into_records();
+    let nominal = construct_production_semantic_types_nominal_v35(tcx, &producers)
+        .unwrap()
+        .into_records();
+    assert_eq!(legacy.len(), 4);
+    assert_eq!(nominal.len(), legacy.len());
+    for ((before, after), producer) in legacy.iter().zip(&nominal).zip(&producers) {
+        let (expected, signed) = match producer.ty.kind() {
+            TyKind::Uint(UintTy::Usize) => (Kind::Usize, false),
+            TyKind::Int(IntTy::Isize) => (Kind::Isize, true),
+            TyKind::Uint(UintTy::U64) => (Kind::Ordinary, false),
+            TyKind::Int(IntTy::I64) => (Kind::Ordinary, true),
+            _ => panic!("actual primitive roster changed"),
+        };
+        assert_eq!(before.rust_type_kind(), Kind::Ordinary);
+        assert_eq!(after.rust_type_kind(), expected);
+        assert_eq!(after.identity(), producer.identity);
+        assert_eq!(after.layout_identity(), producer.semantic_layout_identity);
+        assert_eq!(
+            after.shape(),
+            &SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { signed, bits: 64 })
+        );
+        assert_eq!(
+            after.layout().size_bytes(),
+            Some(producer.layout.size.bytes())
+        );
+        assert_eq!(
+            after.layout().alignment_bytes(),
+            producer.layout.align.abi.bytes()
+        );
+        assert_eq!(after.clone().with_rust_type_kind(Kind::Ordinary), *before);
+    }
+    let alias = construct_production_semantic_types_nominal_v35(tcx, &[producer(inputs[2])])
+        .unwrap()
+        .into_records();
+    assert_eq!(
+        alias.as_slice(),
+        &[nominal
+            .iter()
+            .find(|ty| ty.rust_type_kind() == Kind::Usize)
+            .unwrap()
+            .clone()]
+    );
+    assert_eq!(
+        construct_production_semantic_types_v1(tcx, &producers)
+            .unwrap()
+            .into_records(),
+        legacy,
+    );
+}
+
 impl Callbacks for LayoutCallbacks {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         assert!(!self.observed);
@@ -72,6 +157,7 @@ impl Callbacks for LayoutCallbacks {
         assert_eq!(identity(inputs[0]), identity(inputs[2]));
         assert_ne!(identity(inputs[0]), identity(tcx.types.u64));
         assert_ne!(identity(inputs[1]), identity(tcx.types.i64));
+        observe_nominal_semantic_capture(tcx, inputs);
         for (index, expected) in [
             (
                 6,

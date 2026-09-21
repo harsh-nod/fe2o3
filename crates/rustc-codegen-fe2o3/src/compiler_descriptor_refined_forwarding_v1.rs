@@ -1,4 +1,6 @@
 //! Descriptor evidence and inert encoding for actual source-owned final F.
+#[path = "compiler_descriptor_loop_unroll_v1.rs"]
+pub(crate) mod loop_unroll_v1;
 use super::{
     CheckedDescriptorViewV1, CompilerDescriptorError, ProductionAmdTargetProfileV1,
     TypedDescriptorRootV1, policy8, validate_checked_output_descriptor_evidence_v1,

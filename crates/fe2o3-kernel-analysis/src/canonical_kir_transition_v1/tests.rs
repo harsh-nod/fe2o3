@@ -22,6 +22,7 @@ mod commutative_bitwise_cse;
 mod control;
 mod control_index;
 mod dominance_cse;
+mod integer_boundaries;
 mod integer_identities;
 mod receipt_wire;
 mod resources;

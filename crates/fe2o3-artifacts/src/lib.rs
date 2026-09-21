@@ -27,6 +27,7 @@ mod proof_decode;
 mod proof_encode;
 mod proof_executable_binding;
 mod rust_layout;
+mod rust_nominal_layout_v3;
 mod selection;
 
 pub use abi::{
@@ -120,5 +121,9 @@ pub use rust_layout::{
     RustDisjointIndexSpaceV1, RustLayoutEvidenceError, RustLayoutEvidenceV1,
     RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
     RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+};
+pub use rust_nominal_layout_v3::{
+    RUST_NOMINAL_LAYOUT_DOMAIN_V3, RUST_NOMINAL_TYPE_DOMAIN_V3, RustNominalLayoutErrorV3,
+    RustNominalScalarEvidenceV3, RustNominalScalarKindV3,
 };
 pub use selection::{DeclaredTargetMismatch, KernelSelectionError, SelectedNativeKernel};

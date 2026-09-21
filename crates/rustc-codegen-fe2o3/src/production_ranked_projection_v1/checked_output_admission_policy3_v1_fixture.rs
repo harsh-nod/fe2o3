@@ -137,8 +137,42 @@ fn with_backend_checked_ranked_bound_types_functions_v1(
 ) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
-        CanonicalKernelIrWorkBudgetV1 as Work, VerifiedCanonicalKernelIrModuleV12,
+        CanonicalKernelIrWorkBudgetV1 as Work,
     };
+    let mut work = Work::new(
+        usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
+    );
+    let mut budget = Budget::new(
+        &mut work,
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+    );
+    let (receipt, bound, verification, retained) =
+        prepare_backend_checked_ranked_bound_types_functions_v1(
+            profile,
+            stores,
+            transform,
+            &mut budget,
+        );
+    let floor = budget.storage();
+    next(receipt, bound, verification, &mut budget);
+    assert_eq!(budget.storage(), floor);
+    budget.release_storage(retained).unwrap();
+    assert_eq!(budget.storage(), 29);
+}
+
+fn prepare_backend_checked_ranked_bound_types_functions_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    stores: Option<usize>,
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> (
+    fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1,
+    fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    AuthenticatedRankedVerificationRosterV1,
+    usize,
+) {
+    use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
+    assert_eq!(budget.storage(), 0);
     let original = source_launch_test_semantic_v1(70, 0xa1);
     let unit = SemanticTypeIdV1::from_index(0);
     let scalar = SemanticTypeIdV1::from_index(1);
@@ -251,19 +285,12 @@ fn with_backend_checked_ranked_bound_types_functions_v1(
         profile,
     )
     .unwrap();
-    let mut work = Work::new(
-        usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
-    );
-    let mut budget = Budget::new(
-        &mut work,
-        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
-    );
     const PREFIX: usize = 29;
     budget.reserve_storage(PREFIX + retained).unwrap();
     let (bound, bound_storage) =
         VerifiedCanonicalKernelIrModuleV12::from_module_ref_with_verification_budget_v12(
             binding.module(),
-            &mut budget,
+            budget,
         )
         .unwrap();
     budget
@@ -272,11 +299,10 @@ fn with_backend_checked_ranked_bound_types_functions_v1(
     drop(binding);
     let verified = program.into_verified_roster_receipt().unwrap();
     let (receipt, verification) = verified.into_module_verified_receipt().unwrap();
-    let floor = budget.storage();
-    next(receipt, bound, verification, &mut budget);
-    assert_eq!(budget.storage(), floor);
-    budget
-        .release_storage(bound_storage.retained_storage() + retained)
-        .unwrap();
-    assert_eq!(budget.storage(), PREFIX);
+    (
+        receipt,
+        bound,
+        verification,
+        bound_storage.retained_storage() + retained,
+    )
 }

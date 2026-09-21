@@ -11,7 +11,7 @@ pub const KERNEL_DESCRIPTOR_DOMAIN_V1: &[u8] = b"FE2O3/KERNEL-DESCRIPTOR/V1\0";
 pub const DEVICE_DESCRIPTOR_TABLE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-DESCRIPTOR-TABLE/V1\0";
 pub const CANONICAL_CODE_OBJECT_DOMAIN_V1: &[u8] = b"FE2O3/AMDHSA-CODE-OBJECT/V1\0";
 
-fn domain_hash(domain: &[u8], payload: &[u8]) -> [u8; 32] {
+pub(crate) fn domain_hash(domain: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(domain);
     hasher.update((payload.len() as u64).to_le_bytes());

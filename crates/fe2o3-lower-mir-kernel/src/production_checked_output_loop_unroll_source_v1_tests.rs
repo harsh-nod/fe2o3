@@ -215,7 +215,8 @@ fn forwarded(shared: bool, profile: Profile, bound: Option<u32>) -> (FinalFixtur
     macro_rules! route {
         ($fixture:ident, $variant:ident) => {{
             let source = literal_source(shared, bound);
-            let (preheaders, inherited) = $fixture::prefix_from_source(source, profile, true);
+            let (preheaders, inherited) =
+                $fixture::prefix_from_source(source, profile, bound != Some(0));
             let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
             let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
             budget.reserve_storage(inherited).unwrap();
@@ -317,6 +318,35 @@ fn assert_source_join(owner: &UnrolledFixture, selected: Option<u8>) {
         );
     }
 }
+fn assert_no_loops(graph: &Graph, budget: &mut AssertOriginBudgetV1<'_>) {
+    use fe2o3_kernel_analysis::{CanonicalKirInventoryV1, CanonicalKirLoopsV1};
+
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    let (inventory, inventory_receipt) = CanonicalKirInventoryV1::derive(graph, budget).unwrap();
+    budget
+        .reserve_storage(inventory_receipt.retained_storage())
+        .unwrap();
+    let (loops, loop_receipt) =
+        CanonicalKirLoopsV1::derive(&inventory, Default::default(), budget).unwrap();
+    budget
+        .reserve_storage(loop_receipt.retained_storage())
+        .unwrap();
+    loops
+        .replay(&inventory, Default::default(), budget)
+        .unwrap();
+    assert_eq!(loops.loop_count(), 0);
+    drop(loops);
+    budget
+        .release_storage(loop_receipt.retained_storage())
+        .unwrap();
+    drop(inventory);
+    budget
+        .release_storage(inventory_receipt.retained_storage())
+        .unwrap();
+    assert_eq!(budget.storage(), floor);
+    assert!(budget.work_ledger_identity_v1() == ledger);
+}
 fn with_unrolled(
     shared: bool,
     profile: Profile,
@@ -331,6 +361,9 @@ fn with_unrolled(
     budget.reserve_storage(floor).unwrap();
     let ledger = budget.work_ledger_identity_v1();
     let input_pointer = input.output().canonical().canonical_bytes().as_ptr();
+    if bound == Some(0) {
+        assert_no_loops(input.output(), &mut budget);
+    }
     let (owner, receipt) = input.unroll(Limits::default(), &mut budget).unwrap();
     assert_eq!(budget.storage(), floor);
     budget.reserve_storage(receipt.retained_storage()).unwrap();
@@ -340,7 +373,9 @@ fn with_unrolled(
     );
     assert_source_join(
         &owner,
-        bound.and_then(|n| u8::try_from(n).ok()).filter(|n| *n <= 8),
+        bound
+            .and_then(|n| u8::try_from(n).ok())
+            .filter(|n| *n > 0 && *n <= 8),
     );
     owner.replay(&mut budget).unwrap();
     run(&owner, &mut budget);
@@ -379,25 +414,23 @@ fn source_unroll_direct_and_unit_local_keep_actual_dual_rewrite_then_clone() {
     }
 }
 #[test]
-fn source_unroll_zero_trip_retains_final_header_and_explicit_omissions() {
+fn source_unroll_zero_trip_prefix_erasure_remains_a_checked_noop() {
     for shared in [false, true] {
         for profile in [Profile::Gfx942, Profile::Gfx950] {
             with_unrolled(shared, profile, Some(0), |owner, _| {
+                assert_eq!(owner.tail().origins().selection, None);
+                assert!(!std::ptr::eq(owner.input(), owner.output()));
+                assert_eq!(
+                    owner.input().canonical().canonical_bytes(),
+                    owner.output().canonical().canonical_bytes()
+                );
                 assert!(
                     owner
                         .tail()
                         .origins()
                         .operations
                         .iter()
-                        .any(|r| r.copy == CopyRole::OmittedBody)
-                );
-                assert!(
-                    !owner
-                        .tail()
-                        .origins()
-                        .operations
-                        .iter()
-                        .any(|r| matches!(r.copy, CopyRole::Body(_)))
+                        .all(|r| r.copy == CopyRole::Retained && r.output == Some(r.input))
                 );
             });
         }

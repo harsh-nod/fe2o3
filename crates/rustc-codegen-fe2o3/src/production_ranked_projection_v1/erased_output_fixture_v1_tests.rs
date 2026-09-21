@@ -410,8 +410,45 @@ pub(super) fn with_backend_erased_functions_roster_v1(
 ) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as B, CanonicalKernelIrWorkBudgetV1 as W,
-        VerifiedCanonicalKernelIrModuleV12 as V,
     };
+    let mut work =
+        W::new(usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap());
+    let mut budget = B::new(
+        &mut work,
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+    );
+    let (source, bound, verification, retained) = prepare_backend_erased_functions_roster_v1(
+        expected,
+        roots,
+        profile,
+        load_forwarding,
+        duplicate_store,
+        transform,
+        &mut budget,
+    );
+    let floor = budget.storage();
+    next(source, bound, verification, &mut budget);
+    assert_eq!(budget.storage(), floor);
+    budget.release_storage(retained).unwrap();
+    assert_eq!(budget.storage(), 29);
+}
+
+pub(super) fn prepare_backend_erased_functions_roster_v1(
+    expected: bool,
+    roots: usize,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    load_forwarding: bool,
+    duplicate_store: bool,
+    transform: impl FnOnce(&mut Vec<SemanticFunctionDeclV1>),
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> (
+    fe2o3_lower_mir_kernel::ProductionUnitLocalErasedSourceOwnerV1,
+    fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    AuthenticatedRankedVerificationRosterV1,
+    usize,
+) {
+    use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 as V;
+    assert_eq!(budget.storage(), 0);
     let (source, inputs) = erased_backend_materialized_functions_v1(
         expected,
         roots,
@@ -436,17 +473,10 @@ pub(super) fn with_backend_erased_functions_roster_v1(
             .all(|root| !root.access_sources.is_empty())
     );
     let verified = program.into_verified_roster_receipt().unwrap();
-    let mut work =
-        W::new(usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap());
-    let mut budget = B::new(
-        &mut work,
-        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
-    );
     const PREFIX: usize = 29;
     budget.reserve_storage(PREFIX + original_storage).unwrap();
-    let (source, verification, source_receipt) = verified
-        .into_silent_unit_erased_source_v1(&mut budget)
-        .unwrap();
+    let (source, verification, source_receipt) =
+        verified.into_silent_unit_erased_source_v1(budget).unwrap();
     budget
         .reserve_storage(source_receipt.retained_storage())
         .unwrap();
@@ -461,18 +491,15 @@ pub(super) fn with_backend_erased_functions_roster_v1(
     let binding =
         dialect_amdgcn::bind_production_target_v1(source.erased().module(), profile).unwrap();
     let (bound, bound_receipt) =
-        V::from_module_ref_with_verification_budget_v12(binding.module(), &mut budget).unwrap();
+        V::from_module_ref_with_verification_budget_v12(binding.module(), budget).unwrap();
     budget
         .reserve_storage(bound_receipt.retained_storage())
         .unwrap();
     drop(binding);
-    let floor = budget.storage();
-    next(source, bound, verification, &mut budget);
-    assert_eq!(budget.storage(), floor);
-    budget
-        .release_storage(
-            original_storage + source_receipt.retained_storage() + bound_receipt.retained_storage(),
-        )
-        .unwrap();
-    assert_eq!(budget.storage(), PREFIX);
+    (
+        source,
+        bound,
+        verification,
+        original_storage + source_receipt.retained_storage() + bound_receipt.retained_storage(),
+    )
 }

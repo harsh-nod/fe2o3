@@ -1352,6 +1352,12 @@ fn validate_argument_against_records(
         ));
     }
 
+    let argument = &BorrowedArgumentParts {
+        ownership: argument.ownership,
+        access: argument.access,
+        alias: argument.alias,
+        components: &argument.components,
+    };
     match source_type.descriptor.kind {
         DescriptorKind::Scalar => {
             validate_scalar_argument(argument, source_type.descriptor.element)
@@ -1362,8 +1368,15 @@ fn validate_argument_against_records(
     }
 }
 
-fn validate_scalar_argument(
-    argument: &LogicalArgumentV1,
+pub(crate) struct BorrowedArgumentParts<'a> {
+    pub(crate) ownership: OwnershipSemantics,
+    pub(crate) access: AccessMode,
+    pub(crate) alias: AliasSemantics,
+    pub(crate) components: &'a [PhysicalAbiComponentV1],
+}
+
+pub(crate) fn validate_scalar_argument(
+    argument: &BorrowedArgumentParts<'_>,
     scalar: ScalarTypeV1,
 ) -> Result<(), ValidationError> {
     if argument.ownership != OwnershipSemantics::ByValue
@@ -1384,7 +1397,9 @@ fn validate_scalar_argument(
     Ok(())
 }
 
-fn validate_shared_slice_argument(argument: &LogicalArgumentV1) -> Result<(), ValidationError> {
+pub(crate) fn validate_shared_slice_argument(
+    argument: &BorrowedArgumentParts<'_>,
+) -> Result<(), ValidationError> {
     if argument.ownership != OwnershipSemantics::SharedBorrow
         || argument.access != AccessMode::ReadOnly
         || argument.alias != AliasSemantics::SharedReadOnly
@@ -1396,7 +1411,9 @@ fn validate_shared_slice_argument(argument: &LogicalArgumentV1) -> Result<(), Va
     validate_slice_components(argument)
 }
 
-fn validate_disjoint_slice_argument(argument: &LogicalArgumentV1) -> Result<(), ValidationError> {
+pub(crate) fn validate_disjoint_slice_argument(
+    argument: &BorrowedArgumentParts<'_>,
+) -> Result<(), ValidationError> {
     if argument.ownership != OwnershipSemantics::UniqueBorrow
         || !matches!(
             argument.access,
@@ -1411,8 +1428,8 @@ fn validate_disjoint_slice_argument(argument: &LogicalArgumentV1) -> Result<(), 
     validate_slice_components(argument)
 }
 
-fn validate_global_mut_pointer_argument(
-    argument: &LogicalArgumentV1,
+pub(crate) fn validate_global_mut_pointer_argument(
+    argument: &BorrowedArgumentParts<'_>,
 ) -> Result<(), ValidationError> {
     if argument.ownership != OwnershipSemantics::UniqueBorrow
         || argument.access != AccessMode::ReadWrite
@@ -1437,7 +1454,7 @@ fn validate_global_mut_pointer_argument(
     Ok(())
 }
 
-fn validate_slice_components(argument: &LogicalArgumentV1) -> Result<(), ValidationError> {
+fn validate_slice_components(argument: &BorrowedArgumentParts<'_>) -> Result<(), ValidationError> {
     if argument.components.len() != 2 {
         return Err(ValidationError::InvalidPhysicalAbi(
             "a slice must lower to exactly two components",
@@ -1543,7 +1560,7 @@ fn reject_duplicate_kernel_field<'a>(
     }
 }
 
-fn validate_name(value: &str, field: &'static str) -> Result<(), ValidationError> {
+pub(crate) fn validate_name(value: &str, field: &'static str) -> Result<(), ValidationError> {
     if value.is_empty() {
         return Err(ValidationError::Empty { field });
     }
@@ -1565,7 +1582,7 @@ fn validate_name(value: &str, field: &'static str) -> Result<(), ValidationError
     Ok(())
 }
 
-fn validate_text(value: &str, field: &'static str) -> Result<(), ValidationError> {
+pub(crate) fn validate_text(value: &str, field: &'static str) -> Result<(), ValidationError> {
     if value.is_empty() {
         return Err(ValidationError::Empty { field });
     }

@@ -118,17 +118,33 @@ pub fn decode_device_descriptor_table_v2(
 }
 
 fn encode_requirement(bytes: &mut Vec<u8>, requirement: KernelTargetRequirementsV2) {
-    bytes.extend_from_slice(requirement.kernel_id().as_bytes());
-    bytes.extend_from_slice(&requirement.lds().static_bytes().to_le_bytes());
-    bytes.extend_from_slice(&requirement.lds().max_dynamic_bytes().to_le_bytes());
-    bytes.push(match requirement.wavefront_width() {
+    bytes.extend_from_slice(&requirement_bytes(requirement));
+}
+
+pub(crate) fn requirement_bytes(requirement: KernelTargetRequirementsV2) -> [u8; 48] {
+    let mut bytes = [0; 48];
+    bytes[..32].copy_from_slice(requirement.kernel_id().as_bytes());
+    bytes[32..36].copy_from_slice(&requirement.lds().static_bytes().to_le_bytes());
+    bytes[36..40].copy_from_slice(&requirement.lds().max_dynamic_bytes().to_le_bytes());
+    bytes[40] = match requirement.wavefront_width() {
         RequiredWavefrontWidthV2::Wave32 => 1,
         RequiredWavefrontWidthV2::Wave64 => 2,
-    });
-    bytes.push(u8::from(requirement.cooperative_launch()));
-    bytes.extend_from_slice(&requirement.synchronization().bits().to_le_bytes());
-    bytes.extend_from_slice(&requirement.atomics().bits().to_le_bytes());
-    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    };
+    bytes[41] = u8::from(requirement.cooperative_launch());
+    bytes[42..44].copy_from_slice(&requirement.synchronization().bits().to_le_bytes());
+    bytes[44..46].copy_from_slice(&requirement.atomics().bits().to_le_bytes());
+    bytes
+}
+
+pub(crate) fn parse_requirement_bytes(
+    bytes: &[u8],
+) -> Result<KernelTargetRequirementsV2, DecodeError> {
+    let mut reader = Reader::new(bytes);
+    let value = parse_requirement(&mut reader)?;
+    if !reader.is_empty() {
+        return Err(DecodeError::TrailingBytes);
+    }
+    Ok(value)
 }
 
 fn parse_requirement(reader: &mut Reader<'_>) -> Result<KernelTargetRequirementsV2, DecodeError> {
