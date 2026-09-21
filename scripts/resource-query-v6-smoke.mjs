@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifySourceWatchpointObservation } from "./resource-query-v6-watchpoint.mjs";
 
 if (process.argv.length !== 4) {
   throw new Error("usage: node scripts/resource-query-v6-smoke.mjs SOURCE_ASSEMBLY_SMOKE_DIRECTORY NEW_OUTPUT_DIRECTORY");
@@ -242,9 +243,16 @@ try {
   const allocation = allocationRow.allocation;
   assert.equal(allocation.generation, 0);
   await memory(initial.anchor, allocation, beforeBytes);
-  assert.equal((await ask({ operation: "set_watchpoints", watchpoints: [{ client_label: "source-first-write", enabled: true, allocation, byte_offset: 0, byte_len: 4, access: "write", timing: "after_commit" }] })).status, "ok");
-  assert.equal((await ask({ operation: "continue", max_events: 65536 })).status, "ok");
+  const registered = await ask({ operation: "set_watchpoints", watchpoints: [{ client_label: "source-first-write", enabled: true, allocation, byte_offset: 0, byte_len: 4, access: "write", timing: "after_commit" }] });
+  const registration = { request: requests.at(-1), response: registered };
+  const listed = await ask({ operation: "list_watchpoints", page: { limit: 16 } });
+  const listing = { request: requests.at(-1), response: listed };
+  const stopped = await ask({ operation: "continue", max_events: 65536 });
+  const continuation = { request: requests.at(-1), response: stopped };
+  // The committed-write stop has no captured snapshot. Read memory only at
+  // the separately captured next operation checkpoint, never at a copied anchor.
   const post = await step("forward", true);
+  const checkpoint = { request: requests.at(-1), response: post.response };
   const inventory = await resource("query_allocations", post.anchor);
   const firstAccesses = await accessPages(post.anchor);
   assert.equal(firstAccesses.length, 1);
@@ -252,6 +260,10 @@ try {
   assert.equal(firstAccesses[0].range.byte_len, "4");
   assert.equal(firstAccesses[0].access, "write_committed");
   const postMemory = await memory(post.anchor, allocation, afterFirstBytes);
+  const watchpointObservation = verifySourceWatchpointObservation({
+    initialSession: initial.response.session, allocation, registration, listing, continuation, checkpoint,
+    memory: { request: requests.at(-1), response: postMemory },
+  });
   const staleTokenPage = await resource("query_memory_accesses", post.anchor, { filter: { scope: { level: "dispatch" } }, page: { max_items: 1, max_scanned: 1 } });
   assert.equal(typeof staleTokenPage.page.next_token, "string");
   const wrongSource = clone(post.anchor);
@@ -284,8 +296,8 @@ try {
   save("debug-responses.jsonl", responseText);
   save("debug-stderr.txt", stderr);
   saveJson("resource-checkpoint.json", { schema: "fe2o3-resource-checkpoint-example-v1", origin: "ordinary_rust_source_export", source: sourcePath, bundle_sha256: hash(bundle), expectedSnapshot: post.anchor, response: postMemory });
-  saveJson("resource-query-results.json", { expected_snapshot: post.anchor, independent_anchor_response: post.response, inventory, accesses: firstAccesses, reverse_anchor_response: reverse.response, reverse_memory: reverseMemory, final_memory: finalMemory, final_accesses: finalAccesses });
-  saveJson("receipt.json", { schema: "fe2o3-resource-query-source-smoke-v1", source: sourcePath, source_sha256: receipt.source_sha256, bundle_sha256: hash(bundle), bundle_identity: summary.bundle_identity, canonical_kir_digest: summary.canonical_kir_digest, simulation_request_sha256: hash(simulationRequestBytes), debug_requests_sha256: hash(requestText), debug_responses_sha256: hash(responseText), expected_u32: Number(expectedWord), checks: ["actual_admitted_source_bundle", "independent_full_checkpoint_anchor", "bounded_allocation_inventory", "bounded_actual_memory_access_pages", "first_word_and_four_word_independent_oracle", "initialization_and_canaries", "reverse_prewrite_bytes", "no_future_accesses", "same_cursor_new_revision", "stale_full_anchor_and_token_rejection"], source_edited: false, hardware_observed: false, physical_registers: "not_represented", allocation_lifetime: "not_represented", curriculum_publication: "not_performed" });
+  saveJson("resource-query-results.json", { expected_snapshot: post.anchor, independent_anchor_response: post.response, watchpoint_observation: watchpointObservation, inventory, accesses: firstAccesses, reverse_anchor_response: reverse.response, reverse_memory: reverseMemory, final_memory: finalMemory, final_accesses: finalAccesses });
+  saveJson("receipt.json", { schema: "fe2o3-resource-query-source-smoke-v1", source: sourcePath, source_sha256: receipt.source_sha256, bundle_sha256: hash(bundle), bundle_identity: summary.bundle_identity, canonical_kir_digest: summary.canonical_kir_digest, simulation_request_sha256: hash(simulationRequestBytes), debug_requests_sha256: hash(requestText), debug_responses_sha256: hash(responseText), expected_u32: Number(expectedWord), checks: ["actual_admitted_source_bundle", "same_session_first_write_watchpoint", "uncaptured_watchpoint_stop_and_distinct_memory_checkpoint", "independent_full_checkpoint_anchor", "bounded_allocation_inventory", "bounded_actual_memory_access_pages", "first_word_and_four_word_independent_oracle", "initialization_and_canaries", "reverse_prewrite_bytes", "no_future_accesses", "same_cursor_new_revision", "stale_full_anchor_and_token_rejection"], source_edited: false, hardware_observed: false, physical_registers: "not_represented", allocation_lifetime: "not_represented", curriculum_publication: "not_performed" });
   console.log(`Actual-source V6 resource queries passed; evidence: ${output}`);
 } catch (error) {
   rejectRun(error);
