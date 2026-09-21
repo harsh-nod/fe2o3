@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use core::cell::Cell;
 
 mod allocation_lifecycle;
+mod retained;
 mod settlement;
 mod settlement_storage;
 pub use allocation_lifecycle::ContextAllocationEnrollmentV1;

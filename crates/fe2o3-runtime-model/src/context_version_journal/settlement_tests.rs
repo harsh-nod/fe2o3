@@ -3,6 +3,9 @@ use super::*;
 #[path = "disposal_tests.rs"]
 mod disposal;
 
+#[path = "retained_tests.rs"]
+mod retained;
+
 type Write = ContextAllocationWriteV1;
 type Success = ContextWriterSuccessEvidenceV1;
 type NoEffect = ContextWriterNoEffectEvidenceV1;
@@ -951,9 +954,8 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
             "settlement contains {forbidden}"
         );
     }
-    assert_eq!(source.matches("for _ in 0..count").count(), 1);
     assert_eq!(source.matches("for index in 0..count").count(), 3);
-    assert_eq!(source.matches("for ").count(), 4);
+    assert_eq!(source.matches("for ").count(), 3);
     assert_eq!(source.matches(".push(").count(), 1);
     assert!(source.contains("self.member_free.push(plan.member_slot)"));
     assert!(source.contains("self.settle_retained(writer, evidence.writer, true)"));
@@ -1069,13 +1071,9 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
         .split("fn retained_header(")
         .next()
         .unwrap();
-    assert!(
-        unknown
-            .find("self.validate_retained_chain(writer, head, count)?")
-            .unwrap()
-            < unknown.find("self.store_slot(").unwrap()
-    );
-    assert!(unknown.contains("self.retained_header(writer, true)?"));
+    assert!(unknown.contains("retained::shared_retained_unknown_v1(self, writer)"));
+    assert!(source.contains("retained::shared_retained_header_v1(self, writer, allow_unknown)"));
+    assert!(source.contains("retained::shared_retained_chain_v1(self, writer, head, count)"));
     for forbidden in [
         "self.scratch",
         "self.free",

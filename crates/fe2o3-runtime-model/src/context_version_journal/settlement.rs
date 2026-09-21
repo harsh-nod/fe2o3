@@ -26,19 +26,7 @@ impl ContextVersionJournalV1 {
         &mut self,
         writer: ContextWriterReferenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        let (head, count, unknown) = self.retained_header(writer, true)?;
-        self.validate_retained_chain(writer, head, count)?;
-        if !unknown {
-            self.store_slot(
-                writer.slot,
-                Some(WriterEntryV1::Unknown {
-                    key: writer.key,
-                    head,
-                    count,
-                }),
-            );
-        }
-        Ok(())
+        retained::shared_retained_unknown_v1(self, writer)
     }
 
     fn retained_header(
@@ -46,59 +34,16 @@ impl ContextVersionJournalV1 {
         writer: ContextWriterReferenceV1,
         allow_unknown: bool,
     ) -> Result<(Option<usize>, usize, bool), ContextVersionJournalErrorV1> {
-        let (key, head, count, unknown) = match self.read_slot(writer.slot).copied().flatten() {
-            Some(WriterEntryV1::Pending { key, head, count }) => (key, head, count, false),
-            Some(WriterEntryV1::Unknown { key, head, count }) if allow_unknown => {
-                (key, head, count, true)
-            }
-            _ => return Err(ContextVersionJournalErrorV1::InvalidReference),
-        };
-        if key != writer.key || key.context_generation != self.context_generation {
-            return Err(ContextVersionJournalErrorV1::InvalidReference);
-        }
-        Ok((head, count, unknown))
+        retained::shared_retained_header_v1(self, writer, allow_unknown)
     }
 
     fn validate_retained_chain(
         &self,
         writer: ContextWriterReferenceV1,
-        mut head: Option<usize>,
+        head: Option<usize>,
         count: usize,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        if count > self.allocation_capacity || (count == 0) != head.is_none() {
-            return Err(ContextVersionJournalErrorV1::InvalidState);
-        }
-        let mut previous_key = None;
-        for _ in 0..count {
-            let slot = head.ok_or(ContextVersionJournalErrorV1::InvalidState)?;
-            self.count_indexed_access();
-            let member = self
-                .members
-                .get(slot)
-                .and_then(Option::as_ref)
-                .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
-            if member.writer != writer
-                || previous_key.is_some_and(|key| key >= member.allocation.key)
-            {
-                return Err(ContextVersionJournalErrorV1::InvalidState);
-            }
-            let allocation = self
-                .exact_allocation(member.allocation)
-                .map_err(|_| ContextVersionJournalErrorV1::InvalidState)?;
-            if allocation.pending_member != Some(slot)
-                || allocation.attempt_epoch != member.attempt_epoch
-                || allocation.content_lineage != member.prior_lineage
-                || member.prior_lineage >= member.attempt_epoch
-            {
-                return Err(ContextVersionJournalErrorV1::InvalidState);
-            }
-            previous_key = Some(member.allocation.key);
-            head = member.next;
-        }
-        if head.is_some() {
-            return Err(ContextVersionJournalErrorV1::InvalidState);
-        }
-        Ok(())
+        retained::shared_retained_chain_v1(self, writer, head, count)
     }
 
     pub(super) fn preflight_settlement(
