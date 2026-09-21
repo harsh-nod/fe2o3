@@ -13,6 +13,9 @@ use fe2o3_kernel_descriptor::{
 };
 use std::{fmt, marker::PhantomData, num::NonZeroU64, sync::Arc};
 
+#[path = "generated_nominal_argument_plan_v3.rs"]
+pub(crate) mod nominal_v3;
+
 mod generated_device_scalar_seal {
     pub trait Sealed {}
 }

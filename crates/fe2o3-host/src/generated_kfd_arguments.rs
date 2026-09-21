@@ -1300,6 +1300,110 @@ mod tests {
     }
 
     #[test]
+    fn completion_validates_every_buffer_before_any_writeback() {
+        use GeneratedKfdCompletionError::{Access, BufferCount, ByteLength};
+        use Gfx942RuntimeBufferAccessV1::{ReadOnly, ReadWrite, WriteOnly};
+
+        for (count, expected_access, access, length, error) in [
+            (2, WriteOnly, WriteOnly, 4, None),
+            (2, ReadOnly, ReadOnly, 4, None),
+            (2, WriteOnly, ReadWrite, 4, Some(Access { index: 1 })),
+            (2, ReadOnly, ReadWrite, 4, Some(Access { index: 1 })),
+            (
+                2,
+                WriteOnly,
+                WriteOnly,
+                3,
+                Some(ByteLength {
+                    index: 1,
+                    expected: 4,
+                    actual: 3,
+                }),
+            ),
+            (
+                2,
+                WriteOnly,
+                WriteOnly,
+                5,
+                Some(ByteLength {
+                    index: 1,
+                    expected: 4,
+                    actual: 5,
+                }),
+            ),
+            (
+                2,
+                ReadOnly,
+                ReadOnly,
+                3,
+                Some(ByteLength {
+                    index: 1,
+                    expected: 4,
+                    actual: 3,
+                }),
+            ),
+            (
+                1,
+                WriteOnly,
+                WriteOnly,
+                4,
+                Some(BufferCount {
+                    expected: 2,
+                    actual: 1,
+                }),
+            ),
+            (
+                3,
+                WriteOnly,
+                WriteOnly,
+                4,
+                Some(BufferCount {
+                    expected: 2,
+                    actual: 3,
+                }),
+            ),
+        ] {
+            let mut first = [11_u32];
+            let mut second = [22_u32];
+            let completion = GeneratedKfdCompletion {
+                buffers: vec![
+                    GeneratedKfdCompletedBufferExpectation {
+                        access: WriteOnly,
+                        byte_len: 4,
+                        writeback: Some(GeneratedKfdWriteback::new(&mut first)),
+                    },
+                    GeneratedKfdCompletedBufferExpectation {
+                        access: expected_access,
+                        byte_len: 4,
+                        writeback: (expected_access == WriteOnly)
+                            .then(|| GeneratedKfdWriteback::new(&mut second)),
+                    },
+                ],
+            };
+            let first_bytes = 101_u32.to_le_bytes();
+            let mut second_bytes = [0; 5];
+            second_bytes[..4].copy_from_slice(&202_u32.to_le_bytes());
+            let succeeds = error.is_none();
+            let completed = [
+                (WriteOnly, first_bytes.as_slice()),
+                (access, &second_bytes[..length]),
+                (ReadOnly, &[]),
+            ];
+            let result = completion.apply_completed_buffers(&completed[..count]);
+            assert_eq!(result, error.map_or(Ok(()), Err));
+            assert_eq!(first, if succeeds { [101] } else { [11] });
+            assert_eq!(
+                second,
+                if succeeds && expected_access == WriteOnly {
+                    [202]
+                } else {
+                    [22]
+                }
+            );
+        }
+    }
+
+    #[test]
     fn write_only_and_read_write_descriptor_disagreement_fails_closed() {
         let write_only = write_only_plan(None);
         let read_write = plan();
