@@ -19,6 +19,7 @@ mod authenticated_verus_execution_v2;
 mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
 mod compiler_native_source_proof_v1;
+mod compiler_nominal_abi_v3;
 mod compiler_proof_binding_v3;
 mod compiler_refined_forwarding_output_v1;
 mod compiler_target_lineage_v1;
@@ -67,6 +68,10 @@ pub use compiler_multi_root_target_lineage_v1::{
     ValidatedCompilerMultiRootTargetLineageV1, validate_compiler_multi_root_target_lineage_v1,
 };
 pub use compiler_native_source_proof_v1::*;
+pub use compiler_nominal_abi_v3::{
+    NominalAbiStorageV3, NominalSourceAbiAgreementV3, NominalSourceAbiErrorV3,
+    check_nominal_source_abi_v3,
+};
 pub use compiler_proof_binding_v3::{
     CompilerProofInputValidationErrorV3, CompilerProofInputValidationErrorV4,
     ValidatedCompilerProofInputsV3, ValidatedCompilerProofInputsV4,
