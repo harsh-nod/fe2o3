@@ -4995,7 +4995,7 @@ fn production_access_sources(
                 }
             )
         {
-            if !private_array_read_source_v1::retained_copy_read(types, function, source, facts)? {
+            if !private_array_read_source_v1::retained_read(types, function, source, facts)? {
                 continue;
             }
             if source
@@ -5003,7 +5003,7 @@ fn production_access_sources(
                 .is_some_and(|site| ordinals.contains_key(&(site.block, site.statement)))
             {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "private array copy read has duplicate source correspondence",
+                    "private array read has duplicate source correspondence",
                 ));
             }
         } else if !retained_ranked_access_source_v1(source.memory_space, operation) {

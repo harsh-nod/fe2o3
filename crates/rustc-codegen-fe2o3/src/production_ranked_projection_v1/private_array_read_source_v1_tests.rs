@@ -83,75 +83,83 @@ fn private_array_copy_read_attaches_and_resets_each_statement_ordinal() {
 }
 
 #[test]
-fn private_array_copy_read_requires_independent_initialization() {
+fn private_array_read_requires_independent_initialization() {
     use fe2o3_lower_mir_kernel::{
         ProductionMirPlironTranslationErrorV1, ProductionSemanticKirErrorV1,
     };
-    for legacy in [false, true] {
-        let old = private_copy_read_fixture_v1(1, 1);
-        let mut entry = old.blocks()[0].statements().to_vec();
-        let read = entry.pop().unwrap();
-        let blocks = vec![
-            SemanticBasicBlockV1::new(
-                old.blocks()[0].identity(),
-                old.blocks()[0].source(),
-                entry,
-                old.blocks()[0].terminator().clone(),
+    for binary in [false, true] {
+        for legacy in [false, true] {
+            let old = if binary {
+                private_binary_read_fixture_v1(true, BinaryReadOperandV1::Constant)
+            } else {
+                private_copy_read_fixture_v1(1, 1)
+            };
+            let mut entry = old.blocks()[0].statements().to_vec();
+            let read = entry.pop().unwrap();
+            let blocks = vec![
+                SemanticBasicBlockV1::new(
+                    old.blocks()[0].identity(),
+                    old.blocks()[0].source(),
+                    entry,
+                    old.blocks()[0].terminator().clone(),
+                )
+                .unwrap(),
+                SemanticBasicBlockV1::new(
+                    old.blocks()[1].identity(),
+                    old.blocks()[1].source(),
+                    vec![read],
+                    old.blocks()[1].terminator().clone(),
+                )
+                .unwrap(),
+            ];
+            let function = SemanticFunctionDeclV1::new(
+                old.identity(),
+                old.role(),
+                old.item_definition_identity(),
+                old.monomorphization_identity(),
+                old.generic_type_arguments_identity(),
+                old.const_generic_arguments_identity(),
+                old.source(),
+                old.abi().clone(),
+                old.locals().to_vec(),
+                old.entry(),
+                blocks,
             )
-            .unwrap(),
-            SemanticBasicBlockV1::new(
-                old.blocks()[1].identity(),
-                old.blocks()[1].source(),
-                vec![read],
-                old.blocks()[1].terminator().clone(),
-            )
-            .unwrap(),
-        ];
-        let function = SemanticFunctionDeclV1::new(
-            old.identity(),
-            old.role(),
-            old.item_definition_identity(),
-            old.monomorphization_identity(),
-            old.generic_type_arguments_identity(),
-            old.const_generic_arguments_identity(),
-            old.source(),
-            old.abi().clone(),
-            old.locals().to_vec(),
-            old.entry(),
-            blocks,
-        )
-        .unwrap()
-        .with_kernel_entry(old.kernel_entry().unwrap().clone());
-        let result = attach_private_write_fixture_v1(function, legacy, |materialized, root| {
-            assert_eq!(root.access_sources.len(), 10);
-            with_canonical_assertions_v1(materialized, |session| {
-                assert_eq!(
-                    session
-                        .for_source(ROOT, ROOT)
-                        .private_array_access_index_v1(
-                            ProjectedSemanticAccessSiteV1 {
-                                block: 1,
-                                statement: Some(0)
-                            },
-                            fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::RvalueOperand(0),
-                        )?,
-                    Some(1)
-                );
-                Ok(())
-            })
-            .unwrap();
-        });
-        assert!(matches!(
-            result,
-            Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
-                ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. }
-            ))
-        ));
+            .unwrap()
+            .with_kernel_entry(old.kernel_entry().unwrap().clone());
+            let result = attach_private_write_fixture_v1(function, legacy, |materialized, root| {
+                assert_eq!(root.access_sources.len(), if binary { 9 } else { 10 });
+                with_canonical_assertions_v1(materialized, |session| {
+                    assert_eq!(
+                        session
+                            .for_source(ROOT, ROOT)
+                            .private_array_access_index_v1(
+                                ProjectedSemanticAccessSiteV1 {
+                                    block: 1,
+                                    statement: Some(0)
+                                },
+                                fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::RvalueOperand(
+                                    u32::from(binary)
+                                ),
+                            )?,
+                        Some(u64::from(!binary))
+                    );
+                    Ok(())
+                })
+                .unwrap();
+            });
+            assert!(matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
+                    ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. }
+                ))
+            ));
+        }
     }
 }
 
 #[test]
-fn private_array_copy_read_keeps_binary_projected_destination_refused() {
+fn private_array_binary_read_keeps_projected_destination_write_refused() {
     use fe2o3_lower_mir_kernel::{
         ProductionMirPlironTranslationErrorV1, ProductionSemanticKirErrorV1,
     };
@@ -177,7 +185,7 @@ fn private_array_copy_read_keeps_binary_projected_destination_refused() {
             private_write_statements_v1(&old, statements),
             legacy,
             |materialized, root| {
-                assert_eq!(root.access_sources.len(), 8);
+                assert_eq!(root.access_sources.len(), 9);
                 assert_private_initializer_rows_v1(materialized, root, 1);
                 with_canonical_assertions_v1(materialized, |session| {
                     assert_eq!(
@@ -200,7 +208,7 @@ fn private_array_copy_read_keeps_binary_projected_destination_refused() {
                 ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
                     semantic_block: 0,
                     semantic_statement: Some(2),
-                    semantic_access_ordinal: 0,
+                    semantic_access_ordinal: 1,
                 }
             ))
         ));
@@ -208,38 +216,42 @@ fn private_array_copy_read_keeps_binary_projected_destination_refused() {
 }
 
 #[test]
-fn private_array_copy_read_missing_row_and_wrong_ranked_index_fail_final_relation() {
+fn private_array_read_missing_row_and_wrong_ranked_index_fail_final_relation() {
     use fe2o3_lower_mir_kernel::{
         ProductionMirPlironTranslationErrorV1, ProductionSemanticKirErrorV1,
     };
-    for legacy in [false, true] {
-        for missing in [false, true] {
-            let result = attach_private_write_fixture_v1(
-                private_copy_read_fixture_v1(0, 1),
-                legacy,
-                |_, root| {
-                    let row = *root.access_sources.last().unwrap();
-                    assert_eq!(row.semantic_statement(), Some(3));
-                    if missing {
-                        root.access_sources.pop();
-                        return;
-                    }
-                    let kernel = root.lowering.kernel();
-                    let ProductionRankedOperationV1::Access {
-                        indices,
-                        kind: AccessKindAttr::Read,
-                        ..
-                    } = &kernel.blocks()[row.ranked_block() as usize].operations()
-                        [row.ranked_operation() as usize]
-                    else {
-                        panic!("read");
-                    };
-                    let [ProductionRankedValueV1::Local(index)] = indices.as_slice() else {
-                        panic!("index");
-                    };
-                    let mut changed = 0;
-                    let blocks =
-                        kernel
+    for binary in [false, true] {
+        for legacy in [false, true] {
+            for missing in [false, true] {
+                let result = attach_private_write_fixture_v1(
+                    if binary {
+                        private_binary_read_fixture_v1(true, BinaryReadOperandV1::Move)
+                    } else {
+                        private_copy_read_fixture_v1(0, 1)
+                    },
+                    legacy,
+                    |_, root| {
+                        let row = *root.access_sources.last().unwrap();
+                        assert_eq!(row.semantic_statement(), Some(3));
+                        if missing {
+                            root.access_sources.pop();
+                            return;
+                        }
+                        let kernel = root.lowering.kernel();
+                        let ProductionRankedOperationV1::Access {
+                            indices,
+                            kind: AccessKindAttr::Read,
+                            ..
+                        } = &kernel.blocks()[row.ranked_block() as usize].operations()
+                            [row.ranked_operation() as usize]
+                        else {
+                            panic!("read");
+                        };
+                        let [ProductionRankedValueV1::Local(index)] = indices.as_slice() else {
+                            panic!("index");
+                        };
+                        let mut changed = 0;
+                        let blocks = kernel
                             .blocks()
                             .iter()
                             .map(|block| {
@@ -263,93 +275,102 @@ fn private_array_copy_read_missing_row_and_wrong_ranked_index_fail_final_relatio
                                 )
                             })
                             .collect();
-                    assert_eq!(changed, 1);
-                    let changed = ProductionRankedKernelV1::new(
-                        kernel.function_name(),
-                        kernel.argument_count(),
-                        blocks,
-                    )
-                    .unwrap();
-                    root.ranked_ir =
-                        format_ranked_cfg(changed.function_name(), changed.blocks()).unwrap();
-                    root.lowering = fe2o3_pliron::compile_ranked_kernel_for_lowering_v1(
-                        ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, changed).unwrap(),
-                        ProductionSessionLimitsV1::default(),
-                    )
-                    .unwrap();
-                    assert!(root.lowering.all_mandatory_reports_are_clean());
-                },
-            );
-            if missing {
-                assert!(matches!(
-                    result,
-                    Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
-                        ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
-                            semantic_block: 0,
-                            semantic_statement: Some(3),
-                            semantic_access_ordinal: 0,
-                        }
-                    ))
-                ));
-            } else {
-                assert!(matches!(
-                    result,
-                    Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
-                        ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. }
-                    ))
-                ));
+                        assert_eq!(changed, 1);
+                        let changed = ProductionRankedKernelV1::new(
+                            kernel.function_name(),
+                            kernel.argument_count(),
+                            blocks,
+                        )
+                        .unwrap();
+                        root.ranked_ir =
+                            format_ranked_cfg(changed.function_name(), changed.blocks()).unwrap();
+                        root.lowering = fe2o3_pliron::compile_ranked_kernel_for_lowering_v1(
+                            ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, changed).unwrap(),
+                            ProductionSessionLimitsV1::default(),
+                        )
+                        .unwrap();
+                        assert!(root.lowering.all_mandatory_reports_are_clean());
+                    },
+                );
+                if missing {
+                    assert!(matches!(
+                        result,
+                        Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
+                            ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
+                                semantic_block: 0,
+                                semantic_statement: Some(3),
+                                semantic_access_ordinal: 0,
+                            }
+                        ))
+                    ));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
+                            ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. }
+                        ))
+                    ));
+                }
             }
         }
     }
 }
 
 #[test]
-fn private_array_copy_read_checks_caller_budget_and_rejects_duplicate_occurrences() {
-    let program =
-        assertion_project(assertion_materialized(private_copy_read_fixture_v1(0, 1))).unwrap();
-    let root = &program.roots[0];
-    let row = root.access_sources.last().unwrap();
-    let mut source = private_copy_source_v1(3);
-    source.block = row.ranked_block() as usize;
-    source.operation = row.ranked_operation() as usize;
-    let semantic = program.materialized.semantic_ssa().source_semantic();
-    with_canonical_assertions_v1(&program.materialized, |session| {
-        let floor = program.materialized.retained_analysis_storage_v1();
-        let direct = |limit| {
-            let mut work = Work::new(limit);
-            let mut budget = Budget::new(&mut work, floor);
-            budget.reserve_storage(floor).unwrap();
-            let result = program
-                .materialized
-                .materialized_private_array_constant_index(
-                    ROOT,
-                    ROOT,
-                    fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement {
-                        block: fe2o3_mir_model::SsaBlockIdV1::new(0),
-                        statement: 3,
-                    },
-                    fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::RvalueOperand(0),
-                    &mut budget,
-                );
-            (result, budget.work())
+fn private_array_read_checks_caller_budget_and_rejects_duplicate_occurrences() {
+    for binary in [false, true] {
+        let function = if binary {
+            private_binary_read_fixture_v1(true, BinaryReadOperandV1::Move)
+        } else {
+            private_copy_read_fixture_v1(0, 1)
         };
-        let (baseline, query_work) = direct(1_000_000);
-        assert_eq!(baseline, Ok(Some(0)));
-        // The genuine lowerer query is the independent adapter/caller oracle.
-        // This measures row conversion, not the whole source factory.
-        for query_limit in [query_work, query_work - 1] {
-            let (expected, accepted) = direct(query_limit);
-            let mut work = Work::new(query_limit + 52);
-            let mut budget = Budget::new(&mut work, floor);
-            budget.reserve_storage(floor).unwrap();
-            let result = production_access_sources(
-                semantic.types(),
-                &semantic.functions()[0],
-                root.lowering.kernel().blocks(),
-                &[source],
-                &mut session.for_source_with_query_budget_v1(&mut budget, ROOT, ROOT),
-            );
-            match (expected, result) {
+        let overhead = if binary { 100 } else { 52 };
+        let program = assertion_project(assertion_materialized(function)).unwrap();
+        let root = &program.roots[0];
+        let row = root.access_sources.last().unwrap();
+        let mut source = private_copy_source_v1(3);
+        source.block = row.ranked_block() as usize;
+        source.operation = row.ranked_operation() as usize;
+        let semantic = program.materialized.semantic_ssa().source_semantic();
+        with_canonical_assertions_v1(&program.materialized, |session| {
+            let floor = program.materialized.retained_analysis_storage_v1();
+            let direct = |limit| {
+                let mut work = Work::new(limit);
+                let mut budget = Budget::new(&mut work, floor);
+                budget.reserve_storage(floor).unwrap();
+                let result = program
+                    .materialized
+                    .materialized_private_array_constant_index(
+                        ROOT,
+                        ROOT,
+                        fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement {
+                            block: fe2o3_mir_model::SsaBlockIdV1::new(0),
+                            statement: 3,
+                        },
+                        fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::RvalueOperand(u32::from(
+                            binary,
+                        )),
+                        &mut budget,
+                    );
+                (result, budget.work())
+            };
+            let (baseline, query_work) = direct(1_000_000);
+            assert_eq!(baseline, Ok(Some(0)));
+            // The genuine lowerer query is the independent adapter/caller oracle.
+            // This measures row conversion, not the whole source factory.
+            for query_limit in [query_work, query_work - 1] {
+                let (expected, accepted) = direct(query_limit);
+                let mut work = Work::new(query_limit + overhead);
+                let mut budget = Budget::new(&mut work, floor);
+                budget.reserve_storage(floor).unwrap();
+                let result = production_access_sources(
+                    semantic.types(),
+                    &semantic.functions()[0],
+                    root.lowering.kernel().blocks(),
+                    &[source],
+                    &mut session.for_source_with_query_budget_v1(&mut budget, ROOT, ROOT),
+                );
+                match (expected, result) {
                 (Ok(Some(0)), Ok(rows)) => assert_eq!(rows, vec![*row]),
                 (
                     Err(fe2o3_lower_mir_kernel::SemanticKirPrivateArrayQueryErrorV1::Resource(
@@ -363,31 +384,34 @@ fn private_array_copy_read_checks_caller_budget_and_rejects_duplicate_occurrence
                         ),
                     )),
                 ) => {
-                    assert_eq!(actual.actual(), expected.actual() + 52);
-                    assert_eq!(actual.limit(), expected.limit() + 52);
+                    assert_eq!(actual.actual(), expected.actual() + overhead);
+                    assert_eq!(actual.limit(), expected.limit() + overhead);
                 }
                 other => panic!("caller changed lowerer query: {other:?}"),
             }
-            assert_eq!(budget.work(), accepted + 52);
-            assert_eq!((budget.storage(), budget.peak_storage()), (floor, floor));
-        }
-        let result = production_access_sources(
-            semantic.types(),
-            &semantic.functions()[0],
-            root.lowering.kernel().blocks(),
-            &[source, source],
-            &mut session.for_source(ROOT, ROOT),
-        );
-        assert!(matches!(
-            result,
-            Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "private array copy read has duplicate source correspondence"
-            ))
-        ));
-        Ok(())
-    })
-    .unwrap();
+                assert_eq!(budget.work(), accepted + overhead);
+                assert_eq!((budget.storage(), budget.peak_storage()), (floor, floor));
+            }
+            let result = production_access_sources(
+                semantic.types(),
+                &semantic.functions()[0],
+                root.lowering.kernel().blocks(),
+                &[source, source],
+                &mut session.for_source(ROOT, ROOT),
+            );
+            assert!(matches!(
+                result,
+                Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "private array read has duplicate source correspondence"
+                ))
+            ));
+            Ok(())
+        })
+        .unwrap();
+    }
 }
+
+include!("private_array_binary_read_source_v1_tests.rs");
 
 #[test]
 fn private_array_copy_read_prepays_candidate_and_requires_real_facts() {
@@ -401,7 +425,7 @@ fn private_array_copy_read_prepays_candidate_and_requires_real_facts() {
             budget: &mut budget,
             calls: 0,
         };
-        let result = private_array_read_source_v1::retained_copy_read(
+        let result = private_array_read_source_v1::retained_read(
             &types,
             &function,
             &private_copy_source_v1(statement),
