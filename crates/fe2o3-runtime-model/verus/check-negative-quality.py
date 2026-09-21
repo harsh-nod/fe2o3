@@ -19,17 +19,17 @@ EXPECTED_CHECK_NEGATIVE_FUNCTION_SHA256 = (
 EXPECTED_RUNNER_FUNCTION_SHA256 = {
     "read_pin": "dd0f063d2e13126778cfec4fc6bd9a89af38a0b55ed45491e59eff830a3448aa",
     "check_digest": "1b1af7d88401a6baa244c63b3edd41fd15b07814e02f3d1bfb4b1841c33819e0",
-    "check_sources": "0adc3954823a9ca0fd6568e964172d3843642f2744f17c06d2c1e0b96155aaf1",
+    "check_sources": "6b89b259dda208700b2698c78f4faa24233617dba5aed293814a8d76a090cfba",
     "run_verus": "a22ae6cb1d34ec0ea6b402ecf96008773cefcc620e511aae7bc3d6e495b5cf66",
     "check_positive": "2f353f8881c8def07ede3a251bb64de9148b92c802eda65b768a64172cd65d92",
     "seal_authority": "3e49725d7555f6816455cac2080aae192a8ad6210f62f5be5d8f19ac395d227a",
 }
-EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1538
+EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1541
 EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENTS_SHA256 = (
-    "4b4b874792c2fe1c632139f61f24ae76355f5d27281d9c70eb66addc7e1b732f"
+    "698860f038f7f825d9795837e20e3a59b796c9a1963044d7361ebd3839f1d8dd"
 )
 EXPECTED_RUNNER_SHA256 = (
-    "07d6c61f0254a8df26701577c85457feb6dc9eb7648c3b0858d10a35f8163935"
+    "7dfdc2980d45a543fd1c295d8f2ecb13b69e6a48a1f356aca690af4983c57871"
 )
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 IDENTIFIER = r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*"
@@ -87,7 +87,8 @@ RUNNER_TOOL_BINDING_BLOCK = (
     'read_invariant_checker="$script_dir/check-read-invariant.py"',
     'producer_read_invariant_checker="$script_dir/check-producer-read-invariant.py"',
     'producer_read_lifecycle_checker="$script_dir/check-producer-read-lifecycle.py"',
-    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker read_invariant_checker producer_read_invariant_checker producer_read_lifecycle_checker",
+    'producer_journal_issuance_checker="$script_dir/check-producer-journal-issuance.py"',
+    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker read_invariant_checker producer_read_invariant_checker producer_read_lifecycle_checker producer_journal_issuance_checker",
 )
 RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$journal_issuance_checker" --self-test "$journal_issuance_proof"',
@@ -131,6 +132,13 @@ RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK = (
     '    /usr/bin/python3 -I "$producer_read_lifecycle_checker" \\',
     '    "$producer_read_lifecycle_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/producer-read-lifecycle"',
 )
+RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK = (
+    '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$producer_journal_issuance_checker" --self-test "$producer_journal_issuance_proof"',
+    '/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \\',
+    '    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \\',
+    '    /usr/bin/python3 -I "$producer_journal_issuance_checker" \\',
+    '    "$producer_journal_issuance_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/producer-journal-issuance"',
+)
 RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" --self-test \\',
     '    "$negative_quality_reject_fixture" \\',
@@ -144,6 +152,7 @@ RUNNER_SOURCE_CHECKER_INVOCATION = (
 RUNNER_TOOL_DIGEST_LINES = (
     '    check_digest "$expected_producer_read_invariant_checker" "$producer_read_invariant_checker"',
     '    check_digest "$expected_producer_read_lifecycle_checker" "$producer_read_lifecycle_checker"',
+    '    check_digest "$expected_producer_journal_issuance_checker" "$producer_journal_issuance_checker"',
     '    check_digest "$expected_read_invariant_checker" "$read_invariant_checker"',
     '    check_digest "$expected_read_commit_checker" "$read_commit_checker"',
     '    check_digest "$expected_read_preflight_checker" "$read_preflight_checker"',
@@ -158,6 +167,7 @@ RUNNER_TOOL_DIGEST_LINES = (
 RUNNER_TOOL_NAMES = (
     "producer_read_invariant_checker",
     "producer_read_lifecycle_checker",
+    "producer_journal_issuance_checker",
     "read_invariant_checker",
     "read_commit_checker",
     "read_preflight_checker",
@@ -994,6 +1004,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
     invariant_start = exact_block_start(lines, RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK, "reader invariant campaign")
     producer_start = exact_block_start(lines, RUNNER_PRODUCER_READ_INVARIANT_CAMPAIGN_BLOCK, "producer read invariant campaign")
     lifecycle_start = exact_block_start(lines, RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK, "producer read lifecycle campaign")
+    producer_issuance_start = exact_block_start(lines, RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK, "producer journal issuance campaign")
     if not environment_start < root_start < tool_start < invocation_start:
         raise QualityError(
             "runner environment, root, tool, and invocation blocks are out of order",
@@ -1026,6 +1037,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
     allowed_tool_lines.update(range(invariant_start, invariant_start + len(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK)))
     allowed_tool_lines.update(range(producer_start, producer_start + len(RUNNER_PRODUCER_READ_INVARIANT_CAMPAIGN_BLOCK)))
     allowed_tool_lines.update(range(lifecycle_start, lifecycle_start + len(RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK)))
+    allowed_tool_lines.update(range(producer_issuance_start, producer_issuance_start + len(RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK)))
     for digest_line in RUNNER_TOOL_DIGEST_LINES:
         matches = [index for index, line in enumerate(lines) if line == digest_line]
         if len(matches) != 1:
@@ -1139,6 +1151,10 @@ def audit_runner_root_bindings(runner_source: str) -> None:
             and quality_audits[0] < lifecycle_start < quality_audits[-1] < closure_invocations[-1]):
         raise QualityError("producer lifecycle campaign must run after producer invariant and before final source/tool checks",
                            code="runner.producer_read_lifecycle_campaign.order")
+    if not (lifecycle_start < producer_issuance_start < source_checks[-2]
+            and quality_audits[0] < producer_issuance_start < quality_audits[-1] < closure_invocations[-1]):
+        raise QualityError("producer journal issuance campaign must run after lifecycle and before final source/tool checks",
+                           code="runner.producer_journal_issuance_campaign.order")
     if late_block_starts != sorted(late_block_starts):
         raise QualityError(
             "runner late-authority binding blocks are out of order",
@@ -1574,6 +1590,7 @@ def build_inventory_fixture(root: Path) -> tuple[Path, Path]:
                 *RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK,
                 *RUNNER_PRODUCER_READ_INVARIANT_CAMPAIGN_BLOCK,
                 *RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK,
+                *RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK,
                 "check_sources",
                 RUNNER_NEGATIVE_QUALITY_AUDIT,
                 "check_sources",
@@ -1703,6 +1720,34 @@ def inventory_self_test() -> None:
             lambda _d, r: r.write_text(r.read_text().replace(
                 "\n".join(RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK) + "\n", "")
                 + "\n".join(RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK) + "\n"),
+        ),
+        (
+            "missing producer journal issuance campaign",
+            lambda _d, r: replace_runner(r, "\n".join(RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK) + "\n", ""),
+        ),
+        (
+            "duplicate producer journal issuance campaign",
+            lambda _d, r: r.write_text(r.read_text() + "\n".join(RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK) + "\n"),
+        ),
+        (
+            "changed producer journal issuance arguments",
+            lambda _d, r: replace_runner(r, RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK[-1].replace('"$timeout_seconds"', '"300"')),
+        ),
+        (
+            "masked producer journal issuance failure",
+            lambda _d, r: replace_runner(r, RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK[-1] + " || true"),
+        ),
+        (
+            "producer journal issuance tool rebound",
+            lambda _d, r: r.write_text(r.read_text() + 'producer_journal_issuance_checker=/tmp/untrusted\n'),
+        ),
+        (
+            "relocated producer journal issuance campaign",
+            lambda _d, r: r.write_text(r.read_text().replace(
+                "\n".join(RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK) + "\n", "")
+                + "\n".join(RUNNER_PRODUCER_JOURNAL_ISSUANCE_CAMPAIGN_BLOCK) + "\n"),
         ),
         (
             "missing invariant campaign",
@@ -2365,6 +2410,10 @@ def inventory_self_test() -> None:
            "changed producer lifecycle arguments", "masked producer lifecycle failure")
     expect("runner.tool_wiring.unparsed", "producer lifecycle tool rebound")
     expect("runner.producer_read_lifecycle_campaign.order", "relocated producer lifecycle campaign")
+    expect("runner.block.producer_journal_issuance_campaign.count", "missing producer journal issuance campaign", "duplicate producer journal issuance campaign",
+           "changed producer journal issuance arguments", "masked producer journal issuance failure")
+    expect("runner.tool_wiring.unparsed", "producer journal issuance tool rebound")
+    expect("runner.producer_journal_issuance_campaign.order", "relocated producer journal issuance campaign")
     expect("runner.block.reader_invariant_campaign.count", "missing invariant campaign", "duplicate invariant campaign",
            "changed invariant arguments", "masked invariant failure")
     expect("runner.tool_wiring.unparsed", "invariant tool rebound")

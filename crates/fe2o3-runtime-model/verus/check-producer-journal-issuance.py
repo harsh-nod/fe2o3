@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Authenticate logical producer lifecycle execution, not Rust/native refinement."""
+"""Authenticate producer journal issuance composition, not Rust/native refinement."""
 
 from __future__ import annotations
 
@@ -17,16 +17,16 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 PINS = HERE / "pins"
-POSITIVE_COUNT = 255
+POSITIVE_COUNT = 201
 INHERITED_COUNT = 181
-HEADER = """// Producer-read lifecycle candidate: logical execution, not Rust/native refinement.
-mod custody {
-    include!("context_producer_read_invariant_v1.rs");
-    pub use self::issuance::*;
-}
-use custody::*;
-use vstd::prelude::*;
+HEADER = """// Producer journal issuance composition: logical contents, not Rust/native refinement.
+include!("context_producer_read_invariant_v1.rs");
+
+mod journal_issuance {
+use super::*;
+use super::issuance::*;
 """
+FOOTER = "\n}\n\npub use journal_issuance::*;\n"
 
 
 def require(condition, message):
@@ -56,7 +56,7 @@ def pinned_module(name: str, path: Path, pin: Path):
     return module
 
 
-PRODUCER = pinned_module("lifecycle_producer_utilities", HERE / "check-producer-read-invariant.py",
+PRODUCER = pinned_module("journal_issuance_producer_utilities", HERE / "check-producer-read-invariant.py",
                          PINS / "PRODUCER_READ_INVARIANT_CHECKER_SHA256")
 INVARIANT, COMMIT, PREFLIGHT, BASE, POLICY = (
     PRODUCER.INVARIANT, PRODUCER.COMMIT, PRODUCER.PREFLIGHT, PRODUCER.BASE, PRODUCER.POLICY)
@@ -70,81 +70,48 @@ DEPENDENCIES = {
 def mutations():
     cases = []
 
-    def add(name, function, before, after, postcondition="exact_decision_v1"):
+    def add(name, function, before, after, postcondition):
         cases.append(BASE.Mutation(name, function, before, after, postcondition, POSITIVE_COUNT - 1))
 
-    for name, before, after in [
-        ("pending_as_success", "WriterEntryV1::Pending { .. } => Ok(ProducerStatusV1::Pending)",
-         "WriterEntryV1::Pending { .. } => Ok(ProducerStatusV1::Success)"),
-        ("unknown_as_pending", "WriterEntryV1::Unknown { .. } => Ok(ProducerStatusV1::Unknown)",
-         "WriterEntryV1::Unknown { .. } => Ok(ProducerStatusV1::Pending)"),
-        ("noeffect_as_success", "else if entry.content_lineage == read.content_lineage { Ok(ProducerStatusV1::NoEffect) }",
-         "else if entry.content_lineage == read.content_lineage { Ok(ProducerStatusV1::Success) }"),
+    constructor = "issued_producer_constructor_exec_v1"
+    call = "let result = producer_constructor_exec_v1(context, allocations, writers, reads);"
+    add("constructor_context", constructor, call,
+        call.replace("(context,", "(0,"), "issued_constructor_relation_v1")
+    add("constructor_read_capacity", constructor, call,
+        call.replace("writers, reads)", "writers, 0)"), "issued_constructor_relation_v1")
+    for kind, changes in [
+        ("register", [
+            ("watermark", "contents.stable.journal.registration_watermark = 0;"),
+            ("reserved_count", "contents.stable.journal.reserved_count = 0;"),
+            ("writer_free", "contents.stable.journal.free.clear();"),
+            ("stable_incarnation", "contents.stable.next_incarnation = 0;"),
+            ("producer_counts", "contents.counts.clear();"),
+        ]),
+        ("abort", [
+            ("reserved_count", "contents.stable.journal.reserved_count = 0;"),
+            ("writer_free", "contents.stable.journal.free.push(reference.slot);"),
+            ("watermark", "contents.stable.journal.registration_watermark = 0;"),
+            ("members", "contents.stable.journal.members.clear();"),
+        ]),
     ]:
-        add(name, "producer_status_exec_v1", before, after)
-    device = """    if entry.device.context_generation != read.device.context_generation || entry.device.local != read.device.local {
-        return Err(ReadErrorV1::AllocationDeviceMismatch);
-    }
-"""
-    extent = "    if entry.byte_extent != read.byte_extent { return Err(ReadErrorV1::AllocationExtentMismatch); }\n"
-    add("device_extent_order", "producer_status_exec_v1", device + extent, extent + device)
-    add("nonpending_admitted", "producer_validate_exec_v1",
-        "Ok(_) => Err(ReadErrorV1::AllocationBusy),", "Ok(_) => Ok(()),")
-    identity = "    if !issuable_id_exec_v1(consumer.local) || !matches!(consumer.kind, WriterKindV1::Submission) { return Err(ReadErrorV1::InvalidWriterId); }\n"
-    add("producer_kind_admitted", "producer_acquire_header_exec_v1", identity,
-        "    if !issuable_id_exec_v1(consumer.local) { return Err(ReadErrorV1::InvalidWriterId); }\n"
-        "    if !matches!(consumer.kind, WriterKindV1::Submission) { return Ok(()); }\n")
-    producer_order = "    if request.producer.key.local >= consumer.local { return Err(ReadErrorV1::InvalidWriterId); }\n"
-    add("producer_equal_consumer", "producer_acquire_item_exec_v1", producer_order,
-        "    if request.producer.key.local == consumer.local { return Ok(state); }\n" + producer_order)
-    capacity = "    if count > remaining { return Err(ReadErrorV1::MemberCapacity); }\n"
-    add("shared_capacity_ignores_stable", "producer_capacity_exec_v1", capacity,
-        "    if count > remaining && count <= contents.free.len() { return Ok(()); }\n" + capacity)
-    epoch = """    if contents.next_incarnation == 0 || contents.next_incarnation.checked_add(count as u64).is_none() {
-        return Err(ReadErrorV1::EpochExhausted);
-    }
-"""
-    add("capacity_epoch_order", "producer_capacity_exec_v1", capacity + epoch, epoch + capacity)
-    evidence = "    if !same_key_exec_v1(evidence_consumer, consumer) { return Err(ReadErrorV1::SettlementEvidenceMismatch); }\n"
-    empty = "    if count == 0 { return Err(ReadErrorV1::RosterCapacity); }\n"
-    add("release_evidence_order", "producer_release_header_exec_v1", evidence + empty, empty + evidence)
-    context = "    if consumer.context_generation != contents.stable.journal.context_generation { return Err(ReadErrorV1::ForeignContext); }\n"
-    add("identity_before_context", "producer_acquire_header_exec_v1", context + identity, identity + context)
-    for kind, args in [
-        ("acquire", "requests[index], index, state"), ("release", "references[index], state"),
-    ]:
-        item = f"""        match producer_{kind}_item_exec_v1(contents, consumer, {args}) {{
-            Err(error) => return Err(error), Ok(next) => state = next,
-        }}"""
-        add(f"{kind}_scan_error_accepted", f"producer_{kind}_preflight_exec_v1", item,
-            item.replace("Err(error) => return Err(error)", "Err(_) => return Ok(())"))
-    for kind in ("acquire", "release"):
-        function = f"producer_{kind}_contents_exec_v1"
-        postcondition = f"producer_{kind}_execution_relation_v1"
-        add(f"{kind}_error_state", function, "Err(error) => return Err(error)",
-            "Err(error) => { contents.next_incarnation = 0; return Err(error); }", postcondition)
-        if kind == "acquire":
-            add("acquire_error_output", function, "Err(error) => return Err(error)",
-                "Err(error) => { output.clear(); return Err(error); }", postcondition)
-            commit = "    producer_acquire_commit_exec_v1(contents, consumer, requests, output);"
-            add("acquire_commit_counter", function, commit,
-                commit + "\n    contents.next_incarnation = 0;", postcondition)
-            add("acquire_commit_output", function, commit,
-                commit + "\n    output.clear();", postcondition)
-        else:
-            commit = "    producer_release_commit_exec_v1(contents, references);"
-            add("release_commit_free", function, commit,
-                commit + "\n    contents.free.clear();", postcondition)
+        function = f"{kind}_issued_producer_exec_v1"
+        postcondition = f"issued_{kind}_relation_v1"
+        for name, change in changes:
+            add(f"{kind}_{name}", function, "    result\n}",
+                f"    {change}\n    result\n}}", postcondition)
+        add(f"{kind}_result", function, "    result\n}",
+            "    Err(JournalErrorV1::InvalidState)\n}", postcondition)
     return cases
 
 
 def audit_source(source: str, output: Path) -> None:
     require(source.isascii(), "ASCII proof source")
-    require(source.startswith(HEADER) and source.count(HEADER) == 1, "exact initial custody module")
+    require(source.startswith(HEADER) and source.count(HEADER) == 1, "exact initial issuance module")
+    require(source.endswith(FOOTER) and source.count(FOOTER) == 1, "exact issuance module export")
     for name, pin in DEPENDENCIES.items():
         check_pin(output / name, PINS / pin)
-    stripped = output / "audited-lifecycle-body.rs"
-    stripped.write_text("use vstd::prelude::*;\n" + source[len(HEADER):], encoding="ascii")
+    stripped = output / "audited-journal-issuance-body.rs"
+    stripped.write_text("use vstd::prelude::*;\n" + source[len(HEADER):-len(FOOTER)], encoding="ascii")
     POLICY.scan(stripped)
     PRODUCER.audit_source((output / "context_producer_read_invariant_v1.rs").read_text(), output)
     for name, pin in DEPENDENCIES.items():
@@ -156,8 +123,8 @@ def campaign(source: Path, verus: Path, timeout: int, output: Path):
     require(1 <= timeout <= 300, "timeout must be 1 through 300")
     require(verus.name == "verus", "named Verus executable required")
     pin_names = {
-        source: "CONTEXT_PRODUCER_READ_LIFECYCLE_SHA256",
-        Path(__file__): "PRODUCER_READ_LIFECYCLE_CHECKER_SHA256",
+        source: "CONTEXT_PRODUCER_JOURNAL_ISSUANCE_SHA256",
+        Path(__file__): "PRODUCER_JOURNAL_ISSUANCE_CHECKER_SHA256",
         **{HERE / name: pin for name, pin in DEPENDENCIES.items()},
         Path(PRODUCER.__file__): "PRODUCER_READ_INVARIANT_CHECKER_SHA256",
         Path(INVARIANT.__file__): "READ_INVARIANT_CHECKER_SHA256",
@@ -201,7 +168,7 @@ def campaign(source: Path, verus: Path, timeout: int, output: Path):
         for name, mutation in cases:
             out = output / name
             out.mkdir()
-            candidate = out / "context_producer_read_lifecycle_v1.rs"
+            candidate = out / "context_producer_journal_issuance_v1.rs"
             expected = (BASE.mutate(original, mutation) if mutation else original).encode("ascii")
             candidate.write_bytes(expected)
             for dependency, data in dependencies.items():
@@ -209,7 +176,7 @@ def campaign(source: Path, verus: Path, timeout: int, output: Path):
             audit_source(expected.decode("ascii"), out)
             generated = {str(candidate): digest(expected),
                          **{str(out / dependency): digest(data) for dependency, data in dependencies.items()}}
-            for part in ["lifecycle", "producer", "invariant", "commit", "preflight"]:
+            for part in ["journal-issuance", "producer", "invariant", "commit", "preflight"]:
                 path = out / f"audited-{part}-body.rs"
                 generated[str(path)] = digest(path.read_bytes())
             (out / "sources.json").write_text(json.dumps(generated, indent=2) + "\n")
@@ -226,13 +193,13 @@ def campaign(source: Path, verus: Path, timeout: int, output: Path):
             PREFLIGHT.check_result(status, stdout, stderr, expected.decode("ascii"), candidate, mutation)
             require({str(path): digest(path.read_bytes()) for path in inputs} == identities,
                     "source/tool replacement")
-            print(f"PASS: producer lifecycle {name}", flush=True)
+            print(f"PASS: producer journal issuance {name}", flush=True)
     require({str(path): digest(path.read_bytes()) for path in inputs} == identities,
             "final source/tool identities")
     result = {"qualified": True, "obligations": POSITIVE_COUNT, "inherited": INHERITED_COUNT,
               "executable_mutations": len(mutations()), "inputs": identities}
     (output / "finished.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(f"PRODUCER_READ_LIFECYCLE_OK obligations={POSITIVE_COUNT} inherited={INHERITED_COUNT} "
+    print(f"PRODUCER_JOURNAL_ISSUANCE_OK obligations={POSITIVE_COUNT} inherited={INHERITED_COUNT} "
           f"new={POSITIVE_COUNT - INHERITED_COUNT} executable_mutations={len(mutations())}", flush=True)
 
 
@@ -241,7 +208,7 @@ def self_test(source: str):
         BASE.postcondition_bounds(BASE.mutate(source, case), case)
     PRODUCER.self_test((HERE / "context_producer_read_invariant_v1.rs").read_text())
     rejected = 0
-    with tempfile.TemporaryDirectory(prefix="fe2o3-producer-lifecycle-audit-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-producer-journal-issuance-audit-") as temporary:
         output = Path(temporary)
         for name in DEPENDENCIES:
             (output / name).write_bytes((HERE / name).read_bytes())
@@ -249,10 +216,10 @@ def self_test(source: str):
         for invalid in [
             source.replace('include!("context_producer_read_invariant_v1.rs");', 'include!("foreign.rs");'),
             source.replace('include!("context_producer_read_invariant_v1.rs");', 'include!("/owned/context_producer_read_invariant_v1.rs");'),
-            source.replace("pub use self::issuance::*;", "pub use foreign::*;"),
-            source.replace("use custody::*;", "use foreign::*;"),
-            source.replace("mod custody {", "#[cfg(false)]\nmod custody {"),
-            source.replace("mod custody {", "#[allow(unused)]\nmod custody {"),
+            source.replace("pub use journal_issuance::*;", "pub use foreign::*;"),
+            source.replace("use super::*;", "use foreign::*;"),
+            source.replace("mod journal_issuance {", "#[cfg(false)]\nmod journal_issuance {"),
+            source.replace("mod journal_issuance {", "#[allow(unused)]\nmod journal_issuance {"),
             "\n" + source, "/*\n" + source + "\n*/", source + HEADER,
             source + '\ninclude!("foreign.rs");\n', source + "\nmod foreign;\n",
             source + "\nmod foreign {}\n", source + "\n#[cfg(false)] fn hidden() {}\n",
@@ -263,7 +230,7 @@ def self_test(source: str):
             except (ValueError, POLICY.ScanError):
                 rejected += 1
             else:
-                raise ValueError("producer lifecycle auditor accepted adverse source")
+                raise ValueError("producer journal issuance auditor accepted adverse source")
         for name in DEPENDENCIES:
             path = output / name
             data = path.read_bytes()
@@ -277,7 +244,7 @@ def self_test(source: str):
             finally:
                 path.write_bytes(data)
         audit_source(source, output)
-    print(f"PASS: producer lifecycle self-test ({len(mutations())} executable mutations, "
+    print(f"PASS: producer journal issuance self-test ({len(mutations())} executable mutations, "
           f"{rejected} additional adverse sources rejected)")
 
 

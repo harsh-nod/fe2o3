@@ -4,7 +4,7 @@
 
 `src/context_producer_reads.rs` adds a concrete producer-bound reservation wrapper
 around the stable-reader journal. RuntimeContext does not yet use it.
-`context_producer_read_invariant_v1.rs` adds 25 logical-content obligations to 155
+`context_producer_read_invariant_v1.rs` adds 25 logical-content obligations to 156
 inherited obligations: constructor and nonempty two-consumer witness, exact
 pending-chain custody, Success/NoEffect and Unknown preservation, stable-reader
 and outer-storage framing, resolved status independent of retired writer/member
@@ -12,18 +12,18 @@ slots, and positive combined count for a retained reservation.
 
 `check-producer-read-invariant.py` registers whole-crate positive-before/after
 runs with one appended test obligation and 12 invariant-sensitivity mutations.
-Each negative must report exactly its designated postcondition failure with 180
+Each negative must report exactly its designated postcondition failure with 181
 other obligations verified; compiler errors, partial runs, other diagnostics and
 timeouts are not acceptance. All four inherited sources and their checker chain
 are pinned. Captured pinned bytes determine the generated solver inputs.
 The standalone negative-file roster remains 691; preseal authority bindings are
-1538. The twelve generated mutations are not standalone negative files or
+1541. The twelve generated mutations are not standalone negative files or
 transition-implementation mutation proofs.
 The [signed-source qualification](../../../docs/evidence/dev-producer-read-custody-verus-2026-09-21/README.md)
 records the complete registered run and an independently retained dedicated
 campaign, with exact inputs, receipts and portable offline evidence validation.
 
-`context_producer_read_lifecycle_v1.rs` adds 74 obligations to those 180 inherited
+`context_producer_read_lifecycle_v1.rs` adds 74 obligations to those 181 inherited
 obligations. It proves exact executable logical status, preflight and error
 precedence, acquire/release commit contents, unchanged-on-error state/output,
 arena/count/incarnation/shared-budget preservation, stable-wrapper composition,
@@ -33,9 +33,9 @@ reuse/stale references, and release after all four legitimate producer statuses.
 
 `check-producer-read-lifecycle.py` authenticates the literal custody module header
 and recursively audits all five inherited sources without widening the global
-import policy. Whole-crate positives must report 254 verified obligations. Each
+import policy. Whole-crate positives must report 255 verified obligations. Each
 of 19 executable-body mutations must report exactly its intended postcondition
-failure with 253 other obligations verified. No synthetic subject is appended.
+failure with 254 other obligations verified. No synthetic subject is appended.
 Consumer-kind, equal-producer-ID and shared-capacity controls insert focused
 wrong admissions rather than deleting whole guards with multiple failure exits.
 The ten mutation-target functions and four recursive lifecycle bridges use
@@ -46,10 +46,29 @@ The [signed-source lifecycle qualification](../../../docs/evidence/dev-producer-
 records the dedicated campaign and complete registered proof run, including all
 691 standalone negatives and portable offline evidence validation.
 
+The linked historical archives retain their original source and obligation counts.
+The additional inherited obligation is a pointwise reader-prefix extension lemma;
+it preserves the original predicate and contracts, with explicit SMT triggers and
+isolated solver contexts for the induction and reader-release preservation.
+
+`context_producer_journal_issuance_v1.rs` adds 20 obligations to 181 inherited
+obligations. The candidate composes producer custody with the exact reserved count
+and successful-registration history over the same journal projection. Logical
+constructor, register and Reserved-abort wrappers preserve that combined invariant,
+all reader storage, and unrelated Pending/Unknown chains. Resolved reservation
+status remains independent of reuse of the old producer slot. One witness starts
+at construction and exercises replay, capacity rejection, abort and stale-reference
+rejection after slot reuse. A separate explicitly initialized mixed-state fixture
+exercises all four producer statuses and nonempty retained chains; it is not a
+constructor-to-Pending witness. Its 13 executable-body controls target the exact
+constructor/register/abort relations. Qualification of this new campaign and the
+updated inherited campaigns remains pending; a positive solver run alone is not
+campaign acceptance.
+
 The strong chain graph is a reachable-state premise, not a whole-arena check
-performed by Rust settlement. Base issuance/history and exact reserved-count
-composition, physical storage, fallible allocation, panic/unwind behavior and
-production Rust/native refinement remain open. The unread guard is proved for
+performed by Rust settlement. Enrollment, begin-write and settlement composition
+with issuance history, physical storage, fallible allocation, panic/unwind behavior
+and production Rust/native refinement remain open. The unread guard is proved for
 the logical executable model, not production mutator integration. Observed release
 capacity is not yet bound to Rust Vec capacity; intermediate incarnation induction
 states are not claims about concrete loop states.

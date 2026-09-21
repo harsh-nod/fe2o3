@@ -17,8 +17,8 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 PINS = HERE / "pins"
-BASE_OBLIGATIONS = 155
-INHERITED_COUNT = 127
+BASE_OBLIGATIONS = 156
+INHERITED_COUNT = 128
 POSITIVE_COUNT = BASE_OBLIGATIONS + 1
 DEPENDENCIES = {
     "context_read_commit_v1.rs": "CONTEXT_READ_COMMIT_SHA256",

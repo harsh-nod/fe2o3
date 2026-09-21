@@ -279,6 +279,7 @@ pub proof fn acquire_preserves_reader_invariant_v1(
     }
 }
 
+#[verifier::spinoff_prover]
 pub proof fn release_preserves_reader_invariant_v1(
     before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1, references: Seq<ReadReferenceV1>,
     evidence_consumer: WriterKeyV1, observed_free_capacity: usize, result: Result<(), ReadErrorV1>,

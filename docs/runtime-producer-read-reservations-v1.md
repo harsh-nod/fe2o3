@@ -66,7 +66,7 @@ These are executable tests, not a formal refinement or hardware qualification.
 The [signed-source CPU qualification](evidence/dev-producer-read-model-cpu-2026-09-21/README.md)
 records the GNU/musl model, doctest and runtime regression results.
 
-`context_producer_read_invariant_v1.rs` adds 25 obligations to the 155 inherited
+`context_producer_read_invariant_v1.rs` adds 25 obligations to the 156 inherited
 reader/journal obligations. It specifies exact arena partitions, live reference
 identity/incarnation, per-allocation counts, and the shared active-read ceiling.
 It proves logical construction, a two-consumer nonempty witness, and conditional
@@ -85,7 +85,7 @@ The [signed-source custody qualification](evidence/dev-producer-read-custody-ver
 records the accepted dedicated campaign and the full registered proof run,
 including all 691 standalone negative files and portable evidence validation.
 
-`context_producer_read_lifecycle_v1.rs` adds 74 obligations to the 180 inherited
+`context_producer_read_lifecycle_v1.rs` adds 74 obligations to the 181 inherited
 obligations. Executable logical status, lookup, capacity and ordered preflight
 functions match their exact decisions, including error precedence. Acquire and
 release commit loops implement exact contents relations; rejection frames the
@@ -106,10 +106,21 @@ The [signed-source lifecycle qualification](evidence/dev-producer-read-lifecycle
 records both whole-crate positive brackets, all 19 executable controls, and the
 complete registered proof run with all 691 standalone negative files.
 
+The linked historical archives retain their original source and obligation counts.
+The new `context_producer_journal_issuance_v1.rs` candidate composes the custody
+predicate with exact `reserved_count` and successful-registration history. Its
+logical constructor/register/Reserved-abort wrappers preserve the combined
+invariant, reader storage and unrelated Pending/Unknown chains. A constructor-based
+reuse witness covers rejection and stale identity; a separate directly initialized
+mixed-state fixture covers all four reservation statuses during register/abort in
+a retired producer slot. That fixture is not production reachability. The new
+20-obligation composition and its 13 executable mutation controls await complete
+campaign qualification, including reruns of the updated inherited proofs.
+
 These are conditional logical-execution proofs, not whole-wrapper verification.
-Complete retained-chain coverage is a premise whose reachability across all
-base-journal transitions remains to be established. The custody predicate does
-not yet compose exact `reserved_count` or issuance history. Physical Vec storage,
+Complete retained-chain coverage is a premise whose reachability across enrollment,
+begin-write and the remaining base-journal transitions still needs to be established.
+Physical Vec storage,
 fallible allocation, settlement scratch/preflight execution, panic/unwind behavior,
 and production Rust correspondence remain separate. Release bounds use an observed
 capacity argument, not a proved binding to Rust `Vec::capacity()`. The acquisition

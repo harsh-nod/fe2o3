@@ -54,18 +54,21 @@ pub open spec fn acquire_commit_ready_v1(before: ReadContentsV1, requests: Seq<A
     &&& acquire_prefix_ready_v1(before, requests, requests.len())
 }
 
+pub open spec fn acquire_prefix_entry_v1(before: ReadContentsV1, requests: Seq<AllocationReadV1>, i: int) -> bool {
+    let slot = before.free_reads@[before.free_reads@.len() - 1 - i];
+    let allocation = requests[i].allocation.slot;
+    &&& slot < before.leases@.len()
+    &&& before.leases@[slot as int].is_none()
+    &&& allocation < before.readers@.len()
+    &&& before.readers@[allocation as int]
+        + read_slot_count_v1(requests.take(i + 1), allocation) <= usize::MAX
+    &&& before.readers@[allocation as int]
+        + read_slot_count_v1(requests.take(i + 1), allocation) <= before.leases@.len()
+}
+
 pub open spec fn acquire_prefix_ready_v1(before: ReadContentsV1, requests: Seq<AllocationReadV1>, end: nat) -> bool {
-    forall|i: int| 0 <= i < end ==> {
-        let slot = before.free_reads@[before.free_reads@.len() - 1 - i];
-        let allocation = (#[trigger] requests[i]).allocation.slot;
-        &&& slot < before.leases@.len()
-        &&& before.leases@[slot as int].is_none()
-        &&& allocation < before.readers@.len()
-        &&& before.readers@[allocation as int]
-            + read_slot_count_v1(requests.take(i + 1), allocation) <= usize::MAX
-        &&& before.readers@[allocation as int]
-            + read_slot_count_v1(requests.take(i + 1), allocation) <= before.leases@.len()
-    }
+    forall|i: int| #![trigger requests[i]] #![trigger acquire_prefix_entry_v1(before, requests, i)]
+        0 <= i < end ==> acquire_prefix_entry_v1(before, requests, i)
 }
 
 pub open spec fn acquired_leases_v1(
@@ -388,6 +391,27 @@ pub proof fn read_count_local_dominance_v1(
     }
 }
 
+#[verifier::spinoff_prover]
+pub proof fn acquire_prefix_extend_v1(before: ReadContentsV1, requests: Seq<AllocationReadV1>, index: nat)
+    requires acquire_prefix_ready_v1(before, requests, index), index < requests.len(),
+        index < before.free_reads@.len(),
+        before.free_reads@[before.free_reads@.len() - 1 - index] < before.leases@.len(),
+        before.leases@[before.free_reads@[before.free_reads@.len() - 1 - index] as int].is_none(),
+        requests[index as int].allocation.slot < before.readers@.len(),
+        before.readers@[requests[index as int].allocation.slot as int]
+            + read_slot_count_v1(requests.take((index + 1) as int), requests[index as int].allocation.slot) <= usize::MAX,
+        before.readers@[requests[index as int].allocation.slot as int]
+            + read_slot_count_v1(requests.take((index + 1) as int), requests[index as int].allocation.slot) <= before.leases@.len(),
+    ensures acquire_prefix_ready_v1(before, requests, index + 1),
+{
+    assert forall|i: int| #![trigger requests[i]] #![trigger acquire_prefix_entry_v1(before, requests, i)] 0 <= i < index + 1
+        implies acquire_prefix_entry_v1(before, requests, i) by {
+        if i < index { assert(acquire_prefix_entry_v1(before, requests, i)); }
+        else { assert(i == index); }
+    }
+}
+
+#[verifier::spinoff_prover]
 pub proof fn acquire_scan_commit_ready_v1(
     before: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>, output: Seq<Option<ReadReferenceV1>>,
     index: nat, state: ReadScanV1,
@@ -415,7 +439,7 @@ pub proof fn acquire_scan_commit_ready_v1(
         assert(canonical_prefix_v1(keys, index + 1, next));
         assert(read_slot_count_v1(requests.take((index + 1) as int), request.allocation.slot) <= next.group);
         assert(before.readers@[request.allocation.slot as int] + next.group <= before.leases@.len());
-        assert(acquire_prefix_ready_v1(before, requests, index + 1));
+        acquire_prefix_extend_v1(before, requests, index);
         acquire_scan_commit_ready_v1(before, consumer, requests, output, index + 1, next);
     }
 }
