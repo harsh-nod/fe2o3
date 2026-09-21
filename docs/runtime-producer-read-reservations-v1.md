@@ -62,6 +62,8 @@ atomic admission/release, shared capacity, stable-reader coexistence, writer and
 allocation slot reuse, incarnation exhaustion, unchanged storage identity, and
 whole-roster mutation/disposal exclusion when a later member is protected.
 These are executable tests, not a formal refinement or hardware qualification.
+The [signed-source CPU qualification](evidence/dev-producer-read-model-cpu-2026-09-21/README.md)
+records the GNU/musl model, doctest and runtime regression results.
 
 Before enabling runtime admission, the remaining work is:
 

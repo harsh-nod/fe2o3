@@ -649,6 +649,21 @@ wall-clock bound. No HIP/HSA comparator or performance gain was measured here,
 and existing abstract R74 proofs are not executable Rust/native refinement.
 This evidence does not close G2, G3, G6 or G7 as complete gates.
 
+## Producer Read Model Candidate
+
+Signed source `cba869de8794e6baf0d0e183caf740f6d5dbc1f3` adds a bounded
+[producer-read reservation model](runtime-producer-read-reservations-v1.md).
+It preserves consumer custody across producer settlement without migrating
+reservations or scanning consumers, and shares the existing active-read budget.
+The [CPU packet](evidence/dev-producer-read-model-cpu-2026-09-21/README.md)
+records GNU/musl model, doctest and runtime regression qualification.
+
+This candidate is not wired into Context or a backend and is not in the formal
+proof inventory. Pending journaled producer inputs still return `ContextReserved`.
+Exact settlement composition, Context dependency authentication and result
+custody, consumer-driven dependency progress, and native qualification remain
+required. No parity gate or performance claim is closed by these CPU tests.
+
 ## Required Gates
 
 ### G1: API and ownership
