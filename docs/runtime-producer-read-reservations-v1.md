@@ -1,8 +1,8 @@
 # Producer-Bound Read Reservations V1
 
 Status: concrete Rust model candidate. Not yet wired into RuntimeContext, Worker
-transport or a native backend. Conditional custody proofs are registered in the
-Verus campaign; full wrapper lifecycle and Rust/native refinement remain open.
+transport or a native backend. Conditional custody and logical lifecycle proofs
+are registered in the Verus campaign; Rust/native refinement remains open.
 Pending journaled producer-to-consumer requests still return `ContextReserved`.
 
 ## Ownership Model
@@ -85,20 +85,42 @@ The [signed-source custody qualification](evidence/dev-producer-read-custody-ver
 records the accepted dedicated campaign and the full registered proof run,
 including all 691 standalone negative files and portable evidence validation.
 
-These are conditional logical-content proofs, not whole-wrapper verification.
+`context_producer_read_lifecycle_v1.rs` adds 73 obligations to the 180 inherited
+obligations. Executable logical status, lookup, capacity and ordered preflight
+functions match their exact decisions, including error precedence. Acquire and
+release commit loops implement exact contents relations; rejection frames the
+whole logical state and caller output. Separate wrappers prove arena, count,
+incarnation and shared-budget preservation. Stable-reader wrapper operations
+preserve the producer arena and shared limit. Combined-count arithmetic is
+bounded, and the ordered unread guard rejects a retained reservation.
+
+Nonempty executable witnesses cover late-item acquire/release rejection,
+two-item round trips, release-capacity rejection, slot reuse and stale references,
+and release in all four legitimate producer statuses. Settlement witnesses
+instantiate the conditional journal relations; they do not refine production
+settlement preflight. Release leaves the journal unchanged in every status.
+The dedicated checker runs whole-crate positives before and after 19 executable
+body mutations, with strict single-postcondition diagnostics. The exact custody
+module header is authenticated separately; arbitrary imports remain forbidden.
+
+These are conditional logical-execution proofs, not whole-wrapper verification.
 Complete retained-chain coverage is a premise whose reachability across all
 base-journal transitions remains to be established. The custody predicate does
 not yet compose exact `reserved_count` or issuance history. Physical Vec storage,
-fallible allocation, exact error precedence, scratch/preflight execution,
-panic/unwind behavior, and production Rust correspondence remain separate.
+fallible allocation, settlement scratch/preflight execution, panic/unwind behavior,
+and production Rust correspondence remain separate. Release bounds use an observed
+capacity argument, not a proved binding to Rust `Vec::capacity()`. The acquisition
+induction advances a hypothetical incarnation prefix; the concrete logical loop
+updates its watermark once at the end. It does not establish invariants at every
+intermediate machine state or atomicity under panic/unwind.
 
 Before enabling runtime admission, the remaining work is:
 
-1. Prove invariant preservation across outer and wrapped stable admission/release,
-   canonical atomic commit and unchanged-on-error output, exact count bounds for
-   concrete arithmetic, and base-custody reachability/issuance composition. Prove
-   Rust correspondence and concrete mutation guards before treating the logical
-   settlement theorem as full-wrapper refinement.
+1. Establish base-custody reachability/issuance composition and production Rust
+   correspondence for the proved logical admission/release and unread guards.
+   Bind physical capacity and fallible allocation to those relations, and refine
+   settlement preflight before treating the logical lifecycle as full-wrapper
+   refinement.
 2. Retain an exact Context event-to-producer writer/member binding and a distinct
    producer-reader root, with preallocated capacity before backend entry.
    Include it in Context cleanup, generated-operation exclusion and usage.

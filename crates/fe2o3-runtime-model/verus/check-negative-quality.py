@@ -19,17 +19,17 @@ EXPECTED_CHECK_NEGATIVE_FUNCTION_SHA256 = (
 EXPECTED_RUNNER_FUNCTION_SHA256 = {
     "read_pin": "dd0f063d2e13126778cfec4fc6bd9a89af38a0b55ed45491e59eff830a3448aa",
     "check_digest": "1b1af7d88401a6baa244c63b3edd41fd15b07814e02f3d1bfb4b1841c33819e0",
-    "check_sources": "19e72ed3823b7815f08f2b8a73c9933b3e34be275fc3ca6a7c51d3afed3d03ad",
+    "check_sources": "0adc3954823a9ca0fd6568e964172d3843642f2744f17c06d2c1e0b96155aaf1",
     "run_verus": "a22ae6cb1d34ec0ea6b402ecf96008773cefcc620e511aae7bc3d6e495b5cf66",
     "check_positive": "2f353f8881c8def07ede3a251bb64de9148b92c802eda65b768a64172cd65d92",
     "seal_authority": "3e49725d7555f6816455cac2080aae192a8ad6210f62f5be5d8f19ac395d227a",
 }
-EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1535
+EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1538
 EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENTS_SHA256 = (
-    "64a52af9db3cf3fab9e5e6b197b981f81f1f7a95786827cce530b9f11f3fb95f"
+    "4b4b874792c2fe1c632139f61f24ae76355f5d27281d9c70eb66addc7e1b732f"
 )
 EXPECTED_RUNNER_SHA256 = (
-    "5309bcf6be34c326602feaa4af261ef4911a23290e36b29eb005f70aa594feac"
+    "96f59e31240bbc1185b0fba77bec759990cada16b3c35d6a729fc357864afd43"
 )
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 IDENTIFIER = r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*"
@@ -86,7 +86,8 @@ RUNNER_TOOL_BINDING_BLOCK = (
     'read_commit_checker="$script_dir/check-read-commit.py"',
     'read_invariant_checker="$script_dir/check-read-invariant.py"',
     'producer_read_invariant_checker="$script_dir/check-producer-read-invariant.py"',
-    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker read_invariant_checker producer_read_invariant_checker",
+    'producer_read_lifecycle_checker="$script_dir/check-producer-read-lifecycle.py"',
+    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker read_invariant_checker producer_read_invariant_checker producer_read_lifecycle_checker",
 )
 RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$journal_issuance_checker" --self-test "$journal_issuance_proof"',
@@ -123,6 +124,13 @@ RUNNER_PRODUCER_READ_INVARIANT_CAMPAIGN_BLOCK = (
     '    /usr/bin/python3 -I "$producer_read_invariant_checker" \\',
     '    "$producer_read_invariant_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/producer-read-invariant"',
 )
+RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK = (
+    '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$producer_read_lifecycle_checker" --self-test "$producer_read_lifecycle_proof"',
+    '/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \\',
+    '    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \\',
+    '    /usr/bin/python3 -I "$producer_read_lifecycle_checker" \\',
+    '    "$producer_read_lifecycle_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/producer-read-lifecycle"',
+)
 RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" --self-test \\',
     '    "$negative_quality_reject_fixture" \\',
@@ -135,6 +143,7 @@ RUNNER_SOURCE_CHECKER_INVOCATION = (
 )
 RUNNER_TOOL_DIGEST_LINES = (
     '    check_digest "$expected_producer_read_invariant_checker" "$producer_read_invariant_checker"',
+    '    check_digest "$expected_producer_read_lifecycle_checker" "$producer_read_lifecycle_checker"',
     '    check_digest "$expected_read_invariant_checker" "$read_invariant_checker"',
     '    check_digest "$expected_read_commit_checker" "$read_commit_checker"',
     '    check_digest "$expected_read_preflight_checker" "$read_preflight_checker"',
@@ -148,6 +157,7 @@ RUNNER_TOOL_DIGEST_LINES = (
 )
 RUNNER_TOOL_NAMES = (
     "producer_read_invariant_checker",
+    "producer_read_lifecycle_checker",
     "read_invariant_checker",
     "read_commit_checker",
     "read_preflight_checker",
@@ -983,6 +993,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
     commit_start = exact_block_start(lines, RUNNER_READ_COMMIT_CAMPAIGN_BLOCK, "reader commit campaign")
     invariant_start = exact_block_start(lines, RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK, "reader invariant campaign")
     producer_start = exact_block_start(lines, RUNNER_PRODUCER_READ_INVARIANT_CAMPAIGN_BLOCK, "producer read invariant campaign")
+    lifecycle_start = exact_block_start(lines, RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK, "producer read lifecycle campaign")
     if not environment_start < root_start < tool_start < invocation_start:
         raise QualityError(
             "runner environment, root, tool, and invocation blocks are out of order",
@@ -1014,6 +1025,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
     allowed_tool_lines.update(range(commit_start, commit_start + len(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK)))
     allowed_tool_lines.update(range(invariant_start, invariant_start + len(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK)))
     allowed_tool_lines.update(range(producer_start, producer_start + len(RUNNER_PRODUCER_READ_INVARIANT_CAMPAIGN_BLOCK)))
+    allowed_tool_lines.update(range(lifecycle_start, lifecycle_start + len(RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK)))
     for digest_line in RUNNER_TOOL_DIGEST_LINES:
         matches = [index for index, line in enumerate(lines) if line == digest_line]
         if len(matches) != 1:
@@ -1123,6 +1135,10 @@ def audit_runner_root_bindings(runner_source: str) -> None:
             and quality_audits[0] < producer_start < quality_audits[-1] < closure_invocations[-1]):
         raise QualityError("producer invariant campaign must run after reader invariant and before final source/tool checks",
                            code="runner.producer_read_invariant_campaign.order")
+    if not (producer_start < lifecycle_start < source_checks[-2]
+            and quality_audits[0] < lifecycle_start < quality_audits[-1] < closure_invocations[-1]):
+        raise QualityError("producer lifecycle campaign must run after producer invariant and before final source/tool checks",
+                           code="runner.producer_read_lifecycle_campaign.order")
     if late_block_starts != sorted(late_block_starts):
         raise QualityError(
             "runner late-authority binding blocks are out of order",
@@ -1557,6 +1573,7 @@ def build_inventory_fixture(root: Path) -> tuple[Path, Path]:
                 *RUNNER_READ_COMMIT_CAMPAIGN_BLOCK,
                 *RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK,
                 *RUNNER_PRODUCER_READ_INVARIANT_CAMPAIGN_BLOCK,
+                *RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK,
                 "check_sources",
                 RUNNER_NEGATIVE_QUALITY_AUDIT,
                 "check_sources",
@@ -1658,6 +1675,34 @@ def inventory_self_test() -> None:
             lambda _d, r: r.write_text(r.read_text().replace(
                 "\n".join(RUNNER_PRODUCER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n", "")
                 + "\n".join(RUNNER_PRODUCER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n"),
+        ),
+        (
+            "missing producer lifecycle campaign",
+            lambda _d, r: replace_runner(r, "\n".join(RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK) + "\n", ""),
+        ),
+        (
+            "duplicate producer lifecycle campaign",
+            lambda _d, r: r.write_text(r.read_text() + "\n".join(RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK) + "\n"),
+        ),
+        (
+            "changed producer lifecycle arguments",
+            lambda _d, r: replace_runner(r, RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK[-1].replace('"$timeout_seconds"', '"300"')),
+        ),
+        (
+            "masked producer lifecycle failure",
+            lambda _d, r: replace_runner(r, RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK[-1] + " || true"),
+        ),
+        (
+            "producer lifecycle tool rebound",
+            lambda _d, r: r.write_text(r.read_text() + 'producer_read_lifecycle_checker=/tmp/untrusted\n'),
+        ),
+        (
+            "relocated producer lifecycle campaign",
+            lambda _d, r: r.write_text(r.read_text().replace(
+                "\n".join(RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK) + "\n", "")
+                + "\n".join(RUNNER_PRODUCER_READ_LIFECYCLE_CAMPAIGN_BLOCK) + "\n"),
         ),
         (
             "missing invariant campaign",
@@ -2316,6 +2361,10 @@ def inventory_self_test() -> None:
            "changed producer invariant arguments", "masked producer invariant failure")
     expect("runner.tool_wiring.unparsed", "producer invariant tool rebound")
     expect("runner.producer_read_invariant_campaign.order", "relocated producer invariant campaign")
+    expect("runner.block.producer_read_lifecycle_campaign.count", "missing producer lifecycle campaign", "duplicate producer lifecycle campaign",
+           "changed producer lifecycle arguments", "masked producer lifecycle failure")
+    expect("runner.tool_wiring.unparsed", "producer lifecycle tool rebound")
+    expect("runner.producer_read_lifecycle_campaign.order", "relocated producer lifecycle campaign")
     expect("runner.block.reader_invariant_campaign.count", "missing invariant campaign", "duplicate invariant campaign",
            "changed invariant arguments", "masked invariant failure")
     expect("runner.tool_wiring.unparsed", "invariant tool rebound")

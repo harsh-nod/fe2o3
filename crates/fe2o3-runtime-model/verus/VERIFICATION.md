@@ -17,17 +17,34 @@ other obligations verified; compiler errors, partial runs, other diagnostics and
 timeouts are not acceptance. All four inherited sources and their checker chain
 are pinned. Captured pinned bytes determine the generated solver inputs.
 The standalone negative-file roster remains 691; preseal authority bindings are
-1535. The twelve generated mutations are not standalone negative files or
+1538. The twelve generated mutations are not standalone negative files or
 transition-implementation mutation proofs.
 The [signed-source qualification](../../../docs/evidence/dev-producer-read-custody-verus-2026-09-21/README.md)
 records the complete registered run and an independently retained dedicated
 campaign, with exact inputs, receipts and portable offline evidence validation.
 
+`context_producer_read_lifecycle_v1.rs` adds 73 obligations to those 180 inherited
+obligations. It proves exact executable logical status, preflight and error
+precedence, acquire/release commit contents, unchanged-on-error state/output,
+arena/count/incarnation/shared-budget preservation, stable-wrapper composition,
+combined-count arithmetic and the unread guard. Nonempty witnesses exercise
+late-item rejection, multi-item round trips, insufficient observed capacity,
+reuse/stale references, and release after all four legitimate producer statuses.
+
+`check-producer-read-lifecycle.py` authenticates the literal custody module header
+and recursively audits all five inherited sources without widening the global
+import policy. Whole-crate positives must report 253 verified obligations. Each
+of 19 executable-body mutations must report exactly its intended postcondition
+failure with 252 other obligations verified. No synthetic subject is appended.
+Counts overlap across importing campaigns and must not be summed.
+
 The strong chain graph is a reachable-state premise, not a whole-arena check
 performed by Rust settlement. Base issuance/history and exact reserved-count
-composition, acquisition/release preservation, arithmetic bounds for concrete
-counts, physical storage, precise errors and executable Rust/native refinement
-remain open. The positive-count lemma does not prove concrete mutator rejection.
+composition, physical storage, fallible allocation, panic/unwind behavior and
+production Rust/native refinement remain open. The unread guard is proved for
+the logical executable model, not production mutator integration. Observed release
+capacity is not yet bound to Rust Vec capacity; intermediate incarnation induction
+states are not claims about concrete loop states.
 See `docs/runtime-producer-read-reservations-v1.md` for the full integration gates.
 
 ## R74 Ordered Peer Copy
