@@ -1,0 +1,13 @@
+{
+  "development_checks_passed": true,
+  "positive_obligations": 382,
+  "inherited_obligations": 367,
+  "negative_cases": 15,
+  "shared_retained_admission_and_unknown": true,
+  "logical_settlement_composition": true,
+  "issued_custody_preservation": true,
+  "repeated_unknown_identity": true,
+  "allocator_or_machine_refinement": false,
+  "full_runtime_refinement": false,
+  "native_or_performance_acceptance": false
+}

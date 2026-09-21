@@ -219,14 +219,33 @@ site and wrapper postcondition. Its 360 inherited obligations overlap the preced
 packet. This closes one scalar source-correspondence slice, not the full Rust
 settlement gate: the live callsite is authenticated and tested, but the standard
 library's capacity implementation, allocator, unwind and remaining production
-header/chain/scratch/staging/commit bodies are not refined by this proof.
+header/chain/scratch/staging/commit bodies are not refined by that packet.
 
-These are logical-execution proofs with invariant-conditional custody composition,
+Retained writer/header checks, exact allocation lookup, member validation, bounded
+chain traversal and Pending-to-Unknown execution now use the same executable
+source in ordinary Rust and Verus through `retained_bodies.rs`. Raw proofs have no
+journal-validity or global-idle premise and establish exact admission results,
+unchanged-on-error modeled contents and content-identical repeated Unknown marking.
+Issued wrappers preserve history and reader custody under their explicit invariant
+precondition. Constructor witnesses cover empty and two-member writers with empty
+reader arenas. Settlement composition uses the new shared admission path, but its
+scratch scan, staging and commit remain separately implemented production/model
+bodies. The [shared retained development packet](evidence/dev-shared-retained-2026-09-21/README.md)
+retains two 382/0 whole-crate positives, fifteen 381/1 executable controls,
+833 unit tests and 27 doctests. Thirteen controls fail exact postconditions;
+two fail exact supporting assertions. Its 367 inherited obligations overlap prior
+packets. The pinned identity syntax adapter supplies no executable loop annotations
+in Rust; the Verus invocation supplies only fixed invariant/decreases clauses.
+Source-consistent non-exit diagnostic spans and substituted adapters are rejected
+by the evidence checker. Physical pointer/capacity preservation remains CPU-test
+evidence, not a theorem from modeled-content equality.
+
+These are scoped logical/shared-body proofs with invariant-conditional custody composition,
 not whole-wrapper verification.
 Complete retained-chain coverage is preserved by logical enrollment and Begin;
 settlement/issuance composition is now derived from the executable logical commit.
 Physical Vec storage, fallible allocation, panic/unwind behavior and production
-Rust correspondence remain separate. Release bounds use an observed
+Rust correspondence for the remaining bodies remain separate. Release bounds use an observed
 capacity argument, not a proved binding to Rust `Vec::capacity()`. The acquisition
 induction advances a hypothetical incarnation prefix; the concrete logical loop
 updates its watermark once at the end. It does not establish invariants at every
@@ -236,11 +255,13 @@ Before enabling runtime admission, the remaining work is:
 
 1. Finish production Rust correspondence for enrollment, Begin, settlement,
    Unknown marking and the proved logical admission/release and unread guards.
-   The shared settlement scalar guard is complete; retained-header/chain admission
-   and the Pending-to-Unknown transition are the next shared-source candidates.
-   Bind physical capacity and fallible allocation to those relations and specify
-   normal/unwind semantics before treating the logical lifecycle as full-wrapper
-   refinement.
+   Shared executable source now covers the settlement scalar return guard and
+   retained-chain admission/Unknown transition. Remaining bodies include
+   construction/enrollment and sorting/search, Begin, settlement scratch scanning,
+   staging/commit, stable/producer reader admission/release and unread guards.
+   Complete type/view correspondence, physical storage and fallible-allocation
+   contracts, and explicit normal/unwind semantics remain open before treating
+   the logical lifecycle as full-wrapper refinement.
 2. Retain an exact Context event-to-producer writer/member binding and a distinct
    producer-reader root, with preallocated capacity before backend entry.
    Include it in Context cleanup, generated-operation exclusion and usage.

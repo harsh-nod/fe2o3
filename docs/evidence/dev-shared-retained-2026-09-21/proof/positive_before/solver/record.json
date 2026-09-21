@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--foreground",
+    "--signal=TERM",
+    "--kill-after=5",
+    "180",
+    "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+    "--crate-type",
+    "lib",
+    "--triggers-mode",
+    "silent",
+    "--no-cheating",
+    "--output-json",
+    "--error-format=json",
+    "--num-threads",
+    "4",
+    "/home/harsh/.codex-tmp/fe2o3-shared-retained-20260921-proof-final/positive_before/verus/context_shared_retained_v1.rs"
+  ],
+  "started_ns": 1790016990341826887,
+  "process_group": 819939,
+  "group_absent": true,
+  "finished_ns": 1790017105822633198,
+  "status": 0
+}
