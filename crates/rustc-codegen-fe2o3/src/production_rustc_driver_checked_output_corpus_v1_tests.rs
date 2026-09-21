@@ -325,6 +325,10 @@ fn run_case_with_simulation(
             .env(progress::CHILD_PROGRESS, &callback_progress)
             .args(["--exact", CHILD_TEST, "--ignored", "--nocapture"]);
         progress::clear_inherited_jobserver(&mut command);
+        const CUSTODY_TRACE: &str = "FE2O3_TRACE_RANKED_CUSTODY_V1";
+        if let Some(value) = env::var_os(CUSTODY_TRACE) {
+            command.env(CUSTODY_TRACE, value);
+        }
         simulation::configure_child(&mut command, simulation_case);
         snapshots::configure_child(&mut command, &fixture.fixture_id);
         eprintln!(
@@ -492,6 +496,37 @@ fn ordinary_scalar_gemm_requires_checked_policy4_output() {
     assert_eq!(runtime.writes, 0);
     assert!(runtime.kernels >= 1);
     assert_eq!(runtime.v4_policy3_receipts, runtime.kernels);
+}
+
+#[test]
+#[ignore = "focused ordinary-source P4 diagnostic; requires pinned rust-src and dependencies, not full-corpus qualification"]
+fn ordinary_scalar_attention_requires_checked_policy4_output() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let manifest = std::fs::read(workspace.join(MANIFEST)).unwrap();
+    let fixtures = fixtures(&manifest).expect("complete fixed-P4 source contract");
+    let fixture = fixtures
+        .iter()
+        .find(|fixture| fixture.fixture_id == "gfx950-gpt-oss-scalar-attention")
+        .expect("declared scalar-attention fixture");
+    assert_eq!(fixture.target, "gfx950");
+    let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-policy4-scalar-attention");
+    let report = run_case(
+        &workspace,
+        fixture,
+        &scratch.path().join("case"),
+        &scratch.path().join("dependencies"),
+    );
+    eprintln!(
+        "P4 FOCUSED REPORT\n{}",
+        serde_json::to_string_pretty(&report).unwrap()
+    );
+    assert!(
+        report.passed(),
+        "ordinary scalar attention remains unqualified"
+    );
 }
 
 #[test]
