@@ -299,7 +299,22 @@ their chains. Historical correspondence explicitly factors out the old no-write
 identity conditions instead of inferring opaque Vec equality from equal views.
 Qualification records two 472/0 whole-crate positives, seven executable mutation
 controls and two identity-specification controls, 859 unit tests and 27 doctests.
-Actual-typed settlement mutation and full-wrapper correspondence remain open.
+That packet does not cover actual-typed settlement or full-wrapper correspondence.
+
+The [production settlement packet](evidence/dev-journal-settlement-execution-2026-09-21/README.md)
+now instantiates scalar return admission, scratch scanning/staging and ordered
+commit on actual production declarations. The scalar storage declaration is shared
+as well. Raw contracts preserve aliases, repeated member returns, dirty tails,
+count-zero behavior and current-lineage NoEffect semantics without adding valid-state
+premises. Exact historical bridges retain the opaque identity factors separately
+from sequence equality. The proved composition uses explicit reference comparisons
+and supplied capacity observations, not the public wrapper's derived equality or
+physical capacity calls. Qualification records two 478/0 whole-crate positives,
+twelve executable and two identity-specification controls, 861 unit tests and
+27 doctests. A contract-preserving decomposition of the inherited Begin-custody
+proof resolves its default resource-limit failure; old and current sources are
+authenticated without changing earlier evidence pins. Unused historical wrapper
+layers are not included in this root, so obligation counts are not additive.
 
 These are scoped logical/shared-body proofs with invariant-conditional custody composition,
 not whole-wrapper verification.
@@ -321,9 +336,9 @@ Before enabling runtime admission, the remaining work is:
    Remaining bodies include construction/enrollment and sorting/search, Begin,
    stable/producer reader admission/release and unread guards.
    Core journal declarations and content views are now shared and related, but
-   only the explicit comparisons, retained admission and Unknown mutation have
-   actual-typed operation correspondence so far. Actual-typed settlement mutation,
-   remaining type/trait/wrapper correspondence, physical storage and fallible-allocation
+   explicit comparisons, retained admission, Unknown mutation and the settlement
+   return/scratch/commit bodies now have actual-typed operation correspondence.
+   Remaining type/trait/wrapper correspondence, physical storage and fallible-allocation
    contracts, and explicit normal/unwind semantics remain open before treating
    the logical lifecycle as full-wrapper refinement.
 2. Retain an exact Context event-to-producer writer/member binding and a distinct
