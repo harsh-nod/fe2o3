@@ -1,0 +1,12 @@
+{
+  "complete_logical_enrollment": true,
+  "constructor_enroll_register_witness": true,
+  "constructor_to_pending_reachability": false,
+  "native_execution": false,
+  "performance_acceptance": false,
+  "producer_custody_and_issuance_preserved": true,
+  "production_integration": false,
+  "qualified": true,
+  "rust_sorting_search_refined": false,
+  "source_commit": "97ea2f97a2473bb8ebc1944a8efff18866d3b72a"
+}

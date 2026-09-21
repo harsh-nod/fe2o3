@@ -78,6 +78,10 @@ witness exercises nonempty enrollment, replay, a lower unused key and registrati
 The standalone checker requires 263/0 positives and 21 exact 262/1 body controls.
 Production still uses standard-library sorting/search; their correspondence and
 integration remain open. See `docs/runtime-context-version-enrollment-v1.md`.
+The [signed-source enrollment qualification](../../../docs/evidence/dev-enrollment-execution-verus-2026-09-21/README.md)
+records both 263/0 positives and all 21 exact 262/1 controls, with portable offline
+validation and 26 adverse-evidence tests. It does not rerun the shared runner or
+claim production/native acceptance.
 
 The strong chain graph is a reachable-state premise, not a whole-arena check
 performed by Rust settlement. Begin-write and settlement composition

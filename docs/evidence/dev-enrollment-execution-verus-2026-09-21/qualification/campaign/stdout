@@ -1,0 +1,33 @@
+positive_before: PASS
+foreign_precedence: PASS
+allocation_error_identity: PASS
+shape_error_identity: PASS
+empty_batch_precedence: PASS
+rejection_output_mutation: PASS
+retained_free_prefix: PASS
+writer_watermark_frame: PASS
+key_comparison: PASS
+key_search_full_identity: PASS
+slot_search_result: PASS
+live_key_replay: PASS
+selected_vacancy: PASS
+selected_duplicates: PASS
+retained_overlap: PASS
+plan_coordinate_loss: PASS
+output_restoration: PASS
+sorted_output_order: PASS
+execution_success_result: PASS
+producer_counts: PASS
+producer_incarnation: PASS
+stable_incarnation: PASS
+positive_after: PASS
+{
+  "qualified": true,
+  "scope": "complete logical enrollment with producer custody and issuance",
+  "positive_obligations": 263,
+  "inherited_obligations": 201,
+  "negative_cases": 21,
+  "full_logical_batch_enrollment_verified": true,
+  "rust_sorting_search_refined": false,
+  "native_or_performance_acceptance": false
+}

@@ -1,0 +1,10 @@
+{
+  "qualified": true,
+  "scope": "complete logical enrollment with producer custody and issuance",
+  "positive_obligations": 263,
+  "inherited_obligations": 201,
+  "negative_cases": 21,
+  "full_logical_batch_enrollment_verified": true,
+  "rust_sorting_search_refined": false,
+  "native_or_performance_acceptance": false
+}

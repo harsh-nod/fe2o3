@@ -119,9 +119,16 @@ records the 201 whole-crate obligations (181 inherited and 20 new), all 13
 executable mutation controls, and the complete registered runner, including the
 updated inherited proofs and all 691 standalone negative files.
 
+The [signed-source enrollment qualification](evidence/dev-enrollment-execution-verus-2026-09-21/README.md)
+connects complete logical batch admission, sorting/search, rollback and commit to
+producer custody and issuance preservation: two 263/0 positives and 21 exact
+262/1 controls. Its constructor/enroll/register witness reaches Reserved, not
+Pending. Production still uses the standard-library sorting/search operations.
+
 These are conditional logical-execution proofs, not whole-wrapper verification.
-Complete retained-chain coverage is a premise whose reachability across enrollment,
-begin-write and the remaining base-journal transitions still needs to be established.
+Complete retained-chain coverage is preserved by logical enrollment, but its
+reachability through begin-write and the remaining base-journal transitions
+still needs to be established.
 Physical Vec storage,
 fallible allocation, settlement scratch/preflight execution, panic/unwind behavior,
 and production Rust correspondence remain separate. Release bounds use an observed
@@ -132,9 +139,9 @@ intermediate machine state or atomicity under panic/unwind.
 
 Before enabling runtime admission, the remaining work is:
 
-1. Finish base-custody reachability/issuance composition across enrollment,
-   begin-write and settlement, and establish production Rust correspondence for
-   the proved logical admission/release and unread guards.
+1. Finish base-custody reachability/issuance composition across begin-write and
+   settlement. Establish production Rust correspondence for enrollment and the
+   proved logical admission/release and unread guards.
    Bind physical capacity and fallible allocation to those relations, and refine
    settlement preflight before treating the logical lifecycle as full-wrapper
    refinement.

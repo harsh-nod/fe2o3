@@ -1,0 +1,28 @@
+{
+  "command": [
+    "git",
+    "rev-parse",
+    "HEAD"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup",
+    "USER": "harsh",
+    "VERUS": "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789994286997404245,
+  "group_absent": true,
+  "pid": 2486837,
+  "started_ns": 1789994286990746056,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "f41c66589bfb73995d0c096b3a7c3e95d1e26bf6390d05c2a926e0c7ac6f595e",
+  "timeout_seconds": 30
+}

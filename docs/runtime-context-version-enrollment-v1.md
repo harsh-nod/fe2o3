@@ -104,8 +104,11 @@ The local classifier self-test rejects 43 adverse results, and the source-audit
 self-test rejects 15 adverse sources in addition to inherited self-tests.
 This remains a standalone campaign, not part of the shared verification runner.
 
-Qualification evidence for the new candidate is published separately when its
-signed-source campaign completes. Development solver runs are not that evidence.
+The [signed-source execution qualification](evidence/dev-enrollment-execution-verus-2026-09-21/README.md)
+records both 263/0 positives and all 21 exact 262/1 controls on clean signed source
+`97ea2f97a2473bb8ebc1944a8efff18866d3b72a`. Its portable validator reconstructs
+source and mutations from Git, checks raw receipts and the packet manifest, and
+passes 26 adverse-evidence tests. Development solver probes are excluded.
 
 ### Historical Prerequisites
 

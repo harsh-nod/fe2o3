@@ -1,0 +1,163 @@
+[
+  {
+    "case": "positive_before",
+    "exit": 0,
+    "verified": 263,
+    "errors": 0,
+    "seconds": 62.73234076
+  },
+  {
+    "case": "foreign_precedence",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 55.420417834
+  },
+  {
+    "case": "allocation_error_identity",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 57.652520946
+  },
+  {
+    "case": "shape_error_identity",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 55.173356303
+  },
+  {
+    "case": "empty_batch_precedence",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 52.405952117
+  },
+  {
+    "case": "rejection_output_mutation",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 55.210087053
+  },
+  {
+    "case": "retained_free_prefix",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 55.866037531
+  },
+  {
+    "case": "writer_watermark_frame",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 61.499595448
+  },
+  {
+    "case": "key_comparison",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 56.288251073
+  },
+  {
+    "case": "key_search_full_identity",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 56.234336372
+  },
+  {
+    "case": "slot_search_result",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 57.424027104
+  },
+  {
+    "case": "live_key_replay",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 58.408623667
+  },
+  {
+    "case": "selected_vacancy",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 65.760576118
+  },
+  {
+    "case": "selected_duplicates",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 62.347548537
+  },
+  {
+    "case": "retained_overlap",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 63.287422235
+  },
+  {
+    "case": "plan_coordinate_loss",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 62.743627516
+  },
+  {
+    "case": "output_restoration",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 61.26006901
+  },
+  {
+    "case": "sorted_output_order",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 62.599210137
+  },
+  {
+    "case": "execution_success_result",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 62.535961836
+  },
+  {
+    "case": "producer_counts",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 54.428257341
+  },
+  {
+    "case": "producer_incarnation",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 61.893862603
+  },
+  {
+    "case": "stable_incarnation",
+    "exit": 1,
+    "verified": 262,
+    "errors": 1,
+    "seconds": 64.026124814
+  },
+  {
+    "case": "positive_after",
+    "exit": 0,
+    "verified": 263,
+    "errors": 0,
+    "seconds": 63.02451723
+  }
+]

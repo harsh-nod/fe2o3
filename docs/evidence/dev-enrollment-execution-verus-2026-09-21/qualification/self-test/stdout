@@ -1,0 +1,8 @@
+PASS: enrollment diagnostic self-test (43 adverse results rejected)
+PASS: journal owned-process self-test (spawn/wait/post-reap interruption, timeout, spawn failure, success)
+PASS: reader self-test (21 mutations, 38 adverse diagnostics/sources rejected)
+PASS: commit self-test (15 reversible mutations, 10 additional adverse sources rejected)
+PASS: invariant self-test (16 reversible invariant mutations, 11 additional adverse sources rejected)
+PASS: producer invariant self-test (12 reversible invariant mutations, 15 additional adverse sources rejected)
+PASS: producer journal issuance self-test (13 executable mutations, 19 additional adverse sources rejected)
+PASS: enrollment self-test (21 executable mutations, 15 adverse sources rejected)

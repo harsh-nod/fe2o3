@@ -1,0 +1,30 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "crates/fe2o3-runtime-model/verus/check-journal-enrollment.py",
+    "--self-test"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup",
+    "USER": "harsh",
+    "VERUS": "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789994292383970938,
+  "group_absent": true,
+  "pid": 2486908,
+  "started_ns": 1789994287195788032,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "a66b318dacc3b94c40e172f0a85e00e79a71a858df2fa9a334a843eb991d5be1",
+  "timeout_seconds": 120
+}
