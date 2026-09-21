@@ -234,6 +234,24 @@ mod enabled {
     }
 
     #[test]
+    fn even_a_whole_list_ready_flush_is_not_a_whole_wait_capture() {
+        use crate::kfd_backend::xgmi_segments::Progress;
+        for progress in [Progress::Poll, Progress::Flush] {
+            for descriptors in [1, 8] {
+                let mut recorder = Recorder::new([71, 93], 1).unwrap();
+                let id = Identity {
+                    descriptors,
+                    ..identity(7)
+                };
+                assert!(!recorder.begin(Some(id), progress != Progress::Wait));
+                recorder.finish(id, Some(timing()));
+                assert!(!recorder.complete());
+                assert!(!recorder.begin(Some(identity(8)), false));
+            }
+        }
+    }
+
+    #[test]
     fn identity_mismatch_order_and_external_invalidation_are_sticky() {
         for candidate in [
             Identity {
@@ -406,7 +424,9 @@ mod enabled {
                     .unwrap()
         );
         assert!(
-            progress.find(".begin(identity, one_step)").unwrap()
+            progress
+                .find(".begin(identity, progress != Progress::Wait)")
+                .unwrap()
                 < progress.find("self.require_live()?").unwrap()
         );
         assert!(

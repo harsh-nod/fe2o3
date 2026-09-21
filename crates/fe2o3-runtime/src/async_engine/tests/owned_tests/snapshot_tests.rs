@@ -40,14 +40,22 @@ impl Harness {
     }
 
     fn new_with_peers(budget: usize, channel: usize, peer_devices: bool) -> Self {
+        Self::with_journal(budget, channel, peer_devices, false)
+    }
+
+    fn with_journal(budget: usize, channel: usize, peer_devices: bool, journal: bool) -> Self {
         let state = Arc::new(Mutex::new(MockState {
             peer_devices,
             ..MockState::default()
         }));
-        let mut context = RuntimeContextV1::open(MockBackend {
+        let backend = MockBackend {
             state: state.clone(),
-        })
-        .unwrap();
+        };
+        let mut context = if journal {
+            RuntimeContextV1::open_with_version_journal_v1(backend, 16, 8).unwrap()
+        } else {
+            RuntimeContextV1::open(backend).unwrap()
+        };
         let device = context.devices()[0].id();
         let stream = context.create_stream(device).unwrap();
         let module = context.load_module(device, &[1]).unwrap();

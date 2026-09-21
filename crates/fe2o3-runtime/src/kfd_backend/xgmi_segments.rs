@@ -17,6 +17,26 @@ pub(super) struct Sequence {
     cursor: OrderedPeerCopyCursorV1,
 }
 
+// Amortize full currentness boundaries without adding a GPU wait or a second ticket.
+const FLUSH_OBSERVATION_BUDGET: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Progress {
+    Poll,
+    Flush,
+    Wait,
+}
+
+impl Progress {
+    fn stop_after_completion(self, observations: usize, deadline: Instant) -> bool {
+        match self {
+            Self::Poll => true,
+            Self::Flush => observations >= FLUSH_OBSERVATION_BUDGET,
+            Self::Wait => Instant::now() >= deadline,
+        }
+    }
+}
+
 impl Sequence {
     pub(super) fn ever_published(&self) -> bool {
         self.cursor.ever_published()
@@ -93,7 +113,11 @@ fn execute<S: Scope>(
         sequence,
         custody,
         deadline,
-        one_step,
+        if one_step {
+            Progress::Poll
+        } else {
+            Progress::Wait
+        },
         &mut Timer::new(),
     )
 }
@@ -103,11 +127,13 @@ fn execute_profiled<S: Scope, const PROFILE: bool>(
     sequence: &mut Sequence,
     mut custody: Custody<S::Pair, S::Ticket>,
     deadline: Instant,
-    one_step: bool,
+    progress: Progress,
     timer: &mut Timer<PROFILE>,
 ) -> Execution<S::Pair, S::Ticket, S::Error> {
     step(&mut sequence.cursor, Action::Open);
+    let mut observations = 0;
     let (error, terminal) = loop {
+        observations += 1;
         let segment = sequence.segments[sequence.cursor.completed() as usize];
         let observation = match custody {
             Custody::Pair(pair) => {
@@ -129,8 +155,7 @@ fn execute_profiled<S: Scope, const PROFILE: bool>(
                 step(&mut sequence.cursor, Action::Complete { segment });
                 custody = Custody::Pair(pair);
                 if sequence.cursor.completed() == sequence.cursor.count()
-                    || one_step
-                    || Instant::now() >= deadline
+                    || progress.stop_after_completion(observations, deadline)
                 {
                     break (None, false);
                 }
@@ -347,7 +372,7 @@ fn open_and_execute<const PROFILE: bool>(
     sequence: &mut Sequence,
     custody: NativeCustody,
     deadline: Instant,
-    one_step: bool,
+    progress: Progress,
     timer: &mut Timer<PROFILE>,
 ) -> NativeAttempt {
     let (source, destination) = sessions;
@@ -366,7 +391,7 @@ fn open_and_execute<const PROFILE: bool>(
                     sequence,
                     custody,
                     deadline,
-                    one_step,
+                    progress,
                     timer,
                 );
                 timer.currentness = [Some(opening), closing];
@@ -381,7 +406,7 @@ fn open_and_execute<const PROFILE: bool>(
             sequence,
             custody,
             deadline,
-            one_step,
+            progress,
             timer,
         )),
         Err(error) => Err((error, custody)),
@@ -495,7 +520,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         &mut self,
         id: u64,
         deadline: Instant,
-        one_step: bool,
+        progress: Progress,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         #[cfg(feature = "hardware-diagnostic")]
         {
@@ -526,13 +551,13 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                     .xgmi_segments_diagnostic
                     .as_mut()
                     .unwrap()
-                    .begin(identity, one_step);
+                    .begin(identity, progress != Progress::Wait);
                 if armed {
                     let identity = identity.expect("armed identity");
                     let start = Instant::now();
                     let mut timer = Timer::<true>::new();
                     let result =
-                        self.progress_peer_segments_profiled(id, deadline, one_step, &mut timer);
+                        self.progress_peer_segments_profiled(id, deadline, progress, &mut timer);
                     let observed = if matches!(result, Ok(BackendPollV1::Succeeded)) {
                         timer.finish(start, identity.descriptors)
                     } else {
@@ -546,14 +571,14 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 }
             }
         }
-        self.progress_peer_segments_profiled(id, deadline, one_step, &mut Timer::<false>::new())
+        self.progress_peer_segments_profiled(id, deadline, progress, &mut Timer::<false>::new())
     }
 
     fn progress_peer_segments_profiled<const PROFILE: bool>(
         &mut self,
         id: u64,
         deadline: Instant,
-        one_step: bool,
+        progress: Progress,
         timer: &mut Timer<PROFILE>,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let admission_start = timer.start();
@@ -607,7 +632,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
         timer.end(Phase::Admission, admission_start);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_peer_segments(id, deadline, one_step, timer)
+            self.run_peer_segments(id, deadline, progress, timer)
         }));
         super::xgmi_batch::finish_native_attempt(result, &mut self.terminal)
     }
@@ -616,7 +641,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         &mut self,
         id: u64,
         deadline: Instant,
-        one_step: bool,
+        progress: Progress,
         timer: &mut Timer<PROFILE>,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let preparation_start = timer.start();
@@ -654,7 +679,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 sequence,
                 custody,
                 deadline,
-                one_step,
+                progress,
                 timer,
             )
         };

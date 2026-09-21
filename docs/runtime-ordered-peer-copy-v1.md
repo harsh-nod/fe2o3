@@ -53,6 +53,14 @@ resource release. Once submitted, existing whole-list settlement and native
 custody rules apply. Ordinary owner polling does not imply eligibility for the
 single-wait diagnostic capture mode below.
 
+With the version journal enabled, an input allocation with a pending writer
+still refuses a new reader with `ContextReserved`, even when the request names
+that producer's event. This happens before backend submission. The owner reports
+the error without retrying; it does not defer the request until the writer
+settles. Explicitly progressing the producer and submitting a fresh consumer
+with its completed event is supported. Pending versioned dataflow remains a gap,
+not a reason to disable the journal.
+
 Focused CPU regressions cover both methods' snapshot bounds/compaction, combined
 credit and rejection refunds, owner-side validation precedence, cancellation,
 observer-drop progress, descriptor order/duplicates and background owner-thread
@@ -78,10 +86,17 @@ measured latency gain. Existing relative waits retain their resolution point and
 one-observation-at-expiry behavior.
 
 `poll` performs at most one segment's publication/completion step. `flush`
-progresses the current eligible segment; later segments become eligible only
-after predecessor completion. First-segment publication is the logical
-operation's publication point. A failed step is reported as a quiescent flush
-error, not success. No background progress is introduced.
+observes at most eight eligible descriptors per invocation, advancing only after
+the predecessor has completed. An outstanding ticket at entry counts toward
+this budget. Every wait receives the same already-expired absolute deadline, so
+it observes readiness without waiting for GPU completion. Pending, failure, list
+completion, or budget exhaustion stops the loop. Full opening/closing currentness
+still brackets each invocation, and operational checks remain on every submit and
+wait. This is a bounded ready-prefix scan, not multi-packet publication or a
+wall-clock bound: host filesystem observations can block. First-segment
+publication is the logical operation's publication point. A failed step is
+reported as a quiescent flush error, not success. No background thread is added
+to the backend; the existing owner engine can drive this progress.
 
 `wait` uses one absolute deadline, including preparation, for the entire call.
 One initial publication/completion scan is allowed at expiry, matching the
@@ -115,6 +130,14 @@ Facade tests cover snapshot immutability, unequal envelopes, duplicates, ordered
 overlaps, canaries, source immutability, one writer/reader, event settlement,
 callbacks, prepublication cancellation, and partial-effect failure.
 
+Ready-prefix tests cover counts through 4096, the eight-observation boundary,
+retained-ticket accounting, repeated pending observations, exact deadline/pair
+forwarding, and submit/wait/close failures at each prefix position. Source-wiring
+checks distinguish poll, flush, and wait call sites. Diagnostic equivalence tests
+exercise the same flush sequence, while capture enrollment rejects flush even
+when it completes the whole list. Journal regressions require pending-producer
+reader refusal before backend entry and successful admission after settlement.
+
 The independent Verus artifact has ten parameterized obligations for arbitrary
 accepted counts and five expected-negative controls. It proves abstract cursor
 ordering, irreversible publication history, cancellation exclusion, no reopening
@@ -122,6 +145,8 @@ or publication after recovery, and successful-close gating under modeled observa
 successful-close flag records the observation supplied by the adapter. Invalid
 Rust transitions return `None`; the specification stutters on invalid actions.
 Rust/Verus correspondence is reviewed, not an executable refinement proof.
+The ready-prefix loop uses existing modeled single-ticket transitions; these
+obligations do not prove the eight-observation budget or nonwaiting Rust calls.
 
 This does not prove ticket authenticity, actual currentness observations, DMA
 effects, Rust/native refinement, hardware liveness, or performance. The native
@@ -159,6 +184,28 @@ continuation. Explicit shutdown, settled/delayed endpoint checks, and owned
 remote cleanup passed. The [source-bound correctness packet](evidence/dev-ordered-peer-copy-mi300x-2026-09-20/README.md)
 contains raw receipts, a byte-identical post-trial build and CPU replay, and an
 offline verifier. It is not native fault injection or performance evidence.
+
+### Owner-Engine Qualification Fixture
+
+`gfx942-runtime-xgmi-segments-owner-smoke` keeps the version journal enabled.
+It checks that a real pending producer-to-consumer dataflow request is refused
+without consumer submission or destination changes. It then explicitly progresses
+that producer and tests the supported completed-event handoff through the owner
+engine: pre-submission cancellation, timeout identity, dropped-observer progress,
+both copy directions, ordered overlaps/duplicates, canaries, unchanged sources,
+released metadata credit, and complete explicit shutdown. The receipt records
+`pending_dataflow=refused_before_submission`, not pending-dataflow support.
+`ordered_lists=2` counts successful lists; refused and cancelled requests are
+separate attempts.
+
+`benchmarks/runtime_gfx942/xgmi_segments_owner_campaign.py` builds this fixture
+from a clean signed checkpoint, performs fresh endpoint admission, records one
+correctness trial, collects byte-exact evidence and cleans only its private
+remote tree. Settled and delayed endpoint checks remain mandatory. This fixture
+is not a performance comparison, an exclusive reservation, fault injection, or
+formal refinement. Native qualification is separate from its CPU plan tests.
+The runner's `native_execution` flag means the whole campaign qualified; a
+false value does not imply the workload never ran before a postflight failure.
 
 ## Performance Qualification Plan
 
@@ -309,6 +356,9 @@ qualification remains separate from this caller-driven Context workload.
   geometries, and attribute the 65-segment cost before larger optimizations. No
   speedup or parity claim follows from the completed comparisons.
 - Graph sequence nodes and explicit negotiated Worker transport support.
+- Versioned pending-producer input handoff. A host-deferred owner driver and
+  native admission of future readers are distinct designs; neither is supplied
+  by the completed-event fixture or ready-prefix flush change.
 - More permissive scheduling-domain coexistence and native multi-packet
   publication are separate optimizations. This serial version still publishes
   and waits once per descriptor and does not claim optimal packet throughput.

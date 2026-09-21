@@ -38,7 +38,10 @@ struct PeerFixture {
 
 impl PeerFixture {
     fn new(bytes: usize, capacity: usize) -> Self {
-        let mut h = Harness::new_with_peers(bytes, capacity, true);
+        Self::from_harness(Harness::new_with_peers(bytes, capacity, true))
+    }
+
+    fn from_harness(mut h: Harness) -> Self {
         let devices = [h.context.devices()[0].id(), h.context.devices()[1].id()];
         let source = h
             .context
@@ -114,6 +117,82 @@ impl PeerFixture {
             )
         }
     }
+}
+
+#[test]
+fn versioned_pending_input_refusal_is_an_observed_error_with_no_second_submission() {
+    let mut f = PeerFixture::from_harness(Harness::with_journal(4096, 2, true, true));
+    let devices = [f.h.context.devices()[0].id(), f.h.context.devices()[1].id()];
+    let seed =
+        f.h.context
+            .allocate(devices[1], RuntimeMemoryKindV1::DeviceLocal, 64, 8)
+            .unwrap();
+    let producer_stream = f.h.context.create_stream(devices[0]).unwrap();
+    let producer =
+        f.h.context
+            .peer_copy_segments(
+                producer_stream,
+                RuntimeMemoryRegionV1 {
+                    allocation: seed,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 64,
+                },
+                RuntimeMemoryRegionV1 {
+                    access: RuntimeAccessV1::Write,
+                    ..f.source
+                },
+                &[SEGMENT],
+                &[],
+            )
+            .unwrap();
+    let event = f.h.context.record_event(&producer).unwrap();
+    let future =
+        f.h.handle
+            .peer_copy_segments_tracked(
+                f.stream,
+                f.source,
+                f.destination,
+                vec![SEGMENT],
+                vec![event],
+            )
+            .unwrap();
+    let control = future.control();
+    assert!(f.h.used() > 0);
+    let mut driver = f.h.pop();
+    assert!(driver.advance(&mut f.h.context));
+    assert_eq!(f.h.used(), 0);
+    let result = join_command(future.future).unwrap();
+    assert!(result.submission.is_none());
+    assert!(matches!(
+        result.observation,
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::ContextReserved
+        ))
+    ));
+    assert_eq!(result.rejected_observations, 0);
+    assert!(result.last_rejected_observation.is_none());
+    assert_eq!(
+        control.phase(),
+        RuntimeAsyncOperationPhaseV1::ObservationFinished
+    );
+    assert_eq!(f.h.state.lock().unwrap().peer_segment_issues.len(), 1);
+    assert_eq!(
+        f.h.context
+            .query_stream(f.stream)
+            .unwrap()
+            .total_submissions,
+        0
+    );
+    assert_eq!(f.h.context.version_journal_writer_records_v1(), Some(1));
+    assert_eq!(f.h.context.version_journal_read_records_v1(), Some(1));
+    f.h.state
+        .lock()
+        .unwrap()
+        .statuses
+        .values_mut()
+        .for_each(|s| *s = BackendPollV1::Succeeded);
+    assert!(f.h.context.cleanup().is_complete());
 }
 
 #[test]

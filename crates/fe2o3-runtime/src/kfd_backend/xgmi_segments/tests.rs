@@ -352,3 +352,4 @@ fn native_wait_forwards_the_absolute_deadline_without_singleton_rosters() {
 }
 
 mod profile_equivalence;
+mod ready_prefix;

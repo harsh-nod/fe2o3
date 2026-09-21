@@ -10617,7 +10617,11 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             )
         })?;
         if active.sequence.is_some() {
-            return self.progress_peer_segments(submission, Instant::now(), true);
+            return self.progress_peer_segments(
+                submission,
+                Instant::now(),
+                xgmi_segments::Progress::Poll,
+            );
         }
         #[cfg(feature = "hardware-diagnostic")]
         if let Some(recorder) = self.xgmi_segments_diagnostic.as_mut() {
@@ -10651,7 +10655,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             .is_some_and(|active| active.sequence.is_some())
         {
             return wait_with_deadline_v1(deadline, || {
-                self.progress_peer_segments(submission, deadline, false)
+                self.progress_peer_segments(submission, deadline, xgmi_segments::Progress::Wait)
             });
         }
         wait_with_deadline_v1(deadline, || self.poll_v1(submission))
@@ -11206,7 +11210,11 @@ impl RuntimeFlushBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         let direction = xgmi_direction_for_destination_v1(destination)
             .ok_or_else(|| self.terminal_error("native XGMI stream lost destination binding"))?;
         if let Some(id) = self.sequence_by_direction[direction] {
-            return match self.progress_peer_segments(id, Instant::now(), true)? {
+            return match self.progress_peer_segments(
+                id,
+                Instant::now(),
+                xgmi_segments::Progress::Flush,
+            )? {
                 BackendPollV1::Pending | BackendPollV1::Succeeded => Ok(()),
                 BackendPollV1::Failed { .. } => Err(Self::quiescent_error(
                     KfdRuntimeBackendErrorKindV1::Native,

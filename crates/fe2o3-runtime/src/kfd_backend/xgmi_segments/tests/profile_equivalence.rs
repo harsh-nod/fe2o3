@@ -15,7 +15,7 @@ fn run_scope<const PROFILE: bool>(
     sequence: &mut Sequence,
     custody: Custody<Box<u64>, Ticket>,
     deadline: Instant,
-    one_step: bool,
+    progress: Progress,
 ) -> Execution<Box<u64>, Ticket, Fault> {
     let mut timer = Timer::<PROFILE>::new();
     #[cfg(feature = "hardware-diagnostic")]
@@ -29,13 +29,13 @@ fn run_scope<const PROFILE: bool>(
             sequence,
             custody,
             deadline,
-            one_step,
+            progress,
             &mut timer,
         );
         assert_eq!(closing.is_some(), execution.closing.is_ok());
         return execution;
     }
-    execute_profiled(scope, sequence, custody, deadline, one_step, &mut timer)
+    execute_profiled(scope, sequence, custody, deadline, progress, &mut timer)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -63,12 +63,17 @@ fn run<const PROFILE: bool>(
     let mut scope = Script::new(&log);
     scope.inject = inject;
     scope.close_failure = close_failure;
+    let progress = if one_step {
+        Progress::Poll
+    } else {
+        Progress::Wait
+    };
     let mut execution = run_scope::<PROFILE>(
         scope,
         &mut sequence,
         Custody::Pair(pair),
         deadline,
-        one_step,
+        progress,
     );
     if retry {
         execution = run_scope::<PROFILE>(
@@ -76,7 +81,7 @@ fn run<const PROFILE: bool>(
             &mut sequence,
             execution.custody,
             deadline,
-            one_step,
+            progress,
         );
     }
     let ticket = match &execution.custody {
@@ -236,7 +241,7 @@ fn panic_run<const PROFILE: bool>(stage: Fault) -> Vec<Fault> {
             &mut sequence(1),
             Custody::Pair(Box::new(42)),
             deadline(),
-            false,
+            Progress::Wait,
             &mut Timer::<PROFILE>::new(),
         )
     }));

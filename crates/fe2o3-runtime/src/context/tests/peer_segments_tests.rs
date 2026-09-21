@@ -130,6 +130,89 @@ fn segments() -> Vec<RuntimePeerCopySegmentV1> {
 }
 
 #[test]
+fn pending_versioned_producer_refuses_reader_before_backend_then_completed_event_admits_it() {
+    let mut f = Fixture::new();
+    f.context.backend.deferred_copies = true;
+    let devices = [f.context.devices()[0].id(), f.context.devices()[1].id()];
+    let seed = f
+        .context
+        .allocate(devices[1], RuntimeMemoryKindV1::DeviceLocal, 64, 16)
+        .unwrap();
+    let input = (0..64).map(|i| 64 - i).collect::<Vec<u8>>();
+    f.context.write_allocation(seed, 0, &input).unwrap();
+    let producer_stream = f.context.create_stream(devices[0]).unwrap();
+    let mut producer = f
+        .context
+        .peer_copy(
+            producer_stream,
+            RuntimeMemoryRegionV1 {
+                allocation: seed,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len: 64,
+            },
+            RuntimeMemoryRegionV1 {
+                allocation: f.source.allocation,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len: 64,
+            },
+            &[],
+        )
+        .unwrap();
+    let event = f.context.record_event(&producer).unwrap();
+    assert_eq!(f.context.backend.copy_call_count, 1);
+    assert_eq!(f.context.version_journal_writer_records_v1(), Some(1));
+    assert_eq!(f.context.version_journal_read_records_v1(), Some(1));
+    assert!(matches!(
+        f.context
+            .peer_copy_segments(f.stream, f.source, f.destination, &segments(), &[event]),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::ContextReserved
+        ))
+    ));
+    assert_eq!(f.context.backend.copy_call_count, 1);
+    assert!(f.context.backend.pending_peer_segments.is_empty());
+    assert_eq!(f.context.version_journal_writer_records_v1(), Some(1));
+    assert_eq!(f.context.version_journal_read_records_v1(), Some(1));
+    assert_eq!(
+        f.context.query_stream(f.stream).unwrap().total_submissions,
+        0
+    );
+    assert_eq!(f.context.query_stream(producer_stream).unwrap().pending, 1);
+    assert_eq!(f.bytes(f.destination), &[0xa5; 64]);
+
+    assert_eq!(
+        f.context
+            .wait(&mut producer, Duration::from_secs(1))
+            .unwrap(),
+        RuntimePollV1::Succeeded
+    );
+    let mut consumer = f
+        .context
+        .peer_copy_segments(f.stream, f.source, f.destination, &segments(), &[event])
+        .unwrap();
+    assert_eq!(f.context.backend.copy_call_count, 2);
+    assert_eq!(f.context.backend.last_dependency_count, 1);
+    assert_eq!(
+        f.context
+            .wait(&mut consumer, Duration::from_secs(1))
+            .unwrap(),
+        RuntimePollV1::Succeeded
+    );
+    let mut expected = vec![0xa5; 64];
+    for segment in segments() {
+        let from = 4 + segment.source_offset as usize;
+        let to = 8 + segment.destination_offset as usize;
+        let bytes = segment.byte_len as usize;
+        expected[to..to + bytes].copy_from_slice(&input[from..from + bytes]);
+    }
+    assert_eq!(f.bytes(f.source), input);
+    assert_eq!(f.bytes(f.destination), expected);
+    assert!(f.context.cleanup().is_complete());
+}
+
+#[test]
 fn ordered_overlaps_duplicates_canaries_and_snapshot_settle_one_writer_once() {
     let mut f = Fixture::new();
     let mut descriptors = segments();
