@@ -1,0 +1,16 @@
+PASS: producer journal issuance positive_before
+PASS: producer journal issuance constructor_context
+PASS: producer journal issuance constructor_read_capacity
+PASS: producer journal issuance register_watermark
+PASS: producer journal issuance register_reserved_count
+PASS: producer journal issuance register_writer_free
+PASS: producer journal issuance register_stable_incarnation
+PASS: producer journal issuance register_producer_counts
+PASS: producer journal issuance register_result
+PASS: producer journal issuance abort_reserved_count
+PASS: producer journal issuance abort_writer_free
+PASS: producer journal issuance abort_watermark
+PASS: producer journal issuance abort_members
+PASS: producer journal issuance abort_result
+PASS: producer journal issuance positive_after
+PRODUCER_JOURNAL_ISSUANCE_OK obligations=201 inherited=181 new=20 executable_mutations=13

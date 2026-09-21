@@ -5,9 +5,9 @@ This development packet addresses two executable portions of
 its final allocation-write/truncate loop. It does not verify the complete batch
 operation or advance a native runtime acceptance milestone.
 
-The new proof includes the unchanged J4 reader invariant, J3 commit, J2
+The proof includes the pinned J4 reader invariant, J3 commit, J2
 preflight and J1 issuance sources. It introduces no authority, allocation-key
-issuance mechanism, native operation or production runtime change.
+issuance mechanism or native operation.
 
 ## Admission Prefix
 
@@ -67,11 +67,19 @@ theorem is not a refinement of those production library calls.
 The production middle phase scans existing allocations with binary search,
 temporarily writes and sorts output references by physical slot, detects both
 selected-slot duplicates and overlap with the retained free prefix, restores
-all-None output on rejection, and sorts references back by allocation key.
+all-None output on rejection, and restores canonical key/slot associations from
+the unchanged reversed free suffix in a linear pass.
 Those operations, including the error restoration, still require executable
 correspondence. This packet does not replace them with a different sorting
 algorithm, repeated single enrollment, an assumed permutation oracle or an
 external-body contract.
+
+The final restoration formerly used a second sort. Its replacement makes that
+step O(k), without changing the whole-operation asymptotic bound. CPU qualification
+covers every permutation of five free slots and all six batch sizes, with an
+existing allocation and distinct incoming metadata: 720 cases. This is a tested
+optimization, not a formal refinement of the missing middle phase or a measured
+performance claim.
 
 Consequently there is no end-to-end enrollment-based reader witness yet. Full
 membership, settlement, retirement and Unknown-disposal trace composition,
@@ -80,6 +88,15 @@ unwind behavior and production Rust/native refinement remain separate work.
 
 ## Qualification
 
+The [2026-09-21 qualification](evidence/dev-enrollment-qualification-2026-09-21/README.md)
+records 814 passing model tests, two intentionally ignored benchmark-style tests,
+27 passing doctests, formatting and Clippy for the linear restoration. The
+standalone prerequisite checker was refreshed for the additional inherited
+reader-prefix lemma: both whole-crate positives passed with 169 obligations
+(156 inherited, 13 local), and all seven controls reported 168 verified with
+only the intended postcondition error. The proof scope remains unchanged.
+
+The following results and archived counts are historical.
 The standalone `verus/check-journal-enrollment.py` campaign on 2026-09-18 passed
 two whole-crate positive runs with **168 verified, 0 errors** each: 155 inherited
 obligations and 13 new obligations. Seven executable-body mutations each produced

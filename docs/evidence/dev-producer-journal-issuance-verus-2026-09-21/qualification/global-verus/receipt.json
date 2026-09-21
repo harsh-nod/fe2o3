@@ -1,0 +1,28 @@
+{
+  "command": [
+    "bash",
+    "crates/fe2o3-runtime-model/verus/verify-verus.sh"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup",
+    "USER": "harsh",
+    "VERUS": "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+    "VERUS_TIMEOUT_SECONDS": "180"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789991366918731400,
+  "group_absent": true,
+  "pid": 958626,
+  "started_ns": 1789986185688270402,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "2f6b9c6bfd8019d4eda96ead8d3397e06bf99919bb73c6020c6434c605445b7b",
+  "timeout_seconds": 14400
+}

@@ -1,0 +1,18 @@
+positive_before: PASS
+foreign_precedence: PASS
+allocation_error_identity: PASS
+shape_error_identity: PASS
+empty_batch_precedence: PASS
+rejection_output_mutation: PASS
+retained_free_prefix: PASS
+writer_watermark_frame: PASS
+positive_after: PASS
+{
+  "scope": "admission prefix and conditional commit suffix only",
+  "positive_obligations": 169,
+  "inherited_obligations": 156,
+  "negative_cases": 7,
+  "full_batch_enrollment_verified": false,
+  "rust_sorting_search_refined": false,
+  "native_or_performance_acceptance": false
+}

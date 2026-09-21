@@ -61,9 +61,12 @@ at construction and exercises replay, capacity rejection, abort and stale-refere
 rejection after slot reuse. A separate explicitly initialized mixed-state fixture
 exercises all four producer statuses and nonempty retained chains; it is not a
 constructor-to-Pending witness. Its 13 executable-body controls target the exact
-constructor/register/abort relations. Qualification of this new campaign and the
-updated inherited campaigns remains pending; a positive solver run alone is not
-campaign acceptance.
+constructor/register/abort relations. The
+[signed-source issuance qualification](../../../docs/evidence/dev-producer-journal-issuance-verus-2026-09-21/README.md)
+records both dedicated whole-crate positives at 201 obligations, all 13 intended
+postcondition failures, and the complete registered runner with updated inherited
+campaigns and all 691 standalone negatives. The archive supports portable offline
+validation and includes adverse-evidence tests; this is not native acceptance.
 
 The strong chain graph is a reachable-state premise, not a whole-arena check
 performed by Rust settlement. Enrollment, begin-write and settlement composition

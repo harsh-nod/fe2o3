@@ -1,0 +1,8 @@
+{
+  "cpu_tests": true,
+  "formal_equivalence": false,
+  "native_execution": false,
+  "performance_acceptance": false,
+  "qualified": true,
+  "source_commit": "2202036a93c2c340536b80f3d2e907b201833789"
+}

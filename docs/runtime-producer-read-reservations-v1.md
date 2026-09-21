@@ -107,15 +107,17 @@ records both whole-crate positive brackets, all 19 executable controls, and the
 complete registered proof run with all 691 standalone negative files.
 
 The linked historical archives retain their original source and obligation counts.
-The new `context_producer_journal_issuance_v1.rs` candidate composes the custody
+`context_producer_journal_issuance_v1.rs` composes the custody
 predicate with exact `reserved_count` and successful-registration history. Its
 logical constructor/register/Reserved-abort wrappers preserve the combined
 invariant, reader storage and unrelated Pending/Unknown chains. A constructor-based
 reuse witness covers rejection and stale identity; a separate directly initialized
 mixed-state fixture covers all four reservation statuses during register/abort in
-a retired producer slot. That fixture is not production reachability. The new
-20-obligation composition and its 13 executable mutation controls await complete
-campaign qualification, including reruns of the updated inherited proofs.
+a retired producer slot. That fixture is not production reachability. The
+[signed-source issuance qualification](evidence/dev-producer-journal-issuance-verus-2026-09-21/README.md)
+records the 201 whole-crate obligations (181 inherited and 20 new), all 13
+executable mutation controls, and the complete registered runner, including the
+updated inherited proofs and all 691 standalone negative files.
 
 These are conditional logical-execution proofs, not whole-wrapper verification.
 Complete retained-chain coverage is a premise whose reachability across enrollment,
@@ -130,8 +132,9 @@ intermediate machine state or atomicity under panic/unwind.
 
 Before enabling runtime admission, the remaining work is:
 
-1. Establish base-custody reachability/issuance composition and production Rust
-   correspondence for the proved logical admission/release and unread guards.
+1. Finish base-custody reachability/issuance composition across enrollment,
+   begin-write and settlement, and establish production Rust correspondence for
+   the proved logical admission/release and unread guards.
    Bind physical capacity and fallible allocation to those relations, and refine
    settlement preflight before treating the logical lifecycle as full-wrapper
    refinement.

@@ -1,0 +1,30 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-producer-journal-issuance-verus-2026-09-21/archive.py",
+    "--verify-archive",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-producer-journal-issuance-verus-2026-09-21",
+    "--repo",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789991536143320160,
+  "group_absent": true,
+  "pid": 1986728,
+  "started_ns": 1789991531376433168,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "96b2247a64cb016ec09654f60584717fd27bb2e77f7a8588bb7441ba42eda410",
+  "timeout_seconds": 300
+}

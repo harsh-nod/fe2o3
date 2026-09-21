@@ -1,0 +1,27 @@
+{
+  "command": [
+    "git",
+    "status",
+    "--porcelain"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-enrollment-linear-output-20260921",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789986756223851640,
+  "group_absent": true,
+  "pid": 1076638,
+  "started_ns": 1789986756102885139,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 30
+}

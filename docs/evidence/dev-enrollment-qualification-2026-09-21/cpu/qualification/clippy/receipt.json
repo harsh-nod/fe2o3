@@ -1,0 +1,34 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--offline",
+    "-p",
+    "fe2o3-runtime-model",
+    "--all-targets",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-enrollment-linear-output-20260921",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789986704145213495,
+  "group_absent": true,
+  "pid": 1060459,
+  "started_ns": 1789986681524399954,
+  "stderr_sha256": "d8d6955c78060f6b485fffdf6babd0c29b97097c49ed4780e20fc440e4b88063",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 600
+}

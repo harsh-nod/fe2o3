@@ -1,0 +1,10 @@
+{
+  "constructor_to_pending_reachability": false,
+  "context_integration": false,
+  "logical_producer_journal_issuance": true,
+  "native_execution": false,
+  "performance_acceptance": false,
+  "qualified": true,
+  "rust_journal_refinement": false,
+  "source_commit": "5f3b864937ce359de8c8934dbce557036d12c631"
+}
