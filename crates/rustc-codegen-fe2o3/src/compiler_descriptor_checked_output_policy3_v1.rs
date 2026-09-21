@@ -171,6 +171,24 @@ fn construct_checked_descriptor_v1(
         (ProductionAmdTargetProfileV1::Gfx950, 8) => policy8::producer_version(profile),
         _ => unreachable!("only fixed consuming checked-owner constructors call this helper"),
     };
+    construct_descriptor_from_checked_geometry_v1(
+        envelope,
+        compiler_module,
+        typed_roots,
+        admitted.output,
+        geometries,
+        producer_version,
+    )
+}
+
+fn construct_descriptor_from_checked_geometry_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    geometries: Vec<crate::production_geometry_v1::ProductionGeometryV1>,
+    producer_version: &'static str,
+) -> Result<CompilerDescriptorSourceV1, CompilerDescriptorError> {
     let profiles = geometries
         .into_iter()
         .map(|geometry| DescriptorConstructionProfileV1 {
@@ -186,7 +204,7 @@ fn construct_checked_descriptor_v1(
         .collect::<Vec<_>>();
     construct_compiler_descriptor_source_with_profiles_v1(
         envelope,
-        admitted.output.module(),
+        output.module(),
         compiler_module,
         typed_roots,
         &profiles,

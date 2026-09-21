@@ -4,6 +4,10 @@ use fe2o3_kernel_analysis::{
     CheckedCanonicalKirPrivateCellPromotionV1 as PromotionRelation,
 };
 type Site = Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>;
+#[path = "production_checked_output_loop_unroll_sites_v1.rs"]
+mod loop_unroll_sites;
+pub use loop_unroll_sites::ProductionLoopUnrollOriginV1;
+pub(super) use loop_unroll_sites::check_loop_unroll_sites;
 #[path = "production_checked_output_cross_block_forwarding_sites_v1.rs"]
 mod cross_block_forwarding_sites;
 pub use cross_block_forwarding_sites::ProductionCrossBlockForwardingOriginV1;
@@ -254,7 +258,7 @@ fn census_sites_named(
     budget: &mut AssertOriginBudgetV1<'_>,
     binding: &PromotionBinding,
 ) -> PResult<Box<[FormalMemoryObligations]>> {
-    census_sites_inner(sites, stage, None, None, budget, binding)
+    census_sites_inner(sites, stage, None, None, None, budget, binding)
 }
 
 pub(super) fn census_induction_refinement_sites(
@@ -267,6 +271,7 @@ pub(super) fn census_induction_refinement_sites(
         sites,
         "checked induction refinement",
         Some(pair),
+        None,
         None,
         budget,
         binding,
@@ -286,6 +291,29 @@ pub(super) fn census_refined_forwarding_sites(
         "refined cross-block private forwarding",
         Some(refinement),
         Some((forwarding, intermediate)),
+        None,
+        budget,
+        binding,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn census_loop_unroll_sites(
+    sites: CheckedPromotedSites<'_, '_>,
+    intermediate: &CanonicalKirInventoryV1<'_>,
+    final_input: &CanonicalKirInventoryV1<'_>,
+    refinement: &fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>,
+    forwarding: &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'_>,
+    unroll: &fe2o3_kernel_analysis::CheckedCanonicalKirLoopUnrollPairV1<'_, '_, '_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+    binding: &PromotionBinding,
+) -> PResult<Box<[FormalMemoryObligations]>> {
+    census_sites_inner(
+        sites,
+        "bounded source unroll",
+        Some(refinement),
+        Some((forwarding, intermediate)),
+        Some((unroll, final_input)),
         budget,
         binding,
     )
@@ -299,12 +327,17 @@ pub(super) fn check_licm_sites(
     census_sites_named(sites, "total-integer LICM", budget, binding)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn census_sites_inner(
     sites: CheckedPromotedSites<'_, '_>,
     stage: &'static str,
     refinement: Option<&fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>>,
     forwarding: Option<(
         &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'_>,
+        &CanonicalKirInventoryV1<'_>,
+    )>,
+    unroll: Option<(
+        &fe2o3_kernel_analysis::CheckedCanonicalKirLoopUnrollPairV1<'_, '_, '_>,
         &CanonicalKirInventoryV1<'_>,
     )>,
     budget: &mut AssertOriginBudgetV1<'_>,
@@ -336,7 +369,26 @@ fn census_sites_inner(
                 .get(ordinal)
                 .is_some_and(|row| row.coordinate == coordinate))
     };
-    if let Some((forwarding, intermediate)) = forwarding {
+    if let Some((unroll, final_input)) = unroll {
+        let refinement =
+            refinement.ok_or_else(|| refused("bounded source unroll", "actual refinement pair"))?;
+        let (forwarding, intermediate) =
+            forwarding.ok_or_else(|| refused("bounded source unroll", "actual forwarding pair"))?;
+        census::native_with_loop_unroll(
+            output,
+            &private,
+            &division,
+            &helpers,
+            stage,
+            authorized_trap,
+            refinement,
+            forwarding,
+            intermediate,
+            final_input,
+            unroll,
+            budget,
+        )?;
+    } else if let Some((forwarding, intermediate)) = forwarding {
         let pair = refinement.ok_or_else(|| {
             refused(
                 "refined cross-block private forwarding",

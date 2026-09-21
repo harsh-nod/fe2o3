@@ -1,4 +1,4 @@
-//! Descriptor evidence for the actual source-owned final F, without encoding or authority.
+//! Descriptor evidence and inert encoding for actual source-owned final F.
 use super::{
     CheckedDescriptorViewV1, CompilerDescriptorError, ProductionAmdTargetProfileV1,
     TypedDescriptorRootV1, policy8, validate_checked_output_descriptor_evidence_v1,
@@ -61,7 +61,41 @@ pub(crate) enum FinalOwnerV1<'a> {
     Direct(&'a Direct),
     Erased(&'a Erased),
 }
-impl FinalOwnerV1<'_> {
+impl<'a> FinalOwnerV1<'a> {
+    pub(crate) fn output(self) -> &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 {
+        match self {
+            Self::Direct(owner) => owner.output(),
+            Self::Erased(owner) => owner.output(),
+        }
+    }
+    pub(crate) fn original_ffi_identity(self) -> [u8; 32] {
+        match self {
+            Self::Direct(owner) => *owner
+                .prefix()
+                .prefix()
+                .prefix()
+                .prefix()
+                .prefix()
+                .prefix()
+                .prefix()
+                .source_semantic_kir()
+                .canonical_kernel_ir_identity()
+                .digest(),
+            Self::Erased(owner) => *owner
+                .prefix()
+                .prefix()
+                .prefix()
+                .prefix()
+                .prefix()
+                .prefix()
+                .prefix()
+                .original_source()
+                .executable()
+                .canonical()
+                .identity()
+                .digest(),
+        }
+    }
     fn required(self) -> Result<usize> {
         match self {
             Self::Direct(owner) => owner.retained_input_storage_floor_v1(),
@@ -102,11 +136,11 @@ impl FinalOwnerV1<'_> {
     }
 }
 
-fn scoped<'w>(
+fn scoped<'w, T>(
     required: usize,
     budget: &mut Budget<'w>,
-    run: impl FnOnce(&mut Budget<'w>) -> Result<()>,
-) -> Result<()> {
+    run: impl FnOnce(&mut Budget<'w>) -> Result<T>,
+) -> Result<T> {
     if budget.storage() < required {
         return Err(Resource::Accounting.into());
     }
@@ -129,6 +163,73 @@ fn scoped<'w>(
 
 const HEADER: usize =
     size_of::<CheckedDescriptorViewV1<'static>>() + size_of::<Vec<ProductionGeometryV1>>();
+
+/// Content-family labels only. Neither spelling authenticates its producer.
+pub(crate) fn producer_version_v1(profile: ProductionAmdTargetProfileV1) -> &'static str {
+    match profile {
+        ProductionAmdTargetProfileV1::Gfx942 => {
+            "production-refined-forwarding-checked-gfx942-cov6-v1"
+        }
+        ProductionAmdTargetProfileV1::Gfx950 => {
+            "production-refined-forwarding-checked-gfx950-cov6-v1"
+        }
+    }
+}
+
+/// Encodes only the actual F view. The caller prepays the unchanged bounded
+/// descriptor-codec domain; opaque codec allocations are not claimed as RSS.
+pub(crate) fn construct_final_descriptor_source_v1(
+    envelope: &fe2o3_compiler_ffi::CompilerFfiEnvelopeV1,
+    compiler_module: &crate::kernel_ir_codegen::InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    owner: FinalOwnerV1<'_>,
+    profile: ProductionAmdTargetProfileV1,
+    budget: &mut Budget<'_>,
+) -> Result<fe2o3_compiler_ffi::CompilerDescriptorSourceV1> {
+    if fe2o3_compiler_ffi::DeviceTargetV1::parse(profile.device_target()).ok()
+        != Some(envelope.target())
+        || envelope.code_object_version() != fe2o3_compiler_ffi::CodeObjectVersion::V6
+    {
+        return Err(descriptor(
+            CompilerDescriptorError::ProductionDescriptorMismatch(
+                "final F descriptor target profile/COV6",
+            ),
+        ));
+    }
+    validate_final_descriptor_evidence_v1(owner, typed_roots, profile, budget)?;
+    scoped(owner.required()?, budget, |budget| {
+        budget.reserve_storage(HEADER)?;
+        let view = owner.view()?;
+        let requested = typed_roots
+            .len()
+            .checked_mul(size_of::<ProductionGeometryV1>())
+            .ok_or(Resource::Arithmetic)?;
+        budget.reserve_storage(requested)?;
+        // The existing descriptor engine deliberately performs its own complete
+        // evidence check. No typed-root or formal witness is inferred from F's hash.
+        let geometries = validate_checked_output_descriptor_evidence_v1(
+            typed_roots,
+            &view,
+            profile.device_target(),
+        )
+        .map_err(descriptor)?;
+        let actual = geometries
+            .capacity()
+            .checked_mul(size_of::<ProductionGeometryV1>())
+            .ok_or(Resource::Arithmetic)?;
+        budget.reserve_storage(actual.checked_sub(requested).ok_or(Resource::Accounting)?)?;
+        budget.charge_work(1)?;
+        super::construct_descriptor_from_checked_geometry_v1(
+            envelope,
+            compiler_module,
+            typed_roots,
+            view.output,
+            geometries,
+            producer_version_v1(profile),
+        )
+        .map_err(descriptor)
+    })
+}
 
 /// Replays F's owner, exact historical N/B target binding, ordered typed/source
 /// identities, source launch, final ABI and F's fresh formal obligations.

@@ -11,12 +11,21 @@ use fe2o3_lower_mir_kernel::{
     ProductionRefinedCrossBlockForwardingErrorV1 as CompositionAdmissionError,
 };
 
+#[path = "production_refined_forwarding_history_v1.rs"]
+mod history;
+use history::{PreparedRefinedForwardingHistoryClaimsV1, RefinedForwardingHistoryErrorV1};
+
+#[path = "production_refined_forwarding_worker_v1.rs"]
+mod worker;
+
 #[derive(Debug)]
 pub(crate) enum RefinedForwardingNativeStageErrorV1 {
     Resource(Resource),
     Admission(Box<CompositionAdmissionError>),
     Descriptor(Box<RefinedForwardingDescriptorErrorV1>),
+    History(Box<RefinedForwardingHistoryErrorV1>),
     Mismatch(&'static str),
+    Worker(Box<worker::RefinedForwardingWorkerErrorV1>),
 }
 impl fmt::Display for RefinedForwardingNativeStageErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -28,6 +37,8 @@ impl std::error::Error for RefinedForwardingNativeStageErrorV1 {
         match self {
             Self::Admission(error) => Some(error.as_ref()),
             Self::Descriptor(error) => Some(error.as_ref()),
+            Self::History(error) => Some(error.as_ref()),
+            Self::Worker(error) => Some(error.as_ref()),
             _ => None,
         }
     }
@@ -305,6 +316,7 @@ fn prepare(
 /// One actual authenticated source/ranked entry and its final composed output.
 pub(crate) struct RefinedForwardingNativeProductionCompilationV1 {
     native: PreparedRefinedForwardingNativeOutputV1,
+    history: PreparedRefinedForwardingHistoryClaimsV1,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
@@ -335,12 +347,20 @@ impl RankedVerifiedProductionCompilation {
             budget
                 .reserve_storage(receipt.retained_storage())
                 .map_err(resource)?;
+            let history = PreparedRefinedForwardingHistoryClaimsV1::prepare(&native, budget)?;
+            budget
+                .reserve_storage(history.retained_storage())
+                .map_err(resource)?;
             let wrapper = size_of::<RefinedForwardingNativeProductionCompilationV1>()
                 .checked_sub(size_of::<PreparedRefinedForwardingNativeOutputV1>())
+                .and_then(|bytes| {
+                    bytes.checked_sub(size_of::<PreparedRefinedForwardingHistoryClaimsV1>())
+                })
                 .ok_or_else(|| resource(Resource::Arithmetic))?;
             budget.reserve_storage(wrapper).map_err(resource)?;
             let value = RefinedForwardingNativeProductionCompilationV1 {
                 native,
+                history,
                 ranked_verification,
                 bindings,
                 retained_floor: budget.storage(),
@@ -411,6 +431,11 @@ impl RefinedForwardingNativeProductionCompilationV1 {
                     "complete refined-forwarding target/ranked custody",
                 ));
             }
+            let checked = self.history.check(&self.native, budget)?;
+            let history_storage = checked.retained_storage();
+            budget.reserve_storage(history_storage).map_err(resource)?;
+            drop(checked);
+            budget.release_storage(history_storage).map_err(resource)?;
             let owner = match &self.native.owner {
                 Composed::Direct(owner) => FinalOwnerV1::Direct(owner),
                 Composed::Erased(owner) => FinalOwnerV1::Erased(owner),

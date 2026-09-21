@@ -211,7 +211,7 @@ fn select_typed_root_v1<'a>(
         require_flat_abi_v1(function.abi(), semantic.types(), budget)?;
         for argument in typed.arguments.as_slice() {
             budget.charge_work(1)?;
-            if argument.kind == DescriptorArgumentKindV1::CompilerLaidOutByValue {
+            if argument.kind.is_compiler_laid_out() {
                 return Err(Error::UnsupportedAbi);
             }
         }

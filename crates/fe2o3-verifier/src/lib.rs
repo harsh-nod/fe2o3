@@ -20,6 +20,7 @@ mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
 mod compiler_native_source_proof_v1;
 mod compiler_proof_binding_v3;
+mod compiler_refined_forwarding_output_v1;
 mod compiler_target_lineage_v1;
 mod control_flow_binding;
 mod executor;
@@ -71,6 +72,11 @@ pub use compiler_proof_binding_v3::{
     ValidatedCompilerProofInputsV3, ValidatedCompilerProofInputsV4,
     VerifiedSemanticU32InductionKirAnchorV1, validate_compiler_proof_inputs_v3,
     validate_compiler_proof_inputs_v4,
+};
+pub use compiler_refined_forwarding_output_v1::{
+    CheckedCompilerRefinedForwardingOutputV1, CompilerRefinedForwardingOutputErrorV1,
+    CompilerRefinedForwardingOutputStorageV1, RefinedForwardingOriginalSourceProofV1,
+    check_compiler_refined_forwarding_output_v1,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a

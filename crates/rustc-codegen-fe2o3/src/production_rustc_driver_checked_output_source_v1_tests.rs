@@ -1,5 +1,8 @@
 //! Ordinary Rust through the checked-output stage, without a shipping selector.
 use super::*;
+
+#[path = "production_rustc_driver_guarded_loop_read_source_v1_tests.rs"]
+mod guarded_loop_read;
 use crate::production_pipeline::checked_output_policy4_v1::snapshots;
 use fe2o3_kernel_ir::OperationKind;
 use fe2o3_rustc_invocation::{
@@ -407,6 +410,7 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    GuardedLoopRead(guarded_loop_read::Case),
     ConditionalDescriptorPair,
     ReferenceFill,
     MaskedShift(masked_shift_source::Config),
@@ -600,6 +604,15 @@ fn ordinary_rust_source_cases(
                 usize::from(config.retained),
             ),
             OrdinarySourceCase::Fill => ("fill", "examples/fill", None, &["fill"][..], 0, 1, 0),
+            OrdinarySourceCase::GuardedLoopRead(case) => (
+                case.feature(),
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some(case.feature()),
+                case.roots(),
+                usize::from(*case != guarded_loop_read::Case::Control),
+                1,
+                0,
+            ),
             OrdinarySourceCase::ReferenceFill => (
                 "reference-fill",
                 "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
@@ -844,6 +857,7 @@ fn ordinary_rust_source_cases(
             );
         progress::clear_inherited_jobserver(&mut command);
         let simulation_case = match case {
+            OrdinarySourceCase::GuardedLoopRead(_) => None,
             OrdinarySourceCase::MaskedShift(config) => {
                 Some(simulation::Case::MaskedShift(config.batch))
             }

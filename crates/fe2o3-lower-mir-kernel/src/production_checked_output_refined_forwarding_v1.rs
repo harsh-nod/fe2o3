@@ -7,6 +7,13 @@ use fe2o3_kernel_opt::{
 };
 use promotion_sites::ProductionCrossBlockForwardingOriginV1 as FinalOrigin;
 
+#[path = "production_checked_output_loop_unroll_v1.rs"]
+mod loop_unroll;
+pub use loop_unroll::{
+    ProductionLoopUnrollErrorV1, ProductionLoopUnrollOriginV1, ProductionLoopUnrollStorageV1,
+    ProductionOwnedLoopUnrollContinuationV1, ProductionOwnedUnitLocalLoopUnrollContinuationV1,
+};
+
 /// Refusal of the actual sequential refinement/forwarding continuation.
 #[derive(Debug)]
 pub enum ProductionRefinedCrossBlockForwardingErrorV1 {
@@ -214,6 +221,41 @@ fn check_actual(
     budget: &mut AssertOriginBudgetV1<'_>,
     binding: &PromotionBinding,
 ) -> CResult<Box<[FormalMemoryObligations]>> {
+    with_actual_refined_forwarding_sites(
+        prefix,
+        tail,
+        limits,
+        origins,
+        budget,
+        binding,
+        |final_sites, intermediate, refinement, forwarding, budget, binding| {
+            promotion_sites::census_refined_forwarding_sites(
+                final_sites,
+                intermediate,
+                refinement,
+                forwarding,
+                budget,
+                binding,
+            )
+        },
+    )
+}
+fn with_actual_refined_forwarding_sites<'g, 'w>(
+    prefix: RefinedPrefix<'g>,
+    tail: &'g ForwardingTail,
+    limits: ForwardingLimits,
+    origins: &mut Vec<FinalOrigin>,
+    budget: &mut AssertOriginBudgetV1<'w>,
+    binding: &PromotionBinding,
+    use_sites: impl for<'s> FnOnce(
+        promotion_sites::CheckedPromotedSites<'s, 'g>,
+        &'s Inventory<'g>,
+        &'s fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'g>,
+        &'s fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'g>,
+        &mut AssertOriginBudgetV1<'w>,
+        &PromotionBinding,
+    ) -> PResult<Box<[FormalMemoryObligations]>>,
+) -> CResult<Box<[FormalMemoryObligations]>> {
     budget.charge_work(7)?;
     if tail.limits() != limits {
         return Err(CError::LimitsMismatch);
@@ -251,7 +293,7 @@ fn check_actual(
                 budget,
                 binding,
                 |final_sites, budget, binding| {
-                    promotion_sites::census_refined_forwarding_sites(
+                    use_sites(
                         final_sites,
                         intermediate,
                         refinement,

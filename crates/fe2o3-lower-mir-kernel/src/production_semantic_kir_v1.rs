@@ -89,6 +89,11 @@ pub use checked_output_admission_policy3_v1::*;
 #[path = "production_checked_output_guarded_formal_v1.rs"]
 mod checked_output_guarded_formal_v1;
 pub(crate) use checked_output_guarded_formal_v1::derive_checked_output_guarded_obligations_v1;
+pub use checked_output_guarded_formal_v1::{
+    CanonicalOutputFormalSourceAnchorV1, CanonicalOutputGuardedFormalMemoryErrorV1,
+    CanonicalOutputGuardedFormalMemoryStorageV1, CanonicalOutputGuardedFormalMemoryV1,
+    analyze_canonical_output_guarded_formal_memory_v1,
+};
 #[path = "production_original_native_formal_v1.rs"]
 mod original_native_formal_v1;
 pub use original_native_formal_v1::*;

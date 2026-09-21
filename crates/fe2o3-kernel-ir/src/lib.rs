@@ -184,6 +184,9 @@ pub use launch_kernel_contract_v2::{
 pub use local_frame_effects_v1::*;
 pub use matrix::*;
 pub(crate) use operation_capability_visitation_v1::*;
+pub use operation_capability_visitation_v1::{
+    TargetCapabilityNameRefV1, TargetCapabilityRefV1, atomic_pointer_capability_v1,
+};
 pub use production_semantic_debug_fragment_v1::*;
 pub use region_effects::*;
 pub use semantic_debug_map_v1::*;

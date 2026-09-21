@@ -7,6 +7,8 @@ use fe2o3_kernel_ir::{
 include!("production_checked_output_masked_assert_success_v1.rs");
 #[path = "production_checked_output_induction_refinement_native_census_v1.rs"]
 mod induction_refinement;
+#[path = "production_checked_output_loop_unroll_native_census_v1.rs"]
+mod loop_unroll;
 #[path = "production_checked_output_refined_forwarding_native_census_v1.rs"]
 mod refined_forwarding;
 
@@ -349,6 +351,7 @@ pub(super) fn native(
         authorized_trap,
         None,
         None,
+        None,
         budget,
     )
 }
@@ -373,6 +376,7 @@ pub(super) fn native_with_induction_refinement(
         phase,
         authorized_trap,
         Some(&allowed),
+        None,
         None,
         budget,
     )
@@ -407,6 +411,45 @@ pub(super) fn native_with_refinement_forwarding(
         authorized_trap,
         None,
         Some(&allowed),
+        None,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn native_with_loop_unroll(
+    inventory: &CanonicalKirInventoryV1<'_>,
+    private: &private_memory::PrivateMemory<'_, '_>,
+    division: &unsigned_division::UnsignedDivision<'_, '_>,
+    helpers: &scalar_helpers::RawEmptyScalarHelpers<'_, '_>,
+    phase: &'static str,
+    authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
+    refinement: &fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>,
+    forwarding: &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'_>,
+    intermediate: &CanonicalKirInventoryV1<'_>,
+    final_input: &CanonicalKirInventoryV1<'_>,
+    unroll: &fe2o3_kernel_analysis::CheckedCanonicalKirLoopUnrollPairV1<'_, '_, '_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
+    let allowed = loop_unroll::CheckedUnrolledAdds::new(
+        refinement,
+        forwarding,
+        intermediate,
+        final_input,
+        unroll,
+        inventory,
+        budget,
+    )?;
+    native_inner(
+        inventory,
+        private,
+        division,
+        helpers,
+        phase,
+        authorized_trap,
+        None,
+        None,
+        Some(&allowed),
         budget,
     )
 }
@@ -421,6 +464,7 @@ fn native_inner(
     mut authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
     allowed: Option<&induction_refinement::CheckedAdds<'_, '_, '_>>,
     forwarded: Option<&refined_forwarding::CheckedForwardedAdds<'_, '_, '_>>,
+    unrolled: Option<&loop_unroll::CheckedUnrolledAdds<'_, '_, '_, '_, '_, '_>>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
     charge(budget, 2)?;
@@ -546,7 +590,10 @@ fn native_inner(
                 Some(allowed) => allowed.operation(inventory, ordinal, budget)?,
                 None => match forwarded {
                     Some(allowed) => allowed.operation(inventory, ordinal, budget)?,
-                    None => false,
+                    None => match unrolled {
+                        Some(allowed) => allowed.operation(inventory, ordinal, budget)?,
+                        None => false,
+                    },
                 },
             } =>
             {

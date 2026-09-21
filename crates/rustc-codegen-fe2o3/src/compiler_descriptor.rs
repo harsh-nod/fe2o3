@@ -3,6 +3,9 @@
 #[path = "compiler_descriptor_checked_output_policy3_v1.rs"]
 pub(crate) mod checked_output_policy3_v1;
 
+#[path = "compiler_descriptor_laid_out_plan_v1.rs"]
+mod laid_out_plan_v1;
+
 #[path = "compiler_descriptor_conditional_output_binding_v1.rs"]
 pub(crate) mod conditional_output_binding_v1;
 #[cfg(test)]
@@ -30,12 +33,12 @@ use fe2o3_kernel_descriptor::{
     RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1, RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1,
     ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, ValidationError,
 };
+#[cfg(test)]
 use fe2o3_kernel_ir::{
     AMDGPU_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE,
-    BF16_F32_M16N16K16_CAPABILITY, MATRIX_CAPABILITY_NAMESPACE, Module,
-    SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY, SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY,
-    SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY, TargetCapability, WaveWidth, WorkgroupSize,
+    BF16_F32_M16N16K16_CAPABILITY, MATRIX_CAPABILITY_NAMESPACE, WaveWidth,
 };
+use fe2o3_kernel_ir::{Module, TargetCapability, WorkgroupSize};
 use fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdentityV1;
 use reserved_fe2o3_symbols::{KernelBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1};
 use rustc_middle::ty::{TyCtxt, TyKind, TypingEnv};
@@ -90,6 +93,17 @@ enum DescriptorArgumentKindV1 {
     GlobalMutPointer(ScalarTypeV1),
     Scalar(ScalarTypeV1),
     CompilerLaidOutByValue,
+    CompilerLaidOutUsize,
+    CompilerLaidOutIsize,
+}
+
+impl DescriptorArgumentKindV1 {
+    const fn is_compiler_laid_out(self) -> bool {
+        matches!(
+            self,
+            Self::CompilerLaidOutByValue | Self::CompilerLaidOutUsize | Self::CompilerLaidOutIsize
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -200,7 +214,7 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                             function.export_name.clone(),
                         ));
                     }
-                    let arguments = contract
+                    let mut arguments = contract
                         .arguments()
                         .iter()
                         .zip(signature.inputs().iter().copied())
@@ -224,7 +238,9 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                                     | GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
                                         AccessMode::ReadWrite
                                     }
-                                    GeneralTypedArgumentKindV3::CompilerLaidOutByValue => {
+                                    GeneralTypedArgumentKindV3::CompilerLaidOutByValue
+                                    | GeneralTypedArgumentKindV3::CompilerLaidOutUsize
+                                    | GeneralTypedArgumentKindV3::CompilerLaidOutIsize => {
                                         AccessMode::ByValue
                                     }
                                 },
@@ -246,27 +262,32 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                             })
                         })
                         .collect::<Result<Vec<_>, CompilerDescriptorError>>()?;
+                    let packed = laid_out_plan_v1::capture(&mut arguments)?;
                     let arguments = TypedArgumentListV1::new(arguments).map_err(|error| {
                         CompilerDescriptorError::InvalidArgumentCollection {
                             kernel: function.export_name.clone(),
                             reason: error.to_string(),
                         }
                     })?;
-                    Ok(TypedDescriptorRootV1 {
+                    let root = TypedDescriptorRootV1 {
                         logical_name,
                         export_name: function.export_name.clone(),
                         kernel_binding,
                         arguments,
-                        explicit_argument_bytes: u32::try_from(contract.abi().size()).map_err(
-                            |_| {
-                                CompilerDescriptorError::ExplicitArgumentSizeOverflow(
-                                    function.export_name.clone(),
-                                )
-                            },
-                        )?,
-                        kernarg_alignment_bytes: contract.abi().alignment(),
+                        explicit_argument_bytes: u32::try_from(
+                            packed.map_or(contract.abi().size(), |extent| u64::from(extent.bytes)),
+                        )
+                        .map_err(|_| {
+                            CompilerDescriptorError::ExplicitArgumentSizeOverflow(
+                                function.export_name.clone(),
+                            )
+                        })?,
+                        kernarg_alignment_bytes: packed
+                            .map_or(contract.abi().alignment(), |extent| extent.alignment),
                         source_launch: Some(contract.launch().clone()),
-                    })
+                    };
+                    laid_out_plan_v1::check(&root)?;
+                    Ok(root)
                 })
         })
         .collect()
@@ -341,6 +362,12 @@ fn descriptor_argument_kind(kind: GeneralTypedArgumentKindV3) -> DescriptorArgum
         }
         GeneralTypedArgumentKindV3::CompilerLaidOutByValue => {
             DescriptorArgumentKindV1::CompilerLaidOutByValue
+        }
+        GeneralTypedArgumentKindV3::CompilerLaidOutUsize => {
+            DescriptorArgumentKindV1::CompilerLaidOutUsize
+        }
+        GeneralTypedArgumentKindV3::CompilerLaidOutIsize => {
+            DescriptorArgumentKindV1::CompilerLaidOutIsize
         }
     }
 }
@@ -747,14 +774,18 @@ fn validate_production_v1_descriptor_root_evidence(
             },
             DescriptorArgumentKindV1::GlobalMutPointer(_) => KirAccessMode::ReadWrite,
             DescriptorArgumentKindV1::Scalar(_)
-            | DescriptorArgumentKindV1::CompilerLaidOutByValue => unreachable!(),
+            | DescriptorArgumentKindV1::CompilerLaidOutByValue
+            | DescriptorArgumentKindV1::CompilerLaidOutUsize
+            | DescriptorArgumentKindV1::CompilerLaidOutIsize => unreachable!(),
         };
         let expected_kind = match argument.kind {
             DescriptorArgumentKindV1::SharedSlice(_)
             | DescriptorArgumentKindV1::DisjointSlice(_) => FormalParameterKind::Slice,
             DescriptorArgumentKindV1::GlobalMutPointer(_) => FormalParameterKind::Pointer,
             DescriptorArgumentKindV1::Scalar(_)
-            | DescriptorArgumentKindV1::CompilerLaidOutByValue => unreachable!(),
+            | DescriptorArgumentKindV1::CompilerLaidOutByValue
+            | DescriptorArgumentKindV1::CompilerLaidOutUsize
+            | DescriptorArgumentKindV1::CompilerLaidOutIsize => unreachable!(),
         };
         if allocation.value() != body.parameters[index]
             || allocation.kind() != expected_kind
@@ -977,7 +1008,9 @@ fn validate_production_v1_semantic_root_ownership_evidence(
             DescriptorArgumentKindV1::GlobalMutPointer(_) => {
                 SemanticSourceArgumentOwnershipV1::ExclusiveOwner
             }
-            DescriptorArgumentKindV1::CompilerLaidOutByValue => {
+            DescriptorArgumentKindV1::CompilerLaidOutByValue
+            | DescriptorArgumentKindV1::CompilerLaidOutUsize
+            | DescriptorArgumentKindV1::CompilerLaidOutIsize => {
                 SemanticSourceArgumentOwnershipV1::ByValue
             }
         };
@@ -1106,12 +1139,10 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
         ));
     }
     if typed_roots.iter().any(|root| {
-        root.arguments.as_slice().iter().any(|argument| {
-            matches!(
-                argument.kind,
-                DescriptorArgumentKindV1::CompilerLaidOutByValue
-            )
-        })
+        root.arguments
+            .as_slice()
+            .iter()
+            .any(|argument| argument.kind.is_compiler_laid_out())
     }) {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
             "generated KFD packing is unavailable for compiler-laid-out by-value aggregates",
@@ -1223,7 +1254,9 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
                             argument.offset,
                         )
                     }
-                    DescriptorArgumentKindV1::CompilerLaidOutByValue => unreachable!(
+                    DescriptorArgumentKindV1::CompilerLaidOutByValue
+                    | DescriptorArgumentKindV1::CompilerLaidOutUsize
+                    | DescriptorArgumentKindV1::CompilerLaidOutIsize => unreachable!(
                         "compiler-laid-out aggregates are rejected before descriptor construction"
                     ),
                 }
@@ -1327,7 +1360,9 @@ fn descriptor_records(
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::global_mut_pointer(scalar)),
             DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::global_mut_pointer(scalar)),
         ),
-        DescriptorArgumentKindV1::CompilerLaidOutByValue => {
+        DescriptorArgumentKindV1::CompilerLaidOutByValue
+        | DescriptorArgumentKindV1::CompilerLaidOutUsize
+        | DescriptorArgumentKindV1::CompilerLaidOutIsize => {
             unreachable!("compiler-laid-out aggregates are rejected before descriptor construction")
         }
     }
@@ -1365,81 +1400,17 @@ fn descriptor_capabilities(
         )
     });
     for capability in effective {
-        match capability {
-            TargetCapability::Int64 => {}
-            TargetCapability::Extension { namespace, name }
-                if namespace == fe2o3_kernel_ir::AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
-                    && matches!(
-                        name.as_str(),
-                        fe2o3_kernel_ir::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
-                            | fe2o3_kernel_ir::AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME
-                    ) =>
-            {
-                // Exact target binding is represented by the descriptor table's
-                // device target, not as an executable kernel capability.
-            }
-            TargetCapability::Extension { namespace, name }
-                if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
-                    && name == fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME =>
-            {
-                // The closed diagnostic contract is authenticated by Kernel IR
-                // and target lowering. Descriptor V1 has no diagnostic tag.
-            }
-            TargetCapability::Subgroups | TargetCapability::SubgroupSize(64) => {
-                result.insert(CapabilityV1::Subgroup);
-                result.insert(CapabilityV1::AmdWave);
-            }
-            TargetCapability::WaveWidth(WaveWidth::Wave64) => {
-                result.insert(CapabilityV1::AmdWave);
-            }
-            TargetCapability::WorkgroupMemory | TargetCapability::WorkgroupBarrier
-                if allow_workgroup_memory =>
-            {
-                result.insert(CapabilityV1::WorkgroupMemory);
-            }
-            TargetCapability::Atomic { .. } => {
-                result.insert(CapabilityV1::Atomics);
-            }
-            TargetCapability::BFloat16 => {
-                // Descriptor construction has already admitted an exact gfx942
-                // or gfx950 target. BF16 remains bound in retained Kernel IR and
-                // executable evidence; descriptor V1 has no scalar-format tag.
-            }
-            TargetCapability::Extension { namespace, name }
-                if allow_exact_tiled_matrix
-                    && namespace == MATRIX_CAPABILITY_NAMESPACE
-                    && matches!(
-                        name.as_str(),
-                        BF16_F32_M16N16K16_CAPABILITY
-                            | SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY
-                            | SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY
-                            | SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY
-                    ) =>
-            {
-                result.insert(CapabilityV1::MatrixMultiply);
-                result.insert(CapabilityV1::AmdMfma);
-            }
-            TargetCapability::Extension { namespace, name }
-                if allow_workgroup_memory
-                    && namespace == MATRIX_CAPABILITY_NAMESPACE
-                    && name == fe2o3_kernel_ir::LDS_TILE_16X16_XOR4_CAPABILITY =>
-            {
-                result.insert(CapabilityV1::WorkgroupMemory);
-            }
-            TargetCapability::Extension { namespace, name }
-                if has_exact_diagnostic_target
-                    && namespace == AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE
-                    && name == AMDGPU_DIAGNOSTICS_CAPABILITY_NAME =>
-            {
-                // Diagnostics are lowered by the exact target backend and do
-                // not add a kernel descriptor launch or ABI capability.
-            }
-            unsupported => {
-                return Err(CompilerDescriptorError::UnsupportedCapability(format!(
-                    "{unsupported:?}"
-                )));
-            }
-        }
+        let Some(projected) = dialect_amdgcn::project_descriptor_capability_v1(
+            fe2o3_kernel_ir::TargetCapabilityRefV1::from_owned(&capability),
+            allow_exact_tiled_matrix,
+            allow_workgroup_memory,
+            has_exact_diagnostic_target,
+        ) else {
+            return Err(CompilerDescriptorError::UnsupportedCapability(format!(
+                "{capability:?}"
+            )));
+        };
+        result.extend(projected.iter());
     }
     Ok(result.into_iter().collect())
 }
@@ -1954,7 +1925,9 @@ mod tests {
             DescriptorArgumentKindV1::GlobalMutPointer(_) => {
                 (global_mut_pointer_layout(), AccessMode::ReadWrite)
             }
-            DescriptorArgumentKindV1::CompilerLaidOutByValue => {
+            DescriptorArgumentKindV1::CompilerLaidOutByValue
+            | DescriptorArgumentKindV1::CompilerLaidOutUsize
+            | DescriptorArgumentKindV1::CompilerLaidOutIsize => {
                 panic!("aggregate descriptor fixtures require compiler layout evidence")
             }
         };
@@ -2808,6 +2781,35 @@ mod tests {
                 Err(CompilerDescriptorError::UnsupportedCapability(_))
             ));
         }
+    }
+
+    #[test]
+    fn descriptor_capability_shared_mapping_preserves_sorted_first_error_and_debug_text() {
+        let mut module = Module::new("descriptor_first_error");
+        module.required_capabilities.extend([
+            TargetCapability::Int64,
+            TargetCapability::Float64,
+            TargetCapability::Float16,
+            TargetCapability::DynamicWorkgroupMemory,
+        ]);
+        for matrix in [false, true] {
+            for workgroup in [false, true] {
+                assert!(
+                    matches!(descriptor_capabilities(&module, matrix, workgroup),
+                    Err(CompilerDescriptorError::UnsupportedCapability(message))
+                        if message == "Float16")
+                );
+            }
+        }
+        module.required_capabilities.clear();
+        let unsupported = TargetCapability::Extension {
+            namespace: "not-a-target".into(),
+            name: "literal\\\"name".into(),
+        };
+        let expected = format!("{unsupported:?}");
+        module.required_capabilities.insert(unsupported);
+        assert!(matches!(descriptor_capabilities(&module, true, true),
+            Err(CompilerDescriptorError::UnsupportedCapability(message)) if message == expected));
     }
 
     #[test]

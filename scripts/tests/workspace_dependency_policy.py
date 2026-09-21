@@ -159,6 +159,27 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
                 self.assertEqual(expected, violations)
                 self.assertEqual(1, stats["internal_dependencies"])
 
+    def test_final_f_verifier_exceptions_are_exact_and_normal_only(self) -> None:
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        edges = ["fe2o3-kernel-opt", "fe2o3-kernel-analysis", "fe2o3-amdgcn-model"]
+        cases = [("fe2o3-verifier", target, kind, kind is None)
+                 for target in edges for kind in (None, "dev", "build")]
+        cases += [("fe2o3-verifier", target, None, False) for target in (
+            "rustc-codegen-fe2o3", "fe2o3-runtime", "fe2o3-kir-sim")]
+        cases += [("fe2o3-mir-model", target, None, False) for target in edges]
+        for source, target, kind, allowed in cases:
+            with self.subTest(source=source, target=target, kind=kind):
+                packages = [package(source, f"crates/{source}", [
+                    dependency(target, f"crates/{target}", kind)]),
+                    package(target, f"crates/{target}")]
+                violations, stats = CHECKER.check_policy(metadata(packages), reviewed)
+                self.assertEqual(0 if allowed else 1, len(violations))
+                self.assertEqual(1, stats["internal_dependencies"])
+                if not allowed:
+                    self.assertIn(f"{source} [", violations[0])
+                    self.assertIn(f"-> {target} [", violations[0])
+                    self.assertIn(f"({kind or 'normal'};", violations[0])
+
     def test_rejects_exception_that_does_not_cross_a_forbidden_direction(self) -> None:
         invalid = policy()
         invalid["allowed_dependency_edges"] = [

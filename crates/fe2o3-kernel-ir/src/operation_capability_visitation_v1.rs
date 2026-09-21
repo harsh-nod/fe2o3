@@ -16,20 +16,20 @@ mod borrowed_key;
 
 /// Allocation-free view of an extension capability name.
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum TargetCapabilityNameRefV1<'a> {
+pub enum TargetCapabilityNameRefV1<'a> {
     Text(&'a str),
     LowerHex(&'a [u8]),
 }
 
 impl TargetCapabilityNameRefV1<'_> {
-    pub(crate) fn visible_len(self) -> Option<usize> {
+    pub fn visible_len(self) -> Option<usize> {
         match self {
             Self::Text(value) => Some(value.len()),
             Self::LowerHex(bytes) => bytes.len().checked_mul(2),
         }
     }
 
-    fn matches(self, candidate: &str) -> bool {
+    pub fn matches(self, candidate: &str) -> bool {
         match self {
             Self::Text(value) => value == candidate,
             Self::LowerHex(bytes) => {
@@ -82,9 +82,33 @@ const fn lower_hex_digit(nibble: u8) -> u8 {
     }
 }
 
+/// The contextual Atomic requirement used by function capability derivation.
+/// This inert classifier neither verifies the pointer nor grants atomic access.
+pub fn atomic_pointer_capability_v1(
+    atomic: &crate::Atomic,
+    pointer_type: &crate::Type,
+) -> Option<TargetCapability> {
+    let crate::Type::Pointer(pointer) = pointer_type else {
+        return None;
+    };
+    let width_bits = pointer
+        .pointee
+        .as_scalar()
+        .and_then(crate::ScalarType::bit_width)?;
+    matches!(width_bits, 8 | 16 | 32 | 64).then_some(TargetCapability::Atomic {
+        width_bits,
+        address_space: atomic.access.address_space,
+        max_scope: atomic.scope,
+    })
+}
+
+#[cfg(test)]
+#[path = "descriptor_capability_visitation_v1_tests.rs"]
+mod descriptor_tests;
+
 /// Allocation-free view of one required target capability.
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum TargetCapabilityRefV1<'a> {
+pub enum TargetCapabilityRefV1<'a> {
     Float16,
     BFloat16,
     Float64,
@@ -139,7 +163,7 @@ impl fmt::Debug for TargetCapabilityRefV1<'_> {
 }
 
 impl<'a> TargetCapabilityRefV1<'a> {
-    pub(crate) fn from_owned(capability: &'a TargetCapability) -> Self {
+    pub fn from_owned(capability: &'a TargetCapability) -> Self {
         match capability {
             TargetCapability::Float16 => Self::Float16,
             TargetCapability::BFloat16 => Self::BFloat16,
@@ -568,7 +592,7 @@ impl Operation {
     /// Work required to classify this operation's capability roster before
     /// the first visitor callback. Callers separately charge one publication
     /// action per yielded capability.
-    pub(crate) fn required_capability_visitation_work_v1(&self) -> Option<usize> {
+    pub fn required_capability_visitation_work_v1(&self) -> Option<usize> {
         match &self.kind {
             OperationKind::Barrier(barrier) => {
                 1_usize.checked_add(barrier.semantics.address_spaces.len())
@@ -591,7 +615,7 @@ impl Operation {
 
     /// Visits the same sorted, duplicate-free capability roster returned by
     /// `required_capabilities` without constructing owned strings or a set.
-    pub(crate) fn try_visit_required_capabilities_v1<E>(
+    pub fn try_visit_required_capabilities_v1<E>(
         &self,
         mut visitor: impl FnMut(TargetCapabilityRefV1<'_>) -> Result<(), E>,
     ) -> Result<(), E> {

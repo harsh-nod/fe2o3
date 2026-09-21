@@ -1,0 +1,58 @@
+CASE: symbolic-noop
+CHECK-BEFORE: module wire-bounded-unroll kernels=0 capabilities=[]
+CHECK-BEFORE: f0 unroll role=InternalHelper params=[v0:U32,v1:U32,v2:Bool] results=[] capabilities=[]
+CHECK-BEFORE: f0:b0 block-id=13 params=[]
+CHECK-BEFORE: f0:b0:o0 [v10:U32] Constant U32(1)
+CHECK-BEFORE: f0:b0 Branch bb41 [v0]
+CHECK-BEFORE: f0:b1 block-id=41 params=[v20:U32]
+CHECK-BEFORE: f0:b1:o0 [v21:Bool] LessThan v20,v1
+CHECK-BEFORE: f0:b1 Conditional v21 bb97 [v20] bb701 [v20]
+CHECK-BEFORE: f0:b2 block-id=97 params=[v25:U32]
+CHECK-BEFORE: f0:b2:o0 [v30:U32,v31:Bool] CheckedAdd v20,v10
+CHECK-BEFORE: f0:b2 Branch bb41 [v30]
+CHECK-BEFORE: f0:b3 block-id=701 params=[v40:U32]
+CHECK-BEFORE: f0:b3 Return []
+CHECK-AFTER: module wire-bounded-unroll kernels=0 capabilities=[]
+CHECK-AFTER: f0 unroll role=InternalHelper params=[v0:U32,v1:U32,v2:Bool] results=[] capabilities=[]
+CHECK-AFTER: f0:b0 block-id=13 params=[]
+CHECK-AFTER: f0:b0:o0 [v10:U32] Constant U32(1)
+CHECK-AFTER: f0:b0 Branch bb41 [v0]
+CHECK-AFTER: f0:b1 block-id=41 params=[v20:U32]
+CHECK-AFTER: f0:b1:o0 [v21:Bool] LessThan v20,v1
+CHECK-AFTER: f0:b1 Conditional v21 bb97 [v20] bb701 [v20]
+CHECK-AFTER: f0:b2 block-id=97 params=[v25:U32]
+CHECK-AFTER: f0:b2:o0 [v30:U32,v31:Bool] CheckedAdd v20,v10
+CHECK-AFTER: f0:b2 Branch bb41 [v30]
+CHECK-AFTER: f0:b3 block-id=701 params=[v40:U32]
+CHECK-AFTER: f0:b3 Return []
+CHECK-REMARK: limits functions=16384 blocks=65536 edges=262144 definitions=262144 operations=65536 loops=65536 rows=1048576 max-iterations=8 operand-uses=1048576 edge-arguments=1048576 origin-rows=4194304
+CHECK-REMARK: selection none independent-pair=true owning-replay=true authority=false
+CHECK-REMARK: block f0:b0 -> f0:b0 retained
+CHECK-REMARK: block f0:b1 -> f0:b1 retained
+CHECK-REMARK: block f0:b2 -> f0:b2 retained
+CHECK-REMARK: block f0:b3 -> f0:b3 retained
+CHECK-REMARK: definition f0:a0 -> f0:a0 retained
+CHECK-REMARK: definition f0:a1 -> f0:a1 retained
+CHECK-REMARK: definition f0:a2 -> f0:a2 retained
+CHECK-REMARK: definition f0:b0:o0:r0 -> f0:b0:o0:r0 retained
+CHECK-REMARK: definition f0:b1:a0 -> f0:b1:a0 retained
+CHECK-REMARK: definition f0:b1:o0:r0 -> f0:b1:o0:r0 retained
+CHECK-REMARK: definition f0:b2:a0 -> f0:b2:a0 retained
+CHECK-REMARK: definition f0:b2:o0:r0 -> f0:b2:o0:r0 retained
+CHECK-REMARK: definition f0:b2:o0:r1 -> f0:b2:o0:r1 retained
+CHECK-REMARK: definition f0:b3:a0 -> f0:b3:a0 retained
+CHECK-REMARK: operation f0:b0:o0 -> f0:b0:o0 retained
+CHECK-REMARK: operation f0:b1:o0 -> f0:b1:o0 retained
+CHECK-REMARK: operation f0:b2:o0 -> f0:b2:o0 retained
+CHECK-REMARK: terminator f0:b0 -> f0:b0 retained
+CHECK-REMARK: terminator f0:b1 -> f0:b1 retained
+CHECK-REMARK: terminator f0:b2 -> f0:b2 retained
+CHECK-REMARK: terminator f0:b3 -> f0:b3 retained
+CHECK-REMARK: edge f0:b0:e0 -> f0:b0:e0 retained
+CHECK-REMARK: edge f0:b1:e0 -> f0:b1:e0 retained
+CHECK-REMARK: edge f0:b1:e1 -> f0:b1:e1 retained
+CHECK-REMARK: edge f0:b2:e0 -> f0:b2:e0 retained
+CHECK-REMARK: argument f0:b0:e0:a0 -> f0:b0:e0:a0 retained
+CHECK-REMARK: argument f0:b1:e0:a0 -> f0:b1:e0:a0 retained
+CHECK-REMARK: argument f0:b1:e1:a0 -> f0:b1:e1:a0 retained
+CHECK-REMARK: argument f0:b2:e0:a0 -> f0:b2:e0:a0 retained

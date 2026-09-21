@@ -10,7 +10,10 @@ type SourceOrigin = ProductionInductionRefinementOriginV1;
 #[path = "production_checked_output_refined_forwarding_v1.rs"]
 mod refined_forwarding;
 pub use refined_forwarding::{
+    ProductionLoopUnrollErrorV1, ProductionLoopUnrollOriginV1, ProductionLoopUnrollStorageV1,
+    ProductionOwnedLoopUnrollContinuationV1,
     ProductionOwnedRefinedCrossBlockForwardingContinuationV1,
+    ProductionOwnedUnitLocalLoopUnrollContinuationV1,
     ProductionOwnedUnitLocalRefinedCrossBlockForwardingContinuationV1,
     ProductionRefinedCrossBlockForwardingErrorV1, ProductionRefinedCrossBlockForwardingStorageV1,
 };

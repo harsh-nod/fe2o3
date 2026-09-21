@@ -10,6 +10,11 @@
 //! neither establishes target binding nor changes those historical endpoints.
 
 #![forbid(unsafe_code)]
+mod refined_forwarding_history_decode_v1;
+mod refined_forwarding_history_rows_v1;
+mod refined_forwarding_history_wire_v1;
+pub use refined_forwarding_history_decode_v1::*;
+pub use refined_forwarding_history_wire_v1::*;
 
 mod checked_load_forwarding_v1;
 mod checked_optimization_policy3_receipt_v1;
@@ -29,6 +34,7 @@ mod checked_optimization_policy8_transport_v1;
 mod checked_optimization_receipt_v1;
 mod checked_optimization_v1;
 mod checked_redundant_store_v1;
+mod checked_refined_forwarding_history_v1;
 mod checked_store_forwarding_v1;
 mod checked_u32_local_order_v1;
 mod optimization_v2;
@@ -37,6 +43,7 @@ mod owned_cross_block_forwarding_v1;
 mod owned_induction_refinement_v1;
 mod owned_licm_v1;
 mod owned_loop_preheaders_v1;
+mod owned_loop_unroll_v1;
 mod owned_private_cell_promotion_v1;
 mod private_cell_promotion_resources_v1;
 mod structural_replay_admission_v2;
@@ -60,6 +67,7 @@ pub use checked_optimization_policy8_transport_v1::*;
 pub use checked_optimization_receipt_v1::*;
 pub use checked_optimization_v1::*;
 pub use checked_redundant_store_v1::*;
+pub use checked_refined_forwarding_history_v1::*;
 pub use checked_store_forwarding_v1::*;
 pub use checked_u32_local_order_v1::*;
 pub use optimization_v2::*;
@@ -68,6 +76,7 @@ pub use owned_cross_block_forwarding_v1::*;
 pub use owned_induction_refinement_v1::*;
 pub use owned_licm_v1::*;
 pub use owned_loop_preheaders_v1::*;
+pub use owned_loop_unroll_v1::*;
 pub use owned_private_cell_promotion_v1::*;
 pub use structural_replay_admission_v2::*;
 pub use structural_replay_admission_v3::*;

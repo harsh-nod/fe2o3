@@ -8,9 +8,46 @@ struct Origin<'module> {
     ty: &'module Type,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+enum ReadIndex {
+    ProvenOrigin(ValueId),
+    ExactBlockParameter(ValueId),
+}
+
+#[derive(Clone, Copy)]
+enum ReadLink {
+    Terminal,
+    Origin(ValueId),
+    Bridge(ValueId),
+}
+
+#[derive(Clone, Copy)]
+enum ReadResolution {
+    Pending,
+    Visiting,
+    Resolved(ReadIndex),
+    Unsupported,
+}
+
+#[derive(Clone, Copy)]
+struct ReadRepresentation {
+    value: ValueId,
+    scalar: ScalarType,
+    link: ReadLink,
+    next: Option<usize>,
+    resolution: ReadResolution,
+}
+
+fn representation_scalar(ty: &Type) -> Option<ScalarType> {
+    match ty {
+        Type::Scalar(s @ (ScalarType::Index | ScalarType::U64)) => Some(*s),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ReadGuard {
-    index: ValueId,
+    index: ReadIndex,
     slice: ValueId,
     allocation: FormalAllocationIdentity,
     guard_index: ValueId,
@@ -25,6 +62,7 @@ struct ReadGuard {
 pub(super) struct RuntimeReadState<'module> {
     origins: Vec<Origin<'module>>,
     guards: Vec<ReadGuard>,
+    representations: Vec<ReadRepresentation>,
 }
 
 fn origin_lookup_work_v1(count: usize) -> Result<usize, ResourceError> {
@@ -70,14 +108,14 @@ impl<'module> GuardedAnalysisV1<'module> {
             .sort(&mut self.runtime_reads.origins, 1, |a, b| {
                 a.value.cmp(&b.value)
             })?;
+        self.collect_read_representations(function)?;
         self.ledger
             .reserve(&mut self.runtime_reads.guards, self.truths.len())?;
         for ordinal in 0..self.truths.len() {
             self.ledger.charge(24)?;
             let truth = self.truths[ordinal];
-            if truth.ambiguous {
-                continue;
-            }
+            // Repeated predicates still have independently checked true edges.
+            // This index retains every edge; the single-truth recipe does not.
             let Some(compare) = self.definition(truth.predicate)? else {
                 continue;
             };
@@ -89,11 +127,15 @@ impl<'module> GuardedAnalysisV1<'module> {
             else {
                 continue;
             };
-            let Some(index) = self.runtime_index_origin(lhs)? else {
+            let Some(index) = self.runtime_read_index(lhs)? else {
                 continue;
             };
-            let Some(length) = self.runtime_index_origin(rhs)? else {
+            let Some(length) = self.runtime_read_index(rhs)? else {
                 continue;
+            };
+            let length = match length {
+                ReadIndex::ProvenOrigin(value) => value,
+                ReadIndex::ExactBlockParameter(_) => continue,
             };
             let Some(length_op) = self.definition(length)? else {
                 continue;
@@ -122,7 +164,7 @@ impl<'module> GuardedAnalysisV1<'module> {
             });
         }
         self.ledger
-            .sort(&mut self.runtime_reads.guards, 5, |a, b| {
+            .sort(&mut self.runtime_reads.guards, 6, |a, b| {
                 (a.index, a.slice, a.interval, a.predicate).cmp(&(
                     b.index,
                     b.slice,
@@ -133,7 +175,7 @@ impl<'module> GuardedAnalysisV1<'module> {
         // Prefix maxima select a covering successful edge in logarithmic work,
         // even when an earlier enclosing guard outlives a later sibling guard.
         for ordinal in 0..self.runtime_reads.guards.len() {
-            self.ledger.charge(6)?;
+            self.ledger.charge(8)?;
             let row = self.runtime_reads.guards[ordinal];
             let covering = if ordinal > 0 {
                 let previous = self.runtime_reads.guards[ordinal - 1];
@@ -149,6 +191,183 @@ impl<'module> GuardedAnalysisV1<'module> {
                 ordinal
             };
             self.runtime_reads.guards[ordinal].covering = covering;
+        }
+        Ok(())
+    }
+
+    fn collect_read_representations(
+        &mut self,
+        function: &'module Function,
+    ) -> Result<(), ResourceError> {
+        if !self.runtime_reads.representations.is_empty() {
+            return Err(ResourceError::Accounting);
+        }
+        let body = function.body.as_ref().ok_or(ResourceError::Accounting)?;
+        // Count all possible rows first. Non-index rows remain unused capacity;
+        // no push can reallocate while the dependency cache is being built.
+        let count = self
+            .parameters
+            .len()
+            .checked_add(self.runtime_reads.origins.len())
+            .and_then(|v| v.checked_add(self.definitions.len()))
+            .ok_or(ResourceError::Arithmetic)?;
+        self.ledger
+            .reserve(&mut self.runtime_reads.representations, count)?;
+        for row in &self.parameters {
+            self.ledger.charge(3)?;
+            if let Some(scalar) = representation_scalar(row.ty) {
+                self.runtime_reads.representations.push(ReadRepresentation {
+                    value: row.value,
+                    scalar,
+                    link: ReadLink::Terminal,
+                    next: None,
+                    resolution: ReadResolution::Resolved(ReadIndex::ProvenOrigin(row.value)),
+                });
+            }
+        }
+        for row in &self.runtime_reads.origins {
+            self.ledger.charge(4)?;
+            if let Some(scalar) = representation_scalar(row.ty) {
+                self.runtime_reads.representations.push(ReadRepresentation {
+                    value: row.value,
+                    scalar,
+                    next: None,
+                    link: row.origin.map_or(ReadLink::Terminal, ReadLink::Origin),
+                    resolution: row.origin.map_or(
+                        ReadResolution::Resolved(ReadIndex::ExactBlockParameter(row.value)),
+                        |_| ReadResolution::Pending,
+                    ),
+                });
+            }
+        }
+        for block in &body.blocks {
+            self.ledger.charge(1)?;
+            if self
+                .control_row(block.id)?
+                .is_none_or(|row| row.interval.is_none())
+            {
+                continue;
+            }
+            for operation in &block.operations {
+                self.ledger.charge(3)?;
+                for result in &operation.results {
+                    self.ledger.charge(4)?;
+                    let Some(scalar) = representation_scalar(&result.ty) else {
+                        continue;
+                    };
+                    let link = match &operation.kind {
+                        OperationKind::Cast {
+                            kind: CastKind::Bitcast,
+                            value,
+                            to,
+                        } if operation.results.len() == 1 && *to == result.ty => {
+                            ReadLink::Bridge(*value)
+                        }
+                        _ => ReadLink::Terminal,
+                    };
+                    if self.runtime_reads.representations.len() == count {
+                        return Err(ResourceError::Accounting);
+                    }
+                    self.runtime_reads.representations.push(ReadRepresentation {
+                        value: result.id,
+                        scalar,
+                        link,
+                        next: None,
+                        resolution: match link {
+                            ReadLink::Terminal => {
+                                ReadResolution::Resolved(ReadIndex::ProvenOrigin(result.id))
+                            }
+                            _ => ReadResolution::Pending,
+                        },
+                    });
+                }
+            }
+        }
+        self.ledger
+            .sort(&mut self.runtime_reads.representations, 1, |a, b| {
+                a.value.cmp(&b.value)
+            })?;
+        for ordinal in 0..self.runtime_reads.representations.len() {
+            self.ledger.charge(6)?;
+            let row = self.runtime_reads.representations[ordinal];
+            if ordinal > 0 && self.runtime_reads.representations[ordinal - 1].value == row.value {
+                return Err(ResourceError::Accounting);
+            }
+            let (value, bridge) = match row.link {
+                ReadLink::Terminal => continue,
+                ReadLink::Origin(value) => (value, false),
+                ReadLink::Bridge(value) => (value, true),
+            };
+            let next = self
+                .ledger
+                .find(&self.runtime_reads.representations, |r| r.value.cmp(&value))?;
+            let valid = next.is_some_and(|next| {
+                let from = self.runtime_reads.representations[next].scalar;
+                if bridge {
+                    matches!(
+                        (from, row.scalar),
+                        (ScalarType::U64, ScalarType::Index) | (ScalarType::Index, ScalarType::U64)
+                    )
+                } else {
+                    from == row.scalar
+                }
+            });
+            if valid {
+                self.runtime_reads.representations[ordinal].next = next;
+            } else {
+                // An unrecognized cast stays its own opaque SSA value. It is
+                // never equated with a separately computed signed/numeric cast.
+                self.runtime_reads.representations[ordinal].resolution = if bridge {
+                    ReadResolution::Resolved(ReadIndex::ProvenOrigin(row.value))
+                } else {
+                    ReadResolution::Unsupported
+                };
+            }
+        }
+        self.resolve_read_representations()
+    }
+
+    fn resolve_read_representations(&mut self) -> Result<(), ResourceError> {
+        self.ledger.storage(size_of::<Vec<usize>>())?;
+        let mut path = Vec::new();
+        self.ledger
+            .reserve(&mut path, self.runtime_reads.representations.len())?;
+        for start in 0..self.runtime_reads.representations.len() {
+            self.ledger.charge(1)?;
+            if !matches!(
+                self.runtime_reads.representations[start].resolution,
+                ReadResolution::Pending
+            ) {
+                continue;
+            }
+            let mut current = start;
+            let result = loop {
+                self.ledger.charge(4)?;
+                let row = self
+                    .runtime_reads
+                    .representations
+                    .get(current)
+                    .ok_or(ResourceError::Accounting)?;
+                match row.resolution {
+                    ReadResolution::Resolved(result) => break Some(result),
+                    ReadResolution::Visiting | ReadResolution::Unsupported => break None,
+                    ReadResolution::Pending => {
+                        let next = row.next.ok_or(ResourceError::Accounting)?;
+                        self.runtime_reads.representations[current].resolution =
+                            ReadResolution::Visiting;
+                        if path.len() == path.capacity() {
+                            return Err(ResourceError::Accounting);
+                        }
+                        path.push(current);
+                        current = next;
+                    }
+                }
+            };
+            while let Some(ordinal) = path.pop() {
+                self.ledger.charge(2)?;
+                self.runtime_reads.representations[ordinal].resolution =
+                    result.map_or(ReadResolution::Unsupported, ReadResolution::Resolved);
+            }
         }
         Ok(())
     }
@@ -194,6 +413,39 @@ impl<'module> GuardedAnalysisV1<'module> {
             return Ok(None);
         };
         Ok((self.runtime_type(origin)? == Some(&Type::INDEX)).then_some(origin))
+    }
+
+    fn runtime_read_index(&mut self, value: ValueId) -> Result<Option<ReadIndex>, ResourceError> {
+        self.ledger.charge(2)?;
+        if let Some(origin) = self.runtime_index_origin(value)? {
+            let operation = self.definition(origin)?;
+            if operation.is_none_or(|op| {
+                !matches!(
+                    op.kind,
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        ..
+                    }
+                )
+            }) {
+                return Ok(Some(ReadIndex::ProvenOrigin(origin)));
+            }
+        }
+        let Some(ordinal) = self
+            .ledger
+            .find(&self.runtime_reads.representations, |row| {
+                row.value.cmp(&value)
+            })?
+        else {
+            return Ok(None);
+        };
+        self.ledger.charge(4)?;
+        let row = self.runtime_reads.representations[ordinal];
+        // The bridge is internal: raw guards/GEPs must still use INDEX.
+        Ok(match (row.scalar, row.resolution) {
+            (ScalarType::Index, ReadResolution::Resolved(key)) => Some(key),
+            _ => None,
+        })
     }
 
     fn runtime_slice_parameter(
@@ -294,7 +546,7 @@ impl<'module> GuardedAnalysisV1<'module> {
         if slice_type.element != pointer_type.pointee || slice_type.access != pointer_type.access {
             return Ok(None);
         }
-        let Some(index) = self.runtime_index_origin(offset)? else {
+        let Some(index) = self.runtime_read_index(offset)? else {
             return Ok(None);
         };
         let Some(control) = self.control_row(location.block)? else {
@@ -305,7 +557,7 @@ impl<'module> GuardedAnalysisV1<'module> {
         };
         let selected = verification_find_last_by_v1(
             &self.runtime_reads.guards,
-            3,
+            4,
             &mut Budget::new(&mut self.ledger.work, 0),
             |row| match (row.index, row.slice).cmp(&(index, parameter.value)) {
                 std::cmp::Ordering::Equal if row.interval.0 <= start => std::cmp::Ordering::Equal,

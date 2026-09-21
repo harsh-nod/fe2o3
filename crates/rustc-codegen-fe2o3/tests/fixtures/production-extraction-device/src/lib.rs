@@ -1,5 +1,13 @@
 #![no_std]
 
+#[cfg(any(
+    feature = "guarded-loop-read",
+    feature = "guarded-loop-read-control",
+    feature = "guarded-loop-read-stale",
+    feature = "guarded-loop-read-different",
+))]
+mod guarded_loop_read;
+
 #[cfg(feature = "conditional-descriptor-pair")]
 mod conditional_descriptor_pair;
 
@@ -132,6 +140,10 @@ mod ordered_region_v31;
 mod ordered_program_v32;
 
 #[cfg(not(any(
+    feature = "guarded-loop-read",
+    feature = "guarded-loop-read-control",
+    feature = "guarded-loop-read-stale",
+    feature = "guarded-loop-read-different",
     feature = "loop-capture-exact",
     feature = "loop-capture-renamed",
     feature = "loop-capture-generic",
