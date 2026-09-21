@@ -1,8 +1,9 @@
 # Producer-Bound Read Reservations V1
 
 Status: concrete Rust model candidate. Not yet wired into RuntimeContext, Worker
-transport or a native backend. Conditional custody and logical lifecycle proofs
-are registered in the Verus campaign; Rust/native refinement remains open.
+transport or a native backend. Core reader/custody proofs are registered in the
+Verus campaign; recent execution extensions have dedicated development checkers.
+Production Rust/native refinement remains open.
 Pending journaled producer-to-consumer requests still return `ContextReserved`.
 
 ## Ownership Model
@@ -183,13 +184,33 @@ retains two 338/0 whole-crate positives, ten exact 337/1 executable controls,
 823 model unit tests and 27 doctests, with mandatory exact-source/receipt auditing.
 Its 321 inherited obligations overlap earlier campaigns.
 
-These are conditional logical-execution proofs, not whole-wrapper verification.
+`context_version_journal_settlement_commit_v1.rs` now executes the complete raw
+settlement transaction: exact preflight, prestate-derived scratch staging,
+sequential Success/NoEffect commit, member/writer returns and scratch restoration.
+It has no valid-state precondition and exactly frames rejection. It preserves
+unreachable members, unrelated forged backlinks, malformed free prefixes and
+unused scratch tails rather than introducing a global-validity premise.
+`context_version_journal_settlement_custody_v1.rs` derives the existing settlement
+relation from that execution under pending custody, then preserves issued history,
+stable leases and producer reservations without global idleness. Complete retained
+chain coverage and the historical backlink selector are justified by custody,
+not by raw preflight alone. Constructor/enroll/register/Begin traces now execute
+both outcomes for empty and two-member writers, including rejection and repeat
+settlement framing; their reader arenas are empty.
+The [settlement execution development packet](evidence/dev-settlement-commit-2026-09-21/README.md)
+retains two 360/0 whole-crate positives, ten exact 359/1 executable controls,
+825 model unit tests and 27 doctests, with exact offline source/receipt auditing.
+New production regressions cover 34 admitted-state cases, including malformed
+untouched state, and preserve all seven vector storage identities and the
+touched-chain indexed-access bound.
+The 338 inherited obligations overlap prior packets.
+
+These are logical-execution proofs with invariant-conditional custody composition,
+not whole-wrapper verification.
 Complete retained-chain coverage is preserved by logical enrollment and Begin;
-settlement/issuance composition is established only for the exact transition
-relation, not yet for the executable staging/commit loop.
-Physical Vec storage,
-fallible allocation, settlement scratch/commit execution, panic/unwind behavior,
-and production Rust correspondence remain separate. Release bounds use an observed
+settlement/issuance composition is now derived from the executable logical commit.
+Physical Vec storage, fallible allocation, panic/unwind behavior and production
+Rust correspondence remain separate. Release bounds use an observed
 capacity argument, not a proved binding to Rust `Vec::capacity()`. The acquisition
 induction advances a hypothetical incarnation prefix; the concrete logical loop
 updates its watermark once at the end. It does not establish invariants at every
@@ -197,15 +218,11 @@ intermediate machine state or atomicity under panic/unwind.
 
 Before enabling runtime admission, the remaining work is:
 
-1. Connect successful settlement preflight to prestate-derived scratch plans and
-   sequential Success/NoEffect commit, deriving the exact settlement relation and
-   complete unchanged-on-rejection contents for the whole executor. Preserve
-   unrelated live readers without a global-idle premise.
-   Establish production Rust correspondence for enrollment, Begin, settlement,
-   Unknown marking and the
-   proved logical admission/release and unread guards.
-   Bind physical capacity and fallible allocation to those relations before
-   treating the logical lifecycle as full-wrapper refinement.
+1. Establish production Rust correspondence for enrollment, Begin, settlement,
+   Unknown marking and the proved logical admission/release and unread guards.
+   Bind physical capacity and fallible allocation to those relations and specify
+   normal/unwind semantics before treating the logical lifecycle as full-wrapper
+   refinement.
 2. Retain an exact Context event-to-producer writer/member binding and a distinct
    producer-reader root, with preallocated capacity before backend entry.
    Include it in Context cleanup, generated-operation exclusion and usage.

@@ -1,0 +1,14 @@
+{
+  "development_checks_passed": true,
+  "positive_obligations": 360,
+  "inherited_obligations": 338,
+  "negative_cases": 10,
+  "exact_raw_settlement_execution": true,
+  "settlement_commit_loop_refined": true,
+  "issued_producer_preservation": true,
+  "constructor_settlement_witness": true,
+  "mixed_reader_constructor_witness": false,
+  "physical_capacity_binding_proved": false,
+  "rust_source_refinement_proved": false,
+  "native_or_performance_acceptance": false
+}
