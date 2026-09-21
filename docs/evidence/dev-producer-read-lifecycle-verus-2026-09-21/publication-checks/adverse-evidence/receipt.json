@@ -1,0 +1,30 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-producer-read-lifecycle-verus-2026-09-21/archive-selftest.py",
+    "--archive",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-producer-read-lifecycle-verus-2026-09-21",
+    "--repo",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789983109498721423,
+  "group_absent": true,
+  "pid": 388987,
+  "started_ns": 1789983090897528817,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "92ef4e54968e67dbd5c13ba2ca6ce0bb3b1ff5642332c43f4c7eae6dfda3d31f",
+  "timeout_seconds": 300
+}

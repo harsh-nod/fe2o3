@@ -1,0 +1,9 @@
+{
+  "context_integration": false,
+  "logical_producer_lifecycle": true,
+  "native_execution": false,
+  "performance_acceptance": false,
+  "qualified": true,
+  "rust_lifecycle_refinement": false,
+  "source_commit": "85aa7f7e02f467ac298a5adc66d6ceb62f185039"
+}

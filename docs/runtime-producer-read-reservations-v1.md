@@ -102,6 +102,9 @@ settlement preflight. Release leaves the journal unchanged in every status.
 The dedicated checker runs whole-crate positives before and after 19 executable
 body mutations, with strict single-postcondition diagnostics. The exact custody
 module header is authenticated separately; arbitrary imports remain forbidden.
+The [signed-source lifecycle qualification](evidence/dev-producer-read-lifecycle-verus-2026-09-21/README.md)
+records both whole-crate positive brackets, all 19 executable controls, and the
+complete registered proof run with all 691 standalone negative files.
 
 These are conditional logical-execution proofs, not whole-wrapper verification.
 Complete retained-chain coverage is a premise whose reachability across all

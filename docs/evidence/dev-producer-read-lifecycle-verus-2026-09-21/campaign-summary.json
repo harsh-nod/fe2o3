@@ -1,0 +1,149 @@
+[
+  {
+    "case": "positive_before",
+    "exit": 0,
+    "verified": 254,
+    "errors": 0,
+    "seconds": 62.744331535
+  },
+  {
+    "case": "pending_as_success",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 61.50249898
+  },
+  {
+    "case": "unknown_as_pending",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 58.330778549
+  },
+  {
+    "case": "noeffect_as_success",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 62.531448724
+  },
+  {
+    "case": "device_extent_order",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 61.213872101
+  },
+  {
+    "case": "nonpending_admitted",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 59.57910545
+  },
+  {
+    "case": "producer_kind_admitted",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 58.172216321
+  },
+  {
+    "case": "producer_equal_consumer",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 61.494716768
+  },
+  {
+    "case": "shared_capacity_ignores_stable",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 60.180562899
+  },
+  {
+    "case": "capacity_epoch_order",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 63.010213349
+  },
+  {
+    "case": "release_evidence_order",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 61.908287928
+  },
+  {
+    "case": "identity_before_context",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 65.003955928
+  },
+  {
+    "case": "acquire_scan_error_accepted",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 69.248849361
+  },
+  {
+    "case": "release_scan_error_accepted",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 69.698495288
+  },
+  {
+    "case": "acquire_error_state",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 64.464268435
+  },
+  {
+    "case": "acquire_error_output",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 63.387774557
+  },
+  {
+    "case": "acquire_commit_counter",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 60.850233214
+  },
+  {
+    "case": "acquire_commit_output",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 63.699819032
+  },
+  {
+    "case": "release_error_state",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 62.95840727
+  },
+  {
+    "case": "release_commit_free",
+    "exit": 1,
+    "verified": 253,
+    "errors": 1,
+    "seconds": 63.23083561
+  },
+  {
+    "case": "positive_after",
+    "exit": 0,
+    "verified": 254,
+    "errors": 0,
+    "seconds": 65.39023992
+  }
+]

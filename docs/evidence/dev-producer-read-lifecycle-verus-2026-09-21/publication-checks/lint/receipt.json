@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/home/harsh/.local/bin/ruff",
+    "check",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-producer-read-lifecycle-verus-2026-09-21/qualify.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-producer-read-lifecycle-verus-2026-09-21/archive.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-producer-read-lifecycle-verus-2026-09-21/archive-selftest.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789983082344271431,
+  "group_absent": true,
+  "pid": 388591,
+  "started_ns": 1789983082268052405,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+  "timeout_seconds": 60
+}

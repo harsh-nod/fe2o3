@@ -42,6 +42,9 @@ The ten mutation-target functions and four recursive lifecycle bridges use
 separate solver contexts in the positive source. Contracts, budgets and the
 whole-crate diagnostic requirements are unchanged.
 Counts overlap across importing campaigns and must not be summed.
+The [signed-source lifecycle qualification](../../../docs/evidence/dev-producer-read-lifecycle-verus-2026-09-21/README.md)
+records the dedicated campaign and complete registered proof run, including all
+691 standalone negatives and portable offline evidence validation.
 
 The strong chain graph is a reachable-state premise, not a whole-arena check
 performed by Rust settlement. Base issuance/history and exact reserved-count
