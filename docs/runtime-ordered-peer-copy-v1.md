@@ -28,6 +28,37 @@ An intermediate native completion does not settle the writer, deliver completion
 callbacks, or wake dependent submissions. Cancellation is possible only before
 the first publication attempt, never between completed segments.
 
+## Owned Async Calls
+
+`RuntimeAsyncProgressHandleV1::peer_copy_segments` and
+`peer_copy_segments_tracked` enqueue the same local SPI through the existing
+owner-engine operation registry. They require `RuntimePeerCopySegmentsBackendV1`;
+they do not add Worker wire encoding, graph nodes, native routing or authority.
+The typed result represents the entire ordered list, not an individual segment.
+
+Both methods consume descriptor and dependency vectors, preserve descriptor
+order/duplicates and discard spare vector capacity. One shared-budget permit
+charges the combined boxed-slice payload until owner-thread submission or actual
+disposal. This excludes record/allocator overhead and Context/backend/GPU custody.
+At most 4096 three-u64 descriptors and 256 event IDs can be retained. Invalid or
+duplicate dependency lists and excessive descriptor counts fail before enqueue;
+empty lists, ranges and live-resource identities remain Context checks on the
+owner thread. Successful Context admission takes its own snapshot before the
+async payload charge is released.
+
+Dropping a future abandons observation only: accepted owner work still progresses.
+Tracked cancellation can stop an unsubmitted operation, with credit returned
+when the owner disposes of its request. Timeouts do not cancel or authorize
+resource release. Once submitted, existing whole-list settlement and native
+custody rules apply. Ordinary owner polling does not imply eligibility for the
+single-wait diagnostic capture mode below.
+
+Focused CPU regressions cover both methods' snapshot bounds/compaction, combined
+credit and rejection refunds, owner-side validation precedence, cancellation,
+observer-drop progress, descriptor order/duplicates and background owner-thread
+completion. These mock-backed tests are not a new native or formal-refinement
+qualification.
+
 ## Native Execution
 
 The gfx942 XGMI adapter uses existing native batch-scope APIs. It submits one
@@ -268,8 +299,7 @@ measurements remain pending. The earlier native packets do not qualify it.
 - Expand matched useful-segment testing to the remaining seven payload/count
   geometries, and attribute the 65-segment cost before larger optimizations. No
   speedup or parity claim follows from the completed comparisons.
-- Owner-engine convenience wrappers with descriptor budget accounting, graph
-  sequence nodes, and explicit negotiated Worker transport support.
+- Graph sequence nodes and explicit negotiated Worker transport support.
 - More permissive scheduling-domain coexistence and native multi-packet
   publication are separate optimizations. This serial version still publishes
   and waits once per descriptor and does not claim optimal packet throughput.

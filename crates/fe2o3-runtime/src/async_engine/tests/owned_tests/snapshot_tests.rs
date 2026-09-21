@@ -2,6 +2,8 @@ use super::*;
 use crate::{RuntimeAsyncLaunchRequestV1, RuntimeBindingV1};
 use std::sync::atomic::AtomicUsize;
 
+mod peer_segments;
+
 #[derive(Clone)]
 struct Args {
     encodes: Arc<AtomicUsize>,
@@ -34,7 +36,14 @@ struct Harness {
 }
 impl Harness {
     fn new(budget: usize, channel: usize) -> Self {
-        let state = Arc::new(Mutex::new(MockState::default()));
+        Self::new_with_peers(budget, channel, false)
+    }
+
+    fn new_with_peers(budget: usize, channel: usize, peer_devices: bool) -> Self {
+        let state = Arc::new(Mutex::new(MockState {
+            peer_devices,
+            ..MockState::default()
+        }));
         let mut context = RuntimeContextV1::open(MockBackend {
             state: state.clone(),
         })

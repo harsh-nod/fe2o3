@@ -1992,6 +1992,8 @@ mod tests {
 
     #[derive(Default)]
     struct MockState {
+        peer_devices: bool,
+        peer_segment_issues: Vec<(u64, Vec<crate::RuntimePeerCopySegmentV1>, Vec<u64>)>,
         adoption_ready_calls: usize,
         adoption_ready_mode: u8,
         adoption_retire_calls: usize,
@@ -2042,20 +2044,25 @@ mod tests {
         fn enumerate_devices_v1(
             &mut self,
         ) -> Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<Self::Error>> {
-            Ok(vec![BackendDeviceDescriptionV1 {
-                backend_device: 1,
-                name: "mock".to_owned(),
-                target: "mock".to_owned(),
-                global_memory_bytes: 4096,
-                capabilities: RuntimeCapabilitiesV1 {
-                    typed_async_launch: true,
-                    streams: true,
-                    events: true,
-                    device_memory: true,
-                    host_visible_memory: true,
-                    ..RuntimeCapabilitiesV1::default()
-                },
-            }])
+            let peer_devices = self.state.lock().unwrap().peer_devices;
+            Ok((1..=if peer_devices { 2 } else { 1 })
+                .map(|backend_device| BackendDeviceDescriptionV1 {
+                    backend_device,
+                    name: "mock".to_owned(),
+                    target: "mock".to_owned(),
+                    global_memory_bytes: 4096,
+                    capabilities: RuntimeCapabilitiesV1 {
+                        typed_async_launch: true,
+                        streams: true,
+                        events: true,
+                        device_memory: true,
+                        host_visible_memory: true,
+                        peer_copy: peer_devices,
+                        multi_device: peer_devices,
+                        ..RuntimeCapabilitiesV1::default()
+                    },
+                })
+                .collect())
         }
 
         fn create_stream_v1(

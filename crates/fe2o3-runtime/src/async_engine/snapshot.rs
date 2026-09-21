@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::{
-    RuntimeArgumentsV1, RuntimeBindingV1, RuntimeLaunchGeometryV1, RuntimeSubmissionV1,
-    TypedRuntimeKernelV1,
+    RuntimeArgumentsV1, RuntimeBindingV1, RuntimeLaunchGeometryV1, RuntimePeerCopySegmentV1,
+    RuntimeSubmissionV1, TypedRuntimeKernelV1,
 };
 use std::sync::atomic::AtomicUsize;
 
@@ -13,6 +13,7 @@ pub enum RuntimeAsyncSnapshotErrorV1 {
     DuplicateDependency,
     KernargTooLarge,
     TooManyBindings,
+    TooManyPeerCopySegments,
 }
 
 impl fmt::Display for RuntimeAsyncSnapshotErrorV1 {
@@ -108,6 +109,34 @@ pub(super) fn charge_dependencies(
         .map_err(RuntimeAsyncEngineCallErrorV1::InvalidSnapshot)?;
     let bytes = std::mem::size_of_val(&*dependencies);
     budget.charge(dependencies, bytes)
+}
+
+pub(super) struct PeerCopySegmentsSnapshotV1 {
+    pub(super) segments: Box<[RuntimePeerCopySegmentV1]>,
+    pub(super) dependencies: Box<[RuntimeEventIdV1]>,
+}
+
+pub(super) fn charge_peer_copy_segments(
+    budget: &Arc<SnapshotBudgetV1>,
+    segments: Vec<RuntimePeerCopySegmentV1>,
+    dependencies: Vec<RuntimeEventIdV1>,
+) -> Result<Charged<PeerCopySegmentsSnapshotV1>, RuntimeAsyncEngineCallErrorV1> {
+    let dependencies = compact_dependencies(dependencies)
+        .map_err(RuntimeAsyncEngineCallErrorV1::InvalidSnapshot)?;
+    if segments.len() > crate::MAX_RUNTIME_PEER_COPY_SEGMENTS_V1 {
+        return Err(RuntimeAsyncEngineCallErrorV1::InvalidSnapshot(
+            RuntimeAsyncSnapshotErrorV1::TooManyPeerCopySegments,
+        ));
+    }
+    let segments = segments.into_boxed_slice();
+    let bytes = std::mem::size_of_val(&*segments) + std::mem::size_of_val(&*dependencies);
+    budget.charge(
+        PeerCopySegmentsSnapshotV1 {
+            segments,
+            dependencies,
+        },
+        bytes,
+    )
 }
 
 /// An owned address-free launch snapshot, not context or executable admission.

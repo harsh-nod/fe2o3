@@ -3,7 +3,8 @@
 use super::*;
 use crate::{
     RuntimeArgumentsV1, RuntimeAsyncCopyBackendV1, RuntimeCopyV1, RuntimeLaunchGeometryV1,
-    RuntimeMemoryRegionV1, RuntimePeerCopyV1, RuntimeSubmissionV1, TypedRuntimeKernelV1,
+    RuntimeMemoryRegionV1, RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsBackendV1,
+    RuntimePeerCopySegmentsV1, RuntimePeerCopyV1, RuntimeSubmissionV1, TypedRuntimeKernelV1,
 };
 use std::collections::{BTreeMap, VecDeque};
 
@@ -494,6 +495,20 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         snapshot::charge_dependencies(&self.observer.snapshot_budget, dependencies)
     }
 
+    fn operation_peer_copy_segments(
+        &self,
+        segments: Vec<RuntimePeerCopySegmentV1>,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        snapshot::Charged<snapshot::PeerCopySegmentsSnapshotV1>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        if self.observer.rejects_async_enqueue() {
+            return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+        }
+        snapshot::charge_peer_copy_segments(&self.observer.snapshot_budget, segments, dependencies)
+    }
+
     pub(super) fn enqueue_operation<A: 'static>(
         &self,
         stream: RuntimeStreamIdV1,
@@ -670,6 +685,78 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             Box::new(move |context| {
                 dependencies.with(|dependencies| {
                     context.peer_copy(stream, source, destination, dependencies)
+                })
+            }),
+        )
+    }
+
+    /// Enqueues one ordered peer-copy list with runtime-owned whole-list progress.
+    ///
+    /// Descriptors and dependencies are compacted and charged together until
+    /// owner-thread submission or disposal. Spare Vec capacity is not retained;
+    /// the charge excludes allocator/record overhead and backend/GPU custody.
+    /// Descriptor order and duplicates are preserved. The context validates live
+    /// identities and all ranges on the owner thread. Dropping the future does
+    /// not cancel the list. This local SPI extension does not imply XGMI routing.
+    pub fn peer_copy_segments(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        segments: Vec<RuntimePeerCopySegmentV1>,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncOperationFutureV1<RuntimePeerCopySegmentsV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimePeerCopySegmentsBackendV1,
+    {
+        let snapshot = self.operation_peer_copy_segments(segments, dependencies)?;
+        self.enqueue_operation(
+            stream,
+            Box::new(move |context| {
+                snapshot.with(|request| {
+                    context.peer_copy_segments(
+                        stream,
+                        source,
+                        destination,
+                        &request.segments,
+                        &request.dependencies,
+                    )
+                })
+            }),
+        )
+    }
+
+    /// Ordered peer copy with local pre-submission cancellation and timeout
+    /// observation. Credit and native custody follow `peer_copy_segments`.
+    pub fn peer_copy_segments_tracked(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        segments: Vec<RuntimePeerCopySegmentV1>,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncTrackedOperationV1<RuntimePeerCopySegmentsV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimePeerCopySegmentsBackendV1,
+    {
+        let snapshot = self.operation_peer_copy_segments(segments, dependencies)?;
+        self.enqueue_tracked_operation(
+            stream,
+            Box::new(move |context| {
+                snapshot.with(|request| {
+                    context.peer_copy_segments(
+                        stream,
+                        source,
+                        destination,
+                        &request.segments,
+                        &request.dependencies,
+                    )
                 })
             }),
         )
