@@ -280,6 +280,10 @@ include!("canonical_kir_loops_resources_v1.rs");
 include!("canonical_kir_loops_build_v1.rs");
 include!("canonical_kir_loops_replay_v1.rs");
 
+#[path = "canonical_kir_loop_induction_facts_v1.rs"]
+mod induction_facts;
+pub use induction_facts::*;
+
 #[cfg(test)]
 #[path = "canonical_kir_loops_v1_tests.rs"]
 mod tests;

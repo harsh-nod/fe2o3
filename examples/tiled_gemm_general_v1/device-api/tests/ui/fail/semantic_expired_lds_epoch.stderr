@@ -10,7 +10,7 @@ error[E0382]: use of moved value: `published`
    |                    ^^^^^^^^^ value used here after move
    |
 note: `Gfx942TiledGemmWave64V1::<GemmPublished>::multiply_accumulate` takes ownership of the receiver `self`, which moves `published`
-  --> device-api/src/lib.rs
+  --> src/lib.rs
    |
    |     pub fn multiply_accumulate(self) -> Gfx942TiledGemmWave64V1<GemmConsumed> {
    |                                ^^^^

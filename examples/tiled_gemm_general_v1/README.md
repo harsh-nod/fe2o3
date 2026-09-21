@@ -58,6 +58,15 @@ admission; those remain a separate, fail-closed pipeline.
 
 ## Safety boundary
 
+The standalone capability API owns its host UI tests. From the repository root:
+
+```bash
+cargo test --locked --offline --manifest-path examples/tiled_gemm_general_v1/device-api/Cargo.toml --test device_api_ui
+```
+
+This runs one passing and sixteen compile-fail capability cases. It does not
+compile the attributed GEMM kernel or qualify its semantic proofs or GPU execution.
+
 The library containing the kernel uses `#![forbid(unsafe_code)]`. Ordinary Rust
 slice indexing and `DisjointSlice::get_mut` remain visible to the compiler, so
 generic bounds and ownership analysis can verify them. The host binary contains

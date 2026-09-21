@@ -774,7 +774,7 @@ fn multiblock_recurrence_rejects_mutation_and_alternate_entry() {
 }
 
 #[test]
-fn multiblock_two_external_header_entries_are_not_single_entry() {
+fn multiblock_two_external_header_entries_share_one_dominating_seed() {
     let context = &mut setup();
     let function = multi_block_loop(
         context,
@@ -784,11 +784,28 @@ fn multiblock_two_external_header_entries_are_not_single_entry() {
         RangeCase::None,
     );
     let report = run_pliron_progress_check_v1(context, &function);
+    assert!(report.is_clean(), "{report:?}");
+    assert!(report.findings().is_empty());
+    assert_eq!(report.certificates().len(), 1);
+}
+
+#[test]
+fn multiblock_distinct_equal_literal_header_seeds_remain_incomplete() {
+    let context = &mut setup();
+    let function = multi_block_loop(
+        context,
+        Some(64),
+        1,
+        MultiBlockCase::DistinctHeaderSeeds,
+        RangeCase::None,
+    );
+    let report = run_pliron_progress_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(report.certificates().is_empty());
     assert!(matches!(
         report.findings(),
         [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
-            if reason.contains("exactly one external entry")
+            if reason.contains("one outside dominating typed induction seed")
     ));
 }
 

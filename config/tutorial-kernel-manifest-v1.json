@@ -4322,7 +4322,7 @@
         "sourceEntryIds": [
           "gfx950-gpt-oss-120b-megakernel"
         ],
-        "sourceBindingGap": "Displayed pipelined-attention and scalar-attention sources lack selected fixture associations. Shared package membership does not establish their feature/symbol or execution coverage.",
+        "sourceBindingGap": null,
         "variants": [
           {
             "kind": "simt",
@@ -7024,6 +7024,8 @@
               "gfx950-gpt-oss-materialized-attention",
               "gfx950-gpt-oss-materialized-expert",
               "gfx950-gpt-oss-materialized-router",
+              "gfx950-gpt-oss-pipelined-attention",
+              "gfx950-gpt-oss-scalar-attention",
               "gfx950-gpt-oss-serial-router"
             ]
           }
@@ -7140,6 +7142,71 @@
             "lessonId": "softmax-invariant",
             "fixtureIds": [
               "gfx942-row-softmax"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-tiled-gemm-paired-default",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/tiled_gemm_general_v1/Cargo.toml",
+            "test",
+            "paired_contract"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Fresh qualification remains pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gemm-proof-plan",
+            "fixtureIds": [
+              "gfx942-tiled-gemm"
+            ]
+          },
+          {
+            "lessonId": "gemm-tiling",
+            "fixtureIds": [
+              "gfx942-tiled-gemm"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-tiled-gemm-paired-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/tiled_gemm_general_v1/Cargo.toml",
+            "test",
+            "paired_contract",
+            "--no-default-features",
+            "--features",
+            "kernel-simt-gemm-general"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Fresh qualification remains pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gemm-proof-plan",
+            "fixtureIds": [
+              "gfx942-tiled-gemm"
+            ]
+          },
+          {
+            "lessonId": "gemm-tiling",
+            "fixtureIds": [
+              "gfx942-tiled-gemm"
             ]
           }
         ]
@@ -8403,6 +8470,54 @@
             ]
           }
         ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-pipelined-attention",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-pipelined-attention"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The source-produced simulation adapter, independent oracle and fresh qualification remain pending; no other variant's retained KIR is execution evidence for this source.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-scalar-attention",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-scalar-attention"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The source-produced simulation adapter, independent oracle and fresh qualification remain pending; no other variant's retained KIR is execution evidence for this source.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention"
+            ]
+          }
+        ]
       }
     ],
     "status": "pending"
@@ -8737,11 +8852,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/tiled_gemm_general_v1/Cargo.toml",
-        "packageManifestSha256": "8fcded65fb00a9e8c19214683bafecedd7c82832903db298145027ad8ace1021",
+        "packageManifestSha256": "4cd3fdce66b66980a73164151526a40df7c101ba3e3e222d044158c29d100efa",
         "sourcePaths": [
           "examples/tiled_gemm_general_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "b20a03bfde4cfa37792f0289cc36401b12d2ddd72ae554e451b6198aea9a9088",
+        "sourceClosureSha256": "c6893efaf362327799787f1c6e0c3e19d61471600c1dadd1034e5af05de5fe26",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_tiled_gemm_general_v1",
@@ -8753,8 +8868,8 @@
           "tiled_gemm_general_v1"
         ],
         "cargoLockPath": "examples/tiled_gemm_general_v1/Cargo.lock",
-        "cargoLockSha256": "a0f7557a022619bac683f7b8cde2f566c4f68b1739707d15ae261c6e730c6c12",
-        "contractSha256": "ef1dbec0fe3e5421a0345988f17ba7f3b78cfda62724646456a442f2c36dd18e"
+        "cargoLockSha256": "14e9b7b2926079d54e574ec65bea9b01a50ce06d0e15f1d34c5fa541b4a9c74d",
+        "contractSha256": "a58d64c512a641c70de9539d6771ec66c1d012fd90d409bd243a71b523f82ab9"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-tiled-gemm.request.json",
@@ -9589,7 +9704,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9604,7 +9719,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "6b690ebe81c3dc19c057f83070921364891338818831d44b923778f95ad61429",
-        "contractSha256": "31593d636dc8bf52d245094574b3e0b61eda471aa26f98cf7294f9083fb2e9f6"
+        "contractSha256": "4556027a52f5877ee4873fe3843b10729493e9829715b6026cd601926abbe672"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9638,7 +9753,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9653,7 +9768,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "6b690ebe81c3dc19c057f83070921364891338818831d44b923778f95ad61429",
-        "contractSha256": "9d1dedf75fb2bda1651926398c97573ef370a2a4c08a6c2455e7145353d0195c"
+        "contractSha256": "6dcbadf0b879963f90399f0d18b191016cedb26d653ee7b3f2267eb9adbf835e"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9687,7 +9802,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9702,7 +9817,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "6b690ebe81c3dc19c057f83070921364891338818831d44b923778f95ad61429",
-        "contractSha256": "4a90097c9547225c86b3d6255a146a5ba387a2c0f35060a075a4d869eaf40370"
+        "contractSha256": "936cc8bef2ebe924926ff660a6d4b0d4c3dc388f2c8c88f405e1f74a2ce52452"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9736,7 +9851,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_components.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9751,7 +9866,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "6b690ebe81c3dc19c057f83070921364891338818831d44b923778f95ad61429",
-        "contractSha256": "3dc086c4704018aa0216dab3ad66b6b8fb3021f2e6eb9feb4c6c7ad8d623719d"
+        "contractSha256": "ab942291df06786dd16c69ccad9b232667f93cfd17f845b91986d680ecaf4f85"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-attention.request.json",
@@ -9785,7 +9900,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_components.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9800,7 +9915,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "6b690ebe81c3dc19c057f83070921364891338818831d44b923778f95ad61429",
-        "contractSha256": "2d2a0ad78fd4df0e97034c12f0cc273e44719596e6a3dbd0c1948e053bdbbb98"
+        "contractSha256": "969ed3b6c503cae07a57d8758303e708a69b93a0d3c760cbb4bd933e6d0c6dac"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-expert.request.json",
@@ -9834,7 +9949,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_components.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9849,7 +9964,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "6b690ebe81c3dc19c057f83070921364891338818831d44b923778f95ad61429",
-        "contractSha256": "341b5ad9dbaae5b73be3a8e08771a369c88f2314de5f39b0d8e93a9e8a81331f"
+        "contractSha256": "6c46dd890c1c3c7e5e5323ed0c0e098426317b568c05df2a6a8bb1527e08aee5"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-router.request.json",
@@ -9861,6 +9976,104 @@
         "bundleVersion": 7,
         "canonicalKirVersion": 12,
         "status": "pending-reconciliation"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-pipelined-attention",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-pipelined-attention",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-pipelined-attention",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-pipelined-attention.hsaco",
+        "runnerArguments": [
+          "pipelined-attention"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "0a398ffdfe075a195ace31f491ca20b051860b5349ea3813e4213a2b698ed31b",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention.rs"
+        ],
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-pipelined-attention"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "6b690ebe81c3dc19c057f83070921364891338818831d44b923778f95ad61429",
+        "contractSha256": "5d660dbdcc21525dec5de33229643db674958d72d4c54e9c2effeb12e01d9fc7"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-scalar-attention",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-scalar-attention",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-scalar-attention",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-scalar-attention.hsaco",
+        "runnerArguments": [
+          "scalar-attention"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "0a398ffdfe075a195ace31f491ca20b051860b5349ea3813e4213a2b698ed31b",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention.rs"
+        ],
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-scalar-attention"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "6b690ebe81c3dc19c057f83070921364891338818831d44b923778f95ad61429",
+        "contractSha256": "f9980ececf0a99e9bb95fea44c9e78aecc9690ab044de1809c0c057cdeee36c5"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
       }
     },
     {
@@ -9883,7 +10096,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_router_serial.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9898,7 +10111,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "6b690ebe81c3dc19c057f83070921364891338818831d44b923778f95ad61429",
-        "contractSha256": "b276cc0dfc6fd8972fb1e9f9c5243f8e542725b8b008ef49cf484398b7a4a1c0"
+        "contractSha256": "3a2c4170537992f1631d898e4a1459d1c1f264780d2a2d5369934e8c9a1ac30a"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -10938,6 +11151,8 @@
         "gfx950-gpt-oss-materialized-attention",
         "gfx950-gpt-oss-materialized-expert",
         "gfx950-gpt-oss-materialized-router",
+        "gfx950-gpt-oss-pipelined-attention",
+        "gfx950-gpt-oss-scalar-attention",
         "gfx950-gpt-oss-serial-router"
       ],
       "requiredGates": [
@@ -13020,6 +13235,70 @@
             }
           }
         ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-pipelined-attention:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-pipelined-attention",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-scalar-attention:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-scalar-attention",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
       }
     ],
     "negativeCases": [
@@ -14015,10 +14294,12 @@
         "functionUtf8Offset": 1508,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-pipelined-attention:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed whole-file attention variant has no selected fixture association; package membership and a shared symbol do not establish feature, source, or execution coverage."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -14037,10 +14318,12 @@
         "functionUtf8Offset": 3041,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-scalar-attention:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed whole-file attention variant has no selected fixture association; package membership and a shared symbol do not establish feature, source, or execution coverage."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-megakernel-performance-lab",

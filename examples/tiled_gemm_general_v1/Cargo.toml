@@ -8,8 +8,11 @@ rust-version = "1.94"
 publish = false
 
 [workspace]
-members = []
+members = ["device-api"]
 resolver = "3"
+
+[features]
+kernel-simt-gemm-general = []
 
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
@@ -21,7 +24,6 @@ fe2o3-host = { path = "../../crates/fe2o3-host" }
 [dev-dependencies]
 fe2o3-gemm-device-v1 = { path = "device-api" }
 syn = { version = "2", features = ["full", "visit"] }
-trybuild = "1"
 
 [[bin]]
 name = "fe2o3-tiled-gemm-general-v1"

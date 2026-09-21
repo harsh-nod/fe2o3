@@ -408,3 +408,20 @@ mod tests;
 #[cfg(test)]
 #[path = "production_checked_output_private_cell_metadata_v1_tests.rs"]
 mod metadata_tests;
+
+#[path = "production_checked_output_loop_preheaders_v1.rs"]
+mod loop_preheaders;
+pub use loop_preheaders::{
+    ProductionLicmErrorV1, ProductionLicmStorageV1, ProductionOwnedLicmContinuationV1,
+    ProductionOwnedUnitLocalLicmContinuationV1,
+};
+pub use loop_preheaders::{
+    ProductionLoopInductionQueryErrorV1, ProductionLoopInductionQueryStorageV1,
+    ProductionLoopInductionQueryV1,
+};
+pub use loop_preheaders::{
+    ProductionLoopPreheaderIncomingOriginV1, ProductionLoopPreheaderOriginV1,
+    ProductionLoopPreheaderParameterOriginV1, ProductionLoopPreheadersErrorV1,
+    ProductionLoopPreheadersStorageV1, ProductionOwnedLoopPreheadersContinuationV1,
+    ProductionOwnedUnitLocalLoopPreheadersContinuationV1,
+};

@@ -71,6 +71,7 @@ fn canonical_positive_induction_loop(
     blocks: &[Ptr<BasicBlock>],
     block_indices: &HashMap<Ptr<BasicBlock>, usize>,
     operation_blocks: &HashMap<Ptr<Operation>, usize>,
+    dominators: &[HashSet<usize>],
     predecessors: &[Vec<usize>],
     edges: &[Vec<usize>],
     incoming: &[Vec<IncomingEdgeV1>],
@@ -120,9 +121,27 @@ fn canonical_positive_induction_loop(
             .copied()
             .filter(|predecessor| !component_members.contains(predecessor))
             .collect::<Vec<_>>();
-        if internal_header_predecessors.len() != 1 || external_header_predecessors.len() != 1 {
+        if internal_header_predecessors.len() != 1 || external_header_predecessors.is_empty() {
             return CanonicalLoopResultV1::Incomplete(
                 "the loop header does not have exactly one external entry and one internal recurrence",
+            );
+        }
+        if external_header_predecessors.len() > 1
+            && progress_multi_entry_initial_v1(
+                context,
+                blocks,
+                block_indices,
+                operation_blocks,
+                dominators,
+                component_members,
+                *header_index,
+                &external_header_predecessors,
+                0,
+            )
+            .is_err()
+        {
+            return CanonicalLoopResultV1::Incomplete(
+                "the loop entries do not share one outside dominating typed induction seed",
             );
         }
         if branch
@@ -289,6 +308,62 @@ fn canonical_positive_induction_loop(
     CanonicalLoopResultV1::Incomplete(
         "the cycle has no supported `i < bound; i := i + positive_constant` header and backedge",
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn progress_multi_entry_initial_v1(
+    context: &Context,
+    blocks: &[Ptr<BasicBlock>],
+    block_indices: &HashMap<Ptr<BasicBlock>, usize>,
+    operation_blocks: &HashMap<Ptr<Operation>, usize>,
+    dominators: &[HashSet<usize>],
+    members: &HashSet<usize>,
+    header_index: usize,
+    entries: &[usize],
+    induction_argument: usize,
+) -> Result<pliron::value::Value, ()> {
+    use pliron::r#type::Typed;
+
+    let header = blocks[header_index];
+    let header_ref = header.deref(context);
+    let mut initial = None;
+    let mut previous = None;
+    for entry in entries.iter().copied() {
+        // Root predecessor rows are in source order and retain occurrences.
+        // One query authenticates every parallel occurrence from this source.
+        if previous == Some(entry) {
+            continue;
+        }
+        if previous.is_some_and(|previous| previous > entry) || members.contains(&entry) {
+            return Err(());
+        }
+        previous = Some(entry);
+        let arguments = progress_edge_arguments_v1(context, blocks[entry], header)?;
+        if arguments.len() != header_ref.get_num_arguments() {
+            return Err(());
+        }
+        for (argument, value) in arguments.iter().copied().enumerate() {
+            if value.get_type(context) != header_ref.get_argument(argument).get_type(context) {
+                return Err(());
+            }
+        }
+        let value = *arguments.get(induction_argument).ok_or(())?;
+        let definition = if let Some(operation) = value.defining_op() {
+            *operation_blocks.get(&operation).ok_or(())?
+        } else {
+            *block_indices
+                .get(&value.defining_block().ok_or(())?)
+                .ok_or(())?
+        };
+        if members.contains(&definition) || !dominators[entry].contains(&definition) {
+            return Err(());
+        }
+        if initial.is_some_and(|initial| initial != value) {
+            return Err(());
+        }
+        initial = Some(value);
+    }
+    initial.ok_or(())
 }
 
 fn successor_arguments(

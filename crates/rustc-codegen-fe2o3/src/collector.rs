@@ -45,6 +45,8 @@ pub(crate) use kernel_context_auth_v1::{
 };
 mod closure_flow_v1;
 mod kernel_context_frontend_v1;
+#[cfg(test)]
+pub(crate) mod primitive_from_stage_tests;
 mod production_importer_v1;
 mod reference_custody_v1;
 
@@ -3389,6 +3391,25 @@ impl<'tcx> DeviceCollector<'tcx> {
             self.closure_work
                 .charge(1)
                 .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
+            return Ok(());
+        }
+
+        if crate::production_primitive_from_v1::check_primitive_from_v1(
+            self.tcx,
+            resolved,
+            crate::production_primitive_from_v1::PrimitiveFromStageV1::Collector,
+            self.closure_work.limits(),
+            &mut |amount| self.closure_work.charge(amount),
+        )
+        .map_err(|error| {
+            self.reachable_error(
+                caller,
+                &error.to_string(),
+                Some(self.instance_label(resolved)),
+            )
+        })?
+        .is_some()
+        {
             return Ok(());
         }
 

@@ -386,6 +386,18 @@ fn validate_boundary_v1<'tcx>(
     {
         return Ok(());
     }
+    if crate::production_primitive_from_v1::check_primitive_from_v1(
+        tcx,
+        callee,
+        crate::production_primitive_from_v1::PrimitiveFromStageV1::ClosureReplay,
+        work.limits(),
+        &mut |amount| work.charge(amount),
+    )
+    .map_err(|error| Error::new(error.to_string()))?
+    .is_some()
+    {
+        return Ok(());
+    }
     for import in &collection.device_ffi.imports {
         charge(work, 1)?;
         if crate::device_ffi::source_owner_matches_instance(tcx, &import.owner, callee) {
@@ -524,6 +536,8 @@ fn propagate_origins_v1(
     Ok(())
 }
 
+#[cfg(test)]
+pub(super) mod primitive_from_stage_tests;
 #[cfg(test)]
 #[path = "closure_flow_v1_tests.rs"]
 mod tests;

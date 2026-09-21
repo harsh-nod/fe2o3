@@ -24,6 +24,11 @@ use fe2o3_lower_mir_kernel::{
 };
 use std::{fmt, mem::size_of};
 
+#[path = "production_pipeline_loop_preheaders_native_v1.rs"]
+mod loop_preheaders_native_v1;
+pub(crate) use loop_preheaders_native_v1::LicmNativeStageErrorV1;
+pub(crate) use loop_preheaders_native_v1::LoopPreheadersNativeStageErrorV1;
+
 #[derive(Debug)]
 pub(crate) enum PrivateCellNativeStageErrorV1 {
     Resource(Resource),
@@ -319,6 +324,37 @@ pub(crate) struct PrivateCellNativeProductionCompilationV1 {
     retained_floor: usize,
 }
 impl RankedVerifiedProductionCompilation {
+    fn prepare_native_prefix_v1(
+        self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(
+        Prefix6,
+        crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
+        AuthenticatedProductionBindings,
+    )> {
+        use fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1;
+        let policy = self.ranked.materialized().helper_source_policy_v1();
+        let (prefix, ranked_verification, bindings) = match policy {
+            ProductionHelperSourcePolicyV1::RawEmpty => {
+                let stage = self.prepare_admitted_policy6_v1(budget)?;
+                (
+                    Prefix6::Direct(stage.admitted),
+                    stage.ranked_verification,
+                    stage.bindings,
+                )
+            }
+            ProductionHelperSourcePolicyV1::UnitLocal => {
+                let stage = self.prepare_admitted_erased_policy6_v1(budget)?;
+                (
+                    Prefix6::Erased(stage.admitted),
+                    stage.ranked_verification,
+                    stage.bindings,
+                )
+            }
+        };
+        Ok((prefix, ranked_verification, bindings))
+    }
+
     /// Returns a complete added receipt on the original caller ledger. Every
     /// failure and unwind restores its entry floor; work remains cumulative.
     pub(crate) fn lower_private_cell_native_with_budget_v1(
@@ -330,26 +366,7 @@ impl RankedVerifiedProductionCompilation {
     )> {
         let floor = budget.storage();
         scoped(floor, budget, move |budget| {
-            use fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1;
-            let policy = self.ranked.materialized().helper_source_policy_v1();
-            let (prefix, ranked_verification, bindings) = match policy {
-                ProductionHelperSourcePolicyV1::RawEmpty => {
-                    let stage = self.prepare_admitted_policy6_v1(budget)?;
-                    (
-                        Prefix6::Direct(stage.admitted),
-                        stage.ranked_verification,
-                        stage.bindings,
-                    )
-                }
-                ProductionHelperSourcePolicyV1::UnitLocal => {
-                    let stage = self.prepare_admitted_erased_policy6_v1(budget)?;
-                    (
-                        Prefix6::Erased(stage.admitted),
-                        stage.ranked_verification,
-                        stage.bindings,
-                    )
-                }
-            };
+            let (prefix, ranked_verification, bindings) = self.prepare_native_prefix_v1(budget)?;
             let (native, storage) = prepare(prefix, bindings.rustc_target.profile(), budget)?;
             budget
                 .reserve_storage(storage.retained_storage())

@@ -321,6 +321,20 @@ pub use commutative::{
     ProductionPrivateCellPromotionContinuationErrorV1,
     ProductionPrivateCellPromotionContinuationStorageV1,
 };
+pub use commutative::{
+    ProductionLicmErrorV1, ProductionLicmStorageV1, ProductionOwnedLicmContinuationV1,
+    ProductionOwnedUnitLocalLicmContinuationV1,
+};
+pub use commutative::{
+    ProductionLoopInductionQueryErrorV1, ProductionLoopInductionQueryStorageV1,
+    ProductionLoopInductionQueryV1,
+};
+pub use commutative::{
+    ProductionLoopPreheaderIncomingOriginV1, ProductionLoopPreheaderOriginV1,
+    ProductionLoopPreheaderParameterOriginV1, ProductionLoopPreheadersErrorV1,
+    ProductionLoopPreheadersStorageV1, ProductionOwnedLoopPreheadersContinuationV1,
+    ProductionOwnedUnitLocalLoopPreheadersContinuationV1,
+};
 
 #[cfg(test)]
 #[path = "production_checked_output_redundant_store_scope_v1_tests.rs"]

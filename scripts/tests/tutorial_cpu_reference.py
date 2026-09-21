@@ -97,16 +97,72 @@ class AdapterComponents(unittest.TestCase):
             self.assertEqual(len(plan["fixtureContracts"]), 2)
             self.assertEqual(manifest, source_manifest(arguments))
 
+    def test_explicit_host_feature_selection_is_canonical_and_fixture_independent(self) -> None:
+        cases = [([], True, []), (["--no-default-features"], False, []),
+                 (["--features", "a,b"], True, ["a", "b"]),
+                 (["--no-default-features", "--features", "a,b"], False, ["a", "b"]),
+                 (["--features", "a,b", "--no-default-features"], False, ["a", "b"])]
+        for selector in (["lib"], ["test", "reference"]):
+            for options, defaults, features in cases:
+                arguments = ["examples/fixture/Cargo.toml", *selector, *options]
+                manifest = source_manifest(arguments)
+                with self.subTest(arguments=arguments):
+                    plan = adapter.select_suite(manifest, arguments)
+                    configuration = {"defaultFeatures": defaults, "features": features,
+                                     "profile": "test", "selector": selector}
+                    self.assertEqual(plan["hostConfiguration"], configuration)
+                    self.assertEqual(adapter.feature_arguments(configuration),
+                                     ([] if defaults else ["--no-default-features"]) +
+                                     (["--features", ",".join(features)] if features else []))
+                    self.assertEqual(plan["fixtureContracts"][0]["compilerInput"]["features"], ["kernel-a"])
+                    self.assertEqual(manifest, source_manifest(arguments))
+
+    def test_host_feature_grammar_refuses_noncanonical_and_nonlocal_names(self) -> None:
+        bad = [["--no-default-features", "--no-default-features"], ["--features"],
+               ["--features", "a", "--features", "b"], ["--all-features"],
+               ["--features=a"], ["--unknown"], ["--"], ["extra"]]
+        bad += [["--features", names] for names in
+                ("", "a,a", "b,a", ",a", "a,", "a,,b", " a", "a b", "a,b ",
+                 "dep/a", "dep:a", "dep?/a", "--a", ".a", "+a", "*")]
+        for selector in (["lib"], ["test", "reference"]):
+            for options in bad:
+                arguments = ["Cargo.toml", *selector, *options]
+                with self.subTest(arguments=arguments), self.assertRaises(adapter.ObservationError):
+                    adapter.select_suite(source_manifest(arguments), arguments)
+        configuration = adapter.parse_selection(["Cargo.toml", "lib", "--features", "a+b,a-b,a.b,a_b"])
+        self.assertEqual(configuration["features"], ["a+b", "a-b", "a.b", "a_b"])
+
+    def test_host_features_are_declared_in_parsed_cargo_toml(self) -> None:
+        configuration = adapter.parse_selection(["Cargo.toml", "lib", "--features", "a"])
+        for document in ('[features]\na=[]\n', '[features]\na=["helper"]\nhelper=[]\n'):
+            self.manifest.write_text(document)
+            adapter.validate_features(self.manifest, configuration)
+        for document in ('', '[features]\nb=[]\n', 'features=[]\n',
+                         '[dependencies]\na={version="1",optional=true}\n'):
+            self.manifest.write_text(document)
+            with self.subTest(document=document), self.assertRaisesRegex(adapter.ObservationError, "undeclared"):
+                adapter.validate_features(self.manifest, configuration)
+        self.manifest.write_text('[features\n')
+        with self.assertRaisesRegex(adapter.ObservationError, "invalid host package manifest"):
+            adapter.validate_features(self.manifest, configuration)
+
     def test_all_declared_cpu_suites_have_exact_component_plans(self) -> None:
         source = Path(__file__).resolve().parents[2] / "config/tutorial-kernel-manifest-v1.json"
         payload = source.read_bytes()
         manifest = adapter.decode_json(payload)
         suites = [suite for suite in manifest["qualification"]["suites"] if suite["gate"] == "cpu-reference"]
-        self.assertEqual(len(suites), 12)
+        self.assertEqual(len(suites), 14)
+        featureful = []
         for suite in suites:
             plan = adapter.select_suite(manifest, suite["command"]["arguments"])
             self.assertEqual(plan["suiteId"], suite["suiteId"])
-            self.assertEqual(plan["hostConfiguration"]["features"], [])
+            expected = (["kernel-simt-gemm-general"]
+                        if suite["suiteId"] == "cpu-reference-tiled-gemm-paired-simt" else [])
+            self.assertEqual(plan["hostConfiguration"]["features"], expected)
+            self.assertEqual(plan["hostConfiguration"]["defaultFeatures"], not bool(expected))
+            if expected:
+                featureful.append(suite["suiteId"])
+        self.assertEqual(featureful, ["cpu-reference-tiled-gemm-paired-simt"])
         self.assertEqual(source.read_bytes(), payload)
 
     def test_source_loader_uses_the_existing_validator_before_selecting(self) -> None:
@@ -124,6 +180,10 @@ class AdapterComponents(unittest.TestCase):
         plan, _ = adapter.load_plan(self.root, arguments)
         self.assertEqual(plan["suiteId"], "cpu-reference-fixture")
         self.assertIn("validatorSha256", plan)
+        arguments.extend(["--features", "missing"])
+        (config / "tutorial-kernel-manifest-v1.json").write_text(json.dumps(source_manifest(arguments)))
+        with self.assertRaisesRegex(adapter.ObservationError, "undeclared local host feature"):
+            adapter.load_plan(self.root, arguments)
 
     def test_wrong_ambiguous_injected_and_foreign_suite_refuse(self) -> None:
         arguments = ["examples/fixture/Cargo.toml", "lib"]
@@ -175,6 +235,17 @@ class AdapterComponents(unittest.TestCase):
         observed = self.observe(self.events())["executable"]
         self.assertEqual(observed["digestScope"], "post-execution-on-disk-artifact-only")
         self.assertEqual(set(observed), {"path", "observedSha256", "digestScope"})
+
+    def test_artifact_features_equal_resolved_closure_not_requested_subset(self) -> None:
+        self.expected["features"] = ["feature-a", "helper"]
+        events = self.events()
+        events[0]["features"] = ["feature-a", "helper"]
+        self.assertEqual(self.observe(events)["outcome"], "passed")
+        for features in ([], ["feature-a"], ["feature-a", "helper", "unexpected"]):
+            events[0]["features"] = features
+            with self.subTest(features=features), self.assertRaisesRegex(
+                    adapter.ObservationError, "wrong harness artifact identity"):
+                self.observe(events)
 
     def test_artifact_observation_uses_existing_runner_bound_not_data_bounds(self) -> None:
         self.assertEqual(adapter.MAX_EXECUTABLE_BYTES, 512 * 1024 * 1024)
@@ -461,7 +532,8 @@ class AdapterComponents(unittest.TestCase):
 
     def run_orchestration_double(self, mutate_source: bool = False, interval: str | None = None,
                                  config_change: tuple[str, str] | None = None,
-                                 host: str = "x86_64-unknown-linux-gnu") -> tuple[dict, list[list[str]]]:
+                                 host: str = "x86_64-unknown-linux-gnu", feature_options=(),
+                                 resolved_features=()) -> tuple[dict, list[list[str]]]:
         # Every tool response here is a protocol double, never compiler evidence.
         def write(relative: str, value: str = "fixture") -> Path:
             path = self.root / relative
@@ -469,7 +541,9 @@ class AdapterComponents(unittest.TestCase):
             path.write_text(value)
             return path
 
-        app_manifest = write("examples/fixture/Cargo.toml", '[package]\nname="fixture"\nversion="0.1.0"\n')
+        app_manifest = write("examples/fixture/Cargo.toml",
+                             '[package]\nname="fixture"\nversion="0.1.0"\n'
+                             '[features]\nfeature-a=["helper"]\nhelper=[]\n')
         app_source = write("examples/fixture/src/lib.rs", "#[test] fn component() {}")
         driver_manifest = write("crates/cargo-fe2o3/Cargo.toml")
         driver_source = write("crates/cargo-fe2o3/src/main.rs")
@@ -494,7 +568,7 @@ class AdapterComponents(unittest.TestCase):
                 config_path = config_path.with_name("config")
         toolpaths = {name: write("tools/" + name) for name in ("cargo", "rustc", "rustup")}
         output = Path(tempfile.mkdtemp(prefix="observation-", dir=self.root))
-        arguments = ["examples/fixture/Cargo.toml", "lib"]
+        arguments = ["examples/fixture/Cargo.toml", "lib", *feature_options]
         declaration = source_manifest(arguments)
         tutorial_manifest = write("config/tutorial-kernel-manifest-v1.json", json.dumps(declaration))
         plan = adapter.select_suite(declaration, arguments)
@@ -507,7 +581,8 @@ class AdapterComponents(unittest.TestCase):
         target = {"name": "fixture", "kind": ["lib"], "crate_types": ["lib"],
                   "src_path": str(app_source), "test": True}
         metadata = {"packages": [{"id": "app", "manifest_path": str(app_manifest), "source": None,
-                                  "targets": [target]}], "resolve": {"nodes": [{"id": "app", "features": []}]}}
+                                  "targets": [target]}],
+                    "resolve": {"nodes": [{"id": "app", "features": list(resolved_features)}]}}
         driver_metadata = {"packages": [{"id": "driver", "manifest_path": str(driver_manifest), "source": None}]}
         commands: list[list[str]] = []
 
@@ -561,7 +636,8 @@ class AdapterComponents(unittest.TestCase):
             executable.write_bytes(b"unexecuted test double")
             executable.chmod(0o700)
             events = self.events(["failed"] if mutate_source else ["ok"])
-            events[0].update(package_id="app", target=target, executable=str(executable))
+            events[0].update(package_id="app", target=target, executable=str(executable),
+                             features=list(resolved_features))
             if mutate_source:
                 app_source.write_text("changed after fake execution")
                 phases[-1]["returncode"] = 101
@@ -615,6 +691,24 @@ class AdapterComponents(unittest.TestCase):
         self.assertTrue(observation["inputsUnchanged"])
         self.assertTrue(all(observation[key] is False for key in adapter.NO_AUTHORITY))
         self.assertEqual(len(commands), 7)
+
+    def test_single_suite_features_bind_metadata_and_test_without_bootstrap_leakage(self) -> None:
+        options = ["--no-default-features", "--features", "feature-a"]
+        observation, _ = self.run_orchestration_double(
+            feature_options=options, resolved_features=["feature-a", "helper"])
+        self.assertEqual(observation["outcome"], "passed")
+        self.assertEqual(observation["plan"]["hostConfiguration"]["features"], ["feature-a"])
+        self.assertEqual(observation["plan"]["selectedTarget"]["features"], ["feature-a", "helper"])
+        for phase in observation["phases"]:
+            argv = phase["argv"]
+            if phase["label"] in {"suite-metadata", "suite"}:
+                self.assertEqual(argv.count("--no-default-features"), 1)
+                self.assertEqual(argv.count("--features"), 1)
+                self.assertEqual(argv[argv.index("--features") + 1], "feature-a")
+            else:
+                self.assertNotIn("--no-default-features", argv)
+                self.assertNotIn("--features", argv)
+        self.assertTrue(all(observation[key] is False for key in adapter.NO_AUTHORITY))
 
     def test_bootstrap_target_is_exact_discovered_host_with_nested_driver_artifact(self) -> None:
         for host in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"):
@@ -727,15 +821,19 @@ class BatchComponents(unittest.TestCase):
         path.write_text(payload)
         return path
 
-    def prepare(self, count: int = 3) -> None:
+    def prepare(self, count: int = 3, feature_options=None, resolved_features=None) -> None:
         self.apps = []
+        self.feature_options = [(feature_options or {}).get(index, []) for index in range(count)]
         self.declaration = {"qualification": {"suites": []}, "compilerFixtures": []}
         for index in range(count):
             package = f"arbitrary_package_{index}"
-            manifest = self.write(f"examples/{package}/Cargo.toml", f'[package]\nname="{package}"\nversion="0.1.0"\n')
+            manifest = self.write(f"examples/{package}/Cargo.toml",
+                                  f'[package]\nname="{package}"\nversion="0.1.0"\n'
+                                  '[features]\nfeature-a=["helper"]\nhelper=[]\n')
             kind = "lib" if index % 2 == 0 else "test"
             source = self.write(f"examples/{package}/" + ("src/lib.rs" if kind == "lib" else "tests/reference.rs"))
             arguments = [str(manifest.relative_to(self.root)), kind, *([] if kind == "lib" else ["reference"])]
+            arguments.extend(self.feature_options[index])
             item = source_manifest(arguments)
             item["qualification"]["suites"][0]["suiteId"] = f"cpu-{index}"
             for fixture in item["compilerFixtures"]:
@@ -748,7 +846,7 @@ class BatchComponents(unittest.TestCase):
                       "src_path": str(source), "test": True}
             metadata = {"packages": [{"id": package, "manifest_path": str(manifest), "source": None,
                                       "targets": [target]}],
-                        "resolve": {"nodes": [{"id": package, "features": []}]}}
+                        "resolve": {"nodes": [{"id": package, "features": (resolved_features or {}).get(index, [])}]}}
             self.apps.append((manifest, source, target, metadata))
         self.tutorial = self.write("config/tutorial-kernel-manifest-v1.json", json.dumps(self.declaration))
         self.validator_path = self.write("scripts/validate-tutorial-kernel-manifest.py")
@@ -814,6 +912,9 @@ class BatchComponents(unittest.TestCase):
             elif label == "suite-metadata":
                 data = json.dumps(self.apps[index][3]).encode()
                 self.assertEqual(argv[argv.index("--manifest-path") + 1], str(self.apps[index][0]))
+                self.assertEqual(argv, [str(self.tools["cargo"]), "metadata", "--locked", "--offline",
+                                       "--format-version", "1", "--manifest-path", str(self.apps[index][0]),
+                                       "--filter-platform", "x86_64-unknown-linux-gnu", *self.feature_options[index]])
             elif label == "driver-build":
                 self.assertEqual(argv, [str(self.tools["cargo"]), "build", "--locked", "--offline", "-p",
                                        "cargo-fe2o3", "--bin", "cargo-fe2o3", "--target",
@@ -834,7 +935,8 @@ class BatchComponents(unittest.TestCase):
                 manifest, _, target, metadata = self.apps[index]
                 selector = ["--lib"] if target["kind"] == ["lib"] else ["--test", "reference"]
                 self.assertEqual(argv, [str(self.output / "common/driver/cargo-fe2o3"), "test", "--locked", "--offline",
-                                       "--manifest-path", str(manifest), *selector, "--message-format=json", "--",
+                                       "--manifest-path", str(manifest), *self.feature_options[index],
+                                       *selector, "--message-format=json", "--",
                                        "-Z", "unstable-options", "--format=json", "--test-threads=1"])
                 self.assertNotIn("RUSTC", env)
                 self.assertNotIn("FE2O3_HIP_SYS_DISABLE", env)
@@ -845,7 +947,8 @@ class BatchComponents(unittest.TestCase):
                 executable.chmod(0o700)
                 outcomes = states.get(index, ["ok"])
                 events = [{"reason": "compiler-artifact", "package_id": metadata["packages"][0]["id"],
-                           "target": target, "features": [], "profile": {"test": True}, "executable": str(executable)},
+                           "target": target, "features": metadata["resolve"]["nodes"][0]["features"],
+                           "profile": {"test": True}, "executable": str(executable)},
                           {"reason": "build-finished", "success": True},
                           {"type": "suite", "event": "started", "test_count": len(outcomes)}]
                 for ordinal, result in enumerate(outcomes):
@@ -933,6 +1036,40 @@ class BatchComponents(unittest.TestCase):
         self.assertTrue(observation["finalSharedInputsUnchanged"])
         self.assertEqual(self.alarms[-1], 0)
 
+    def test_batch_feature_selections_do_not_leak_between_suites_or_bootstrap(self) -> None:
+        options = {1: ["--features", "feature-a"],
+                   2: ["--no-default-features", "--features", "feature-a"]}
+        resolved = {1: ["feature-a", "helper"], 2: ["feature-a", "helper"]}
+        self.prepare(4, options, resolved)
+        observation = self.run_batch()
+        self.assertEqual(observation["outcome"], "passed")
+        for index, record in enumerate(self.records(observation)):
+            self.assertEqual(record["plan"]["hostConfiguration"]["features"], ["feature-a"] if index in options else [])
+            self.assertEqual(record["plan"]["hostConfiguration"]["defaultFeatures"], index != 2)
+            self.assertEqual(record["plan"]["selectedTarget"]["features"], resolved.get(index, []))
+            self.assertTrue(all(record[key] is False for key in adapter.NO_AUTHORITY))
+        for label, argv, *_ in self.calls:
+            if label in {"driver-metadata", "driver-build"}:
+                self.assertNotIn("--features", argv)
+                self.assertNotIn("--no-default-features", argv)
+
+    def test_fourteen_unique_suites_are_the_exact_batch_limit(self) -> None:
+        self.prepare(14)
+        self.assertEqual(adapter.MAX_BATCH_SUITES, 14)
+        observation = self.run_batch()
+        self.assertEqual(observation["outcome"], "passed")
+        self.assertEqual(len(self.records(observation)), 14)
+        self.assertEqual(len(self.calls), 33)
+        self.assertEqual([call[0] for call in self.calls].count("driver-build"), 1)
+        suites = [call for call in self.calls if call[0] == "suite"]
+        self.assertEqual(len({call[2]["CARGO_TARGET_DIR"] for call in suites}), 14)
+
+    def test_fifteen_unique_suites_refuse_the_limit_before_execution(self) -> None:
+        self.prepare(15)
+        with self.assertRaisesRegex(adapter.ObservationError, "between 1 and 14"):
+            adapter.batch_plans(self.declaration)
+        self.assertEqual(self.calls, [])
+
     def test_empty_duplicate_overcap_and_foreign_batch_plans_refuse(self) -> None:
         self.prepare(1)
         for mutation in ("empty", "duplicate-id", "duplicate-command", "overcap", "foreign", "environment"):
@@ -941,7 +1078,7 @@ class BatchComponents(unittest.TestCase):
             if mutation == "empty":
                 manifest["qualification"]["suites"] = []
             elif mutation == "overcap":
-                manifest["qualification"]["suites"] *= 13
+                manifest["qualification"]["suites"] *= 15
             elif mutation.startswith("duplicate"):
                 extra = copy.deepcopy(suite)
                 if mutation == "duplicate-command":
@@ -1162,8 +1299,12 @@ class BatchComponents(unittest.TestCase):
         source = Path(__file__).resolve().parents[2] / "config/tutorial-kernel-manifest-v1.json"
         manifest = adapter.decode_json(source.read_bytes())
         expected = [suite["suiteId"] for suite in manifest["qualification"]["suites"] if suite["gate"] == "cpu-reference"]
-        self.assertEqual(len(expected), 12)
+        self.assertEqual(len(expected), 14)
         self.assertEqual([plan["suiteId"] for plan in adapter.batch_plans(manifest)], expected)
+        self.declaration["qualification"]["suites"][0]["command"]["arguments"].extend(["--features", "missing"])
+        self.tutorial.write_text(json.dumps(self.declaration))
+        with self.assertRaisesRegex(adapter.ObservationError, "undeclared local host feature"):
+            adapter.load_batch_plans(self.root)
 
     def test_main_batch_selector_is_exact_and_restores_handlers_and_timer(self) -> None:
         previous = {number: adapter.signal.getsignal(number) for number in

@@ -370,7 +370,9 @@ fn checked_output_source_child() {
     assert!(result.is_ok(), "checked native source route: {result:?}");
 }
 
-include!("production_rustc_driver_checked_output_source_helpers_v1_tests.rs");
+use crate::production_rustc_driver_checked_output_source_helpers_v1_tests::{
+    artifact, clean_command, output,
+};
 
 #[test]
 #[ignore = "requires pinned nightly rust-src, AMD dependencies, and ordinary-source compilation"]

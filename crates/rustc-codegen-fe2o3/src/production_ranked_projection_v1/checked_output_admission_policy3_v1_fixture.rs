@@ -116,6 +116,25 @@ fn with_backend_checked_ranked_bound_functions_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_checked_ranked_bound_types_functions_v1(
+        profile,
+        stores,
+        |_, functions| transform(functions),
+        next,
+    )
+}
+
+fn with_backend_checked_ranked_bound_types_functions_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    stores: Option<usize>,
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work, VerifiedCanonicalKernelIrModuleV12,
@@ -123,7 +142,7 @@ fn with_backend_checked_ranked_bound_functions_v1(
     let original = source_launch_test_semantic_v1(70, 0xa1);
     let unit = SemanticTypeIdV1::from_index(0);
     let scalar = SemanticTypeIdV1::from_index(1);
-    let types = vec![
+    let mut types = vec![
         original.types()[0].clone(),
         neutral_semantic_types_v1()[3].clone(),
     ];
@@ -193,7 +212,7 @@ fn with_backend_checked_ranked_bound_functions_v1(
             .with_kernel_entry(source.kernel_entry().unwrap().clone())
         })
         .collect();
-    transform(&mut functions);
+    transform(&mut types, &mut functions);
     let semantic = InertSemanticMirRequestV1::new(
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
         types,

@@ -77,7 +77,7 @@ fn induction_predicate_source_operand_v1(
             return Ok((induction.source_progress.induction_type == operand.ty()
                 && induction.contains_block(use_site.block)
                 && use_site.block != induction.header
-                && use_site.block != induction.preheader
+                && use_site.block != induction.initializer_block
                 && use_site.block != induction.latch
                 && local_definitions.get(index).copied() == Some(2))
             .then_some(InductionPredicateSourceOperandV1::Induction(ordinal)));
@@ -139,7 +139,12 @@ fn project_induction_body_predicates_v1(
         for induction in inductions.iter() {
             project_loop_graph_charge_v1(&mut work, 1)?;
             in_body |= induction.contains_block(block_index)
-                && ![induction.preheader, induction.header, induction.latch].contains(&block_index);
+                && ![
+                    induction.initializer_block,
+                    induction.header,
+                    induction.latch,
+                ]
+                .contains(&block_index);
         }
         if !in_body {
             continue;
@@ -316,7 +321,7 @@ fn indexed_induction_body_predicates_v1<'a>(
         for predicate in &induction.body_predicates {
             project_loop_graph_charge_v1(&mut work, 1)?;
             if !induction.contains_block(predicate.block)
-                || [induction.preheader, induction.header, induction.latch].contains(&predicate.block)
+                || [induction.initializer_block, induction.header, induction.latch].contains(&predicate.block)
                 || ![&predicate.lhs, &predicate.rhs].iter().any(|operand| {
                     matches!(operand, ProjectedInductionPredicateOperandV1::Induction { ordinal, .. } if *ordinal == owner)
                 })
@@ -342,7 +347,8 @@ fn indexed_induction_body_predicates_v1<'a>(
                 if source.source_progress.induction != *source_local
                     || source.source_progress.induction_type != *source_type
                     || !source.contains_block(predicate.block)
-                    || [source.preheader, source.header, source.latch].contains(&predicate.block)
+                    || [source.initializer_block, source.header, source.latch]
+                        .contains(&predicate.block)
                 {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
                         "an induction body predicate changed its exact induction operand",

@@ -9,7 +9,7 @@ const A_BOOL_PTR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
 const A_ARRAY: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(6);
 const A_NAME: &str = "canonical_assertion_root";
 
-fn assertion_types() -> Vec<SemanticTypeDeclV1> {
+pub(super) fn assertion_types() -> Vec<SemanticTypeDeclV1> {
     let scalar = |tag, size, shape, maximum| {
         SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256(bytes(tag)),

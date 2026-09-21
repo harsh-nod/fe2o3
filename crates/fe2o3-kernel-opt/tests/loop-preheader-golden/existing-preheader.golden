@@ -1,0 +1,28 @@
+CASE: existing-preheader
+CHECK-BEFORE: module loop-preheader-golden-subject kernels=0
+CHECK-BEFORE: f0 f params=[v0:Bool,v1:U32,v2:U32,v3:U32] results=[U32,U32]
+CHECK-BEFORE: f0:b0 block-id=10 params=[]
+CHECK-BEFORE: f0:b0:o0 [v100:U32] Constant U32(1)
+CHECK-BEFORE: f0:b0:term Branch block-id=50 [v1,v2]
+CHECK-BEFORE: f0:b1 block-id=50 params=[v200:U32,v201:U32]
+CHECK-BEFORE: f0:b1:o0 [v202:Bool] LessThan v200,v3
+CHECK-BEFORE: f0:b1:term Conditional v202 then-id=80 [] else-id=90 []
+CHECK-BEFORE: f0:b2 block-id=80 params=[]
+CHECK-BEFORE: f0:b2:o0 [v203:U32] Add v200,v100
+CHECK-BEFORE: f0:b2:term Branch block-id=50 [v203,v201]
+CHECK-BEFORE: f0:b3 block-id=90 params=[]
+CHECK-BEFORE: f0:b3:term Return [v200,v201]
+CHECK-AFTER: module loop-preheader-golden-subject kernels=0
+CHECK-AFTER: f0 f params=[v0:Bool,v1:U32,v2:U32,v3:U32] results=[U32,U32]
+CHECK-AFTER: f0:b0 block-id=10 params=[]
+CHECK-AFTER: f0:b0:o0 [v100:U32] Constant U32(1)
+CHECK-AFTER: f0:b0:term Branch block-id=50 [v1,v2]
+CHECK-AFTER: f0:b1 block-id=50 params=[v200:U32,v201:U32]
+CHECK-AFTER: f0:b1:o0 [v202:Bool] LessThan v200,v3
+CHECK-AFTER: f0:b1:term Conditional v202 then-id=80 [] else-id=90 []
+CHECK-AFTER: f0:b2 block-id=80 params=[]
+CHECK-AFTER: f0:b2:o0 [v203:U32] Add v200,v100
+CHECK-AFTER: f0:b2:term Branch block-id=50 [v203,v201]
+CHECK-AFTER: f0:b3 block-id=90 params=[]
+CHECK-AFTER: f0:b3:term Return [v200,v201]
+CHECK-REMARK: preheaders=0 changed=false independently-checked=true idempotent=true authority=false

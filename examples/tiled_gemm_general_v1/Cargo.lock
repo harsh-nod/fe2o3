@@ -548,6 +548,7 @@ name = "fe2o3-gemm-device-v1"
 version = "0.1.0"
 dependencies = [
  "fe2o3-device",
+ "trybuild",
 ]
 
 [[package]]
@@ -867,7 +868,6 @@ dependencies = [
  "fe2o3-gemm-device-v1",
  "fe2o3-host",
  "syn 2.0.119",
- "trybuild",
 ]
 
 [[package]]

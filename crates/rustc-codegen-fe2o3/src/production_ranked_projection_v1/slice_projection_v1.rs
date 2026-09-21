@@ -34,6 +34,21 @@ pub(super) struct ProjectedViewsV1<'a> {
 }
 
 impl<'a> ProjectedViewsV1<'a> {
+    pub(super) fn with_assertion_facts_v1<T>(
+        &mut self,
+        action: impl for<'f> FnOnce(
+            &'f mut dyn ProjectedAssertionFactsV1,
+        ) -> Result<T, ProductionRankedProjectionErrorV1>,
+    ) -> Result<T, ProductionRankedProjectionErrorV1> {
+        let facts =
+            self.facts
+                .as_deref_mut()
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "multi-entry induction requires live canonical facts",
+                ))?;
+        action(facts)
+    }
+
     pub(super) fn require_unit_local_call(
         &mut self,
         block: usize,

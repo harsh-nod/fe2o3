@@ -180,9 +180,17 @@ fn preflight_progress_execution_resource_upper_bound_v1(
         loop_scan,
         "progress loop work upper bound",
     )?;
-    // At most E candidate backedges, each with two endpoint queries and
-    // B propagation rounds visiting E edges. The all-edge helper adds one
-    // bounded successor scan plus payload copy/equality/drop per query.
+    // This is the COMBINED canonical + nested-fallback bound. Canonical
+    // examines disjoint SCCs and returns immediately after its first entry
+    // query group, even on Incomplete: at most E external occurrences total.
+    // Nested has at most E backedge candidates. For each, X external entry
+    // occurrences and I internal occurrences are disjoint, hence X+I <= E.
+    // Entry queries plus B propagation rounds cost X+B*I <= B*E (B >= 1).
+    // Add one latch query per candidate: E + E*(1+B*E) = E*(2+B*E).
+    // Parallel occurrences count separately; grouping them only saves queries.
+    // Empty/early-refused graphs reduce work, including canonical Incomplete
+    // followed by nested failure. The helper adds one bounded successor scan
+    // plus payload copy/equality/drop per query.
     // Each edge costs 6 visits for iteration, a two-word Ptr copy and its
     // owner/slot/generation comparison; 8 for accessor dispatch/counts and
     // fallback; and 10 for Option/Vec-header control, movement and disposal.
@@ -231,6 +239,68 @@ fn preflight_progress_execution_resource_upper_bound_v1(
             "progress parallel-edge storage",
         )?
     };
+    // A common-seed validator can run once per canonical SCC and once per
+    // nested candidate. Its entry rows total <= E + E*E. Per row allow 48
+    // scalar visits/copies/comparisons for order, cardinality, definition,
+    // outside-membership, dominance and the retained seed. Each payload adds
+    // 16 fixed visits for two typed accessors, exact handles and iteration.
+    // Value::get_type scans UIDs to recover its result/argument index. Both
+    // scans together visit <= 2*(results+block_arguments) UIDs; pay two units
+    // per visited UID (visit + equality), separately from fixed dispatch.
+    // This is separate from the old extraction envelope, not extra queries.
+    let entry_checks = checked_progress_product_v1(
+        census.successors,
+        census
+            .successors
+            .checked_add(1)
+            .ok_or_else(|| progress_resource_error_v1("progress entry checks"))?,
+        "progress entry checks",
+    )?;
+    let entry_type_work = checked_progress_sum_v1(
+        &[
+            16,
+            checked_progress_product_v1(
+                checked_progress_sum_v1(
+                    &[census.results, census.block_arguments],
+                    "progress entry type scan",
+                )?,
+                4,
+                "progress entry type scan",
+            )?,
+        ],
+        "progress entry type scan",
+    )?;
+    let entry_work = checked_progress_product_v1(
+        entry_checks,
+        checked_progress_sum_v1(
+            &[
+                48,
+                checked_progress_product_v1(
+                    census.operands,
+                    entry_type_work,
+                    "progress entry work",
+                )?,
+            ],
+            "progress entry work",
+        )?,
+        "progress entry work",
+    )?;
+    let entry_storage = if census.successors == 0 {
+        0
+    } else {
+        // No new heap workspace: one saved seed, source ordinal, copied
+        // candidate and two transient type handles, sized in ledger words.
+        checked_progress_sum_v1(
+            &[
+                std::mem::size_of::<Option<pliron::value::Value>>(),
+                std::mem::size_of::<Option<usize>>(),
+                std::mem::size_of::<pliron::value::Value>(),
+                2 * std::mem::size_of::<pliron::r#type::TypeHandle>(),
+            ],
+            "progress entry storage",
+        )?
+        .div_ceil(std::mem::size_of::<usize>())
+    };
     let work = checked_progress_sum_v1(
         &[
             checked_progress_product_v1(structural_items, 4, "progress work upper bound")?,
@@ -238,6 +308,7 @@ fn preflight_progress_execution_resource_upper_bound_v1(
             dominator_work,
             loop_work,
             parallel_edge_work,
+            entry_work,
         ],
         "progress work upper bound",
     )?;
@@ -298,6 +369,7 @@ fn preflight_progress_execution_resource_upper_bound_v1(
             verifier_temporary,
             scope_storage,
             parallel_edge_storage,
+            entry_storage,
         ],
         "progress temporary storage upper bound",
     )?;

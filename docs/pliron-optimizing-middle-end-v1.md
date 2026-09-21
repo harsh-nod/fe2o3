@@ -1134,3 +1134,54 @@ resumable signed production stage: authenticated bindings are not retained for
 publication. Guard/control consistency, transport through subsequent optimizer
 occurrences, fresh final checks and an owning production continuation remain
 necessary before loop rewrites or default-pipeline activation.
+
+### Bounded source-owned continuations
+
+Separate unnumbered continuations retain genuine Direct or UnitLocal source
+owners through private-cell promotion, neutral loop preheaders and bounded LICM.
+The [preheader transaction](../crates/fe2o3-kernel-opt/src/owned_loop_preheaders_v1.rs)
+redirects exact external edge occurrences through an appended typed forwarding
+block. Its independent checker preserves existing payloads and backedges;
+already canonical and unsupported loops remain unchanged.
+
+The [LICM transaction](../crates/fe2o3-kernel-opt/src/owned_licm_v1.rs)
+moves only invariant Bool/fixed-width-integer constants, Not, bitwise operations,
+comparisons and Select into a dedicated unconditional preheader. It preserves
+ValueIds and CFG structure. Arithmetic, shifts, casts, floating point, memory,
+calls and convergent operations are not selected. A bounded def-use worklist
+avoids repeatedly scanning every operation for each newly invariant value.
+Independent actual-pair replay checks complete retained/moved origins.
+
+The [source-owned continuation](../crates/fe2o3-lower-mir-kernel/src/production_checked_output_licm_v1.rs)
+retains its original source and full prefix, composes origins, and reruns source
+lifetime, native and formal-memory checks on the actual final graph. The explicit
+[native endpoint](../crates/rustc-codegen-fe2o3/src/production_pipeline_licm_native_v1.rs)
+then lowers that graph, retaining exact target metadata and the historical
+Policy7 execution witness. These additions do not alter a numbered schedule or
+activate the default pipeline.
+
+The read-only
+[`ProductionLoopInductionQueryV1`](../crates/fe2o3-lower-mir-kernel/src/production_checked_output_loop_induction_query_v1.rs)
+borrows this genuine final LICM owner. It derives complete recurrence outcomes
+and independently checks guarded no-wrap, guard-distance and conditional
+normal-header-completion facts for its supported unsigned U8/U16/U32/U64 cases.
+For unit stride, distance is the mathematical `max(bound - initial, 0)` even
+when both values are dynamic. A forwarded initial value remains symbolic.
+Larger strides require supported literal, nonwrapping arithmetic.
+
+Normal-header completion means that entry through the preheader and completion
+through the normal header exit imply N updates and N+1 header evaluations.
+It is not total termination, memory safety or an observed execution count.
+Replay requires the exact source owner, all seven analysis limits, original
+work ledger, live report storage and fresh actual-output analysis. Unsupported
+outcomes stay explicit. The report cannot attach detached graphs, authorize a
+rewrite or erase overflow checks.
+
+Constructed semantic-source tests cover both owner forms and both target
+profiles, nonzero motion, simulator comparisons, exact resource boundaries and
+ownership failures. Ordinary-rustc source qualification, protected proof,
+general memory/control-flow admission and full tutorial coverage remain separate
+gates. New analysis and continuation storage is metered alongside retained
+inputs, but inherited source/ranked/formal services keep their documented
+accounting domains; these are not whole-compiler RSS bounds or artifact/launch
+authority.

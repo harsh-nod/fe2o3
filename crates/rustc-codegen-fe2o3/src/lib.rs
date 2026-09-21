@@ -37,9 +37,13 @@ mod production_ordered_region_v31;
 mod production_ordered_source_occurrences_v31;
 mod production_pipeline;
 mod production_policy;
+mod production_primitive_from_v1;
 mod production_ranked_projection_v1;
+mod production_raw_call_audit_v1;
 mod production_reference_bounds_v2;
 mod production_reference_effect_join_v2;
+#[cfg(test)]
+mod production_rustc_driver_checked_output_source_helpers_v1_tests;
 mod production_rustc_driver_v1;
 mod production_rustc_drop_v1;
 mod production_rustc_intrinsic_v1;

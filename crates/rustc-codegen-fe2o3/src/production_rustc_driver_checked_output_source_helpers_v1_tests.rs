@@ -1,4 +1,8 @@
-fn clean_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+use std::env;
+use std::path::PathBuf;
+use std::process::Command;
+
+pub(crate) fn clean_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
     command.env_clear();
     for key in [
@@ -24,7 +28,7 @@ fn clean_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
-fn output(command: &mut Command) -> std::process::Output {
+pub(crate) fn output(command: &mut Command) -> std::process::Output {
     let result = command
         .output()
         .expect("execute source qualification command");
@@ -37,7 +41,7 @@ fn output(command: &mut Command) -> std::process::Output {
     result
 }
 
-fn artifact(messages: &[serde_json::Value], name: &str) -> PathBuf {
+pub(crate) fn artifact(messages: &[serde_json::Value], name: &str) -> PathBuf {
     let artifacts: Vec<_> = messages
         .iter()
         .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == name)
@@ -69,4 +73,3 @@ fn artifact(messages: &[serde_json::Value], name: &str) -> PathBuf {
     }
     panic!("missing metadata for actual Cargo artifact {name}");
 }
-

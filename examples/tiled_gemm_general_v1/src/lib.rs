@@ -6,8 +6,14 @@
 //! The production compiler imports the attributed Rust MIR, proves the generic
 //! ranked-memory and workgroup-pipeline obligations, lowers through Kernel IR
 //! and LLVM, and emits the HSACO executed by the qualification runner.
+//!
+//! The opt-in SIMT source shares the numerical input contract; its production
+//! compilation, simulation and KFD execution require separate qualification.
 
+#[cfg(not(feature = "kernel-simt-gemm-general"))]
 pub mod kernel;
+#[cfg(feature = "kernel-simt-gemm-general")]
+pub mod kernel_simt;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;
 

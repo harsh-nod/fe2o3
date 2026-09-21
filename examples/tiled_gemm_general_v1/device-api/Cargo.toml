@@ -10,6 +10,9 @@ publish = false
 [dependencies]
 fe2o3-device = { path = "../../../crates/fe2o3-device" }
 
+[dev-dependencies]
+trybuild = "1"
+
 [lib]
 name = "fe2o3_gemm_device_v1"
 path = "src/lib.rs"

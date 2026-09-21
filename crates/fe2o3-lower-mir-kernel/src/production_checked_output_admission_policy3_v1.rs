@@ -1,4 +1,12 @@
 use super::*;
+pub use general::redundant_store::{
+    ProductionLicmErrorV1, ProductionLicmStorageV1, ProductionOwnedLicmContinuationV1,
+    ProductionOwnedUnitLocalLicmContinuationV1,
+};
+pub use general::redundant_store::{
+    ProductionLoopInductionQueryErrorV1, ProductionLoopInductionQueryStorageV1,
+    ProductionLoopInductionQueryV1,
+};
 
 #[path = "production_checked_output_general_policy3_v1.rs"]
 mod general;
@@ -12,6 +20,12 @@ pub use general::redundant_store::{
     ProductionPrivateCellPromotionContinuationErrorV1,
     ProductionPrivateCellPromotionContinuationStorageV1, ProductionRedundantStoreAdmissionErrorV1,
     ProductionRedundantStoreAdmissionStorageV1, ProductionRedundantStoreAdmissionV1,
+};
+pub use general::redundant_store::{
+    ProductionLoopPreheaderIncomingOriginV1, ProductionLoopPreheaderOriginV1,
+    ProductionLoopPreheaderParameterOriginV1, ProductionLoopPreheadersErrorV1,
+    ProductionLoopPreheadersStorageV1, ProductionOwnedLoopPreheadersContinuationV1,
+    ProductionOwnedUnitLocalLoopPreheadersContinuationV1,
 };
 
 #[path = "production_checked_output_admission_policy4_v1.rs"]

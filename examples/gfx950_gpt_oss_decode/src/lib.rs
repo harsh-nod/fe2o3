@@ -27,6 +27,17 @@
 ))]
 compile_error!("an AMDGPU build must select one GPT-OSS kernel feature");
 
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode",
+    not(any(
+        feature = "kernel-gpt-oss-decode-router-serial",
+        feature = "kernel-gpt-oss-decode-held-fragments",
+        feature = "kernel-gpt-oss-decode-scalar-attention",
+        feature = "kernel-gpt-oss-decode-pipelined-attention",
+        feature = "kernel-gpt-oss-decode-interleaved-stores",
+    ))
+))]
 pub mod kernel;
 #[cfg(any(
     target_arch = "amdgpu",

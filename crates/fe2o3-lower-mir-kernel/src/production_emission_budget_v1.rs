@@ -85,6 +85,302 @@ fn emission_push_shared_v1<T>(
     Ok(())
 }
 
+fn emission_prepay_enum_projection_v1(
+    payloads: &BTreeMap<u32, Vec<SemanticValueBindingV1>>,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    charge_execution_cfg_lookup_v29(payloads.len(), budget)?;
+    charge_execution_cfg_lookup_v29(payloads.len(), budget)?;
+    for fields in payloads.values() {
+        budget.charge_work(2)?;
+        for binding in fields {
+            emission_prepay_binding_scan_v1(binding, budget)?;
+        }
+    }
+    Ok(())
+}
+
+fn emission_prepay_binding_scan_v1(
+    binding: &SemanticValueBindingV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    // Pay for this census and the existing recursive execution-role check.
+    budget.charge_work(2)?;
+    match binding {
+        SemanticValueBindingV1::Aggregate(fields) => {
+            for field in fields {
+                emission_prepay_binding_scan_v1(field, budget)?;
+            }
+        }
+        SemanticValueBindingV1::Enum { payloads, .. } => {
+            for fields in payloads.values() {
+                budget.charge_work(2)?;
+                for field in fields {
+                    emission_prepay_binding_scan_v1(field, budget)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn emission_clone_binding_v1(
+    binding: &SemanticValueBindingV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+    let floor = budget.storage();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        emission_clone_binding_inner_v1(binding, budget)
+    }));
+    match result {
+        Ok(Ok(copy)) => Ok(copy),
+        other => {
+            // Failed construction has dropped its partial backing before this refund.
+            let cleanup = budget
+                .storage()
+                .checked_sub(floor)
+                .ok_or_else(|| ProductionSemanticKirErrorV1::from(ArgumentResourceV1::Accounting))
+                .and_then(|extra| budget.release_storage(extra));
+            match other {
+                Ok(Err(error)) => {
+                    cleanup?;
+                    Err(error)
+                }
+                Err(payload) => std::panic::resume_unwind(payload),
+                Ok(Ok(_)) => unreachable!(),
+            }
+        }
+    }
+}
+
+fn emission_binding_clone_type_v1(
+    source: &Type,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Type, ProductionSemanticKirErrorV1> {
+    let mut output = Type::Unit;
+    let mut destination = &mut output;
+    let mut source = source;
+    loop {
+        budget.charge_work(1)?;
+        match source {
+            Type::Pointer(pointer) => {
+                budget.reserve_storage(std::mem::size_of::<Type>())?;
+                *destination = Type::pointer(Type::Unit, pointer.address_space, pointer.access);
+                let Type::Pointer(copy) = destination else {
+                    unreachable!()
+                };
+                destination = &mut copy.pointee;
+                source = &pointer.pointee;
+            }
+            Type::Slice(slice) => {
+                budget.reserve_storage(std::mem::size_of::<Type>())?;
+                *destination = Type::slice(Type::Unit, slice.address_space, slice.access);
+                let Type::Slice(copy) = destination else {
+                    unreachable!()
+                };
+                destination = &mut copy.element;
+                source = &slice.element;
+            }
+            leaf => {
+                *destination = match leaf {
+                    Type::Unit => Type::Unit,
+                    Type::Scalar(scalar) => Type::Scalar(*scalar),
+                    Type::Vector(vector) => Type::Vector(*vector),
+                    Type::Execution(role) => Type::Execution(*role),
+                    Type::Pointer(_) | Type::Slice(_) => unreachable!(),
+                };
+                return Ok(output);
+            }
+        }
+    }
+}
+
+fn emission_binding_clone_fields_v1(
+    fields: &[SemanticValueBindingV1],
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Vec<SemanticValueBindingV1>, ProductionSemanticKirErrorV1> {
+    let mut output = emission_vec_v1(fields.len(), budget)?;
+    for field in fields {
+        output.push(emission_clone_binding_inner_v1(field, budget)?);
+    }
+    Ok(output)
+}
+
+fn emission_binding_clone_values_v1(
+    values: &[(ValueId, Type)],
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Vec<(ValueId, Type)>, ProductionSemanticKirErrorV1> {
+    let mut output = emission_vec_v1(values.len(), budget)?;
+    for (id, ty) in values {
+        budget.charge_work(1)?;
+        output.push((*id, emission_binding_clone_type_v1(ty, budget)?));
+    }
+    Ok(output)
+}
+
+fn emission_binding_clone_box_types_v1(
+    types: &[Type],
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Box<[Type]>, ProductionSemanticKirErrorV1> {
+    let mut output = emission_vec_v1(types.len(), budget)?;
+    for ty in types {
+        output.push(emission_binding_clone_type_v1(ty, budget)?);
+    }
+    budget.charge_work(types.len())?;
+    if output.capacity() == output.len() {
+        return Ok(output.into_boxed_slice());
+    }
+    let old_bytes = argument_product_v1(output.capacity(), std::mem::size_of::<Type>())?;
+    budget.reserve_storage(argument_product_v1(
+        output.len(),
+        std::mem::size_of::<Type>(),
+    )?)?;
+    let output = output.into_boxed_slice();
+    budget.release_storage(old_bytes)?;
+    Ok(output)
+}
+
+fn emission_clone_binding_inner_v1(
+    binding: &SemanticValueBindingV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+    use SemanticValueBindingV1 as Binding;
+    budget.charge_work(1)?;
+    Ok(match binding {
+        Binding::Aggregate(fields) => {
+            Binding::Aggregate(emission_binding_clone_fields_v1(fields, budget)?)
+        }
+        Binding::Enum {
+            discriminant,
+            discriminant_ty,
+            semantic_type,
+            variant,
+            payloads,
+        } => {
+            let discriminant_ty = emission_binding_clone_type_v1(discriminant_ty, budget)?;
+            let mut output = BTreeMap::new();
+            for (variant, fields) in payloads {
+                let fields = emission_binding_clone_fields_v1(fields, budget)?;
+                reserve_execution_cfg_map_entry_v29::<u32, Vec<SemanticValueBindingV1>>(
+                    output.len(),
+                    budget,
+                )?;
+                output.insert(*variant, fields);
+            }
+            Binding::Enum {
+                discriminant: *discriminant,
+                discriminant_ty,
+                semantic_type: *semantic_type,
+                variant: *variant,
+                payloads: output,
+            }
+        }
+        Binding::DynamicLds {
+            base,
+            base_ty,
+            len,
+            byte_len,
+            dynamic_lds,
+            element_storage,
+            elements,
+            byte_extent,
+            alignment,
+            producer_function,
+            producer_block,
+        } => Binding::DynamicLds {
+            base: *base,
+            base_ty: emission_binding_clone_type_v1(base_ty, budget)?,
+            len: *len,
+            byte_len: *byte_len,
+            dynamic_lds: *dynamic_lds,
+            element_storage: *element_storage,
+            elements: *elements,
+            byte_extent: *byte_extent,
+            alignment: *alignment,
+            producer_function: *producer_function,
+            producer_block: *producer_block,
+        },
+        Binding::MatrixFragment {
+            values,
+            contract,
+            storage_layout,
+            wave,
+        } => Binding::MatrixFragment {
+            values: emission_binding_clone_values_v1(values, budget)?,
+            contract: *contract,
+            storage_layout: *storage_layout,
+            wave: *wave,
+        },
+        Binding::AccumulatorFragment {
+            values,
+            contract,
+            wave,
+        } => Binding::AccumulatorFragment {
+            values: emission_binding_clone_values_v1(values, budget)?,
+            contract: *contract,
+            wave: *wave,
+        },
+        Binding::WorkgroupPipeline {
+            storage,
+            pipeline,
+            element,
+            payload_binding,
+            component_types,
+            packed_type,
+            buffers,
+            elements,
+            prefetch_distance,
+            alignment,
+        } => Binding::WorkgroupPipeline {
+            storage: *storage,
+            pipeline: *pipeline,
+            element: *element,
+            payload_binding: *payload_binding,
+            component_types: emission_binding_clone_box_types_v1(component_types, budget)?,
+            packed_type: emission_binding_clone_type_v1(packed_type, budget)?,
+            buffers: *buffers,
+            elements: *elements,
+            prefetch_distance: *prefetch_distance,
+            alignment: *alignment,
+        },
+        Binding::Value { id, ty } => Binding::Value {
+            id: *id,
+            ty: emission_binding_clone_type_v1(ty, budget)?,
+        },
+        Binding::OptionPointer {
+            present,
+            pointer,
+            pointer_ty,
+            availability,
+        } => Binding::OptionPointer {
+            present: *present,
+            pointer: *pointer,
+            pointer_ty: emission_binding_clone_type_v1(pointer_ty, budget)?,
+            availability: *availability,
+        },
+        // These variants contain only inline identities, geometry and availability.
+        Binding::Unit
+        | Binding::Unmaterialized
+        | Binding::Execution(_)
+        | Binding::ExecutionBorrow(_)
+        | Binding::ExecutionReferent(_)
+        | Binding::MovedExecution
+        | Binding::MathContext
+        | Binding::CollectiveContext
+        | Binding::WorkgroupLdsScope
+        | Binding::MatrixContext
+        | Binding::WaveLane { .. }
+        | Binding::Gfx950LdsTransposeTile { .. }
+        | Binding::IndexWitness { .. }
+        | Binding::OptionIndexWitness { .. }
+        | Binding::GridLeader { .. }
+        | Binding::ComponentWitness { .. }
+        | Binding::OptionComponentWitness { .. }
+        | Binding::OptionGridLeader { .. } => binding.clone(),
+    })
+}
+
 impl SemanticFunctionLoweringV1<'_> {
     fn with_emission_budget_v1<T>(
         &mut self,
@@ -110,6 +406,10 @@ impl SemanticFunctionLoweringV1<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "production_emission_binding_v1_tests.rs"]
+mod emission_binding_tests;
 
 #[cfg(test)]
 mod emission_budget_tests {
