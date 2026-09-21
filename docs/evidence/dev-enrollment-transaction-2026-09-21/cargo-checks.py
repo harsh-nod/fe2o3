@@ -24,6 +24,7 @@ def main():
         signal.signal(number, recorder.interrupted)
     runner = recorder.Recorder(output, repo)
     files = [repo / 'Cargo.toml', repo / 'Cargo.lock', Path(__file__).resolve(), path,
+             repo / 'crates/fe2o3-runtime/src/context.rs',
              repo / 'crates/fe2o3-runtime-model/Cargo.toml']
     files.extend(p for p in (repo / 'crates/fe2o3-runtime-model/src').rglob('*') if p.is_file())
     before = {str(p): recorder.sha(p) for p in files}

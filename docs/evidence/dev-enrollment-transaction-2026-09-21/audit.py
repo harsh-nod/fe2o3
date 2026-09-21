@@ -160,6 +160,8 @@ def cpu_checks(repo, source, packet, helper, compare):
     baseline_lock = tomllib.loads(blob(repo, compare.BASELINE, 'Cargo.lock').decode())
     spin = [p for p in baseline_lock['package'] if p['name'] == 'spin' and p['version'] == '0.12.3']
     need(len(spin) == 1, 'baseline spin dependency')
+    # Only `once` is enabled here; the workspace also enables optional lock_api.
+    spin = [{key: spin[0][key] for key in ('name', 'version', 'source', 'checksum')}]
     expected = {}
     for variant in ('baseline', 'candidate'):
         need(helper.entries(cpu / variant) == {'Cargo.toml', 'Cargo.lock'}, 'CPU manifest roster')
@@ -267,6 +269,7 @@ def main():
         source_names = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', source,
             'crates/fe2o3-runtime-model/src'], cwd=repo, text=True).splitlines()
         paths = [*source_names, 'Cargo.toml', 'Cargo.lock', 'crates/fe2o3-runtime-model/Cargo.toml',
+            'crates/fe2o3-runtime/src/context.rs',
             str(PACKET / 'cargo-checks.py'), 'docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py']
         need(set(cargo_inputs) == {str(ROOT / p) for p in paths}, 'exact Cargo input roster')
         need(all(Path(p).is_relative_to(ROOT) and h == sha(blob(repo, source, Path(p).relative_to(ROOT))) for p, h in cargo_inputs.items()), 'Cargo input Git identities')
