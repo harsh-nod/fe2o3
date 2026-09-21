@@ -39,10 +39,11 @@ pub(crate) use tests::{
     with_backend_checked_output_policy5_owned_v1, with_backend_checked_output_policy6_owned_v1,
     with_backend_checked_output_policy6_roster_v1, with_backend_erased_bound_v1,
     with_backend_erased_output_policy5_owned_v1, with_backend_erased_output_policy6_owned_v1,
-    with_backend_erased_roster_v1, with_backend_licm_direct_prefix_v1,
-    with_backend_licm_erased_prefix_v1, with_backend_loop_preheaders_direct_prefix_v1,
-    with_backend_policy7_direct_prefix_v1, with_backend_policy7_erased_prefix_v1,
-    with_backend_policy8_direct_prefix_v1, with_backend_policy8_erased_prefix_v1,
+    with_backend_erased_roster_v1, with_backend_forwarding_erased_prefix_v1,
+    with_backend_licm_direct_prefix_v1, with_backend_licm_erased_prefix_v1,
+    with_backend_loop_preheaders_direct_prefix_v1, with_backend_policy7_direct_prefix_v1,
+    with_backend_policy7_erased_prefix_v1, with_backend_policy8_direct_prefix_v1,
+    with_backend_policy8_erased_prefix_v1,
 };
 
 use analysis_multi_split_v1::{

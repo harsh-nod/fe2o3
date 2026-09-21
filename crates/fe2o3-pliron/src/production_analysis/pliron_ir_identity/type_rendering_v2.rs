@@ -32,15 +32,25 @@ impl TypeRenderNestingV2 {
     }
 }
 
-fn render_type_preflight_bounded_v2(
+#[cfg(test)]
+fn render_type_preflight_bounded_v2<'a, 'p: 'a, 'r: 'p>(
     location: PlironPreserveLocationV1,
-    render: impl FnOnce(&mut LimitedTextV1) -> fmt::Result,
+    render: impl FnOnce(&mut LimitedTextV1<'a, 'p, 'r>) -> fmt::Result,
+) -> Result<String, PlironIrIdentityErrorV1> {
+    render_type_preflight_bounded_observed_v2(location, None, render)
+}
+
+fn render_type_preflight_bounded_observed_v2<'a, 'p, 'r>(
+    location: PlironPreserveLocationV1,
+    observer: RenderObserverV1<'a, 'p, 'r>,
+    render: impl FnOnce(&mut LimitedTextV1<'a, 'p, 'r>) -> fmt::Result,
 ) -> Result<String, PlironIrIdentityErrorV1> {
     render_with_bounded_writer_v1(
         location,
         "type preflight",
         LimitedTextV1 {
             type_nesting: Some(TypeRenderNestingV2::default()),
+            observer,
             ..LimitedTextV1::default()
         },
         render,
@@ -50,6 +60,172 @@ fn render_type_preflight_bounded_v2(
 #[cfg(test)]
 mod type_rendering_v2_tests {
     use super::*;
+    use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+        InvocationReceiptFailureV1, InvocationReceiptV1,
+    };
+
+    fn rendering_receipt() -> (InvocationReceiptV1, ProductionAnalysisResourceUpperBoundV1) {
+        let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+        let floor =
+            ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 17, 64, 32).unwrap();
+        let reservation = ProductionAnalysisResourceUpperBoundV1::checked_phase(
+            phase,
+            4 * MAX_PLIRON_IDENTITY_ENTITY_TEXT_BYTES_V1 + 128,
+            0,
+            4 * MAX_PLIRON_IDENTITY_ENTITY_TEXT_BYTES_V1 + 128,
+        )
+        .unwrap();
+        (
+            InvocationReceiptV1::new(
+                floor,
+                ProductionAnalysisResourceLimitsV1::new(usize::MAX, usize::MAX),
+            )
+            .unwrap(),
+            reservation,
+        )
+    }
+
+    #[test]
+    fn observed_renderer_denial_survives_swallow_and_later_panic() {
+        let phase_kind = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+        for nesting in [false, true] {
+            for behavior in 0..3 {
+                let (mut receipt, reservation) = rendering_receipt();
+                let phase = receipt.phase(phase_kind, 0).unwrap();
+                let observer = phase.observer(&Ok);
+                observer
+                    .require(
+                        ProductionAnalysisResourceLimitsV1::new(usize::MAX, usize::MAX),
+                        phase_kind,
+                        Ok(reservation),
+                    )
+                    .unwrap();
+                let print = |writer: &mut LimitedTextV1<'_, '_, '_>| {
+                    let error = if nesting {
+                        writer.write_str(&"<".repeat(MAX_TYPE_RENDER_DELIMITERS_V2 + 1))
+                    } else {
+                        writer.write_str(&"x".repeat(MAX_PLIRON_IDENTITY_ENTITY_TEXT_BYTES_V1 + 1))
+                    };
+                    assert!(error.is_err());
+                    match behavior {
+                        0 => error,
+                        1 => Ok(()),
+                        _ => panic!("printer panic after quota"),
+                    }
+                };
+                let result = if nesting {
+                    render_type_preflight_bounded_observed_v2(
+                        PlironPreserveLocationV1::Function,
+                        Some(&observer),
+                        print,
+                    )
+                } else {
+                    render_bounded_observed_v1(
+                        PlironPreserveLocationV1::Function,
+                        "test",
+                        Some(&observer),
+                        print,
+                    )
+                };
+                if behavior == 1 {
+                    assert_eq!(result.unwrap(), "");
+                } else if behavior == 2 {
+                    assert!(matches!(
+                        result,
+                        Err(PlironIrIdentityErrorV1::RenderingFailed { .. })
+                    ));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(PlironIrIdentityErrorV1::ResourceLimitExceeded { .. })
+                    ));
+                }
+                phase.commit(reservation).unwrap();
+                let expected = crate::production_analysis::ProductionAnalysisResourceLimitV1 {
+                    phase: phase_kind,
+                    resource: if nesting {
+                        "type rendering nesting"
+                    } else {
+                        "rendered entity bytes"
+                    },
+                };
+                assert_eq!(receipt.snapshot().first_denial, Some(expected));
+                assert_eq!(receipt.snapshot().caught_panic, behavior == 2);
+                assert_eq!(
+                    receipt.complete(),
+                    Err(InvocationReceiptFailureV1::Denied(expected))
+                );
+                assert_eq!(
+                    receipt.snapshot().committed.work_upper_bound(),
+                    reservation.work_upper_bound()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn observed_renderer_distinguishes_plain_failure_and_panic() {
+        let phase_kind = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+        for panic in [false, true] {
+            let (mut receipt, reservation) = rendering_receipt();
+            let phase = receipt.phase(phase_kind, 0).unwrap();
+            let observer = phase.observer(&Ok);
+            observer
+                .require(
+                    ProductionAnalysisResourceLimitsV1::new(usize::MAX, usize::MAX),
+                    phase_kind,
+                    Ok(reservation),
+                )
+                .unwrap();
+            let result = render_bounded_observed_v1(
+                PlironPreserveLocationV1::Function,
+                "test",
+                Some(&observer),
+                |_| {
+                    assert!(!panic, "plain printer panic");
+                    Err(fmt::Error)
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(PlironIrIdentityErrorV1::RenderingFailed { .. })
+            ));
+            phase.commit(reservation).unwrap();
+            assert_eq!(receipt.snapshot().first_denial, None);
+            assert_eq!(receipt.snapshot().caught_panic, panic);
+            if panic {
+                assert_eq!(
+                    receipt.complete(),
+                    Err(InvocationReceiptFailureV1::CaughtPanic)
+                );
+            } else {
+                assert_eq!(receipt.complete(), Ok(reservation));
+            }
+        }
+    }
+
+    #[test]
+    fn observed_renderer_does_not_classify_diagnostic_truncation_as_denial() {
+        let phase_kind = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+        let (mut receipt, reservation) = rendering_receipt();
+        let phase = receipt.phase(phase_kind, 0).unwrap();
+        phase
+            .observer(&Ok)
+            .require(
+                ProductionAnalysisResourceLimitsV1::new(usize::MAX, usize::MAX),
+                phase_kind,
+                Ok(reservation),
+            )
+            .unwrap();
+        let mut summary = DiagnosticSummaryV1::default();
+        summary.append(format_args!(
+            "{}",
+            "x".repeat(MAX_DIAGNOSTIC_DETAIL_CHARS_V1 + 1)
+        ));
+        assert!(summary.finish().ends_with("..."));
+        phase.commit(reservation).unwrap();
+        assert_eq!(receipt.complete(), Ok(reservation));
+    }
 
     #[test]
     fn typed_data_identity_rejects_malformed_fixed_vector_descriptor() {

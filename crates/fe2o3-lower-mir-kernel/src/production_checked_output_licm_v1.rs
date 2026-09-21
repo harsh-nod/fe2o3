@@ -1,9 +1,26 @@
 //! Genuine source/preheader custody through checked total-integer LICM.
+#[path = "production_checked_output_cross_block_forwarding_v1.rs"]
+mod cross_block_forwarding;
+pub use cross_block_forwarding::{
+    ProductionCrossBlockForwardingErrorV1, ProductionCrossBlockForwardingOriginV1,
+    ProductionCrossBlockForwardingStorageV1, ProductionOwnedCrossBlockForwardingContinuationV1,
+    ProductionOwnedUnitLocalCrossBlockForwardingContinuationV1,
+};
+#[path = "production_checked_output_induction_refinement_v1.rs"]
+mod induction_refinement;
 #[path = "production_checked_output_loop_induction_query_v1.rs"]
 mod loop_induction_query;
 use super::*;
 use fe2o3_kernel_opt::{
     OwnedLicmContinuationV1 as LicmTail, prepare_owned_licm_v1 as prepare_licm,
+};
+pub use induction_refinement::{
+    ProductionInductionRefinementErrorV1, ProductionInductionRefinementOriginV1,
+    ProductionInductionRefinementStorageV1, ProductionOwnedInductionRefinementContinuationV1,
+    ProductionOwnedRefinedCrossBlockForwardingContinuationV1,
+    ProductionOwnedUnitLocalInductionRefinementContinuationV1,
+    ProductionOwnedUnitLocalRefinedCrossBlockForwardingContinuationV1,
+    ProductionRefinedCrossBlockForwardingErrorV1, ProductionRefinedCrossBlockForwardingStorageV1,
 };
 pub use loop_induction_query::{
     ProductionLoopInductionQueryErrorV1, ProductionLoopInductionQueryStorageV1,
@@ -169,6 +186,26 @@ fn check_actual_licm(
     budget: &mut AssertOriginBudgetV1<'_>,
     binding: &PromotionBinding,
 ) -> LResult<Box<[FormalMemoryObligations]>> {
+    with_actual_licm_sites(
+        prefix,
+        tail,
+        budget,
+        binding,
+        promotion_sites::check_licm_sites,
+    )
+}
+
+fn with_actual_licm_sites<'g, 'w, R>(
+    prefix: PreheaderPrefix<'_>,
+    tail: &'g LicmTail,
+    budget: &mut AssertOriginBudgetV1<'w>,
+    binding: &PromotionBinding,
+    use_sites: impl for<'s> FnOnce(
+        promotion_sites::CheckedPromotedSites<'s, 'g>,
+        &mut AssertOriginBudgetV1<'w>,
+        &PromotionBinding,
+    ) -> PResult<R>,
+) -> LResult<R> {
     let (licm, storage) = tail
         .replay_against(prefix.output(), budget)
         .map_err(LError::Continuation)?;
@@ -197,7 +234,7 @@ fn check_actual_licm(
         budget,
         binding,
         |sites, budget, inner| {
-            promotion_sites::check_licm_after_preheaders_sites(
+            promotion_sites::with_licm_after_preheaders_sites(
                 sites,
                 &preheaders,
                 &licm,
@@ -205,6 +242,7 @@ fn check_actual_licm(
                 &output,
                 budget,
                 inner,
+                use_sites,
             )
         },
     )?;

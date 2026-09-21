@@ -1,6 +1,7 @@
 fn collect_contracts(
     context: &Context,
     inventory: &crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+    observer: OwnershipObserverV1<'_, '_, '_>,
 ) -> Result<Vec<ContractV1>, Box<HierarchicalOwnershipFindingV1>> {
     let mut contracts = Vec::new();
     let mut by_view = HashMap::new();
@@ -12,6 +13,7 @@ fn collect_contracts(
             continue;
         };
         if contracts.len() == MAX_HIERARCHICAL_OWNERSHIP_CONTRACTS_V1 {
+            observe_ownership_quota_v1(observer, "ownership contract limit");
             return Err(Box::new(
                 HierarchicalOwnershipFindingV1::ContractLimitExceeded {
                     actual: contracts.len() + 1,
@@ -152,11 +154,20 @@ fn bounded_element_count(
     view: &str,
     extents: &[u64],
 ) -> Result<usize, Box<HierarchicalOwnershipFindingV1>> {
+    bounded_element_count_with_observation_v1(view, extents, None)
+}
+
+fn bounded_element_count_with_observation_v1(
+    view: &str,
+    extents: &[u64],
+    observer: OwnershipObserverV1<'_, '_, '_>,
+) -> Result<usize, Box<HierarchicalOwnershipFindingV1>> {
     let actual = extents
         .iter()
         .try_fold(1_u64, |total, extent| total.checked_mul(*extent))
         .unwrap_or(u64::MAX);
     if actual > MAX_HIERARCHICAL_OWNERSHIP_ELEMENTS_V1 as u64 {
+        observe_ownership_quota_v1(observer, "ownership element limit");
         return Err(Box::new(
             HierarchicalOwnershipFindingV1::ElementLimitExceeded {
                 view: view.to_owned(),
@@ -179,6 +190,31 @@ fn analyze_contract(
     findings: &mut Vec<HierarchicalOwnershipFindingV1>,
     regions: &mut Vec<HierarchicalOwnershipRegionV1>,
 ) {
+    analyze_contract_with_observation_v1(
+        context,
+        contract,
+        extents,
+        element_count,
+        traces,
+        grid,
+        (findings, regions, None),
+    );
+}
+
+fn analyze_contract_with_observation_v1(
+    context: &Context,
+    contract: &ContractV1,
+    extents: Option<&[u64]>,
+    element_count: Option<usize>,
+    traces: &[PlironInvocationTraceV1],
+    grid: u64,
+    output: (
+        &mut Vec<HierarchicalOwnershipFindingV1>,
+        &mut Vec<HierarchicalOwnershipRegionV1>,
+        OwnershipObserverV1<'_, '_, '_>,
+    ),
+) {
+    let (findings, regions, observer) = output;
     let mut owners = BTreeMap::<Vec<u64>, HierarchicalOwnerWitnessV1>::new();
     let mut sets = BTreeMap::<HierarchicalRegionIdentityV1, BTreeSet<Vec<u64>>>::new();
     let collective = contract.coverage == OwnershipCoverageAttr::CollectiveContributions;
@@ -389,6 +425,15 @@ fn analyze_contract(
             }
             Ok(PresburgerCoverageDecisionV1::Proved) => {}
             Ok(PresburgerCoverageDecisionV1::Incomplete(failure)) | Err(failure) => {
+                if matches!(
+                    failure,
+                    fe2o3_kernel_analysis::PresburgerFailureV1::ResourceLimit { .. }
+                ) {
+                    observe_ownership_quota_v1(
+                        observer,
+                        "ownership Presburger coverage work limit",
+                    );
+                }
                 findings.push(HierarchicalOwnershipFindingV1::EffectDomainIncomplete {
                     detail: format!("Presburger coverage query failed: {failure}"),
                 });
@@ -557,4 +602,158 @@ fn declared_coverage_summary(contracts: &[ContractV1]) -> HierarchicalCoveragePr
         }
     }
     summary
+}
+
+#[cfg(test)]
+mod observed_ownership_coverage_tests {
+    use super::*;
+    use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+        InvocationReceiptFailureV1 as ReceiptFailure, InvocationReceiptV1 as Receipt,
+    };
+    use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
+    use dialect_kernel::{
+        IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, InvocationIndexOp, RankedViewType,
+        ReturnOp,
+    };
+    use fe2o3_kernel_analysis::{MAX_PRESBURGER_WORK_UNITS_V1 as CAP, PresburgerFailureV1};
+    use pliron::{builtin::types::FunctionType, dialect::DialectName};
+
+    fn fixture(extents: Vec<u64>) -> (Context, FuncOp) {
+        let mut context = Context::new();
+        dialect_kernel::register_dialect(
+            &mut context,
+            &DialectName::try_new(dialect_kernel::DIALECT_NAME).unwrap(),
+        )
+        .unwrap();
+        dialect_gpu::register_dialect(&mut context).unwrap();
+        let signature = FunctionType::get(&context, vec![], vec![]);
+        let function = FuncOp::new(
+            &mut context,
+            "observed_ownership_coverage".try_into().unwrap(),
+            signature,
+        );
+        let entry = function.get_entry_block(&context);
+        let launch = (extents[0] - 1) / 2;
+        let rank = extents.len();
+        let layout = ExecutionLayoutOp::new_with_domain(
+            &mut context,
+            41,
+            [launch, 1, 1],
+            [1, 1, 1],
+            1,
+            ExecutionDomainAttr::FullPhysicalWorkgroups,
+        );
+        let ty = RankedViewType::new(&context, 32, true, extents).unwrap();
+        let view = RankedViewOp::new_in_space_with_allocation_contract(
+            &mut context,
+            ty,
+            vec![],
+            MemorySpaceAttr::Global,
+            17,
+            17,
+        )
+        .unwrap();
+        let view_value = view.result(&context);
+        let contract = OwnershipContractOp::new(
+            &mut context,
+            view_value,
+            OwnershipCoverageAttr::ExactView,
+            OwnershipPartitionAttr::ExactSets,
+        )
+        .unwrap();
+        let lane = InvocationIndexOp::new(&mut context, 0, launch);
+        let zero = IndexConstantOp::new(&mut context, 0);
+        let offset = IndexConstantOp::new(&mut context, launch);
+        let lane_value = lane.result(&context);
+        let offset_value = offset.result(&context);
+        let shifted = IndexBinaryOp::new(
+            &mut context,
+            IndexBinaryKindAttr::Add,
+            lane_value,
+            offset_value,
+        );
+        for operation in [
+            layout.get_operation(),
+            view.get_operation(),
+            contract.get_operation(),
+            lane.get_operation(),
+            zero.get_operation(),
+            offset.get_operation(),
+            shifted.get_operation(),
+        ] {
+            operation.insert_at_back(entry, &context);
+        }
+        for index in [lane_value, shifted.result(&context)] {
+            let mut indices = vec![zero.result(&context); rank];
+            indices[0] = index;
+            RankedAccessOp::new(&mut context, AccessKindAttr::Write, view_value, indices)
+                .unwrap()
+                .get_operation()
+                .insert_at_back(entry, &context);
+        }
+        ReturnOp::new(&mut context)
+            .get_operation()
+            .insert_at_back(entry, &context);
+        (context, function)
+    }
+
+    fn run(extents: Vec<u64>) -> (HierarchicalOwnershipReportV1, Receipt) {
+        let (context, function) = fixture(extents);
+        let ordinary = {
+            let mut manager = PlironAnalysisManagerV1::new(&function);
+            run_pliron_hierarchical_ownership_check_with_analyses_v1(
+                &context,
+                &function,
+                &mut manager,
+            )
+        };
+        let mut manager = PlironAnalysisManagerV1::new(&function);
+        let mut receipt = Receipt::new(
+            Default::default(),
+            ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+        )
+        .unwrap();
+        let phase = receipt
+            .phase(ProductionAnalysisResourcePhaseV1::HierarchicalOwnership, 0)
+            .unwrap();
+        let observed = run_pliron_hierarchical_ownership_with_observation_v1(
+            &context,
+            &function,
+            &mut manager,
+            Some(&phase.observer(&Ok)),
+        );
+        drop(phase);
+        assert_eq!(observed, ordinary);
+        assert!(!receipt.snapshot().caught_panic);
+        // Denial classification only: no admission or owner transfer is exercised.
+        assert_eq!(receipt.snapshot().committed, Default::default());
+        (observed, receipt)
+    }
+
+    #[test]
+    fn actual_coverage_hole_is_not_resource_denial() {
+        let (report, receipt) = run(vec![9]);
+        assert!(matches!(report.findings(),
+            [HierarchicalOwnershipFindingV1::CoverageHole { coordinate, extents, .. }]
+            if coordinate == &[8] && extents == &[9]));
+        assert_eq!(receipt.complete(), Ok(Default::default()));
+    }
+
+    #[test]
+    fn actual_coverage_solver_quota_survives_incomplete_conversion() {
+        let (report, receipt) = run(vec![131_073, 1, 1, 1, 1, 1, 1, 1]);
+        let failure = PresburgerFailureV1::ResourceLimit {
+            limit: CAP,
+            actual: CAP + 1,
+        };
+        assert!(matches!(report.findings(),
+            [HierarchicalOwnershipFindingV1::EffectDomainIncomplete { detail }]
+            if detail == &format!("Presburger coverage query failed: {failure}")));
+        let error = ProductionAnalysisResourceLimitV1 {
+            phase: ProductionAnalysisResourcePhaseV1::HierarchicalOwnership,
+            resource: "ownership Presburger coverage work limit",
+        };
+        assert_eq!(receipt.snapshot().first_denial, Some(error));
+        assert_eq!(receipt.complete(), Err(ReceiptFailure::Denied(error)));
+    }
 }

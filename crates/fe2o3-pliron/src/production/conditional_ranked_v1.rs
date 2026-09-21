@@ -509,6 +509,8 @@ impl ProductionPlironSessionV1 {
     }
 }
 
+include!("conditional_pipeline_v1.rs");
+
 #[cfg(test)]
 #[path = "conditional_ranked_v1_tests.rs"]
 mod tests;

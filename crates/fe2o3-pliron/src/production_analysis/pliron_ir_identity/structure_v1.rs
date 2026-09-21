@@ -7,234 +7,262 @@ fn semantic_attribute_count_v1(attributes: &AttributeDict) -> usize {
 }
 
 fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrIdentityErrorV1> {
-    let root = function.get_operation();
-    let root_ref = root.deref(context);
-    let root_name = render_operation_name_v1(context, root, PlironPreserveLocationV1::Function)?;
-    if root_name != "builtin.func" {
-        return Err(PlironIrIdentityErrorV1::UnsupportedRoot {
-            operation: root_name,
-            detail: "identity construction requires builtin.func",
-        });
-    }
-    if root_ref.num_regions() != 1
-        || root_ref.get_num_results() != 0
-        || root_ref.get_num_operands() != 0
-        || root_ref.get_num_successors() != 0
-    {
-        return Err(PlironIrIdentityErrorV1::UnsupportedRoot {
-            operation: root_name,
-            detail: "builtin.func must have exactly one region and no SSA results, operands, or successors",
-        });
-    }
-    check_limit(
-        PlironPreserveLocationV1::Function,
-        "attributes",
-        root_ref.attributes.0.len(),
-        MAX_PLIRON_IDENTITY_ATTRIBUTES_V1,
-    )?;
-    let mut type_nodes = validate_attribute_dict(
-        context,
-        &root_ref.attributes,
-        PlironPreserveLocationV1::Function,
-    )?;
-    let function_type = function.get_type(context);
-    type_nodes = type_nodes
-        .checked_add(validate_and_count_type_handle_v1(
-            context,
-            function_type,
-            PlironPreserveLocationV1::Function,
-        )?)
-        .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-    let function_type_ref = function_type.deref(context);
-    if function_type_ref.downcast_ref::<FunctionType>().is_none() {
-        return Err(PlironIrIdentityErrorV1::UnsupportedType {
-            location: PlironPreserveLocationV1::Function,
-            ty: render_type_id_v1(&*function_type_ref, PlironPreserveLocationV1::Function)?,
-        });
-    }
-    drop(function_type_ref);
+    prescan_observed_v1(context, function, None)
+}
 
-    let mut blocks = Vec::new();
-    let mut operations = Vec::new();
-    let mut operation_count = 0_usize;
-    let mut values = 0_usize;
-    let mut operands = 0_usize;
-    let mut successors = 0_usize;
-    let mut attributes = root_ref.attributes.0.len();
-    let mut block_arguments = 0_usize;
-    let mut max_operation_arity = 0_usize;
-    let mut max_successor_arity = 0_usize;
-    for block in function.get_region(context).deref(context).iter(context) {
+fn prescan_observed_v1(
+    context: &Context,
+    function: &FuncOp,
+    observer: RenderObserverV1<'_, '_, '_>,
+) -> Result<PrescanV1, PlironIrIdentityErrorV1> {
+    let result = (|| {
+        let root = function.get_operation();
+        let root_ref = root.deref(context);
+        let root_name = render_operation_name_observed_v1(
+            context,
+            root,
+            PlironPreserveLocationV1::Function,
+            observer,
+        )?;
+        if root_name != "builtin.func" {
+            return Err(PlironIrIdentityErrorV1::UnsupportedRoot {
+                operation: root_name,
+                detail: "identity construction requires builtin.func",
+            });
+        }
+        if root_ref.num_regions() != 1
+            || root_ref.get_num_results() != 0
+            || root_ref.get_num_operands() != 0
+            || root_ref.get_num_successors() != 0
+        {
+            return Err(PlironIrIdentityErrorV1::UnsupportedRoot {
+                operation: root_name,
+                detail: "builtin.func must have exactly one region and no SSA results, operands, or successors",
+            });
+        }
         check_limit(
             PlironPreserveLocationV1::Function,
-            "basic blocks",
-            blocks
-                .len()
-                .checked_add(1)
-                .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?,
-            MAX_PLIRON_IDENTITY_BLOCKS_V1,
-        )?;
-        let block_index = blocks.len();
-        let block_ref = block.deref(context);
-        let block_location = PlironPreserveLocationV1::Block { block: block_index };
-        type_nodes = type_nodes
-            .checked_add(validate_attribute_dict(
-                context,
-                &block_ref.attributes,
-                block_location.clone(),
-            )?)
-            .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-        for argument in block_ref.arguments() {
-            type_nodes = type_nodes
-                .checked_add(validate_and_count_type_handle_v1(
-                    context,
-                    argument.get_type(context),
-                    block_location.clone(),
-                )?)
-                .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-        }
-        block_arguments = block_arguments
-            .checked_add(block_ref.get_num_arguments())
-            .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-        values = values
-            .checked_add(block_ref.get_num_arguments())
-            .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-        attributes = attributes
-            .checked_add(block_ref.attributes.0.len())
-            .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-        check_limit(
-            PlironPreserveLocationV1::Block { block: block_index },
-            "SSA values",
-            values,
-            MAX_PLIRON_IDENTITY_VALUES_V1,
-        )?;
-        check_limit(
-            PlironPreserveLocationV1::Block { block: block_index },
             "attributes",
-            attributes,
+            root_ref.attributes.0.len(),
             MAX_PLIRON_IDENTITY_ATTRIBUTES_V1,
         )?;
-        let mut block_operations = Vec::new();
-        for (operation_index, operation) in block_ref.iter(context).enumerate() {
-            operation_count = operation_count
-                .checked_add(1)
-                .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-            let dynamic = Operation::get_op_dyn(operation, context);
-            let name = render_operation_name_v1(
+        let mut type_nodes = validate_attribute_dict(
+            context,
+            &root_ref.attributes,
+            PlironPreserveLocationV1::Function,
+            observer,
+        )?;
+        let function_type = function.get_type(context);
+        type_nodes = type_nodes
+            .checked_add(validate_and_count_type_handle_observed_v1(
                 context,
-                operation,
-                PlironPreserveLocationV1::Block { block: block_index },
-            )?;
-            let location = PlironPreserveLocationV1::Operation {
-                block: block_index,
-                operation: operation_index,
-                name: name.clone(),
-            };
+                function_type,
+                PlironPreserveLocationV1::Function,
+                observer,
+            )?)
+            .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
+        let function_type_ref = function_type.deref(context);
+        if function_type_ref.downcast_ref::<FunctionType>().is_none() {
+            return Err(PlironIrIdentityErrorV1::UnsupportedType {
+                location: PlironPreserveLocationV1::Function,
+                ty: render_type_id_v1(
+                    &*function_type_ref,
+                    PlironPreserveLocationV1::Function,
+                    observer,
+                )?,
+            });
+        }
+        drop(function_type_ref);
+
+        let mut blocks = Vec::new();
+        let mut operations = Vec::new();
+        let mut operation_count = 0_usize;
+        let mut values = 0_usize;
+        let mut operands = 0_usize;
+        let mut successors = 0_usize;
+        let mut attributes = root_ref.attributes.0.len();
+        let mut block_arguments = 0_usize;
+        let mut max_operation_arity = 0_usize;
+        let mut max_successor_arity = 0_usize;
+        for block in function.get_region(context).deref(context).iter(context) {
             check_limit(
-                location.clone(),
-                "operations",
-                operation_count,
-                MAX_PLIRON_IDENTITY_OPERATIONS_V1,
+                PlironPreserveLocationV1::Function,
+                "basic blocks",
+                blocks
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?,
+                MAX_PLIRON_IDENTITY_BLOCKS_V1,
             )?;
-            if !is_production_ranked_operation_v1(dynamic.as_ref()) {
-                return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
-                    location,
-                    detail: "operation is outside the closed ranked operation allowlist",
-                });
-            }
-            let raw = operation.deref(context);
+            let block_index = blocks.len();
+            let block_ref = block.deref(context);
+            let block_location = PlironPreserveLocationV1::Block { block: block_index };
             type_nodes = type_nodes
                 .checked_add(validate_attribute_dict(
                     context,
-                    &raw.attributes,
-                    location.clone(),
+                    &block_ref.attributes,
+                    block_location.clone(),
+                    observer,
                 )?)
                 .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-            for result in raw.results() {
+            for argument in block_ref.arguments() {
                 type_nodes = type_nodes
-                    .checked_add(validate_and_count_type_handle_v1(
+                    .checked_add(validate_and_count_type_handle_observed_v1(
                         context,
-                        result.get_type(context),
-                        location.clone(),
+                        argument.get_type(context),
+                        block_location.clone(),
+                        observer,
                     )?)
                     .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
             }
-            if raw.num_regions() != 0 {
-                return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
-                    location,
-                    detail: "ranked body operations must not contain nested regions",
-                });
-            }
+            block_arguments = block_arguments
+                .checked_add(block_ref.get_num_arguments())
+                .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
             values = values
-                .checked_add(raw.get_num_results())
-                .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-            operands = operands
-                .checked_add(raw.get_num_operands())
-                .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-            successors = successors
-                .checked_add(raw.get_num_successors())
+                .checked_add(block_ref.get_num_arguments())
                 .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
             attributes = attributes
-                .checked_add(raw.attributes.0.len())
+                .checked_add(block_ref.attributes.0.len())
                 .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
-            max_operation_arity = max_operation_arity.max(
-                raw.get_num_results()
-                    .checked_add(raw.get_num_operands())
-                    .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?,
-            );
-            max_successor_arity = max_successor_arity.max(raw.get_num_successors());
             check_limit(
-                location.clone(),
+                PlironPreserveLocationV1::Block { block: block_index },
                 "SSA values",
                 values,
                 MAX_PLIRON_IDENTITY_VALUES_V1,
             )?;
             check_limit(
-                location.clone(),
-                "operands",
-                operands,
-                MAX_PLIRON_IDENTITY_OPERANDS_V1,
-            )?;
-            check_limit(
-                location.clone(),
-                "CFG successors",
-                successors,
-                MAX_PLIRON_IDENTITY_SUCCESSORS_V1,
-            )?;
-            check_limit(
-                location,
+                PlironPreserveLocationV1::Block { block: block_index },
                 "attributes",
                 attributes,
                 MAX_PLIRON_IDENTITY_ATTRIBUTES_V1,
             )?;
-            block_operations.push(operation);
+            let mut block_operations = Vec::new();
+            for (operation_index, operation) in block_ref.iter(context).enumerate() {
+                operation_count = operation_count
+                    .checked_add(1)
+                    .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
+                let dynamic = Operation::get_op_dyn(operation, context);
+                let name = render_operation_name_observed_v1(
+                    context,
+                    operation,
+                    PlironPreserveLocationV1::Block { block: block_index },
+                    observer,
+                )?;
+                let location = PlironPreserveLocationV1::Operation {
+                    block: block_index,
+                    operation: operation_index,
+                    name: name.clone(),
+                };
+                check_limit(
+                    location.clone(),
+                    "operations",
+                    operation_count,
+                    MAX_PLIRON_IDENTITY_OPERATIONS_V1,
+                )?;
+                if !is_production_ranked_operation_v1(dynamic.as_ref()) {
+                    return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
+                        location,
+                        detail: "operation is outside the closed ranked operation allowlist",
+                    });
+                }
+                let raw = operation.deref(context);
+                type_nodes = type_nodes
+                    .checked_add(validate_attribute_dict(
+                        context,
+                        &raw.attributes,
+                        location.clone(),
+                        observer,
+                    )?)
+                    .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
+                for result in raw.results() {
+                    type_nodes = type_nodes
+                        .checked_add(validate_and_count_type_handle_observed_v1(
+                            context,
+                            result.get_type(context),
+                            location.clone(),
+                            observer,
+                        )?)
+                        .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
+                }
+                if raw.num_regions() != 0 {
+                    return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
+                        location,
+                        detail: "ranked body operations must not contain nested regions",
+                    });
+                }
+                values = values
+                    .checked_add(raw.get_num_results())
+                    .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
+                operands = operands
+                    .checked_add(raw.get_num_operands())
+                    .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
+                successors = successors
+                    .checked_add(raw.get_num_successors())
+                    .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
+                attributes = attributes
+                    .checked_add(raw.attributes.0.len())
+                    .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
+                max_operation_arity = max_operation_arity.max(
+                    raw.get_num_results()
+                        .checked_add(raw.get_num_operands())
+                        .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?,
+                );
+                max_successor_arity = max_successor_arity.max(raw.get_num_successors());
+                check_limit(
+                    location.clone(),
+                    "SSA values",
+                    values,
+                    MAX_PLIRON_IDENTITY_VALUES_V1,
+                )?;
+                check_limit(
+                    location.clone(),
+                    "operands",
+                    operands,
+                    MAX_PLIRON_IDENTITY_OPERANDS_V1,
+                )?;
+                check_limit(
+                    location.clone(),
+                    "CFG successors",
+                    successors,
+                    MAX_PLIRON_IDENTITY_SUCCESSORS_V1,
+                )?;
+                check_limit(
+                    location,
+                    "attributes",
+                    attributes,
+                    MAX_PLIRON_IDENTITY_ATTRIBUTES_V1,
+                )?;
+                block_operations.push(operation);
+            }
+            blocks.push(block);
+            operations.push(block_operations);
         }
-        blocks.push(block);
-        operations.push(block_operations);
-    }
-    if blocks.is_empty() {
-        return Err(PlironIrIdentityErrorV1::StructuralVerificationFailed {
-            detail: "builtin.func has no basic blocks".to_owned(),
-        });
-    }
-    Ok(PrescanV1 {
-        blocks,
-        operations,
-        values,
-        operands,
-        successors,
-        block_arguments,
-        attributes,
-        type_nodes,
-        max_operation_arity,
-        max_successor_arity,
-    })
+        if blocks.is_empty() {
+            return Err(PlironIrIdentityErrorV1::StructuralVerificationFailed {
+                detail: "builtin.func has no basic blocks".to_owned(),
+            });
+        }
+        Ok(PrescanV1 {
+            blocks,
+            operations,
+            values,
+            operands,
+            successors,
+            block_arguments,
+            attributes,
+            type_nodes,
+            max_operation_arity,
+            max_successor_arity,
+        })
+    })();
+    observe_identity_result_v1(observer, result)
 }
 
 fn validate_attribute_dict(
     context: &Context,
     attributes: &AttributeDict,
     location: PlironPreserveLocationV1,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<usize, PlironIrIdentityErrorV1> {
     let mut type_nodes = 0_usize;
     for attribute in attributes.0.values() {
@@ -245,15 +273,16 @@ fn validate_attribute_dict(
         ) {
             return Err(PlironIrIdentityErrorV1::UnsupportedAttribute {
                 location: location.clone(),
-                attribute: render_attribute_id_v1(attribute, location.clone())?,
+                attribute: render_attribute_id_v1(attribute, location.clone(), observer)?,
             });
         }
         if let Some(type_attribute) = attribute.downcast_ref::<TypeAttr>() {
             type_nodes = type_nodes
-                .checked_add(validate_and_count_type_handle_v1(
+                .checked_add(validate_and_count_type_handle_observed_v1(
                     context,
                     type_attribute.get_type(context),
                     location.clone(),
+                    observer,
                 )?)
                 .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
         }
@@ -266,47 +295,53 @@ fn encode_attributes(
     attributes: &AttributeDict,
     location: PlironPreserveLocationV1,
     encoder: &mut IdentityEncoderV1,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<(), PlironIrIdentityErrorV1> {
-    let mut sorted = attributes
-        .0
-        .iter()
-        .filter(|(_, attribute)| !is_debug_info_attribute_v1(attribute.as_ref()))
-        .collect::<Vec<_>>();
-    sorted.sort_by(|lhs, rhs| lhs.0.cmp(rhs.0));
-    for (key, _) in &sorted {
-        check_limit(
-            location.clone(),
-            "attribute key bytes",
-            key.as_ref().len(),
-            MAX_IDENTIFIER_BYTES_V1,
-        )?;
-    }
-    let mut summary = DiagnosticSummaryV1::default();
-    if sorted.is_empty() {
-        summary.append(format_args!("no attributes"));
-    }
-    for (index, (key, attribute)) in sorted.iter().enumerate() {
-        let (attribute_id, value) = render_attribute(context, attribute, location.clone())?;
-        if index != 0 {
-            summary.append(format_args!(", "));
+    let result = (|| {
+        let mut sorted = attributes
+            .0
+            .iter()
+            .filter(|(_, attribute)| !is_debug_info_attribute_v1(attribute.as_ref()))
+            .collect::<Vec<_>>();
+        sorted.sort_by(|lhs, rhs| lhs.0.cmp(rhs.0));
+        for (key, _) in &sorted {
+            check_limit(
+                location.clone(),
+                "attribute key bytes",
+                key.as_ref().len(),
+                MAX_IDENTIFIER_BYTES_V1,
+            )?;
         }
-        summary.append(format_args!("{key}={attribute_id} {value}"));
-    }
-    encoder.record(
-        location.clone(),
-        "attributes",
-        summary.finish(),
-        |encoder| {
-            encoder.usize(sorted.len())?;
-            for (key, attribute) in sorted {
-                let (attribute_id, value) = render_attribute(context, attribute, location.clone())?;
-                encoder.string(AsRef::<str>::as_ref(key).as_bytes())?;
-                encoder.string(attribute_id.as_bytes())?;
-                encoder.string(value.as_bytes())?;
+        let mut summary = DiagnosticSummaryV1::default();
+        if sorted.is_empty() {
+            summary.append(format_args!("no attributes"));
+        }
+        for (index, (key, attribute)) in sorted.iter().enumerate() {
+            let (attribute_id, value) =
+                render_attribute(context, attribute, location.clone(), observer)?;
+            if index != 0 {
+                summary.append(format_args!(", "));
             }
-            Ok(())
-        },
-    )
+            summary.append(format_args!("{key}={attribute_id} {value}"));
+        }
+        encoder.record(
+            location.clone(),
+            "attributes",
+            summary.finish(),
+            |encoder| {
+                encoder.usize(sorted.len())?;
+                for (key, attribute) in sorted {
+                    let (attribute_id, value) =
+                        render_attribute(context, attribute, location.clone(), observer)?;
+                    encoder.string(AsRef::<str>::as_ref(key).as_bytes())?;
+                    encoder.string(attribute_id.as_bytes())?;
+                    encoder.string(value.as_bytes())?;
+                }
+                Ok(())
+            },
+        )
+    })();
+    observe_identity_result_v1(observer, result)
 }
 
 fn is_debug_info_attribute_v1(attribute: &dyn pliron::attribute::Attribute) -> bool {
@@ -318,15 +353,16 @@ fn render_attribute(
     context: &Context,
     attribute: &AttrObj,
     location: PlironPreserveLocationV1,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<(String, String), PlironIrIdentityErrorV1> {
-    let attribute_id = render_attribute_id_v1(attribute, location.clone())?;
+    let attribute_id = render_attribute_id_v1(attribute, location.clone(), observer)?;
     if !is_production_attribute_id(&attribute_id) {
         return Err(PlironIrIdentityErrorV1::UnsupportedAttribute {
             location,
             attribute: attribute_id,
         });
     }
-    let value = render_bounded(location, "attribute", |writer| {
+    let value = render_bounded_observed_v1(location, "attribute", observer, |writer| {
         use pliron::builtin::attributes::{FPDoubleAttr, FPHalfAttr, FPSingleAttr};
         use pliron::utils::apfloat::Float;
 
@@ -350,8 +386,9 @@ fn render_attribute(
 fn render_attribute_id_v1(
     attribute: &AttrObj,
     location: PlironPreserveLocationV1,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<String, PlironIrIdentityErrorV1> {
-    render_bounded(location, "attribute id", |writer| {
+    render_bounded_observed_v1(location, "attribute id", observer, |writer| {
         write!(writer, "{}", attribute.get_attr_id())
     })
 }
@@ -360,33 +397,36 @@ fn render_type(
     context: &Context,
     value: Value,
     location: PlironPreserveLocationV1,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<(String, String), PlironIrIdentityErrorV1> {
-    render_type_handle(context, value.get_type(context), location)
+    render_type_handle(context, value.get_type(context), location, observer)
 }
 
 fn render_type_handle(
     context: &Context,
     ty: TypeHandle,
     location: PlironPreserveLocationV1,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<(String, String), PlironIrIdentityErrorV1> {
     // Prescan validates the closed type tree before either encoding pass. Do
     // not repeat the owned FunctionType child-roster traversal here.
     let type_id = {
         let borrowed = ty.deref(context);
-        render_type_id_v1(&*borrowed, location.clone())?
+        render_type_id_v1(&*borrowed, location.clone(), observer)?
     };
-    let value = render_bounded(location, "type", |writer| {
+    let value = render_bounded_observed_v1(location, "type", observer, |writer| {
         write!(writer, "{}", ty.disp(context))
     })?;
     Ok((type_id, value))
 }
 
-fn render_operation_name_v1(
+fn render_operation_name_observed_v1(
     context: &Context,
     operation: Ptr<Operation>,
     location: PlironPreserveLocationV1,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<String, PlironIrIdentityErrorV1> {
-    render_bounded(location, "operation name", |writer| {
+    render_bounded_observed_v1(location, "operation name", observer, |writer| {
         write!(
             writer,
             "{}",
@@ -398,29 +438,51 @@ fn render_operation_name_v1(
 fn render_type_id_v1(
     ty: &dyn Type,
     location: PlironPreserveLocationV1,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<String, PlironIrIdentityErrorV1> {
-    render_bounded(location, "type id", |writer| {
+    render_bounded_observed_v1(location, "type id", observer, |writer| {
         write!(writer, "{}", ty.get_type_id())
     })
 }
 
+#[cfg(test)]
 fn validate_and_count_type_handle_v1(
     context: &Context,
     ty: TypeHandle,
     location: PlironPreserveLocationV1,
 ) -> Result<usize, PlironIrIdentityErrorV1> {
-    // FunctionTypeInterface exposes owned child rosters only. Render through
-    // the byte/depth-guarded writer before requesting either roster. The builtin
-    // FunctionType printer emits at least one byte for every descendant type,
-    // so the successful byte count is an executable bound on both total nodes
-    // and the sum of child handles simultaneously retained by recursive frames.
-    let rendered_bytes = render_type_preflight_bounded_v2(location.clone(), |writer| {
-        write!(writer, "{}", ty.disp(context))
-    })?
-    .len()
-    .max(1);
-    let mut remaining_nodes = rendered_bytes;
-    validate_and_count_type_handle_at_depth_v1(context, ty, location, 0, &mut remaining_nodes)
+    validate_and_count_type_handle_observed_v1(context, ty, location, None)
+}
+
+fn validate_and_count_type_handle_observed_v1(
+    context: &Context,
+    ty: TypeHandle,
+    location: PlironPreserveLocationV1,
+    observer: RenderObserverV1<'_, '_, '_>,
+) -> Result<usize, PlironIrIdentityErrorV1> {
+    let result = (|| {
+        // FunctionTypeInterface exposes owned child rosters only. Render through
+        // the byte/depth-guarded writer before requesting either roster. The builtin
+        // FunctionType printer emits at least one byte for every descendant type,
+        // so the successful byte count is an executable bound on both total nodes
+        // and the sum of child handles simultaneously retained by recursive frames.
+        let rendered_bytes =
+            render_type_preflight_bounded_observed_v2(location.clone(), observer, |writer| {
+                write!(writer, "{}", ty.disp(context))
+            })?
+            .len()
+            .max(1);
+        let mut remaining_nodes = rendered_bytes;
+        validate_and_count_type_handle_at_depth_v1(
+            context,
+            ty,
+            location,
+            0,
+            &mut remaining_nodes,
+            observer,
+        )
+    })();
+    observe_identity_result_v1(observer, result)
 }
 
 fn validate_and_count_type_handle_at_depth_v1(
@@ -429,6 +491,7 @@ fn validate_and_count_type_handle_at_depth_v1(
     location: PlironPreserveLocationV1,
     depth: usize,
     remaining_nodes: &mut usize,
+    observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<usize, PlironIrIdentityErrorV1> {
     check_limit(
         location.clone(),
@@ -448,7 +511,7 @@ fn validate_and_count_type_handle_at_depth_v1(
     if !is_production_type(&*borrowed) {
         return Err(PlironIrIdentityErrorV1::UnsupportedType {
             location: location.clone(),
-            ty: render_type_id_v1(&*borrowed, location)?,
+            ty: render_type_id_v1(&*borrowed, location, observer)?,
         });
     }
     let data_child = if let Some(pointer) =
@@ -463,7 +526,7 @@ fn validate_and_count_type_handle_at_depth_v1(
         if pliron::common_traits::Verify::verify(vector, context).is_err() {
             return Err(PlironIrIdentityErrorV1::UnsupportedType {
                 location: location.clone(),
-                ty: render_type_id_v1(&*borrowed, location)?,
+                ty: render_type_id_v1(&*borrowed, location, observer)?,
             });
         }
         Some(vector.element())
@@ -476,7 +539,7 @@ fn validate_and_count_type_handle_at_depth_v1(
         if !crate::kir_bridge_v1::ranked_data_type_node_is_supported_v2(&*child_type) {
             return Err(PlironIrIdentityErrorV1::UnsupportedType {
                 location: location.clone(),
-                ty: render_type_id_v1(&*child_type, location)?,
+                ty: render_type_id_v1(&*child_type, location, observer)?,
             });
         }
         drop(child_type);
@@ -486,6 +549,7 @@ fn validate_and_count_type_handle_at_depth_v1(
             location,
             depth + 1,
             remaining_nodes,
+            observer,
         )?;
         return children
             .checked_add(1)
@@ -529,6 +593,7 @@ fn validate_and_count_type_handle_at_depth_v1(
                     location.clone(),
                     depth + 1,
                     remaining_nodes,
+                    observer,
                 )?)
                 .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))
         })

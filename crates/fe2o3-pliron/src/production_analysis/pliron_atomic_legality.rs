@@ -12,6 +12,7 @@ use dialect_kernel::{
 use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation, value::Value};
 
 use crate::production_analysis::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::InvocationObserverV1;
 use crate::production_analysis::pliron_resource_envelope::{
     ProductionAnalysisInputCensusV1, ProductionAnalysisResourceLimitV1,
     ProductionAnalysisResourceLimitsV1, ProductionAnalysisResourcePhaseV1,
@@ -458,25 +459,74 @@ fn require_report(
     }
 }
 
-pub(crate) fn require_pliron_atomic_legality_with_analyses_v1(
-    context: &Context,
-    function: &FuncOp,
-    target: Option<&PlironAtomicTargetContextV1>,
-    analyses: &mut PlironAnalysisManagerV1,
-) -> Result<PlironAtomicLegalityReportV1, PlironAtomicLegalityCheckErrorV1> {
-    require_report(run_check_with_analyses(context, function, target, analyses))
-}
-
+#[cfg(test)]
 fn run_check_with_analyses(
     context: &Context,
     function: &FuncOp,
     target: Option<&PlironAtomicTargetContextV1>,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironAtomicLegalityReportV1 {
+    run_pliron_atomic_legality_check_with_observation_v1(context, function, target, analyses, None)
+}
+
+type AtomicObservationV1<'o, 'p, 'r> = Option<&'o InvocationObserverV1<'p, 'r>>;
+
+fn with_atomic_observation_v1<T>(
+    observer: AtomicObservationV1<'_, '_, '_>,
+    run: impl FnOnce(AtomicObservationV1<'_, '_, '_>) -> T,
+) -> T {
+    match observer {
+        None => run(None),
+        Some(observer) => observer.with_projection(&Ok, |nested| run(Some(nested))),
+    }
+}
+
+pub(crate) fn require_pliron_atomic_legality_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    target: Option<&PlironAtomicTargetContextV1>,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: AtomicObservationV1<'_, '_, '_>,
+) -> Result<PlironAtomicLegalityReportV1, PlironAtomicLegalityCheckErrorV1> {
+    with_atomic_observation_v1(observer, |observer| {
+        require_report(run_atomic_check_inner_v1(
+            context, function, target, analyses, observer,
+        ))
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn run_pliron_atomic_legality_check_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    target: Option<&PlironAtomicTargetContextV1>,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: AtomicObservationV1<'_, '_, '_>,
+) -> PlironAtomicLegalityReportV1 {
+    with_atomic_observation_v1(observer, |observer| {
+        run_atomic_check_inner_v1(context, function, target, analyses, observer)
+    })
+}
+
+fn run_atomic_check_inner_v1(
+    context: &Context,
+    function: &FuncOp,
+    target: Option<&PlironAtomicTargetContextV1>,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: AtomicObservationV1<'_, '_, '_>,
+) -> PlironAtomicLegalityReportV1 {
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,
-        Err(_) => return report(vec![PlironAtomicLegalityFindingV1::ResourceLimitExceeded]),
+        Err(failure) => {
+            if let Some(observer) = observer {
+                observer.deny(ProductionAnalysisResourceLimitV1 {
+                    phase: ProductionAnalysisResourcePhaseV1::FunctionInventory,
+                    resource: failure.resource(),
+                });
+            }
+            return report(vec![PlironAtomicLegalityFindingV1::ResourceLimitExceeded]);
+        }
     };
     let mut operation_count = 0_usize;
     let mut views = HashMap::<Value, (MemorySpaceAttr, u32, u64)>::new();
@@ -484,6 +534,12 @@ fn run_check_with_analyses(
     for site in inventory.operations() {
         operation_count += 1;
         if operation_count > MAX_PLIRON_ATOMIC_OPERATIONS_V1 {
+            if let Some(observer) = observer {
+                observer.deny(ProductionAnalysisResourceLimitV1 {
+                    phase: ProductionAnalysisResourcePhaseV1::AtomicLegality,
+                    resource: "atomic operation limit",
+                });
+            }
             return report(vec![PlironAtomicLegalityFindingV1::ResourceLimitExceeded]);
         }
         let operation = Operation::get_op_dyn(site.pointer(), context);

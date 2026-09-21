@@ -598,19 +598,6 @@ fn tensor_trace(trace: &PlironInvocationTraceV1) -> Vec<PlironTraceLocationV1> {
         .collect()
 }
 
-pub(crate) fn require_pliron_tensor_layout_with_analyses_v1(
-    context: &Context,
-    function: &FuncOp,
-    analyses: &mut PlironAnalysisManagerV1,
-) -> Result<PlironTensorLayoutReportV1, PlironTensorLayoutCheckErrorV1> {
-    let report = run_pliron_tensor_layout_check_with_analyses_v1(context, function, analyses);
-    if report.is_clean() {
-        Ok(report)
-    } else {
-        Err(PlironTensorLayoutCheckErrorV1 { report })
-    }
-}
-
 fn report(findings: Vec<PlironTensorLayoutFindingV1>) -> PlironTensorLayoutReportV1 {
     PlironTensorLayoutReportV1 { findings }
 }

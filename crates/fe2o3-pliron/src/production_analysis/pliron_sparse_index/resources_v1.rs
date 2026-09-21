@@ -1,3 +1,7 @@
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+    InvocationObserverV1, observe_resource_preflight_v1, require_observed_v1,
+};
+
 fn sparse_index_resource_error_v1(resource: &'static str) -> ProductionAnalysisResourceLimitV1 {
     ProductionAnalysisResourceLimitV1 {
         phase: ProductionAnalysisResourcePhaseV1::SparseIndex,
@@ -44,17 +48,30 @@ fn sparse_index_merge_census_work_v1(
 // The structural-identity owner has already verified this exact immutable
 // function. num_preds reads the existing successor-use count without copying
 // a predecessor roster; duplicate and unreachable edges conservatively count.
+#[cfg(test)]
 fn collect_sparse_index_merge_census_v1(
     context: &Context,
     function: &FuncOp,
     census: ProductionAnalysisInputCensusV1,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Result<SparseIndexMergeCensusV1, ProductionAnalysisResourceLimitV1> {
+    collect_sparse_index_merge_census_observed_v1(context, function, census, limits, None)
+}
+
+fn collect_sparse_index_merge_census_observed_v1(
+    context: &Context,
+    function: &FuncOp,
+    census: ProductionAnalysisInputCensusV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: Option<&InvocationObserverV1<'_, '_>>,
+) -> Result<SparseIndexMergeCensusV1, ProductionAnalysisResourceLimitV1> {
     let phase = ProductionAnalysisResourcePhaseV1::SparseIndex;
     let scan_work = sparse_index_merge_census_work_v1(census)?;
-    limits.require(
+    require_observed_v1(
+        limits,
         phase,
-        ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, scan_work, 0, 0)?,
+        ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, scan_work, 0, 0),
+        observer,
     )?;
     let mut result = SparseIndexMergeCensusV1::default();
     let mut blocks = 0_usize;
@@ -74,12 +91,23 @@ fn collect_sparse_index_merge_census_v1(
         // Pinned Pliron finds the type of argument i by scanning i+1 entries.
         // Divide before multiplying so the triangular bound does not overflow
         // when the mathematically representable result still fits usize.
-        let next = arity.checked_add(1).ok_or_else(||
-            sparse_index_resource_error_v1("sparse-index argument type work upper bound"))?;
-        let (lhs, rhs) = if arity.is_multiple_of(2) { (arity / 2, next) } else { (arity, next / 2) };
+        let next = arity.checked_add(1).ok_or_else(|| {
+            sparse_index_resource_error_v1("sparse-index argument type work upper bound")
+        })?;
+        let (lhs, rhs) = if arity.is_multiple_of(2) {
+            (arity / 2, next)
+        } else {
+            (arity, next / 2)
+        };
         result.argument_type_work = checked_sparse_index_sum_v1(
-            &[result.argument_type_work, checked_sparse_index_product_v1(lhs, rhs,
-                "sparse-index argument type work upper bound")?],
+            &[
+                result.argument_type_work,
+                checked_sparse_index_product_v1(
+                    lhs,
+                    rhs,
+                    "sparse-index argument type work upper bound",
+                )?,
+            ],
             "sparse-index argument type work upper bound",
         )?;
         if arity == 0 {
@@ -121,9 +149,25 @@ pub(crate) fn preflight_sparse_index_resource_upper_bound_v1(
     census: ProductionAnalysisInputCensusV1,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
-    checked_sparse_index_population_v1(census)?;
-    let merges = collect_sparse_index_merge_census_v1(context, function, census, limits)?;
-    sparse_index_resource_upper_bound_v1(census, merges, limits)
+    preflight_sparse_index_resource_upper_bound_with_observation_v1(
+        context, function, census, limits, None,
+    )
+}
+
+pub(crate) fn preflight_sparse_index_resource_upper_bound_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    census: ProductionAnalysisInputCensusV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: Option<&InvocationObserverV1<'_, '_>>,
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    observe_resource_preflight_v1(observer, |observer| {
+        checked_sparse_index_population_v1(census)?;
+        let merges = collect_sparse_index_merge_census_observed_v1(
+            context, function, census, limits, observer,
+        )?;
+        sparse_index_resource_upper_bound_observed_v1(census, merges, limits, observer)
+    })
 }
 
 fn checked_sparse_index_population_v1(
@@ -159,10 +203,20 @@ fn checked_sparse_index_population_v1(
     Ok((values, dependency_uses))
 }
 
+#[cfg(test)]
 fn sparse_index_resource_upper_bound_v1(
     census: ProductionAnalysisInputCensusV1,
     merges: SparseIndexMergeCensusV1,
     limits: ProductionAnalysisResourceLimitsV1,
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    sparse_index_resource_upper_bound_observed_v1(census, merges, limits, None)
+}
+
+fn sparse_index_resource_upper_bound_observed_v1(
+    census: ProductionAnalysisInputCensusV1,
+    merges: SparseIndexMergeCensusV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: Option<&InvocationObserverV1<'_, '_>>,
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
     let phase = ProductionAnalysisResourcePhaseV1::SparseIndex;
     let (values, dependency_uses) = checked_sparse_index_population_v1(census)?;
@@ -249,7 +303,8 @@ fn sparse_index_resource_upper_bound_v1(
             // Exact-capacity dense TypeHandle sidecar, coexisting with all facts.
             checked_sparse_index_product_v1(
                 values,
-                std::mem::size_of::<pliron::r#type::TypeHandle>().div_ceil(std::mem::size_of::<usize>()),
+                std::mem::size_of::<pliron::r#type::TypeHandle>()
+                    .div_ceil(std::mem::size_of::<usize>()),
                 "sparse-index type storage upper bound",
             )?,
             checked_sparse_index_product_v1(
@@ -278,5 +333,5 @@ fn sparse_index_resource_upper_bound_v1(
     )?;
     let bound =
         ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, retained, temporary)?;
-    limits.require(phase, bound)
+    require_observed_v1(limits, phase, Ok(bound), observer)
 }

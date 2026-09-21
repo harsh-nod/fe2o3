@@ -593,4 +593,6 @@ pub(crate) struct ProductionAnalysisReportValidationSessionV1<'a> {
 }
 
 include!("pliron_report_validation/session_v1.rs");
+#[path = "pliron_report_validation/conditional_v1.rs"]
+pub(crate) mod conditional_validation_v1;
 include!("pliron_report_validation/resource_tests.rs");

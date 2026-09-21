@@ -7,15 +7,46 @@ pub(crate) fn run_pliron_tensor_layout_check_v1(
     run_pliron_tensor_layout_check_with_analyses_v1(context, function, &mut analyses)
 }
 
+#[cfg(test)]
 pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironTensorLayoutReportV1 {
+    run_pliron_tensor_layout_check_with_observation_v1(context, function, analyses, None)
+}
+
+pub(crate) fn run_pliron_tensor_layout_check_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: TensorObservationV1<'_, '_, '_>,
+) -> PlironTensorLayoutReportV1 {
+    match observer {
+        None => run_tensor_layout_observed_inner_v1(context, function, analyses, None),
+        Some(observer) => observer.with_projection(&Ok, |observer| {
+            run_tensor_layout_observed_inner_v1(context, function, analyses, Some(observer))
+        }),
+    }
+}
+
+fn run_tensor_layout_observed_inner_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: TensorObservationV1<'_, '_, '_>,
+) -> PlironTensorLayoutReportV1 {
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,
-        Err(_) => return report(vec![PlironTensorLayoutFindingV1::ResourceLimitExceeded]),
+        Err(failure) => {
+            observe_tensor_quota_v1(
+                observer,
+                ProductionAnalysisResourcePhaseV1::FunctionInventory,
+                failure.resource(),
+            );
+            return report(vec![PlironTensorLayoutFindingV1::ResourceLimitExceeded]);
+        }
     };
     let mut findings = Vec::new();
     let mut operation_count = 0;
@@ -27,6 +58,13 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
         if operation_count > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1
             || findings.len() >= MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1
         {
+            if operation_count > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1 {
+                observe_tensor_quota_v1(
+                    observer,
+                    ProductionAnalysisResourcePhaseV1::TensorLayout,
+                    "tensor operation limit",
+                );
+            }
             findings.push(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
             return report(findings);
         }
@@ -86,6 +124,11 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
             }
         }
         Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit) => {
+            observe_tensor_quota_v1(
+                observer,
+                ProductionAnalysisResourcePhaseV1::TensorLayout,
+                "tensor dataflow resource limit",
+            );
             findings.push(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
             return report(findings);
         }
@@ -106,6 +149,13 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
                 return report(findings);
             }
             Err(failure) => {
+                if matches!(failure, PlironTraceFailureV1::ResourceLimit) {
+                    observe_tensor_quota_v1(
+                        observer,
+                        ProductionAnalysisResourcePhaseV1::LaunchContract,
+                        "execution-layout analysis",
+                    );
+                }
                 findings.push(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
                     detail: trace_failure_detail(failure),
                 });
@@ -143,7 +193,11 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
             }
         }
         analyses.prepare_exact_trace(context, function);
-        match analyses.exact_trace() {
+        let traces = analyses.exact_trace();
+        if let Err(failure) = &traces {
+            observe_tensor_trace_failure_v1(observer, failure);
+        }
+        match traces {
             Ok(traces) => {
                 if let Some(finding) = exact_subgroup_trace_finding(traces, layout.subgroup_size) {
                     findings.push(finding);
@@ -168,6 +222,7 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
                     .iter()
                     .map(|(block, operation, _, _)| (*block, *operation))
                     .collect::<Vec<_>>(),
+                observer,
             ) {
                 Ok(()) => {}
                 Err(finding) => findings.push(finding),
@@ -233,4 +288,68 @@ fn exact_subgroup_trace_finding(
         }
     }
     None
+}
+type TensorObservationV1<'o, 'p, 'r> =
+    Option<&'o super::pliron_pipeline::invocation_receipt_v1::InvocationObserverV1<'p, 'r>>;
+
+fn observe_tensor_quota_v1(
+    observer: TensorObservationV1<'_, '_, '_>,
+    phase: ProductionAnalysisResourcePhaseV1,
+    resource: &'static str,
+) {
+    if let Some(observer) = observer {
+        observer.deny(ProductionAnalysisResourceLimitV1 { phase, resource });
+    }
+}
+
+fn observe_tensor_bounded_finding_v1(
+    observer: TensorObservationV1<'_, '_, '_>,
+    finding: PlironTensorLayoutFindingV1,
+) -> PlironTensorLayoutFindingV1 {
+    if matches!(finding, PlironTensorLayoutFindingV1::ResourceLimitExceeded) {
+        observe_tensor_quota_v1(
+            observer,
+            ProductionAnalysisResourcePhaseV1::TensorLayout,
+            "tensor symbolic convergence resource limit",
+        );
+    }
+    finding
+}
+
+fn observe_tensor_trace_failure_v1(
+    observer: TensorObservationV1<'_, '_, '_>,
+    failure: &PlironTraceFailureV1,
+) {
+    use ProductionAnalysisResourcePhaseV1 as Phase;
+    match failure {
+        PlironTraceFailureV1::ResourceLimit => observe_tensor_quota_v1(
+            observer,
+            Phase::InvocationTrace,
+            "invocation trace resource limit",
+        ),
+        PlironTraceFailureV1::LaunchTooLarge { .. } => observe_tensor_quota_v1(
+            observer,
+            Phase::InvocationTrace,
+            "invocation trace launch limit",
+        ),
+        PlironTraceFailureV1::Sparse(SparseIndexFailureV1::ResourceLimit { resource, .. }) => {
+            observe_tensor_quota_v1(observer, Phase::SparseIndex, resource);
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn require_pliron_tensor_layout_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: TensorObservationV1<'_, '_, '_>,
+) -> Result<PlironTensorLayoutReportV1, PlironTensorLayoutCheckErrorV1> {
+    let report =
+        run_pliron_tensor_layout_check_with_observation_v1(context, function, analyses, observer);
+    if report.is_clean() {
+        Ok(report)
+    } else {
+        Err(PlironTensorLayoutCheckErrorV1 { report })
+    }
 }

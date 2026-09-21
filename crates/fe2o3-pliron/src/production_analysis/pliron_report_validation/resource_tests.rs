@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    include!("observation_v1_tests.rs");
     use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
     use dialect_kernel::{
         AtomicScopeAttr, DIALECT_NAME, InvocationIndexOp, MemorySpaceAttr, ReturnOp,

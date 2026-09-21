@@ -1,5 +1,11 @@
 // Genuine constructed semantic source, never detached canonical substitutions.
 use super::*;
+#[path = "production_checked_output_cross_block_forwarding_v1_tests.rs"]
+mod cross_block_forwarding;
+#[path = "production_checked_output_induction_refinement_internal_v1_tests.rs"]
+mod induction_refinement;
+#[path = "production_checked_output_refined_forwarding_v1_tests.rs"]
+mod refined_forwarding;
 use crate::{
     ProductionOwnedLoopPreheadersContinuationV1 as DirectPreheaders,
     ProductionOwnedUnitLocalLoopPreheadersContinuationV1 as ErasedPreheaders,

@@ -423,6 +423,25 @@ impl PlironStructuralIdentityProviderV1 for LivePlironStructuralIdentityProvider
         })
     }
 
+    fn capture_with_resource_observation_v1(
+        &mut self,
+        limits: ProductionAnalysisResourceLimitsV1,
+        observer: RenderObserverV1<'_, '_, '_>,
+    ) -> Result<BoundedPlironIdentityCaptureV1<Self::Snapshot>, IdentityCaptureFailureV1> {
+        let (snapshot, input_census, resource_upper_bound) =
+            build_identity_caught_with_observation_v1(
+                self.context,
+                self.function,
+                limits,
+                observer,
+            )?;
+        Ok(BoundedPlironIdentityCaptureV1 {
+            snapshot,
+            input_census,
+            resource_upper_bound,
+        })
+    }
+
     fn label(&self, snapshot: &Self::Snapshot) -> PlironStructuralIdentityLabelV1 {
         PlironStructuralIdentityLabelV1::new(
             snapshot.identity.sha256,
@@ -559,10 +578,32 @@ fn build_identity_caught_with_resource_limits_v1(
     ),
     IdentityCaptureFailureV1,
 > {
-    let (built, upper_bound) = match catch_unwind(AssertUnwindSafe(|| {
-        build_identity(context, function, limits)
+    build_identity_caught_with_observation_v1(context, function, limits, None)
+}
+
+fn build_identity_caught_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: RenderObserverV1<'_, '_, '_>,
+) -> Result<
+    (
+        BuiltIdentityV1,
+        ProductionAnalysisInputCensusV1,
+        ProductionAnalysisResourceUpperBoundV1,
+    ),
+    IdentityCaptureFailureV1,
+> {
+    let (built, upper_bound) = match catch_unwind(AssertUnwindSafe(|| match observer {
+        None => build_identity(context, function, limits),
+        Some(observer) => observer.with_projection(&Ok, |nested| {
+            build_identity_observed_v1(context, function, limits, Some(nested))
+        }),
     })) {
         Err(_) => {
+            if let Some(observer) = observer {
+                observer.caught();
+            }
             return Err(IdentityCaptureFailureV1::Unavailable {
                 source_code: PlironIrIdentityErrorV1::TraversalPanicked.code(),
                 detail: PlironIrIdentityErrorV1::TraversalPanicked.to_string(),
@@ -570,12 +611,18 @@ fn build_identity_caught_with_resource_limits_v1(
         }
         Ok(Ok(result)) => result,
         Ok(Err(BuildIdentityFailureV1::Identity(error))) => {
+            if let PlironIrIdentityErrorV1::ResourceLimitExceeded { resource, .. } = &error {
+                deny_render_quota_v1(observer, resource);
+            }
             return Err(IdentityCaptureFailureV1::Unavailable {
                 source_code: error.code(),
                 detail: error.to_string(),
             });
         }
         Ok(Err(BuildIdentityFailureV1::ResourceLimit(error))) => {
+            if let Some(observer) = observer {
+                observer.deny(error);
+            }
             return Err(IdentityCaptureFailureV1::ResourceLimit(error));
         }
     };
@@ -607,21 +654,69 @@ include!("pliron_ir_identity/structure_v1.rs");
 
 include!("pliron_ir_identity/type_rendering_v2.rs");
 
-fn render_bounded(
-    location: PlironPreserveLocationV1,
-    entity: &'static str,
-    render: impl FnOnce(&mut LimitedTextV1) -> fmt::Result,
-) -> Result<String, PlironIrIdentityErrorV1> {
-    render_with_bounded_writer_v1(location, entity, LimitedTextV1::default(), render)
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::InvocationObserverV1;
+type RenderObserverV1<'a, 'p, 'r> = Option<&'a InvocationObserverV1<'p, 'r>>;
+
+fn deny_render_quota_v1(observer: RenderObserverV1<'_, '_, '_>, resource: &'static str) {
+    if let Some(observer) = observer {
+        observer.deny(
+            crate::production_analysis::ProductionAnalysisResourceLimitV1 {
+                phase: ProductionAnalysisResourcePhaseV1::StructuralIdentity,
+                resource,
+            },
+        );
+    }
 }
 
-fn render_with_bounded_writer_v1(
+fn observe_identity_result_v1<T>(
+    observer: RenderObserverV1<'_, '_, '_>,
+    result: Result<T, PlironIrIdentityErrorV1>,
+) -> Result<T, PlironIrIdentityErrorV1> {
+    result.inspect_err(|error| {
+        if let PlironIrIdentityErrorV1::ResourceLimitExceeded { resource, .. } = error {
+            deny_render_quota_v1(observer, resource);
+        }
+    })
+}
+
+#[cfg(test)]
+fn render_bounded<'a, 'p: 'a, 'r: 'p>(
     location: PlironPreserveLocationV1,
     entity: &'static str,
-    mut writer: LimitedTextV1,
-    render: impl FnOnce(&mut LimitedTextV1) -> fmt::Result,
+    render: impl FnOnce(&mut LimitedTextV1<'a, 'p, 'r>) -> fmt::Result,
+) -> Result<String, PlironIrIdentityErrorV1> {
+    render_bounded_observed_v1(location, entity, None, render)
+}
+
+fn render_bounded_observed_v1<'a, 'p, 'r>(
+    location: PlironPreserveLocationV1,
+    entity: &'static str,
+    observer: RenderObserverV1<'a, 'p, 'r>,
+    render: impl FnOnce(&mut LimitedTextV1<'a, 'p, 'r>) -> fmt::Result,
+) -> Result<String, PlironIrIdentityErrorV1> {
+    render_with_bounded_writer_v1(
+        location,
+        entity,
+        LimitedTextV1 {
+            observer,
+            ..Default::default()
+        },
+        render,
+    )
+}
+
+fn render_with_bounded_writer_v1<'a, 'p, 'r>(
+    location: PlironPreserveLocationV1,
+    entity: &'static str,
+    mut writer: LimitedTextV1<'a, 'p, 'r>,
+    render: impl FnOnce(&mut LimitedTextV1<'a, 'p, 'r>) -> fmt::Result,
 ) -> Result<String, PlironIrIdentityErrorV1> {
     let result = catch_unwind(AssertUnwindSafe(|| render(&mut writer)));
+    if result.is_err()
+        && let Some(observer) = writer.observer
+    {
+        observer.caught();
+    }
     match result {
         Err(_) => Err(PlironIrIdentityErrorV1::RenderingFailed {
             location,
@@ -657,10 +752,11 @@ fn render_with_bounded_writer_v1(
 }
 
 #[derive(Default)]
-struct LimitedTextV1 {
+struct LimitedTextV1<'a, 'p, 'r> {
     text: String,
     exceeded: bool,
     type_nesting: Option<TypeRenderNestingV2>,
+    observer: RenderObserverV1<'a, 'p, 'r>,
 }
 
 #[derive(Default)]
@@ -703,7 +799,7 @@ impl fmt::Write for DiagnosticSummaryV1 {
     }
 }
 
-impl fmt::Write for LimitedTextV1 {
+impl fmt::Write for LimitedTextV1<'_, '_, '_> {
     fn write_str(&mut self, value: &str) -> fmt::Result {
         if self
             .text
@@ -712,10 +808,14 @@ impl fmt::Write for LimitedTextV1 {
             .is_none_or(|length| length > MAX_PLIRON_IDENTITY_ENTITY_TEXT_BYTES_V1)
         {
             self.exceeded = true;
+            deny_render_quota_v1(self.observer, "rendered entity bytes");
             return Err(fmt::Error);
         }
-        if let Some(guard) = self.type_nesting.as_mut() {
-            guard.observe(value)?;
+        if let Some(guard) = self.type_nesting.as_mut()
+            && guard.observe(value).is_err()
+        {
+            deny_render_quota_v1(self.observer, "type rendering nesting");
+            return Err(fmt::Error);
         }
         self.text.push_str(value);
         Ok(())

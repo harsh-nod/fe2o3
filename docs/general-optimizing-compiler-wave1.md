@@ -3,7 +3,7 @@
 Status: implemented compiler infrastructure. This is not a claim that fe2o3 is
 a general-purpose or formally verified compiler.
 
-## Production flow
+## Default production flow
 
 ```text
 Rust/rustc semantic MIR
@@ -18,6 +18,14 @@ Rust/rustc semantic MIR
   -> verified canonical Kernel IR V10 or V11 snapshot
   -> AMDGPU LLVM lowering
 ```
+
+This is the existing default transaction in
+[`production_pipeline.rs`](../crates/rustc-codegen-fe2o3/src/production_pipeline.rs):
+`lower_production_target` retains ranked checks, formal-memory admission, target
+binding and the closed V2/V3 optimizer before lowering. The checked continuations
+below are separate, nondefault owning APIs, not extra passes silently inserted
+into this schedule. Their implementation does not activate a replacement
+artifact or launch route.
 
 The ranked verifier remains an analysis boundary. No pass mutates live ranked
 Pliron between its nine analyses. Position-preserving normalization runs on the
@@ -163,6 +171,97 @@ The executable direct-KIR V1 optimizer is absent. Versioned V1 names that
 remain in dialect or bridge internals identify data/API formats, not an
 alternate production optimizer.
 
+## Nondefault checked continuations
+
+The bounded checked path retains genuine source custody through private-cell
+promotion, neutral loop preheaders and LICM. The next rewrites and their
+composition use the following graph identities; these letters are explanatory,
+not new policy or wire versions:
+
+```text
+retained source / ranked / historical checked owners
+  -> private-cell promotion -> checked preheaders -> LICM output L
+  -> checked induction refinement of L -> R
+  -> checked cross-block private forwarding of R -> F
+  -> fresh final F source/private/native/formal census
+  -> LLVM emission and independent replay from actual F
+```
+
+The individual refinement and forwarding continuations are distinct from their
+composed implementation. Forwarding directly from L remains a separate bounded
+API; it is not evidence that forwarding after refinement ran on R. Composition
+must consume the actual refinement owner, retain L and R, and construct F from
+that same R object. Its independent L-to-R and R-to-F pair checks stay live
+together. The original source, UnitLocal helper erasure, ranked bindings and
+historical execution witness remain owned, rather than reconstructed from an
+output digest. Integration and qualification status is tracked in
+[#271](https://github.com/harsh-nod/fe2o3/issues/271), not implied by this diagram.
+
+Induction refinement replaces only an independently checked nonwrapping
+unsigned `CheckedAdd` update with an adjacent `Add` and Boolean false, retaining
+both original result IDs and their uses. Its one-to-two origin relation records
+the sum's original source statement and a synthetic overflow result without
+inventing a Rust span or trap authority. Guarded no-wrap facts bind the taken
+body edge and operation order. A symbolic guard distance is not an executed
+trip count, and this rewrite is not general unrolling or bounds-check removal.
+
+Private forwarding requires an admitted integer Load, exact allocation/access
+geometry, a dominating stored value and independently grounded memory versions
+with no intervening disqualifying effect. It replaces the selected Load in
+place with `BitOr(value, value)`, preserving its result identity and original
+Load source statement, not attributing it to the earlier Store. Unresolved
+initialization, aliasing, memory-phi grounding or effect obligations refuse
+selection; general memory disambiguation is not claimed.
+
+Refinement does not generally admit scalar `Add`, `Sub` or `Mul` in the native
+census. Its private checked allowance names the precise sum/false pair. The
+composed path transports that allowance through both live relations to the
+actual F inventory, including coordinates shifted by the synthetic false.
+Neither an allowance for R nor a historical safety report can admit F. Complete
+source lineage and fresh final checks precede first LLVM emission; native
+replay emits the same actual final graph and compares its exact text.
+
+The composed native wrapper also checks descriptor evidence against that same
+F owner. Original semantic subjects, ordered typed roots, ABI/type ownership,
+source launch and N/B target bindings remain borrowed from the retained
+history; final physical arguments and allocation/race/bounds obligations come
+from F and its fresh reports. The unchanged descriptor validator checks their
+exact join. This predicate runs after wrapper preflight/target/ranked checks
+and before final native replay; first inert LLVM emission remains inside F's
+native preparation. No encoded descriptor, artifact/proof association, worker
+handoff, publication or launch authority is created by the predicate.
+
+Every continuation retains exact typed analysis limits and checks their full
+identity on replay. Refinement checks output growth before mutation and refuses
+a source-cap mismatch rather than clamping limits. Owning additions and actual
+backing capacities are accounted on the cumulative active ledger while the
+original source and sibling allocations remain live. Typed failure or unwind
+drops partial backing before refunding only scope-owned credit. These are the
+stated compiler resource domains, not a whole-process memory bound.
+
+## Conditional analysis and open gates
+
+Source259's consuming `ProductionConditionalRankedAnalysisV1::check_pipeline_v1`
+retains the original pending owner and runs the shared conditional checks twice
+over its authenticated live graph. `ProductionConditionalPipelineAnalysisV1`
+keeps reports and invocation accounting, including failure information; it
+cannot convert itself into an ordinary lowering input or recover a mutable
+session. Selected conditional facts do not erase outstanding pending
+obligations. The `internal-proof-staging` coverage is separate from ordinary
+coverage and is not a default compiler selector or activation gate.
+
+The checked continuations and this staged consuming checker do not complete
+general memory/control-flow admission, all-Rust import, the signed source/proof
+join, or default-pipeline migration. Ordinary-rustc entry coverage must retain
+the actual authenticated bindings and exercise the consuming method; a
+constructed source-owner test cannot substitute for it. Protected qualification
+requires the admitted runtime and exact source/tool closure, with no missing-
+runtime positive or fallback. Default activation additionally needs the fixed
+policy/descriptor/worker handoff and complete final-graph verification contract.
+Tutorial-wide compilation, target-matched hardware results and broader loop,
+alias, interprocedural and GPU optimization remain separate open gates. No
+formal compiler-verification claim follows from these executable checkers.
+
 ## Proof boundary
 
 The optimizer report proves deterministic structural replay and successful IR
@@ -204,3 +303,24 @@ own effect, convergence, provenance, numerical, and resource contracts.
   executable compiler-produced KIR regression for nested loops and switches.
 - Compiler-side kernel regression runners for the kernels represented by the
   fe2o3-kernels documentation site.
+
+The `refined_forwarding_wire_goldens` optimizer integration target adds 13
+literal canonical V12 wire graphs using the existing bounded decoder and hex
+transport. It runs actual owning L-to-R induction refinement followed by
+R-to-F forwarding, keeps the same R endpoint for both independent pair checks,
+and compares complete before/R/F dumps, rewrite remarks and origin rows with
+literal expected outputs. The cases cover a dynamic loop, diamond, duplicate
+edge, two functions, ungrounded phi, step-two update, unchecked Add, global
+clobber, trapping cut, volatile Load, alignment mismatch, no-op and distinct
+stores. Cases that exclude one rewrite retain that exclusion explicitly.
+
+Additional checks cover malformed input, hostile admitted outputs, lineage,
+idempotence and two genuine fresh-process transcripts. Resource tests retain a
+live input and sibling allocation, exact measured work/storage success and the
+final one-short Work refusal. The initial Storage test refuses the first
+private-scope header at the inherited floor and checks typed denial/history;
+it does not claim a known private-header extent or an owning-header denial.
+These are canonical-wire regressions, not Pliron textual transformation lit or
+source/default-pipeline qualification. The textual runner gap, genuine
+ordinary-rustc/protected-runtime gates and target-matched hardware results
+remain separate; test definitions alone establish no execution or proof claim.

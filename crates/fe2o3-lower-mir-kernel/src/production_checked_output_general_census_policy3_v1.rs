@@ -5,6 +5,10 @@ use fe2o3_kernel_ir::{
 };
 
 include!("production_checked_output_masked_assert_success_v1.rs");
+#[path = "production_checked_output_induction_refinement_native_census_v1.rs"]
+mod induction_refinement;
+#[path = "production_checked_output_refined_forwarding_native_census_v1.rs"]
+mod refined_forwarding;
 
 pub(super) fn source(
     owner: &ProductionSemanticKirOwnerV1,
@@ -333,7 +337,90 @@ pub(super) fn native(
     division: &unsigned_division::UnsignedDivision<'_, '_>,
     helpers: &scalar_helpers::RawEmptyScalarHelpers<'_, '_>,
     phase: &'static str,
+    authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
+    native_inner(
+        inventory,
+        private,
+        division,
+        helpers,
+        phase,
+        authorized_trap,
+        None,
+        None,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn native_with_induction_refinement(
+    inventory: &CanonicalKirInventoryV1<'_>,
+    private: &private_memory::PrivateMemory<'_, '_>,
+    division: &unsigned_division::UnsignedDivision<'_, '_>,
+    helpers: &scalar_helpers::RawEmptyScalarHelpers<'_, '_>,
+    phase: &'static str,
+    authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
+    pair: &fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
+    let allowed = induction_refinement::CheckedAdds::new(pair, inventory, budget)?;
+    native_inner(
+        inventory,
+        private,
+        division,
+        helpers,
+        phase,
+        authorized_trap,
+        Some(&allowed),
+        None,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn native_with_refinement_forwarding(
+    inventory: &CanonicalKirInventoryV1<'_>,
+    private: &private_memory::PrivateMemory<'_, '_>,
+    division: &unsigned_division::UnsignedDivision<'_, '_>,
+    helpers: &scalar_helpers::RawEmptyScalarHelpers<'_, '_>,
+    phase: &'static str,
+    authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
+    refinement: &fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>,
+    forwarding: &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'_>,
+    intermediate: &CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
+    let allowed = refined_forwarding::CheckedForwardedAdds::new(
+        refinement,
+        forwarding,
+        intermediate,
+        inventory,
+        budget,
+    )?;
+    native_inner(
+        inventory,
+        private,
+        division,
+        helpers,
+        phase,
+        authorized_trap,
+        None,
+        Some(&allowed),
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn native_inner(
+    inventory: &CanonicalKirInventoryV1<'_>,
+    private: &private_memory::PrivateMemory<'_, '_>,
+    division: &unsigned_division::UnsignedDivision<'_, '_>,
+    helpers: &scalar_helpers::RawEmptyScalarHelpers<'_, '_>,
+    phase: &'static str,
     mut authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
+    allowed: Option<&induction_refinement::CheckedAdds<'_, '_, '_>>,
+    forwarded: Option<&refined_forwarding::CheckedForwardedAdds<'_, '_, '_>>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
     charge(budget, 2)?;
@@ -451,6 +538,18 @@ pub(super) fn native(
                 op: BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply,
                 ..
             } if matches!(row.operation.results.as_slice(), [value] if matches!(value.ty, Type::F32 | Type::F64)) => {
+                None
+            }
+            OperationKind::Binary {
+                op: BinaryOp::Add, ..
+            } if match allowed {
+                Some(allowed) => allowed.operation(inventory, ordinal, budget)?,
+                None => match forwarded {
+                    Some(allowed) => allowed.operation(inventory, ordinal, budget)?,
+                    None => false,
+                },
+            } =>
+            {
                 None
             }
             OperationKind::Binary {

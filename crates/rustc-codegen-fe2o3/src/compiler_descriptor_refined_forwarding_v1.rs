@@ -1,0 +1,425 @@
+//! Descriptor evidence for the actual source-owned final F, without encoding or authority.
+use super::{
+    CheckedDescriptorViewV1, CompilerDescriptorError, ProductionAmdTargetProfileV1,
+    TypedDescriptorRootV1, policy8, validate_checked_output_descriptor_evidence_v1,
+};
+use crate::production_geometry_v1::ProductionGeometryV1;
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+};
+use fe2o3_lower_mir_kernel::{
+    ProductionOwnedRefinedCrossBlockForwardingContinuationV1 as Direct,
+    ProductionOwnedUnitLocalRefinedCrossBlockForwardingContinuationV1 as Erased,
+    ProductionRefinedCrossBlockForwardingErrorV1 as Admission,
+};
+use std::{
+    fmt,
+    mem::size_of,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
+
+#[derive(Debug)]
+pub(crate) enum RefinedForwardingDescriptorErrorV1 {
+    Resource(Resource),
+    Admission(Box<Admission>),
+    Descriptor(Box<CompilerDescriptorError>),
+    Panicked,
+}
+impl fmt::Display for RefinedForwardingDescriptorErrorV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for RefinedForwardingDescriptorErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Admission(error) => Some(error.as_ref()),
+            Self::Descriptor(error) => Some(error.as_ref()),
+            Self::Panicked => None,
+        }
+    }
+}
+impl From<Resource> for RefinedForwardingDescriptorErrorV1 {
+    fn from(error: Resource) -> Self {
+        Self::Resource(error)
+    }
+}
+type Error = RefinedForwardingDescriptorErrorV1;
+type Result<T> = std::result::Result<T, Error>;
+fn admission(error: Admission) -> Error {
+    Error::Admission(Box::new(error))
+}
+fn descriptor(error: CompilerDescriptorError) -> Error {
+    Error::Descriptor(Box::new(error))
+}
+
+/// Only genuine, complete source owners can select the final subject.
+#[derive(Clone, Copy)]
+pub(crate) enum FinalOwnerV1<'a> {
+    Direct(&'a Direct),
+    Erased(&'a Erased),
+}
+impl FinalOwnerV1<'_> {
+    fn required(self) -> Result<usize> {
+        match self {
+            Self::Direct(owner) => owner.retained_input_storage_floor_v1(),
+            Self::Erased(owner) => owner.retained_input_storage_floor_v1(),
+        }
+        .map_err(admission)
+    }
+    fn replay(self, budget: &mut Budget<'_>) -> Result<()> {
+        match self {
+            Self::Direct(owner) => owner.verify_equivalence(budget),
+            Self::Erased(owner) => owner.verify_equivalence(budget),
+        }
+        .map_err(admission)
+    }
+    fn view(&self) -> Result<CheckedDescriptorViewV1<'_>> {
+        // The old view contributes only original semantic/launch/N/B custody.
+        // Neither the Policy8 output nor a numbered-policy producer is reused.
+        let mut view = match self {
+            Self::Direct(owner) => {
+                policy8::direct_view(owner.prefix().prefix().prefix().prefix().prefix())
+                    .map_err(descriptor)?
+            }
+            Self::Erased(owner) => {
+                policy8::erased_view(owner.prefix().prefix().prefix().prefix().prefix())
+            }
+        };
+        match self {
+            Self::Direct(owner) => {
+                view.output = owner.output();
+                view.kernels = owner.kernels();
+            }
+            Self::Erased(owner) => {
+                view.output = owner.output();
+                view.kernels = owner.kernels();
+            }
+        }
+        Ok(view)
+    }
+}
+
+fn scoped<'w>(
+    required: usize,
+    budget: &mut Budget<'w>,
+    run: impl FnOnce(&mut Budget<'w>) -> Result<()>,
+) -> Result<()> {
+    if budget.storage() < required {
+        return Err(Resource::Accounting.into());
+    }
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    let result = match catch_unwind(AssertUnwindSafe(|| run(budget))) {
+        Ok(result) => result,
+        Err(payload) => {
+            drop(payload);
+            Err(Error::Panicked)
+        }
+    };
+    if budget.work_ledger_identity_v1() != ledger || budget.storage() < floor {
+        drop(result);
+        return Err(Resource::Accounting.into());
+    }
+    budget.release_storage(budget.storage() - floor)?;
+    result
+}
+
+const HEADER: usize =
+    size_of::<CheckedDescriptorViewV1<'static>>() + size_of::<Vec<ProductionGeometryV1>>();
+
+/// Replays F's owner, exact historical N/B target binding, ordered typed/source
+/// identities, source launch, final ABI and F's fresh formal obligations.
+/// Returns no encoded descriptor, producer identity, receipt or publication grant.
+///
+/// Owner/target replay and this adapter use the cumulative ledger. The unchanged
+/// descriptor/formal engines retain their inherited work/allocation exclusions.
+/// The adapter prepays its view/Vec header and requested geometry backing, then
+/// reconciles actual returned capacity before its final controlled operation.
+/// Allocator transients and inherited engine scratch are not a whole-RSS bound.
+pub(crate) fn validate_final_descriptor_evidence_v1(
+    owner: FinalOwnerV1<'_>,
+    typed_roots: &[TypedDescriptorRootV1],
+    profile: ProductionAmdTargetProfileV1,
+    budget: &mut Budget<'_>,
+) -> Result<()> {
+    scoped(owner.required()?, budget, |budget| {
+        budget.charge_work(1)?;
+        owner.replay(budget)?;
+        budget.reserve_storage(HEADER)?;
+        let view = owner.view()?;
+        // Drop the borrowed N/B receipt immediately. It is not used after the
+        // checker returns its temporary charge to the incoming floor.
+        let _ = dialect_amdgcn::check_production_target_coordinate_preservation_v1(
+            view.neutral,
+            view.bound,
+            profile,
+            budget,
+        )
+        .map_err(|error| descriptor(CompilerDescriptorError::CheckedOutputTarget(error)))?;
+        let requested = typed_roots
+            .len()
+            .checked_mul(size_of::<ProductionGeometryV1>())
+            .ok_or(Resource::Arithmetic)?;
+        budget.reserve_storage(requested)?;
+        let geometries = validate_checked_output_descriptor_evidence_v1(
+            typed_roots,
+            &view,
+            profile.device_target(),
+        )
+        .map_err(descriptor)?;
+        let actual = geometries
+            .capacity()
+            .checked_mul(size_of::<ProductionGeometryV1>())
+            .ok_or(Resource::Arithmetic)?;
+        budget.reserve_storage(actual.checked_sub(requested).ok_or(Resource::Accounting)?)?;
+        budget.charge_work(1)?;
+        if geometries.len() != typed_roots.len() {
+            return Err(descriptor(
+                CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "complete final F descriptor geometry roster",
+                ),
+            ));
+        }
+        drop(geometries);
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::super::super::*;
+    use super::*;
+    use fe2o3_artifacts::{
+        BlockSize, Dimensions, PointerWidth, RustPhysicalComponentKindV1, RustPhysicalComponentV1,
+        RustPointerMutabilityV1, RustScalarElementTypeV1, RustSourceTypeShapeV1,
+        RustTypeEvidenceV1,
+    };
+    use fe2o3_kernel_ir::{AddressSpace, ScalarType, Type};
+
+    pub(crate) fn typed_roots(owner: FinalOwnerV1<'_>) -> Vec<TypedDescriptorRootV1> {
+        let view = owner.view().unwrap();
+        view.semantic
+            .roots()
+            .iter()
+            .zip(view.source_launch.roots())
+            .enumerate()
+            .map(|(i, (id, source_launch))| {
+                let function = &view.semantic.functions()[id.index() as usize];
+                let entry = function.kernel_entry().unwrap();
+                let kernel = view
+                    .output
+                    .module()
+                    .kernels
+                    .iter()
+                    .find(|k| k.id.as_str().as_bytes() == entry.export_symbol().as_bytes())
+                    .unwrap();
+                let physical = view
+                    .output
+                    .module()
+                    .functions
+                    .iter()
+                    .find(|f| f.id == kernel.entry)
+                    .unwrap();
+                assert_eq!(
+                    physical.signature.parameters.len(),
+                    function.abi().source_input_types().len()
+                );
+                let mut offset = 0u32;
+                let arguments = physical
+                    .signature
+                    .parameters
+                    .iter()
+                    .zip(function.abi().source_input_types())
+                    .map(|(ty, source_ty)| {
+                        let (kind, access, shape, component, size) = match ty {
+                            Type::Scalar(ScalarType::U32) => (
+                                DescriptorArgumentKindV1::Scalar(ScalarTypeV1::U32),
+                                AccessMode::ByValue,
+                                RustSourceTypeShapeV1::scalar(RustScalarElementTypeV1::U32),
+                                RustPhysicalComponentKindV1::Scalar {
+                                    scalar: RustScalarElementTypeV1::U32,
+                                },
+                                4u32,
+                            ),
+                            Type::Scalar(ScalarType::U64) => (
+                                DescriptorArgumentKindV1::Scalar(ScalarTypeV1::U64),
+                                AccessMode::ByValue,
+                                RustSourceTypeShapeV1::scalar(RustScalarElementTypeV1::U64),
+                                RustPhysicalComponentKindV1::Scalar {
+                                    scalar: RustScalarElementTypeV1::U64,
+                                },
+                                8,
+                            ),
+                            Type::Pointer(pointer)
+                                if pointer.address_space == AddressSpace::Global
+                                    && pointer.access == fe2o3_kernel_ir::AccessMode::ReadWrite
+                                    && pointer.pointee.as_scalar() == Some(ScalarType::U32) =>
+                            {
+                                (
+                                    DescriptorArgumentKindV1::GlobalMutPointer(ScalarTypeV1::U32),
+                                    AccessMode::ReadWrite,
+                                    RustSourceTypeShapeV1::global_mut_pointer(
+                                        RustScalarElementTypeV1::U32,
+                                    ),
+                                    RustPhysicalComponentKindV1::Pointer {
+                                        mutability: RustPointerMutabilityV1::Mut,
+                                        pointee: RustScalarElementTypeV1::U32,
+                                    },
+                                    8,
+                                )
+                            }
+                            _ => panic!("fixture requires exact scalar or Global U32 pointer ABI"),
+                        };
+                        offset = offset.checked_add(size - 1).unwrap() / size * size;
+                        let layout = RustLayoutEvidenceV1::new(
+                            RustTypeEvidenceV1::new(shape),
+                            RustcAbiClassV1::Scalar,
+                            PointerWidth::Bits64,
+                            u64::from(size),
+                            size,
+                            vec![
+                                RustPhysicalComponentV1::new(0, u64::from(size), size, component)
+                                    .unwrap(),
+                            ],
+                        )
+                        .unwrap();
+                        let result = TypedDescriptorArgumentV1 {
+                            name: format!("argument_{offset}"),
+                            kind,
+                            access,
+                            offset,
+                            layout: Some(layout),
+                            source_size: u64::from(size),
+                            source_alignment: size,
+                            rustc_abi_class: RustcAbiClassV1::Scalar,
+                            semantic_type_identity: view.semantic.types()
+                                [source_ty.index() as usize]
+                                .identity(),
+                        };
+                        offset += size;
+                        result
+                    })
+                    .collect();
+                let launch = source_launch.source_launch();
+                let [x, y, z] = launch.exact_workgroup().unwrap();
+                let [gx, gy, gz] = launch.max_grid();
+                TypedDescriptorRootV1 {
+                    logical_name: format!("refined_forwarding_{i}"),
+                    export_name: String::from_utf8(entry.export_symbol().as_bytes().to_vec())
+                        .unwrap(),
+                    kernel_binding: KernelBindingIdV1::from_bytes(
+                        *entry.kernel_binding_identity().as_bytes(),
+                    ),
+                    arguments: TypedArgumentListV1::new(arguments).unwrap(),
+                    explicit_argument_bytes: offset,
+                    kernarg_alignment_bytes: 8,
+                    source_launch: Some(
+                        LaunchContract::new(
+                            launch.rank(),
+                            BlockSize::Exact(Dimensions::new(x, y, z).unwrap()),
+                            Dimensions::new(gx, gy, gz).unwrap(),
+                            0,
+                            0,
+                        )
+                        .unwrap(),
+                    ),
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn hostile(roots: &mut [TypedDescriptorRootV1], case: usize) -> &'static str {
+        match case {
+            0 => {
+                roots.swap(0, 1);
+                "ordered typed/source/output/formal root identity"
+            }
+            1 => {
+                roots[0].export_name.push_str("_foreign");
+                "ordered typed/source/output/formal root identity"
+            }
+            2 => {
+                roots[0].kernel_binding = KernelBindingIdV1::from_bytes([0; 32]);
+                "ordered typed/source/output/formal root identity"
+            }
+            3 => {
+                roots[0].source_launch = None;
+                "authenticated source launch"
+            }
+            4 => {
+                let launch = roots[0].source_launch.as_ref().unwrap();
+                let grid = launch.max_grid();
+                roots[0].source_launch = Some(
+                    LaunchContract::new(
+                        launch.rank(),
+                        launch.block_size(),
+                        Dimensions::new(grid.x() + 1, grid.y(), grid.z()).unwrap(),
+                        0,
+                        0,
+                    )
+                    .unwrap(),
+                );
+                "exact retained source launch fields"
+            }
+            5 => {
+                let mut args = roots[0].arguments.as_slice().to_vec();
+                args[0].source_size += 1;
+                roots[0].arguments = TypedArgumentListV1::new(args).unwrap();
+                "rustc semantic argument layout/ownership"
+            }
+            6 => {
+                let mut args = roots[0].arguments.as_slice().to_vec();
+                args[0].semantic_type_identity = SemanticTypeIdentityV1::from_sha256([0; 32]);
+                roots[0].arguments = TypedArgumentListV1::new(args).unwrap();
+                "rustc semantic argument type identity"
+            }
+            7 => {
+                let mut args = roots[0].arguments.as_slice().to_vec();
+                let last = args.last_mut().unwrap();
+                assert!(matches!(last.kind, DescriptorArgumentKindV1::Scalar(_)));
+                last.kind = DescriptorArgumentKindV1::Scalar(ScalarTypeV1::I64);
+                roots[0].arguments = TypedArgumentListV1::new(args).unwrap();
+                "typed descriptor/Kernel IR argument correspondence"
+            }
+            _ => panic!("closed hostile roster"),
+        }
+    }
+
+    pub(crate) fn assert_final_subject(owner: FinalOwnerV1<'_>) {
+        let view = owner.view().unwrap();
+        macro_rules! exact {
+            ($owner:expr) => {{
+                assert!(std::ptr::eq(view.output, $owner.output()));
+                assert!(std::ptr::eq(view.kernels, $owner.kernels()));
+                assert!(!std::ptr::eq(view.output, $owner.prefix().output()));
+                assert!(!std::ptr::eq(
+                    view.output,
+                    $owner.prefix().prefix().output()
+                ));
+            }};
+        }
+        match owner {
+            FinalOwnerV1::Direct(owner) => exact!(owner),
+            FinalOwnerV1::Erased(owner) => exact!(owner),
+        }
+        assert_eq!(view.semantic.roots().len(), 2);
+        assert_eq!(view.source_launch.roots().len(), 2);
+    }
+
+    pub(crate) const fn header() -> usize {
+        HEADER
+    }
+    pub(crate) fn header_scope(budget: &mut Budget<'_>, panic_after_reserve: bool) -> Result<()> {
+        scoped(budget.storage(), budget, |budget| {
+            budget.charge_work(1)?;
+            budget.reserve_storage(HEADER)?;
+            if panic_after_reserve {
+                panic!("descriptor scope cleanup fixture");
+            }
+            Ok(())
+        })
+    }
+}

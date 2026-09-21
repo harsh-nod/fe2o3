@@ -5,9 +5,10 @@ use dialect_kernel::{PipelineEventOp, TensorLayoutOp, TrapOp};
 use pliron::{context::Context, operation::Operation};
 
 use super::{
-    BarrierPathBlockSummaryV1, BarrierPathFailureV1, BarrierPathSummaryV1,
+    BarrierObserverV1, BarrierPathBlockSummaryV1, BarrierPathFailureV1, BarrierPathSummaryV1,
     MAX_FALLBACK_BARRIER_CFG_BLOCKS_V1, MAX_FALLBACK_BARRIER_PATH_EVENTS_V1,
-    bounded_barrier_diagnostic_v1, merge_barrier_path_summary_v1, prepend_barrier_path_v1,
+    bounded_barrier_diagnostic_v1, merge_barrier_path_summary_v1, observe_barrier_quota_v1,
+    prepend_barrier_path_with_observation_v1,
 };
 use crate::production_analysis::{
     pliron_control_edges_v1::ControlViewV1,
@@ -30,32 +31,57 @@ struct BarrierPathNodeV1 {
     has_collective: bool,
 }
 
+#[cfg(test)]
 pub(super) fn summarize_all_barrier_paths(
     context: &Context,
     inventory: &BoundedPlironFunctionInventoryV1,
     prove_progress: impl FnOnce() -> Result<PlironProgressReportV1, PlironPassPreservationErrorV1>,
 ) -> Result<BarrierPathSummaryV1, PlironPassPreservationErrorV1> {
-    Ok(
-        match summarize_barrier_cfg_v1(context, inventory, prove_progress) {
-            Err(BarrierPathFailureV1::Preservation(error)) => return Err(error),
-            Ok(_) => BarrierPathSummaryV1::Unique,
-            Err(BarrierPathFailureV1::Divergent {
-                first_trace,
-                second_trace,
-            }) => BarrierPathSummaryV1::Divergent {
-                first_trace,
-                second_trace,
-            },
-            Err(BarrierPathFailureV1::Incomplete(detail)) => {
-                BarrierPathSummaryV1::Incomplete(detail)
-            }
-        },
-    )
+    summarize_all_barrier_paths_with_observation_v1(context, inventory, prove_progress, None)
 }
 
+pub(super) fn summarize_all_barrier_paths_with_observation_v1(
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    prove_progress: impl FnOnce() -> Result<PlironProgressReportV1, PlironPassPreservationErrorV1>,
+    observer: BarrierObserverV1<'_, '_, '_>,
+) -> Result<BarrierPathSummaryV1, PlironPassPreservationErrorV1> {
+    let run = || {
+        Ok(
+            match summarize_barrier_cfg_v1(context, inventory, prove_progress, observer) {
+                Err(BarrierPathFailureV1::Preservation(error)) => return Err(error),
+                Ok(_) => BarrierPathSummaryV1::Unique,
+                Err(BarrierPathFailureV1::Divergent {
+                    first_trace,
+                    second_trace,
+                }) => BarrierPathSummaryV1::Divergent {
+                    first_trace,
+                    second_trace,
+                },
+                Err(BarrierPathFailureV1::Incomplete(detail)) => {
+                    BarrierPathSummaryV1::Incomplete(detail)
+                }
+            },
+        )
+    };
+    match observer {
+        None => run(),
+        Some(observer) => observer.with_projection(&Ok, |_| run()),
+    }
+}
+
+#[cfg(test)]
 fn build_barrier_cfg_v1(
     context: &Context,
     inventory: &BoundedPlironFunctionInventoryV1,
+) -> Result<Vec<BarrierPathNodeV1>, BarrierPathFailureV1> {
+    build_barrier_cfg_with_observation_v1(context, inventory, None)
+}
+
+fn build_barrier_cfg_with_observation_v1(
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    observer: BarrierObserverV1<'_, '_, '_>,
 ) -> Result<Vec<BarrierPathNodeV1>, BarrierPathFailureV1> {
     let blocks = inventory.blocks();
     if blocks.is_empty() {
@@ -64,6 +90,7 @@ fn build_barrier_cfg_v1(
         ));
     }
     if blocks.len() > MAX_FALLBACK_BARRIER_CFG_BLOCKS_V1 {
+        observe_barrier_quota_v1(observer, "fallback barrier CFG block limit");
         return Err(BarrierPathFailureV1::Incomplete(format!(
             "the fallback barrier CFG has {} blocks, exceeding the bounded limit of {MAX_FALLBACK_BARRIER_CFG_BLOCKS_V1}",
             blocks.len(),
@@ -95,6 +122,7 @@ fn build_barrier_cfg_v1(
                 || operation.downcast_ref::<PipelineEventOp>().is_some();
             if is_barrier {
                 if local.len() == MAX_FALLBACK_BARRIER_PATH_EVENTS_V1 {
+                    observe_barrier_quota_v1(observer, "fallback barrier block event limit");
                     return Err(BarrierPathFailureV1::Incomplete(format!(
                         "block {block_index} has more than {MAX_FALLBACK_BARRIER_PATH_EVENTS_V1} barriers",
                     )));
@@ -148,8 +176,9 @@ fn summarize_barrier_cfg_v1(
     context: &Context,
     inventory: &BoundedPlironFunctionInventoryV1,
     prove_progress: impl FnOnce() -> Result<PlironProgressReportV1, PlironPassPreservationErrorV1>,
+    observer: BarrierObserverV1<'_, '_, '_>,
 ) -> Result<BarrierPathBlockSummaryV1, BarrierPathFailureV1> {
-    let nodes = build_barrier_cfg_v1(context, inventory)?;
+    let nodes = build_barrier_cfg_with_observation_v1(context, inventory, observer)?;
     let edges = nodes
         .iter()
         .map(|node| node.successors.clone())
@@ -233,12 +262,13 @@ fn summarize_barrier_cfg_v1(
             ));
         }
     }
-    summarize_condensed_paths_v1(&condensed, component_of[0])
+    summarize_condensed_paths_v1(&condensed, component_of[0], observer)
 }
 
 fn summarize_condensed_paths_v1(
     nodes: &[BarrierPathNodeV1],
     entry: usize,
+    observer: BarrierObserverV1<'_, '_, '_>,
 ) -> Result<BarrierPathBlockSummaryV1, BarrierPathFailureV1> {
     let mut states = vec![0_u8; nodes.len()];
     let mut summaries: Vec<Option<BarrierPathBlockSummaryV1>> = vec![None; nodes.len()];
@@ -277,7 +307,7 @@ fn summarize_condensed_paths_v1(
                 .clone();
             merge_barrier_path_summary_v1(
                 &mut complete,
-                prepend_barrier_path_v1(&node.local, suffix)?,
+                prepend_barrier_path_with_observation_v1(&node.local, suffix, observer)?,
             )?;
         }
         match node.end {

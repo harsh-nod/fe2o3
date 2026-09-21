@@ -30,6 +30,8 @@ mod fixed_census_observation;
 mod helper_reference_source;
 #[path = "production_rustc_driver_integer_identity_source_v1_tests.rs"]
 mod integer_identity_source;
+#[path = "production_rustc_driver_licm_native_source_v1_tests.rs"]
+mod licm_native_source;
 #[path = "production_rustc_driver_loop_capture_source_v1_tests.rs"]
 mod loop_capture_source;
 #[path = "production_rustc_driver_private_cell_native_source_v1_tests.rs"]

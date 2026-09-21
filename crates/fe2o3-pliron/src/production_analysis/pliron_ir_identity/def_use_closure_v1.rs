@@ -4,6 +4,9 @@
 //! It establishes the local cardinality premise needed by that separate bound.
 
 use super::*;
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+    InvocationObserverV1, require_observed_v1,
+};
 use crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1;
 use pliron::{
     linked_list::LinkedList,
@@ -55,22 +58,31 @@ fn cells<T>() -> usize {
     size_of::<T>().div_ceil(size_of::<usize>())
 }
 
-struct Budget {
+struct Budget<'a> {
     limits: ProductionAnalysisResourceLimitsV1,
     work: usize,
     base: usize,
     peak: usize,
     incoming: usize,
+    observer: Option<&'a InvocationObserverV1<'a, 'a>>,
 }
 
-impl Budget {
+impl<'a> Budget<'a> {
     fn new(limits: ProductionAnalysisResourceLimitsV1) -> Checked<Self> {
+        Self::with_observer(limits, None)
+    }
+
+    fn with_observer(
+        limits: ProductionAnalysisResourceLimitsV1,
+        observer: Option<&'a InvocationObserverV1<'a, 'a>>,
+    ) -> Checked<Self> {
         let mut budget = Self {
             limits,
             work: 0,
             base: FRAME_CELLS,
             peak: FRAME_CELLS,
             incoming: 0,
+            observer,
         };
         budget.charge(32)?;
         Ok(budget)
@@ -80,8 +92,7 @@ impl Budget {
             .map_err(Failure::Resource)
     }
     fn require(&self) -> Checked<()> {
-        self.limits
-            .require(PHASE, self.bound()?)
+        require_observed_v1(self.limits, PHASE, Ok(self.bound()?), self.observer)
             .map(|_| ())
             .map_err(Failure::Resource)
     }
@@ -191,7 +202,7 @@ impl Owners {
         context: &Context,
         function: &FuncOp,
         prescan: &PrescanV1,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
     ) -> Checked<Self> {
         budget.charge(add(16, prescan.operations.len())?)?;
         let mut floor = add(
@@ -310,7 +321,7 @@ impl Owners {
         })
     }
 
-    fn value(&self, context: &Context, value: Value, budget: &mut Budget) -> Checked<bool> {
+    fn value(&self, context: &Context, value: Value, budget: &mut Budget<'_>) -> Checked<bool> {
         match value.defining_entity() {
             DefiningEntity::Op(operation) => {
                 budget.charge(self.operation_table.lookup)?;
@@ -352,7 +363,7 @@ impl Owners {
         value: Value,
         ordinal: usize,
         remaining: &mut usize,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
     ) -> Checked<()> {
         let prefix = add(ordinal, 1)?;
         budget.charge(add(8, prefix)?)?;
@@ -407,7 +418,7 @@ impl Owners {
         context: &Context,
         block: Ptr<BasicBlock>,
         remaining: &mut usize,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
     ) -> Checked<()> {
         budget.charge(8)?;
         let count = block.num_preds(context);
@@ -504,7 +515,39 @@ pub(super) fn check<'a>(
     prescan: &PrescanV1,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Checked<CheckedOrder<'a>> {
-    let mut budget = Budget::new(limits)?;
+    check_with_observation_v1(context, function, prescan, limits, None)
+}
+
+pub(super) fn check_with_observation_v1<'a>(
+    context: &'a Context,
+    function: &FuncOp,
+    prescan: &PrescanV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: Option<&InvocationObserverV1<'_, '_>>,
+) -> Checked<CheckedOrder<'a>> {
+    let result = match observer {
+        None => check_observed_inner_v1(context, function, prescan, limits, None),
+        Some(observer) => observer.with_projection(&Ok, |nested| {
+            check_observed_inner_v1(context, function, prescan, limits, Some(nested))
+        }),
+    };
+    if let (Some(observer), Err(Failure::Resource(error))) = (observer, &result) {
+        observer.deny(*error);
+    }
+    result
+}
+
+fn check_observed_inner_v1<'a>(
+    context: &'a Context,
+    function: &FuncOp,
+    prescan: &PrescanV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observer: Option<&InvocationObserverV1<'_, '_>>,
+) -> Checked<CheckedOrder<'a>> {
+    let mut budget = match observer {
+        None => Budget::new(limits)?,
+        Some(observer) => Budget::with_observer(limits, Some(observer))?,
+    };
     let owners = match check_inner(context, function, prescan, &mut budget) {
         Ok(owners) => owners,
         Err(failure) => {
@@ -548,7 +591,7 @@ fn check_inner(
     context: &Context,
     function: &FuncOp,
     prescan: &PrescanV1,
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
 ) -> Checked<Owners> {
     let mut owners = Owners::new(context, function, prescan, budget)?;
     // Check direction-sensitive ownership before reverse lists can follow an
@@ -615,6 +658,15 @@ pub(super) fn identity_failure(
     prescan: &PrescanV1,
     failure: Failure,
 ) -> BuildIdentityFailureV1 {
+    identity_failure_with_observation_v1(context, prescan, failure, None)
+}
+
+pub(super) fn identity_failure_with_observation_v1(
+    context: &Context,
+    prescan: &PrescanV1,
+    failure: Failure,
+    observer: RenderObserverV1<'_, '_, '_>,
+) -> BuildIdentityFailureV1 {
     #[cfg(test)]
     require_order_index_retired_for_tests();
     let (block, operation) = match failure {
@@ -633,12 +685,15 @@ pub(super) fn identity_failure(
         } => (block, operation),
     };
     let pointer = prescan.operations[block][operation];
-    let name =
-        match render_operation_name_v1(context, pointer, PlironPreserveLocationV1::Block { block })
-        {
-            Ok(name) => name,
-            Err(error) => return error.into(),
-        };
+    let name = match render_operation_name_observed_v1(
+        context,
+        pointer,
+        PlironPreserveLocationV1::Block { block },
+        observer,
+    ) {
+        Ok(name) => name,
+        Err(error) => return error.into(),
+    };
     let location = PlironPreserveLocationV1::Operation {
         block,
         operation,
@@ -776,3 +831,224 @@ pub(super) fn native_census(context: &Context, function: &FuncOp) -> PrescanV1 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod borrowed_observer_regression_tests {
+    use super::*;
+    use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
+        InvocationReceiptFailureV1 as ReceiptFailure, InvocationReceiptV1 as Receipt,
+    };
+    use crate::production_analysis::pliron_resource_envelope::{
+        ProductionAnalysisResourceLimitsV1 as Limits,
+        ProductionAnalysisResourceUpperBoundV1 as Bound,
+    };
+    use dialect_kernel::{
+        BranchArgsOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, ReturnOp,
+    };
+
+    fn hard() -> Limits {
+        Limits::production_hard_ceiling()
+    }
+
+    fn push(context: &Context, block: Ptr<BasicBlock>, op: impl Op) {
+        op.get_operation().insert_at_back(block, context);
+    }
+
+    fn fixture(kind: u8) -> (Context, FuncOp) {
+        let mut context = Context::new();
+        dialect_kernel::register_dialect(
+            &mut context,
+            &pliron::dialect::DialectName::try_new(dialect_kernel::DIALECT_NAME).unwrap(),
+        )
+        .unwrap();
+        let signature = FunctionType::get(&context, vec![], vec![]);
+        let function = FuncOp::new(&mut context, "observed".try_into().unwrap(), signature);
+        let entry = function.get_entry_block(&context);
+        let index = IndexType::get(&context).into();
+        let join = BasicBlock::new(&mut context, None, vec![index]);
+        join.insert_at_back(function.get_region(&context), &context);
+        let constant = IndexConstantOp::new(&mut context, 7);
+        let value = constant.result(&context);
+        push(&context, entry, constant);
+        let edge = BranchArgsOp::new(&mut context, vec![value], join);
+        let pointer = edge.get_operation();
+        push(&context, entry, edge);
+        let ret = ReturnOp::new(&mut context);
+        push(&context, join, ret);
+        if kind != 0 {
+            let signature = FunctionType::get(&context, vec![], vec![]);
+            let foreign = FuncOp::new(&mut context, "foreign".try_into().unwrap(), signature);
+            let block = foreign.get_entry_block(&context);
+            let constant = IndexConstantOp::new(&mut context, 9);
+            let external = constant.result(&context);
+            push(&context, block, constant);
+            if kind == 1 {
+                Operation::replace_operand(pointer, &context, 0, external);
+            } else {
+                let user = IndexBinaryOp::new(&mut context, IndexBinaryKindAttr::Add, value, value);
+                push(&context, block, user);
+            }
+            let ret = ReturnOp::new(&mut context);
+            push(&context, block, ret);
+        }
+        (context, function)
+    }
+
+    #[test]
+    fn semantic_rejections_keep_the_real_accepted_prefix_without_denial() {
+        for kind in [1, 2] {
+            let (context, function) = fixture(kind);
+            let scan = prescan(&context, &function).unwrap();
+            let mut budget = Budget::new(hard()).unwrap();
+            let failure = check_inner(&context, &function, &scan, &mut budget).unwrap_err();
+            budget.admit_failure(&failure).unwrap();
+            TRACE.set(Trace::default());
+            let mut receipt = Receipt::new(Bound::default(), hard()).unwrap();
+            let phase = receipt.phase(PHASE, 0).unwrap();
+            let error = check_with_observation_v1(
+                &context,
+                &function,
+                &scan,
+                hard(),
+                Some(&phase.observer(&Ok)),
+            )
+            .unwrap_err();
+            assert!(matches!(
+                (kind, error),
+                (
+                    1,
+                    Failure::Operand {
+                        block: 0,
+                        operation: 1,
+                        operand: 0
+                    }
+                ) | (
+                    2,
+                    Failure::Invalid("SSA uses exceed this function's operand roster")
+                )
+            ));
+            drop(phase);
+            let state = receipt.snapshot();
+            assert_eq!(state.current, state.committed);
+            assert_eq!(
+                (
+                    state.committed.work_upper_bound(),
+                    state.committed.peak_storage_upper_bound()
+                ),
+                (budget.work, budget.peak)
+            );
+            assert!(budget.work > 32);
+            assert_eq!(state.first_denial, None);
+            assert!(!state.caught_panic);
+            assert_eq!(receipt.complete().unwrap(), state.committed);
+            let trace = TRACE.get();
+            assert_eq!(
+                (
+                    trace.owner_reservations,
+                    trace.live_order_indexes,
+                    trace.retired_order_indexes
+                ),
+                (1, 0, 1)
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_floor_exact_one_short_and_sticky_first_denial() {
+        for short in [0, 1, 2] {
+            TRACE.set(Trace::default());
+            let (context, function) = fixture(0);
+            let scan = prescan(&context, &function).unwrap();
+            let floor_owner = check(&context, &function, &scan, hard()).unwrap();
+            let bound = floor_owner.resource_upper_bound();
+            assert_eq!(
+                (
+                    bound.work_upper_bound(),
+                    bound.peak_storage_upper_bound(),
+                    bound.retained_storage_upper_bound()
+                ),
+                (4331, 167, 28)
+            );
+            let total = bound.checked_then_retain(bound, PHASE).unwrap();
+            let limits = Limits::new(
+                total.work_upper_bound() - usize::from(short == 1),
+                total.peak_storage_upper_bound() - usize::from(short == 2),
+            );
+            {
+                let mut receipt = Receipt::new(bound, limits).unwrap();
+                let phase = receipt.phase(PHASE, 0).unwrap();
+                let result = check_with_observation_v1(
+                    &context,
+                    &function,
+                    &scan,
+                    hard(),
+                    Some(&phase.observer(&Ok)),
+                );
+                if short == 0 {
+                    let owner = result.unwrap();
+                    assert!(owner.belongs_to(&context, &function));
+                    assert_eq!(owner.resource_upper_bound(), bound);
+                    assert_eq!(TRACE.get().live_order_indexes, 2);
+                    phase.commit(bound).unwrap();
+                    assert_eq!(receipt.complete().unwrap(), bound);
+                    let released = receipt
+                        .drop_owner(PHASE, owner, bound.retained_storage_upper_bound())
+                        .unwrap();
+                    assert_eq!(
+                        (
+                            released.work_upper_bound(),
+                            released.peak_storage_upper_bound(),
+                            released.retained_storage_upper_bound()
+                        ),
+                        (4331, 167, 0)
+                    );
+                } else {
+                    let Err(Failure::Resource(first)) = result else {
+                        panic!("expected cumulative denial");
+                    };
+                    drop(phase);
+                    assert_eq!(first.phase, PHASE);
+                    assert_eq!(
+                        first.resource,
+                        if short == 1 {
+                            "work upper bound"
+                        } else {
+                            "peak storage upper bound"
+                        }
+                    );
+                    let before = receipt.snapshot();
+                    assert!(before.committed.work_upper_bound() > 0);
+                    assert_eq!(before.first_denial, Some(first));
+                    limits
+                        .require(
+                            PHASE,
+                            bound.checked_then_retain(before.committed, PHASE).unwrap(),
+                        )
+                        .unwrap();
+                    let local = if short == 1 {
+                        Limits::new(usize::MAX, 0)
+                    } else {
+                        Limits::new(0, usize::MAX)
+                    };
+                    let phase = receipt.phase(PHASE, 0).unwrap();
+                    let Err(Failure::Resource(second)) = check_with_observation_v1(
+                        &context,
+                        &function,
+                        &scan,
+                        local,
+                        Some(&phase.observer(&Ok)),
+                    ) else {
+                        panic!("expected second denial");
+                    };
+                    drop(phase);
+                    assert_ne!(first.resource, second.resource);
+                    assert_eq!(receipt.snapshot(), before);
+                    assert_eq!(receipt.complete(), Err(ReceiptFailure::Denied(first)));
+                }
+                assert_eq!(TRACE.get().live_order_indexes, 1);
+            }
+            drop(floor_owner);
+            assert_eq!(TRACE.get().live_order_indexes, 0);
+        }
+    }
+}

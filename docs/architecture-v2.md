@@ -17,6 +17,7 @@ Related documents:
 
 - [cuda-oxide parity matrix](cuda-oxide-parity-matrix.md)
 - [production compiler convergence V1](production-pipeline-convergence-v1.md)
+- [default optimizer and nondefault checked continuations](general-optimizing-compiler-wave1.md)
 - [verification model](verification-model.md)
 - [GPU safety contract v1](gpu-safety-contract-v1.md)
 - [implementation roadmap](implementation-roadmap-v2.md)
@@ -715,6 +716,18 @@ backend. The [V12 verification contract](kernel-ir-v12-verification.md) records
 the exact consumer boundaries, resource-budget exclusions, and String-backed
 borrowed-location/owned-diagnostic architecture. This is not formal compiler
 verification or completed production V12 migration.
+
+The nondefault checked continuation composes induction refinement and private
+forwarding on the same evolving canonical V12 graph. Its final descriptor
+predicate borrows the actual final source owner: original typed roots, ABI,
+launch and target bindings are checked against that owner's final graph and
+fresh memory obligations. The wrapper then independently replays native
+lowering and compares the exact final LLVM text. This predicate does not encode
+or publish a descriptor, establish the artifact's proof association, or change
+the default compiler route. Literal canonical-wire regressions exercise the
+owning transformations and independent pair checks; they are not Pliron textual
+lit, ordinary Rust-source admission, or hardware evidence. See the
+[Wave 1 continuation and regression boundaries](general-optimizing-compiler-wave1.md#nondefault-checked-continuations).
 
 ### IR framework
 

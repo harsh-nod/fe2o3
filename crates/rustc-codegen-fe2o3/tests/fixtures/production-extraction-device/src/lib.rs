@@ -53,6 +53,8 @@ mod wave64_capture;
 #[cfg(feature = "scalar-borrow-policy5")]
 mod scalar_borrow_policy5;
 
+#[cfg(feature = "licm-native")]
+mod licm_native;
 #[cfg(feature = "private-cell-native")]
 mod private_cell_native;
 
@@ -157,6 +159,7 @@ mod ordered_program_v32;
     feature = "masked-shift",
     feature = "scalar-borrow-policy5",
     feature = "private-cell-native",
+    feature = "licm-native",
     feature = "defined-helper-reference",
     feature = "f32-exp",
     feature = "f32-helper-exp",

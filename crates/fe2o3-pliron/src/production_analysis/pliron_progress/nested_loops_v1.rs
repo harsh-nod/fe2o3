@@ -48,114 +48,132 @@ fn run_pliron_progress_check_inner_v1(
     run_pliron_progress_after_verification_v1(context, inventory, work)
 }
 
+#[cfg(test)]
 fn run_pliron_progress_after_verification_v1(
     context: &Context,
     inventory: StructuralInventoryV1,
-    mut work: ProgressWorkBudgetV1,
+    work: ProgressWorkBudgetV1,
 ) -> PlironProgressReportV1 {
-    let blocks = inventory.root_blocks;
-    let block_indices = blocks
-        .iter()
-        .enumerate()
-        .map(|(index, block)| (*block, index))
-        .collect::<HashMap<_, _>>();
-    let graph = match build_root_graph(context, &blocks, &block_indices) {
-        Ok(graph) => graph,
-        Err(finding) => return report(finding),
-    };
-    let edge_count = graph.edges.iter().map(Vec::len).sum::<usize>();
-    let graph_work = blocks
-        .len()
-        .checked_add(edge_count)
-        .and_then(|units| units.checked_mul(8))
-        .unwrap_or(usize::MAX);
-    if let Err(finding) = work.charge(graph_work) {
-        return report(finding);
-    }
+    run_pliron_progress_after_verification_with_observation_v1(context, inventory, work, None)
+}
 
-    let reachable = reachable_blocks(&graph.edges);
-    let definitely_reachable = reachable_blocks(&graph.unconditional_edges);
-    let dominators = progress_dominators_v1(&graph.edges, &graph.predecessors);
-    let mut findings = Vec::new();
-    let mut certificates = Vec::new();
-    for mut component in strongly_connected_components(&graph.edges) {
-        component.sort_unstable();
-        let component_work = component.len().saturating_mul(4);
-        if let Err(finding) = work.charge(component_work) {
-            return report(finding);
+fn run_pliron_progress_after_verification_with_observation_v1(
+    context: &Context,
+    inventory: StructuralInventoryV1,
+    mut work: ProgressWorkBudgetV1,
+    observer: ProgressObserverV1<'_, '_, '_>,
+) -> PlironProgressReportV1 {
+    let run = || {
+        let blocks = inventory.root_blocks;
+        let block_indices = blocks
+            .iter()
+            .enumerate()
+            .map(|(index, block)| (*block, index))
+            .collect::<HashMap<_, _>>();
+        let graph = match build_root_graph(context, &blocks, &block_indices) {
+            Ok(graph) => graph,
+            Err(finding) => return observed_progress_report_v1(finding, observer),
+        };
+        let edge_count = graph.edges.iter().map(Vec::len).sum::<usize>();
+        let graph_work = blocks
+            .len()
+            .checked_add(edge_count)
+            .and_then(|units| units.checked_mul(8))
+            .unwrap_or(usize::MAX);
+        if let Err(finding) = work.charge(graph_work) {
+            return observed_progress_report_v1(finding, observer);
         }
-        if !component.iter().any(|block| reachable[*block]) || !is_cycle(&component, &graph.edges) {
-            continue;
-        }
-        let component_members = component.iter().copied().collect::<HashSet<_>>();
-        let has_exit = component.iter().any(|block| {
-            graph.edges[*block]
-                .iter()
-                .any(|successor| !component_members.contains(successor))
-        });
-        if !has_exit {
-            if component.iter().any(|block| definitely_reachable[*block]) {
-                findings.push(PlironProgressFindingV1::NonTerminatingCycle {
+
+        let reachable = reachable_blocks(&graph.edges);
+        let definitely_reachable = reachable_blocks(&graph.unconditional_edges);
+        let dominators = progress_dominators_v1(&graph.edges, &graph.predecessors);
+        let mut findings = Vec::new();
+        let mut certificates = Vec::new();
+        for mut component in strongly_connected_components(&graph.edges) {
+            component.sort_unstable();
+            let component_work = component.len().saturating_mul(4);
+            if let Err(finding) = work.charge(component_work) {
+                return observed_progress_report_v1(finding, observer);
+            }
+            if !component.iter().any(|block| reachable[*block])
+                || !is_cycle(&component, &graph.edges)
+            {
+                continue;
+            }
+            let component_members = component.iter().copied().collect::<HashSet<_>>();
+            let has_exit = component.iter().any(|block| {
+                graph.edges[*block]
+                    .iter()
+                    .any(|successor| !component_members.contains(successor))
+            });
+            if !has_exit {
+                if component.iter().any(|block| definitely_reachable[*block]) {
+                    findings.push(PlironProgressFindingV1::NonTerminatingCycle {
                     blocks: component,
                     reason: "the strongly connected component has no exit edge",
                     counterexample: "an unconditional path from entry reaches the cycle, and every successor remains in it".to_owned(),
                 });
-            } else {
-                findings.push(PlironProgressFindingV1::ProgressIncomplete {
+                } else {
+                    findings.push(PlironProgressFindingV1::ProgressIncomplete {
                     blocks: component,
                     reason: "the exit-free cycle is only conditionally reachable and no feasible incoming witness was reconstructed",
                 });
+                }
+                continue;
             }
-            continue;
-        }
-        match canonical_positive_induction_loop(
-            context,
-            &blocks,
-            &block_indices,
-            &inventory.root_operation_blocks,
-            &dominators,
-            &graph.predecessors,
-            &graph.edges,
-            &graph.incoming,
-            &component,
-            &component_members,
-        ) {
-            CanonicalLoopResultV1::Proved(certificate) => certificates.push(certificate),
-            CanonicalLoopResultV1::Inactive => {}
-            CanonicalLoopResultV1::Rejected {
-                reason,
-                counterexample,
-            } => {
-                findings.push(PlironProgressFindingV1::NonTerminatingCycle {
-                    blocks: component,
+            match canonical_positive_induction_loop(
+                context,
+                &blocks,
+                &block_indices,
+                &inventory.root_operation_blocks,
+                &dominators,
+                &graph.predecessors,
+                &graph.edges,
+                &graph.incoming,
+                &component,
+                &component_members,
+            ) {
+                CanonicalLoopResultV1::Proved(certificate) => certificates.push(certificate),
+                CanonicalLoopResultV1::Inactive => {}
+                CanonicalLoopResultV1::Rejected {
                     reason,
                     counterexample,
-                });
-            }
-            CanonicalLoopResultV1::Incomplete(reason) => {
-                match prove_nested_positive_induction_loops_v1(
-                    context,
-                    &blocks,
-                    &block_indices,
-                    &inventory.root_operation_blocks,
-                    &dominators,
-                    &graph.predecessors,
-                    &graph.edges,
-                    &component,
-                    &component_members,
-                ) {
-                    Ok(mut nested) => certificates.append(&mut nested),
-                    Err(()) => findings.push(PlironProgressFindingV1::ProgressIncomplete {
+                } => {
+                    findings.push(PlironProgressFindingV1::NonTerminatingCycle {
                         blocks: component,
                         reason,
-                    }),
+                        counterexample,
+                    });
+                }
+                CanonicalLoopResultV1::Incomplete(reason) => {
+                    match prove_nested_positive_induction_loops_v1(
+                        context,
+                        &blocks,
+                        &block_indices,
+                        &inventory.root_operation_blocks,
+                        &dominators,
+                        &graph.predecessors,
+                        &graph.edges,
+                        &component,
+                        &component_members,
+                    ) {
+                        Ok(mut nested) => certificates.append(&mut nested),
+                        Err(()) => findings.push(PlironProgressFindingV1::ProgressIncomplete {
+                            blocks: component,
+                            reason,
+                        }),
+                    }
                 }
             }
         }
-    }
-    PlironProgressReportV1 {
-        findings,
-        certificates,
+        PlironProgressReportV1 {
+            findings,
+            certificates,
+        }
+    };
+    match observer {
+        None => run(),
+        Some(observer) => observer.with_projection(&Ok, |_| run()),
     }
 }
 

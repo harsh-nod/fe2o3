@@ -15,6 +15,8 @@ pub(crate) mod policy6;
 pub(crate) mod policy7;
 #[path = "compiler_descriptor_checked_output_policy8_v1.rs"]
 pub(crate) mod policy8;
+#[path = "compiler_descriptor_refined_forwarding_v1.rs"]
+pub(crate) mod refined_forwarding_v1;
 
 struct CheckedDescriptorViewV1<'a> {
     semantic: &'a fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,

@@ -25,9 +25,10 @@ use pliron::{
 use crate::KernelCheckStatusV1;
 use crate::production_analysis::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::production_analysis::pliron_hierarchical_ownership::{
-    HierarchicalOwnershipFindingV1, run_pliron_hierarchical_ownership_check_with_analyses_v1,
+    HierarchicalOwnershipFindingV1, run_pliron_hierarchical_ownership_with_observation_v1,
 };
 use crate::production_analysis::pliron_invocation_trace::PlironTraceLocationV1;
+use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::InvocationObserverV1;
 use crate::production_analysis::pliron_resource_envelope::{
     ProductionAnalysisInputCensusV1, ProductionAnalysisResourceLimitV1,
     ProductionAnalysisResourceLimitsV1, ProductionAnalysisResourcePhaseV1,
@@ -732,225 +733,43 @@ pub(crate) fn run_pliron_effect_refinement_check_v1(
     run_pliron_effect_refinement_with_analyses_v1(context, function, &mut analyses)
 }
 
+#[cfg(test)]
 pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironEffectRefinementReportV1 {
-    analyses.prepare_function_inventory(context, function);
-    let inventory = match analyses.function_inventory_handle() {
-        Ok(inventory) => inventory,
-        Err(failure) => {
-            return one(
-                0,
-                PlironEffectRefinementFindingV1::ResourceLimitExceeded {
-                    actual: failure.actual(),
-                    limit: failure.limit(),
-                },
-            );
-        }
-    };
-    if !inventory.operations().iter().any(|site| {
-        let operation = Operation::get_op_dyn(site.pointer(), context);
-        is_effect_refinement_contract_v1(&*operation)
-    }) {
-        return clean_effect_refinement_report_v1();
-    }
-    let (contracts, writes, ownership_views, obligations, evidence) = collect(context, &inventory);
-    debug_assert!(!contracts.is_empty());
-    if contracts.len() > MAX_EFFECT_REFINEMENT_CONTRACTS_V1 {
-        return one(
-            contracts.len(),
-            PlironEffectRefinementFindingV1::ResourceLimitExceeded {
-                actual: contracts.len(),
-                limit: MAX_EFFECT_REFINEMENT_CONTRACTS_V1,
-            },
-        );
-    }
-    let mut findings = Vec::new();
-    for contract in &contracts {
-        if !ownership_views.contains(&contract.view) {
-            findings.push(PlironEffectRefinementFindingV1::MissingOwnershipContract {
-                view: contract.view_name.clone(),
-                location: contract.location,
-            });
-        }
-    }
-    if !findings.is_empty() {
-        return report(contracts.len(), 0, findings);
-    }
-
-    let hierarchy =
-        run_pliron_hierarchical_ownership_check_with_analyses_v1(context, function, analyses);
-    if !hierarchy.is_clean() {
-        let finding = hierarchy
-            .findings()
-            .first()
-            .expect("non-clean hierarchy has finding");
-        let dynamic = contracts.iter().find_map(|contract| {
-            ranked_view_type(contract.view, context).and_then(|view| {
-                view.deref(context)
-                    .shape()
-                    .iter()
-                    .position(|extent| *extent == DYNAMIC_EXTENT)
-                    .map(|dimension| (contract.view_name.clone(), dimension))
-            })
-        });
-        let effect_finding = project_hierarchy_finding_v1(finding, dynamic);
-        return one(contracts.len(), effect_finding);
-    }
-
-    let mut writes_by_signature =
-        HashMap::<(usize, Value, Vec<Value>), Vec<EffectRefinementLocationV1>>::new();
-    for write in &writes {
-        writes_by_signature
-            .entry((write.location.block, write.view, write.indices.clone()))
-            .or_default()
-            .push(write.location);
-    }
-    let mut by_write = HashMap::<EffectRefinementLocationV1, usize>::new();
-    let mut write_by_contract = vec![None; contracts.len()];
-    for (contract_index, contract) in contracts.iter().enumerate() {
-        let signature = (
-            contract.location.block,
-            contract.view,
-            contract.indices.clone(),
-        );
-        let matching = writes_by_signature
-            .get(&signature)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        if matching.is_empty() {
-            findings.push(PlironEffectRefinementFindingV1::OrphanEffectContract {
-                view: contract.view_name.clone(),
-                location: contract.location,
-            });
-            continue;
-        }
-        if matching.len() != 1 {
-            findings.push(PlironEffectRefinementFindingV1::AmbiguousWriteSite {
-                view: contract.view_name.clone(),
-                location: contract.location,
-                matches: matching.len(),
-            });
-            continue;
-        }
-        let write = matching[0];
-        write_by_contract[contract_index] = Some(write);
-        if let Some(first_index) = by_write.insert(write, contract_index) {
-            findings.push(PlironEffectRefinementFindingV1::DuplicateEffectContract {
-                view: contract.view_name.clone(),
-                write,
-                first: contracts[first_index].location,
-                second: contract.location,
-            });
-        }
-    }
-    if !findings.is_empty() {
-        return report(contracts.len(), 0, findings);
-    }
-
-    for write in &writes {
-        if !by_write.contains_key(&write.location) {
-            findings.push(PlironEffectRefinementFindingV1::UnmodeledWriteSite {
-                view: bounded_effect_diagnostic_v1(write.view.unique_name(context)),
-                location: write.location,
-            });
-        }
-    }
-    if !findings.is_empty() {
-        return report(contracts.len(), 0, findings);
-    }
-
-    let expressions = match SemanticExpressionTableV1::from_inventory(context, &inventory) {
-        Ok(expressions) => expressions,
-        Err(_) => {
-            return one(
-                contracts.len(),
-                PlironEffectRefinementFindingV1::ResourceLimitExceeded {
-                    actual: contracts.len(),
-                    limit: MAX_EFFECT_REFINEMENT_CONTRACTS_V1,
-                },
-            );
-        }
-    };
-    let mut proved = 0;
-    for (index, contract) in contracts.iter().enumerate() {
-        if !validate_proof(contract, &obligations, &evidence, &mut findings) {
-            continue;
-        }
-        let _write = write_by_contract[index].expect("correlated contract has write");
-        let witness = None;
-        let mut pairs = contract
-            .coordinates
-            .iter()
-            .map(|(actual, expected)| ("coordinate", *actual, *expected))
-            .collect::<Vec<_>>();
-        pairs.extend([
-            ("domain", contract.expressions[0], contract.expressions[1]),
-            (
-                "precondition",
-                contract.expressions[2],
-                contract.expressions[3],
-            ),
-            ("value", contract.expressions[4], contract.expressions[5]),
-        ]);
-        let mut valid = true;
-        for (component, actual, expected) in pairs {
-            let Some(actual_description) = expressions.describe_value(actual) else {
-                findings.push(PlironEffectRefinementFindingV1::UnresolvedExpression {
-                    view: contract.view_name.clone(),
-                    location: contract.location,
-                    component,
-                    value: bounded_effect_diagnostic_v1(actual.unique_name(context)),
-                });
-                valid = false;
-                continue;
-            };
-            let Some(expected_description) = expressions.describe_value(expected) else {
-                findings.push(PlironEffectRefinementFindingV1::UnresolvedExpression {
-                    view: contract.view_name.clone(),
-                    location: contract.location,
-                    component,
-                    value: bounded_effect_diagnostic_v1(expected.unique_name(context)),
-                });
-                valid = false;
-                continue;
-            };
-            if expressions.equivalent(actual, expected) != Some(true) {
-                let finding = match component {
-                    "domain" => PlironEffectRefinementFindingV1::DomainMismatch {
-                        view: contract.view_name.clone(),
-                        location: contract.location,
-                        actual: bounded_effect_owned_diagnostic_v1(actual_description),
-                        expected: bounded_effect_owned_diagnostic_v1(expected_description),
-                        witness: witness.clone(),
-                    },
-                    "precondition" => PlironEffectRefinementFindingV1::PreconditionMismatch {
-                        view: contract.view_name.clone(),
-                        location: contract.location,
-                        actual: bounded_effect_owned_diagnostic_v1(actual_description),
-                        expected: bounded_effect_owned_diagnostic_v1(expected_description),
-                        witness: witness.clone(),
-                    },
-                    _ => PlironEffectRefinementFindingV1::ValueMismatch {
-                        view: contract.view_name.clone(),
-                        location: contract.location,
-                        actual: bounded_effect_owned_diagnostic_v1(actual_description),
-                        expected: bounded_effect_owned_diagnostic_v1(expected_description),
-                        witness: witness.clone(),
-                    },
-                };
-                findings.push(finding);
-                valid = false;
-            }
-        }
-        if valid {
-            proved += 1;
-        }
-    }
-    report(contracts.len(), proved, findings)
+    run_pliron_effect_refinement_with_observation_v1(context, function, analyses, None)
 }
+
+pub(crate) fn run_pliron_effect_refinement_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: EffectObserverV1<'_, '_, '_>,
+) -> PlironEffectRefinementReportV1 {
+    let body = run_effect_core_v1(
+        context,
+        function,
+        analyses,
+        &mut OrdinaryEffectModeV1,
+        observer,
+    );
+    PlironEffectRefinementReportV1 {
+        findings: body.findings,
+        contracts: body.contracts,
+        proved_contracts: body.proved_contracts,
+    }
+}
+
+pub(super) mod conditional_v1;
+
+#[cfg(all(test, feature = "internal-proof-staging"))]
+pub(crate) mod source259_effect_tests {
+    pub(crate) use super::conditional_v1::*;
+}
+
+include!("pliron_effect_refinement/execution_v1.rs");
 
 type CollectedProofObligationV1 = (
     [u64; 4],
@@ -1132,17 +951,14 @@ fn report(
     contracts: usize,
     proved_contracts: usize,
     findings: Vec<PlironEffectRefinementFindingV1>,
-) -> PlironEffectRefinementReportV1 {
-    PlironEffectRefinementReportV1 {
+) -> EffectBodyV1 {
+    EffectBodyV1 {
         findings,
         contracts,
         proved_contracts,
     }
 }
-fn one(
-    contracts: usize,
-    finding: PlironEffectRefinementFindingV1,
-) -> PlironEffectRefinementReportV1 {
+fn one(contracts: usize, finding: PlironEffectRefinementFindingV1) -> EffectBodyV1 {
     report(contracts, 0, vec![finding])
 }
 fn proof_identity(words: [u64; 4]) -> String {

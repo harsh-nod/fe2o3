@@ -48,16 +48,75 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     run_pliron_semantic_refinement_after_progress_v1(context, function, analyses, progress)
 }
 
+#[cfg(test)]
 fn run_pliron_semantic_refinement_after_progress_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
     progress: PlironProgressReportV1,
 ) -> PlironSemanticRefinementReportV1 {
+    run_pliron_semantic_refinement_after_progress_with_observation_v1(
+        context, function, analyses, progress, None,
+    )
+}
+
+fn run_pliron_semantic_refinement_after_progress_with_observation_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    progress: PlironProgressReportV1,
+    observer: SemanticObserverV1<'_, '_, '_>,
+) -> PlironSemanticRefinementReportV1 {
+    run_semantic_core_v1(
+        context,
+        function,
+        analyses,
+        progress,
+        OrdinarySemanticModeV1,
+        observer,
+    )
+    .into_ordinary()
+}
+
+fn run_semantic_core_v1<M: SemanticModeV1>(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    progress: PlironProgressReportV1,
+    mode: M,
+    observer: SemanticObserverV1<'_, '_, '_>,
+) -> SemanticBodyV1<M::Effect> {
+    match observer {
+        None => run_semantic_inner_v1(context, function, analyses, progress, mode, None),
+        Some(observer) => observer.with_projection(&Ok, |nested| {
+            run_semantic_inner_v1(context, function, analyses, progress, mode, Some(nested))
+        }),
+    }
+}
+
+fn run_semantic_inner_v1<M: SemanticModeV1>(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    progress: PlironProgressReportV1,
+    mode: M,
+    observer: SemanticObserverV1<'_, '_, '_>,
+) -> SemanticBodyV1<M::Effect> {
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,
-        Err(_) => return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded),
+        Err(failure) => {
+            if let Some(observer) = observer {
+                observer.deny(ProductionAnalysisResourceLimitV1 {
+                    phase: ProductionAnalysisResourcePhaseV1::SemanticRefinement,
+                    resource: failure.resource(),
+                });
+            }
+            return semantic_early_v1(
+                vec![PlironSemanticRefinementFindingV1::ResourceLimitExceeded],
+                progress,
+            );
+        }
     };
     let mut definitions = Vec::new();
     let mut requirements = Vec::new();
@@ -202,9 +261,15 @@ fn run_pliron_semantic_refinement_after_progress_v1(
         // Progress and effect refinement are nested report owners and remain
         // mandatory. The semantic-local path has no expression, contract, or
         // finding payload to allocate after the authenticated inventory scan.
-        let effect_refinement =
-            run_pliron_effect_refinement_with_analyses_v1(context, function, analyses);
-        return PlironSemanticRefinementReportV1 {
+        let effect_refinement = mode.effect(
+            SemanticExecutionV1 {
+                context,
+                function,
+                analyses,
+            },
+            observer,
+        );
+        return SemanticBodyV1 {
             findings: Vec::new(),
             reference_obligations: 0,
             policy_checked_reference_obligations: 0,
@@ -215,11 +280,23 @@ fn run_pliron_semantic_refinement_after_progress_v1(
             typed_root_commitments: Vec::new(),
             numerical_certificates: Vec::new(),
             progress,
-            effect_refinement,
+            effect_refinement: EffectRunV1::Executed(effect_refinement),
         };
     }
     if definitions.len() > MAX_PLIRON_SEMANTIC_NODES_V1 {
-        return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded);
+        expression_quota_v1(
+            observer.map(|observer| {
+                (
+                    ProductionAnalysisResourcePhaseV1::SemanticRefinement,
+                    observer,
+                )
+            }),
+            "semantic expression definition limit",
+        );
+        return semantic_early_v1(
+            vec![PlironSemanticRefinementFindingV1::ResourceLimitExceeded],
+            progress,
+        );
     }
 
     let reference_count = reference_requirements.len() + tensor_requirements.len();
@@ -378,13 +455,28 @@ fn run_pliron_semantic_refinement_after_progress_v1(
         }
     }
 
-    let expressions = match SemanticExpressionTableV1::build(context, &definitions) {
+    let expressions = match SemanticExpressionTableV1::build_with_observation_v1(
+        context,
+        &definitions,
+        observer.map(|observer| {
+            (
+                ProductionAnalysisResourcePhaseV1::SemanticRefinement,
+                observer,
+            )
+        }),
+    ) {
         Ok(expressions) => expressions,
         Err(SemanticExpressionBuildErrorV1::ResourceLimit) => {
-            return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded);
+            return semantic_early_v1(
+                vec![PlironSemanticRefinementFindingV1::ResourceLimitExceeded],
+                progress,
+            );
         }
         Err(SemanticExpressionBuildErrorV1::InvalidTypedExpression(reason)) => {
-            return one(PlironSemanticRefinementFindingV1::TypedExpressionRejected { reason });
+            return semantic_early_v1(
+                vec![PlironSemanticRefinementFindingV1::TypedExpressionRejected { reason }],
+                progress,
+            );
         }
     };
 
@@ -784,6 +876,17 @@ fn run_pliron_semantic_refinement_after_progress_v1(
                 continue;
             }
         };
+        if mode.selected_view(view) {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractIncomplete {
+                    block,
+                    operation,
+                    reason: "conditional selected coverage is not an ordinary collective ownership theorem",
+                },
+            );
+            continue;
+        }
         let matching_coverage = ownership_contracts
             .iter()
             .filter(|(candidate_view, _)| *candidate_view == view)
@@ -834,10 +937,16 @@ fn run_pliron_semantic_refinement_after_progress_v1(
         }
         policy_checked_collective_contracts += 1;
     }
-    let effect_refinement =
-        run_pliron_effect_refinement_with_analyses_v1(context, function, analyses);
+    let effect_refinement = mode.effect(
+        SemanticExecutionV1 {
+            context,
+            function,
+            analyses,
+        },
+        observer,
+    );
     let typed_root_commitments = expressions.typed_root_commitments().to_vec();
-    PlironSemanticRefinementReportV1 {
+    SemanticBodyV1 {
         findings,
         reference_obligations: reference_count,
         policy_checked_reference_obligations,
@@ -848,7 +957,7 @@ fn run_pliron_semantic_refinement_after_progress_v1(
         typed_root_commitments,
         numerical_certificates,
         progress,
-        effect_refinement,
+        effect_refinement: EffectRunV1::Executed(effect_refinement),
     }
 }
 
@@ -864,6 +973,7 @@ fn tensor_element_scalar(element: MatrixElement) -> Option<SemanticTypedScalarV1
 }
 
 #[allow(clippy::result_large_err)]
+#[cfg(test)]
 pub(crate) fn require_pliron_semantic_refinement_with_scoped_input_v1(
     input: crate::production_analysis::pliron_pass_contract::ScopedVerifiedProgressInputV1<'_>,
     analyses: &mut PlironAnalysisManagerV1,
@@ -871,21 +981,40 @@ pub(crate) fn require_pliron_semantic_refinement_with_scoped_input_v1(
     Result<PlironSemanticRefinementReportV1, PlironSemanticRefinementCheckErrorV1>,
     crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
 > {
-    let scoped =
-        crate::production_analysis::pliron_progress::run_pliron_progress_with_scoped_input_v1(
-            input,
-        )?;
-    let report = run_pliron_semantic_refinement_after_progress_v1(
-        scoped.context,
-        scoped.function,
-        analyses,
-        scoped.report,
-    );
-    Ok(if report.is_clean() {
-        Ok(report)
-    } else {
-        Err(PlironSemanticRefinementCheckErrorV1 { report })
-    })
+    require_pliron_semantic_refinement_with_scoped_observation_v1(input, analyses, None)
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn require_pliron_semantic_refinement_with_scoped_observation_v1(
+    input: crate::production_analysis::pliron_pass_contract::ScopedVerifiedProgressInputV1<'_>,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: SemanticObserverV1<'_, '_, '_>,
+) -> Result<
+    Result<PlironSemanticRefinementReportV1, PlironSemanticRefinementCheckErrorV1>,
+    crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
+> {
+    let run = || {
+        let scoped =
+            crate::production_analysis::pliron_progress::run_pliron_progress_with_scoped_observation_v1(
+                input, observer,
+            )?;
+        let report = run_pliron_semantic_refinement_after_progress_with_observation_v1(
+            scoped.context,
+            scoped.function,
+            analyses,
+            scoped.report,
+            observer,
+        );
+        Ok(if report.is_clean() {
+            Ok(report)
+        } else {
+            Err(PlironSemanticRefinementCheckErrorV1 { report })
+        })
+    };
+    match observer {
+        None => run(),
+        Some(observer) => observer.with_projection(&Ok, |_| run()),
+    }
 }
 
 #[cfg(test)]
@@ -931,6 +1060,7 @@ fn push(
     }
 }
 
+#[cfg(test)]
 fn one(finding: PlironSemanticRefinementFindingV1) -> PlironSemanticRefinementReportV1 {
     PlironSemanticRefinementReportV1 {
         findings: vec![finding],

@@ -2,14 +2,18 @@
 //! This is not source/ranked translation replay or a production proof receipt.
 
 use super::{ProductionConditionalRankedOutputErrorV1, ProductionConditionalRankedOutputV1};
+#[cfg(test)]
 use dialect_kernel::AccessKindAttr;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as ResourceError,
 };
 use fe2o3_pliron::{
-    ProductionGpuWriteSiteV2, ProductionRankedKernelV1, ProductionRankedOperationV1 as Op,
-    ProductionRankedTerminatorV1 as Term, ProductionRankedValueV1 as Value,
+    ProductionGpuWriteSiteV2, ProductionRankedKernelV1, ProductionRankedValueV1 as Value,
+};
+#[cfg(test)]
+use fe2o3_pliron::{
+    ProductionRankedOperationV1 as Op, ProductionRankedTerminatorV1 as Term,
     ProductionSemanticExpressionV2 as Expression,
 };
 use std::fmt;
@@ -172,10 +176,6 @@ pub(super) fn check_ranked_coverage_v1<'a>(
     })
 }
 
-fn ordinal(value: usize) -> Result<u32> {
-    u32::try_from(value).map_err(|_| ResourceError::Arithmetic.into())
-}
-
 fn check_paths(
     kernel: &ProductionRankedKernelV1,
     index: Value,
@@ -183,193 +183,21 @@ fn check_paths(
     write: ProductionGpuWriteSiteV2,
     budget: &mut Budget<'_>,
 ) -> Result<[u32; 2]> {
-    // The immutable constructor already checked unique/dense definitions,
-    // operand scope/types and every edge's target/arguments. No second graph or
-    // definition map is needed. Reject unsupported operations even if dead.
-    let mut write_seen = false;
-    for (block_id, block) in kernel.blocks().iter().enumerate() {
-        budget.charge_work(4)?;
-        let block_id = ordinal(block_id)?;
-        if block.index_argument_count() != 0 {
-            return Err(Error::UnsupportedTerminator { block: block_id });
-        }
-        for (operation_id, operation) in block.operations().iter().enumerate() {
-            budget.charge_work(4)?;
-            let operation_id = ordinal(operation_id)?;
-            match operation {
-                Op::ExecutionLayout { .. }
-                | Op::InvocationIndex { .. }
-                | Op::View { .. }
-                | Op::ViewInSpace { .. }
-                | Op::IndexConstant { .. }
-                | Op::IndexUnknown { .. }
-                | Op::SemanticConstant { .. }
-                | Op::SemanticSymbol { .. }
-                | Op::OwnershipContract { .. }
-                | Op::RequestEffectRefinement { .. }
-                | Op::RequireEffectRefinement { .. } => {}
-                Op::SemanticExpression {
-                    expression: Expression::Constant { .. } | Expression::Symbol { .. },
-                    ..
-                } => {}
-                Op::Access {
-                    kind: AccessKindAttr::Write,
-                    ..
-                }
-                | Op::ValueAccess {
-                    kind: AccessKindAttr::Write,
-                    ..
-                } if write == ProductionGpuWriteSiteV2::new(block_id, operation_id) => {
-                    write_seen = true;
-                }
-                _ => {
-                    return Err(Error::UnsupportedOperation {
-                        block: block_id,
-                        operation: operation_id,
-                    });
-                }
+    use fe2o3_pliron::ProductionRankedRecipeCoverageErrorV1 as E;
+    fe2o3_pliron::check_ranked_recipe_paths_v1(kernel, index, extent, write, budget).map_err(
+        |error| match error {
+            E::Resource(error) => Error::Resource(error),
+            E::Coordinate => Error::Coordinate,
+            E::UnsupportedOperation { block, operation } => {
+                Error::UnsupportedOperation { block, operation }
             }
-        }
-        // Validate all conditions, including those in unreachable blocks. Only
-        // an exactly evaluated edge may make a trap or cycle infeasible.
-        successor(kernel, block_id, index, extent, false, budget)?;
-    }
-    if !write_seen {
-        return Err(Error::Coordinate);
-    }
-    Ok([
-        walk(kernel, index, extent, write, false, budget)?,
-        walk(kernel, index, extent, write, true, budget)?,
-    ])
-}
-
-fn walk(
-    kernel: &ProductionRankedKernelV1,
-    index: Value,
-    extent: Value,
-    write: ProductionGpuWriteSiteV2,
-    predicate: bool,
-    budget: &mut Budget<'_>,
-) -> Result<u32> {
-    let mut block_id = 0;
-    let mut wrote = false;
-    // In this fragment each fixed predicate case has exactly one successor.
-    // More than B visits therefore implies a repeated block, without needing
-    // a visited bitmap, allocation, capacity estimate or scratch rollback.
-    for _ in 0..kernel.blocks().len() {
-        budget.charge_work(4)?;
-        if block_id == write.block() {
-            if wrote || !predicate {
-                return Err(Error::WriteCount {
-                    block: block_id,
-                    predicate,
-                });
-            }
-            wrote = true;
-        }
-        match successor(kernel, block_id, index, extent, predicate, budget)? {
-            Edge::Block(target) => block_id = target,
-            Edge::Return if wrote == predicate => return Ok(block_id),
-            Edge::Return => {
-                return Err(Error::WriteCount {
-                    block: block_id,
-                    predicate,
-                });
-            }
-            Edge::Trap => {
-                return Err(Error::AbnormalExit {
-                    block: block_id,
-                    predicate,
-                });
-            }
-        }
-    }
-    Err(Error::Cycle { predicate })
-}
-
-enum Edge {
-    Block(u32),
-    Return,
-    Trap,
-}
-
-fn successor(
-    kernel: &ProductionRankedKernelV1,
-    block_id: u32,
-    index: Value,
-    extent: Value,
-    predicate: bool,
-    budget: &mut Budget<'_>,
-) -> Result<Edge> {
-    budget.charge_work(6)?;
-    let block = kernel
-        .blocks()
-        .get(block_id as usize)
-        .ok_or(Error::Coordinate)?;
-    let (condition, true_block, false_block) = match block.terminator() {
-        Term::Branch { target } => return Ok(Edge::Block(*target)),
-        Term::Return => return Ok(Edge::Return),
-        Term::Trap => return Ok(Edge::Trap),
-        Term::IndexLessThan {
-            lhs,
-            rhs,
-            true_block,
-            false_block,
-        } if *lhs == index && *rhs == extent => (predicate, *true_block, *false_block),
-        Term::IndexLessThan {
-            lhs,
-            rhs,
-            true_block,
-            false_block,
-        }
-        | Term::IndexEqual {
-            lhs,
-            rhs,
-            true_block,
-            false_block,
-        } => {
-            let lhs = literal(kernel, *lhs, budget)?;
-            let rhs = literal(kernel, *rhs, budget)?;
-            let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
-                return Err(Error::UnresolvedCondition { block: block_id });
-            };
-            let condition = if matches!(block.terminator(), Term::IndexEqual { .. }) {
-                lhs == rhs
-            } else {
-                lhs < rhs
-            };
-            (condition, *true_block, *false_block)
-        }
-        _ => return Err(Error::UnsupportedTerminator { block: block_id }),
-    };
-    Ok(Edge::Block(if condition {
-        true_block
-    } else {
-        false_block
-    }))
-}
-
-fn literal(
-    kernel: &ProductionRankedKernelV1,
-    value: Value,
-    budget: &mut Budget<'_>,
-) -> Result<Option<u64>> {
-    budget.charge_work(1)?;
-    let Value::Local(id) = value else {
-        return Ok(None);
-    };
-    for block in kernel.blocks() {
-        budget.charge_work(1)?;
-        for operation in block.operations() {
-            budget.charge_work(2)?;
-            if let Op::IndexConstant { result, value } = operation
-                && *result == id
-            {
-                return Ok(Some(*value));
-            }
-        }
-    }
-    Ok(None)
+            E::UnsupportedTerminator { block } => Error::UnsupportedTerminator { block },
+            E::UnresolvedCondition { block } => Error::UnresolvedCondition { block },
+            E::AbnormalExit { block, predicate } => Error::AbnormalExit { block, predicate },
+            E::WriteCount { block, predicate } => Error::WriteCount { block, predicate },
+            E::Cycle { predicate } => Error::Cycle { predicate },
+        },
+    )
 }
 
 #[cfg(test)]

@@ -3,11 +3,14 @@
 //! Producer reservations also cover caches and potential findings. A receipt
 //! accounts only for the actual report; it never releases that reservation.
 
+use super::pliron_pipeline::invocation_receipt_v1::{InvocationObserverV1, require_observed_v1};
 use super::pliron_resource_envelope::{
     ProductionAnalysisResourceLimitV1, ProductionAnalysisResourceLimitsV1,
     ProductionAnalysisResourcePhaseV1, ProductionAnalysisResourceUpperBoundV1,
 };
 use crate::KernelCheckPassKindV1;
+
+pub(super) type PayloadObservationV1<'o, 'p, 'r> = Option<&'o InvocationObserverV1<'p, 'r>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProductionAnalysisReportPayloadReceiptV1 {
@@ -48,14 +51,17 @@ pub(super) fn payload_product_v1(
         .ok_or_else(|| payload_limit_v1("report payload accounting overflow"))
 }
 
-pub(super) fn require_payload_census_v1(
+pub(super) fn require_payload_census_with_observation_v1(
     work: usize,
     limits: ProductionAnalysisResourceLimitsV1,
+    observer: PayloadObservationV1<'_, '_, '_>,
 ) -> Result<(), ProductionAnalysisResourceLimitV1> {
     let phase = ProductionAnalysisResourcePhaseV1::ReportValidation;
-    limits.require(
+    require_observed_v1(
+        limits,
         phase,
-        ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, 0, 0)?,
+        ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, 0, 0),
+        observer,
     )?;
     Ok(())
 }
@@ -208,17 +214,34 @@ macro_rules! impl_empty_findings_payload_v1 {
                 super::pliron_report_payload_receipt::ProductionAnalysisReportPayloadReceiptV1,
                 super::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
             > {
+                self.validation_payload_receipt_with_observation_v1(limits, None)
+            }
+
+            pub(super) fn validation_payload_receipt_with_observation_v1(
+                &self,
+                limits: super::pliron_resource_envelope::ProductionAnalysisResourceLimitsV1,
+                observer: super::pliron_report_payload_receipt::PayloadObservationV1<'_, '_, '_>,
+            ) -> Result<
+                super::pliron_report_payload_receipt::ProductionAnalysisReportPayloadReceiptV1,
+                super::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+            > {
                 use super::pliron_report_payload_receipt::{
-                    ProductionAnalysisReportPayloadReceiptV1 as Receipt, require_payload_census_v1,
+                    ProductionAnalysisReportPayloadReceiptV1 as Receipt,
+                    require_payload_census_with_observation_v1,
                 };
-                require_payload_census_v1(2, limits)?;
-                Ok(
-                    if self.findings.is_empty() && self.findings.capacity() == 0 {
-                        // Each clone checks length/capacity and initializes
-                        // one empty vector; equality compares vector lengths.
-                        Receipt::exact(self.pass(), 2, 0, 0, 3, 1, 4)
-                    } else {
-                        Receipt::fallback(self.pass(), 2)
+                super::pliron_pipeline::invocation_receipt_v1::observe_resource_preflight_v1(
+                    observer,
+                    |observer| {
+                        require_payload_census_with_observation_v1(2, limits, observer)?;
+                        Ok(
+                            if self.findings.is_empty() && self.findings.capacity() == 0 {
+                                // Each clone checks length/capacity and initializes
+                                // one empty vector; equality compares vector lengths.
+                                Receipt::exact(self.pass(), 2, 0, 0, 3, 1, 4)
+                            } else {
+                                Receipt::fallback(self.pass(), 2)
+                            },
+                        )
                     },
                 )
             }

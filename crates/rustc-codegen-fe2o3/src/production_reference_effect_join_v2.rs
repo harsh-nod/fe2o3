@@ -312,7 +312,8 @@ impl CompilerOwnedStagedReferenceEffectV2 {
             let pending = session
                 .prepare_conditional_ranked_analysis_v1(stage, root, sites)
                 .map_err(|e| format!("{e:?}"))?;
-            observe(&pending, &signed_receipts)
+            let checked = pending.check_pipeline_v1().map_err(|e| format!("{e:?}"))?;
+            observe(checked.pending_analysis(), &signed_receipts)
         })();
         drop(signed_receipts);
         drop(runtime);

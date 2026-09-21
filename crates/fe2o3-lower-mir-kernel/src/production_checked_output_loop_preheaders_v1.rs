@@ -367,6 +367,18 @@ mod tests;
 #[path = "production_checked_output_licm_v1.rs"]
 mod licm;
 pub use licm::{
+    ProductionCrossBlockForwardingErrorV1, ProductionCrossBlockForwardingOriginV1,
+    ProductionCrossBlockForwardingStorageV1, ProductionInductionRefinementErrorV1,
+    ProductionInductionRefinementOriginV1, ProductionInductionRefinementStorageV1,
+    ProductionOwnedCrossBlockForwardingContinuationV1,
+    ProductionOwnedInductionRefinementContinuationV1,
+    ProductionOwnedRefinedCrossBlockForwardingContinuationV1,
+    ProductionOwnedUnitLocalCrossBlockForwardingContinuationV1,
+    ProductionOwnedUnitLocalInductionRefinementContinuationV1,
+    ProductionOwnedUnitLocalRefinedCrossBlockForwardingContinuationV1,
+    ProductionRefinedCrossBlockForwardingErrorV1, ProductionRefinedCrossBlockForwardingStorageV1,
+};
+pub use licm::{
     ProductionLicmErrorV1, ProductionLicmStorageV1, ProductionOwnedLicmContinuationV1,
     ProductionOwnedUnitLocalLicmContinuationV1,
 };

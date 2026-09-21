@@ -523,59 +523,7 @@ fn operation_index(a: &Inventory<'_>, site: Site) -> Result<usize> {
         .ok_or(Error::Mismatch("operation coordinate"))
 }
 fn headers(a: &fe2o3_kernel_ir::Module, b: &fe2o3_kernel_ir::Module) -> Result<()> {
-    let fe2o3_kernel_ir::Module {
-        id,
-        functions,
-        kernels,
-        required_capabilities,
-    } = a;
-    if id != &b.id
-        || kernels != &b.kernels
-        || required_capabilities != &b.required_capabilities
-        || functions.len() != b.functions.len()
-    {
-        return Err(Error::Mismatch("module payload"));
-    }
-    for (a, b) in functions.iter().zip(&b.functions) {
-        let fe2o3_kernel_ir::Function {
-            id,
-            signature,
-            role,
-            body,
-            required_capabilities,
-        } = a;
-        if id != &b.id
-            || signature != &b.signature
-            || role != &b.role
-            || required_capabilities != &b.required_capabilities
-        {
-            return Err(Error::Mismatch("function payload"));
-        }
-        match (body, &b.body) {
-            (None, None) => {}
-            (Some(a), Some(b)) => {
-                let fe2o3_kernel_ir::FunctionBody { parameters, blocks } = a;
-                if parameters != &b.parameters || blocks.len() != b.blocks.len() {
-                    return Err(Error::Mismatch("function body payload"));
-                }
-                for (a, b) in blocks.iter().zip(&b.blocks) {
-                    let fe2o3_kernel_ir::BasicBlock {
-                        id,
-                        parameters,
-                        operations: _,
-                        terminator,
-                    } = a;
-                    if id != &b.id || parameters != &b.parameters || terminator != &b.terminator {
-                        return Err(Error::Mismatch(
-                            "exact CFG, parameters and edge occurrences",
-                        ));
-                    }
-                }
-            }
-            _ => return Err(Error::Mismatch("declaration/body")),
-        }
-    }
-    Ok(())
+    crate::canonical_kir_same_cfg_payload_v1::check(a, b).map_err(Error::Mismatch)
 }
 
 #[cfg(test)]
