@@ -3,7 +3,7 @@ use crate::shared_memory::PreparationMemoryFixtureV1;
 
 type MappingPair = (Gfx942DeviceMemoryIdentityV1, Gfx942DeviceMemoryIdentityV1);
 
-fn fixture() -> (
+pub(super) fn fixture() -> (
     PreparationMemoryFixtureV1,
     Gfx942SdmaQueueOwnerV1,
     Vec<Gfx942SdmaCopyTicketV1>,
@@ -52,7 +52,7 @@ fn fixture() -> (
     (memory, owner, tickets, identities)
 }
 
-fn write_completion(
+pub(super) fn write_completion(
     memory: &mut PreparationMemoryFixtureV1,
     owner: &mut Gfx942SdmaQueueOwnerV1,
     slot: usize,
@@ -67,7 +67,7 @@ fn write_completion(
     .unwrap();
 }
 
-fn retained_identities(owner: &Gfx942SdmaQueueOwnerV1) -> Vec<MappingPair> {
+pub(super) fn retained_identities(owner: &Gfx942SdmaQueueOwnerV1) -> Vec<MappingPair> {
     owner
         .xgmi_records
         .iter()
@@ -81,7 +81,7 @@ fn retained_identities(owner: &Gfx942SdmaQueueOwnerV1) -> Vec<MappingPair> {
         .collect()
 }
 
-fn completed_identities(completed: Vec<Gfx942XgmiCompletedCopyV1>) -> Vec<MappingPair> {
+pub(super) fn completed_identities(completed: Vec<Gfx942XgmiCompletedCopyV1>) -> Vec<MappingPair> {
     completed
         .into_iter()
         .map(|completed| {

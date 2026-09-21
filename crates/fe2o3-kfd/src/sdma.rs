@@ -3266,9 +3266,9 @@ impl Gfx942SdmaQueueOwnerV1 {
 
     fn wait_xgmi_for_in_current_scope(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut impl SdmaSingleMemoryV1,
         ticket: Gfx942SdmaCopyTicketV1,
-        timeout: Duration,
+        deadline: XgmiSingleDeadlineV1,
     ) -> Result<Gfx942XgmiCompletedCopyV1, Gfx942SdmaErrorV1> {
         self.require_live()?;
         let slot = self.validate_xgmi_ticket(ticket)?;
@@ -3276,9 +3276,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             .as_ref()
             .expect("validated XGMI SDMA record")
             .completion_value;
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or(Gfx942SdmaErrorV1::Contract("XGMI SDMA wait deadline"))?;
+        let deadline = deadline.resolve()?;
         let mut wait = MonotonicWaitV1::until(deadline);
         loop {
             let observed = memory.observe_mapped_host_visible_i64_at_in_current_scope(
@@ -3803,6 +3801,23 @@ enum XgmiRouteCurrentnessV1 {
 enum XgmiBatchDeadlineV1 {
     Relative(Duration),
     Absolute(Instant),
+}
+
+#[derive(Clone, Copy)]
+enum XgmiSingleDeadlineV1 {
+    Relative(Duration),
+    Absolute(Instant),
+}
+
+impl XgmiSingleDeadlineV1 {
+    fn resolve(self) -> Result<Instant, Gfx942SdmaErrorV1> {
+        match self {
+            Self::Relative(timeout) => Instant::now()
+                .checked_add(timeout)
+                .ok_or(Gfx942SdmaErrorV1::Contract("XGMI SDMA wait deadline")),
+            Self::Absolute(deadline) => Ok(deadline),
+        }
+    }
 }
 
 impl XgmiBatchDeadlineV1 {
@@ -4560,7 +4575,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
             source_session,
             destination_session,
             ticket,
-            timeout,
+            XgmiSingleDeadlineV1::Relative(timeout),
             XgmiRouteCurrentnessV1::Full,
         )
     }
@@ -4635,7 +4650,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         source_session: &mut SharedGttMemorySessionV1,
         destination_session: &mut SharedGttMemorySessionV1,
         ticket: Gfx942SdmaCopyTicketV1,
-        timeout: Duration,
+        deadline: XgmiSingleDeadlineV1,
         currentness: XgmiRouteCurrentnessV1,
     ) -> Result<Gfx942XgmiCompletedCopyV1, Gfx942XgmiWaitFailureV1> {
         if let Err(error) = self.require_live_queue_state_v1() {
@@ -4651,7 +4666,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
             return Err(Gfx942XgmiWaitFailureV1::Retained { error, ticket });
         }
         let result = match self.owner.as_mut() {
-            Some(owner) => owner.wait_xgmi_for_in_current_scope(source_session, ticket, timeout),
+            Some(owner) => owner.wait_xgmi_for_in_current_scope(source_session, ticket, deadline),
             None => Err(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner")),
         };
         let post = Self::validate_route_currentness(
@@ -4780,7 +4795,27 @@ impl Gfx942NativeXgmiSdmaBatchV1<'_> {
             self.source,
             self.destination,
             ticket,
-            timeout,
+            XgmiSingleDeadlineV1::Relative(timeout),
+            XgmiRouteCurrentnessV1::BatchScoped,
+        )
+    }
+
+    /// Waits for one exact ticket without allocating ticket/completion rosters.
+    ///
+    /// Uses the original absolute deadline, including one completion observation
+    /// at expiry. Timeout retains the ticket and its mappings; a failed closing
+    /// publication check returns retained or completed-indeterminate custody.
+    /// The caller must still finish this scope's full currentness check.
+    pub fn wait_until(
+        &mut self,
+        ticket: Gfx942SdmaCopyTicketV1,
+        deadline: Instant,
+    ) -> Result<Gfx942XgmiCompletedCopyV1, Gfx942XgmiWaitFailureV1> {
+        self.queue.wait_for_with_currentness(
+            self.source,
+            self.destination,
+            ticket,
+            XgmiSingleDeadlineV1::Absolute(deadline),
             XgmiRouteCurrentnessV1::BatchScoped,
         )
     }
@@ -6266,6 +6301,7 @@ fn next_pool_generation(current: u64) -> Result<u64, Gfx942SdmaErrorV1> {
 #[cfg(test)]
 mod tests {
     mod xgmi_batch_wait;
+    mod xgmi_single_wait;
     use super::*;
     use fe2o3_runtime_model::{
         DeviceGenerationV1, DeviceKeyV1, PhysicalDeviceIdV1, QueueGenerationV1, QueueInstanceIdV1,

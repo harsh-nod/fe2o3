@@ -37,6 +37,15 @@ An invocation performs full opening and closing currentness checks; each native
 submit and wait retains the existing operational checks inside that scope.
 Neither whole-host topology discovery nor endpoint observations are skipped.
 
+The scalar `Gfx942NativeXgmiSdmaBatchV1::wait_until` accepts the original absolute
+deadline and returns one completed mapping pair inline. Ordered sequences use
+this path instead of wrapping each ticket in the general batch waiter. It removes
+four temporary ticket/slot/readiness/completion vectors per segment, while
+retaining the same publication-currentness driver and completion-error custody.
+This is roster-allocation removal, not an allocation-free currentness path or a
+measured latency gain. Existing relative waits retain their resolution point and
+one-observation-at-expiry behavior.
+
 `poll` performs at most one segment's publication/completion step. `flush`
 progresses the current eligible segment; later segments become eligible only
 after predecessor completion. First-segment publication is the logical
@@ -198,10 +207,10 @@ this workload; the full-currentness and serial publication costs remain in scope
 ## Remaining Work
 
 - Expand matched useful-segment testing to the remaining seven payload/count
-  geometries, and attribute the 65-segment cost before optimization. No speedup
+  geometries, and attribute the 65-segment cost before larger optimizations. No speedup
   or parity claim follows from the completed first comparison.
 - Owner-engine convenience wrappers with descriptor budget accounting, graph
   sequence nodes, and explicit negotiated Worker transport support.
 - More permissive scheduling-domain coexistence and native multi-packet
-  publication are separate optimizations. This serial version still constructs
-  singleton wait rosters and does not claim optimal packet throughput.
+  publication are separate optimizations. This serial version still publishes
+  and waits once per descriptor and does not claim optimal packet throughput.

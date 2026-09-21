@@ -310,3 +310,26 @@ fn final_close_failure_never_authorizes_success() {
     assert_eq!(execution.closing, Err(Fault::Close));
     assert!(sequence.cursor.transition(Action::Succeed).is_none());
 }
+
+#[test]
+fn native_wait_forwards_the_absolute_deadline_without_singleton_rosters() {
+    let source = include_str!("../xgmi_segments.rs");
+    let native = source
+        .split("impl Scope for NativeScope<'_>")
+        .nth(1)
+        .unwrap();
+    let wait = native
+        .split("fn wait(")
+        .nth(1)
+        .unwrap()
+        .split("fn finish(")
+        .next()
+        .unwrap();
+    assert!(wait.contains("self.0.wait_until(ticket, deadline)"));
+    for repack in ["vec!", "Vec", "wait_batch", "saturating_duration_since"] {
+        assert!(!wait.contains(repack));
+    }
+    assert!(wait.contains("retained != ticket"));
+    assert!(wait.contains("u64::from(completed.copy_bytes()) != bytes"));
+    assert!(wait.contains("Gfx942XgmiWaitFailureV1::CompletedCurrentnessIndeterminate"));
+}

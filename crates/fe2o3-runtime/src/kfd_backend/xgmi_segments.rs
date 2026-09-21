@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::{RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsBackendV1};
-use fe2o3_kfd::{Gfx942NativeXgmiSdmaBatchV1, Gfx942SdmaErrorV1, Gfx942XgmiBatchWaitFailureV1};
+use fe2o3_kfd::{Gfx942NativeXgmiSdmaBatchV1, Gfx942SdmaErrorV1, Gfx942XgmiWaitFailureV1};
 use fe2o3_runtime_model::{
     OrderedPeerCopyActionV1 as Action, OrderedPeerCopyCursorV1,
     validate_ordered_peer_copy_segments_v1,
@@ -205,15 +205,18 @@ impl Scope for NativeScope<'_> {
         bytes: u64,
         deadline: Instant,
     ) -> Observation<Pair, Self::Ticket, Self::Error> {
-        match self.0.wait_batch_until(vec![ticket], deadline) {
-            Ok(mut completed) => {
-                if completed.len() != 1 || u64::from(completed[0].copy_bytes()) != bytes {
+        match self.0.wait_until(ticket, deadline) {
+            Ok(completed) => {
+                if u64::from(completed.copy_bytes()) != bytes {
                     std::process::abort();
                 }
-                Observation::Completed(completed.pop().unwrap().into_mappings())
+                Observation::Completed(completed.into_mappings())
             }
-            Err(Gfx942XgmiBatchWaitFailureV1::Retained { error, tickets }) => {
-                if tickets.as_slice() != [ticket] {
+            Err(Gfx942XgmiWaitFailureV1::Retained {
+                error,
+                ticket: retained,
+            }) => {
+                if retained != ticket {
                     std::process::abort();
                 }
                 if matches!(error, Gfx942SdmaErrorV1::Timeout) {
@@ -226,16 +229,16 @@ impl Scope for NativeScope<'_> {
                     }
                 }
             }
-            Err(Gfx942XgmiBatchWaitFailureV1::CompletedCurrentnessIndeterminate {
+            Err(Gfx942XgmiWaitFailureV1::CompletedCurrentnessIndeterminate {
                 error,
-                mut completed,
+                completed,
             }) => {
-                if completed.len() != 1 || u64::from(completed[0].copy_bytes()) != bytes {
+                if u64::from(completed.copy_bytes()) != bytes {
                     std::process::abort();
                 }
                 Observation::Failed {
                     error,
-                    custody: Custody::Pair(completed.pop().unwrap().into_mappings()),
+                    custody: Custody::Pair(completed.into_mappings()),
                     terminal: true,
                 }
             }
