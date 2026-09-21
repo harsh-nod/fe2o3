@@ -434,6 +434,7 @@ pub proof fn producer_status_projection_v1(journal: JournalContentsV1, request: 
     },
 {}
 
+#[verifier::spinoff_prover]
 pub fn producer_status_exec_v1(journal: &JournalContentsV1, request: ProducerReadV1)
     -> (result: Result<ProducerStatusV1, ReadErrorV1>)
     ensures exact_decision_v1(result, producer_status_decision_v1(*journal, request)),
@@ -490,6 +491,7 @@ pub open spec fn producer_validate_decision_v1(journal: JournalContentsV1, reque
     }
 }
 
+#[verifier::spinoff_prover]
 pub fn producer_validate_exec_v1(journal: &JournalContentsV1, request: ProducerReadV1) -> (result: Result<(), ReadErrorV1>)
     ensures exact_decision_v1(result, producer_validate_decision_v1(*journal, request)),
 {
@@ -545,6 +547,7 @@ pub open spec fn producer_capacity_decision_v1(contents: ProducerReadContentsV1,
     else { Ok(()) }
 }
 
+#[verifier::spinoff_prover]
 pub fn producer_capacity_exec_v1(contents: &ProducerReadContentsV1, count: usize) -> (result: Result<(), ReadErrorV1>)
     requires producer_invariant_v1(*contents), count <= u64::MAX,
     ensures exact_decision_v1(result, producer_capacity_decision_v1(*contents, count)),
@@ -584,6 +587,7 @@ pub open spec fn producer_acquire_header_v1(contents: ProducerReadContentsV1, co
     else { producer_capacity_decision_v1(contents, count) }
 }
 
+#[verifier::spinoff_prover]
 pub fn producer_acquire_header_exec_v1(contents: &ProducerReadContentsV1, consumer: WriterKeyV1,
     count: usize, output: &[Option<ProducerReadReferenceV1>]) -> (result: Result<(), ReadErrorV1>)
     requires producer_invariant_v1(*contents), count <= u64::MAX,
@@ -622,6 +626,7 @@ pub open spec fn producer_acquire_item_v1(contents: ProducerReadContentsV1, cons
     }
 }
 
+#[verifier::spinoff_prover]
 pub fn producer_acquire_item_exec_v1(contents: &ProducerReadContentsV1, consumer: WriterKeyV1,
     request: ProducerReadV1, index: usize, state: ReadScanV1) -> (result: Result<ReadScanV1, ReadErrorV1>)
     requires contents.counts@.len() == contents.stable.journal.allocations@.len(),
@@ -667,6 +672,7 @@ pub open spec fn producer_acquire_decision_v1(contents: ProducerReadContentsV1, 
     }
 }
 
+#[verifier::spinoff_prover]
 pub fn producer_acquire_preflight_exec_v1(contents: &ProducerReadContentsV1, consumer: WriterKeyV1,
     requests: &[ProducerReadV1], output: &[Option<ProducerReadReferenceV1>]) -> (result: Result<(), ReadErrorV1>)
     requires producer_invariant_v1(*contents), requests@.len() <= u64::MAX,
@@ -703,6 +709,7 @@ pub open spec fn producer_release_header_v1(contents: ProducerReadContentsV1, co
     else { Ok(()) }
 }
 
+#[verifier::spinoff_prover]
 pub fn producer_release_header_exec_v1(contents: &ProducerReadContentsV1, consumer: WriterKeyV1,
     evidence_consumer: WriterKeyV1, count: usize, observed_free_capacity: usize) -> (result: Result<(), ReadErrorV1>)
     ensures exact_decision_v1(result, producer_release_header_v1(*contents, consumer, evidence_consumer, count, observed_free_capacity)),
@@ -773,6 +780,7 @@ pub open spec fn producer_release_decision_v1(contents: ProducerReadContentsV1, 
     }
 }
 
+#[verifier::spinoff_prover]
 pub fn producer_release_preflight_exec_v1(contents: &ProducerReadContentsV1, consumer: WriterKeyV1,
     references: &[ProducerReadReferenceV1], evidence_consumer: WriterKeyV1, observed_free_capacity: usize)
     -> (result: Result<(), ReadErrorV1>)
@@ -1191,6 +1199,7 @@ pub proof fn producer_acquire_preflight_ready_v1(before: ProducerReadContentsV1,
     producer_acquire_scan_ready_v1(before, consumer, requests, output, 0, ReadScanV1 { previous: None, group: 0 });
 }
 
+#[verifier::spinoff_prover]
 pub proof fn producer_release_scan_ready_v1(before: ProducerReadContentsV1, consumer: WriterKeyV1,
     references: Seq<ProducerReadReferenceV1>, evidence_consumer: WriterKeyV1, observed_free_capacity: usize,
     index: nat, state: ReadScanV1)
@@ -1330,6 +1339,7 @@ pub open spec fn producer_released_counts_v1(before: ProducerReadContentsV1, ref
         (before.counts@[a] - producer_request_count_v1(producer_released_requests_v1(before, references).take(count as int), a as usize)) as usize)
 }
 
+#[verifier::spinoff_prover]
 pub proof fn producer_release_arena_prefix_v1(before: ProducerReadContentsV1, references: Seq<ProducerReadReferenceV1>, count: nat)
     requires producer_invariant_v1(before), producer_release_commit_ready_v1(before, references), count <= references.len(),
     ensures producer_arena_v1(before.stable.journal, producer_released_reservations_v1(before, references, count),
@@ -1430,6 +1440,7 @@ pub proof fn producer_release_preserves_v1(before: ProducerReadContentsV1, after
     }
 }
 
+#[verifier::spinoff_prover]
 pub fn producer_acquire_contents_exec_v1(contents: &mut ProducerReadContentsV1, consumer: WriterKeyV1,
     requests: &[ProducerReadV1], output: &mut Vec<Option<ProducerReadReferenceV1>>) -> (result: Result<(), ReadErrorV1>)
     requires producer_invariant_v1(*old(contents)), requests@.len() <= u64::MAX,
@@ -1448,6 +1459,7 @@ pub fn producer_acquire_contents_exec_v1(contents: &mut ProducerReadContentsV1, 
     Ok(())
 }
 
+#[verifier::spinoff_prover]
 pub fn producer_release_contents_exec_v1(contents: &mut ProducerReadContentsV1, consumer: WriterKeyV1,
     references: &[ProducerReadReferenceV1], evidence_consumer: WriterKeyV1, observed_free_capacity: usize)
     -> (result: Result<(), ReadErrorV1>)

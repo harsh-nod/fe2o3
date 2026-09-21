@@ -38,6 +38,9 @@ of 19 executable-body mutations must report exactly its intended postcondition
 failure with 253 other obligations verified. No synthetic subject is appended.
 Consumer-kind, equal-producer-ID and shared-capacity controls insert focused
 wrong admissions rather than deleting whole guards with multiple failure exits.
+The ten mutation-target functions and four recursive lifecycle bridges use
+separate solver contexts in the positive source. Contracts, budgets and the
+whole-crate diagnostic requirements are unchanged.
 Counts overlap across importing campaigns and must not be summed.
 
 The strong chain graph is a reachable-state premise, not a whole-arena check
