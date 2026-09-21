@@ -124,7 +124,8 @@ The [signed-source enrollment qualification](evidence/dev-enrollment-execution-v
 connects complete logical batch admission, sorting/search, rollback and commit to
 producer custody and issuance preservation: two 263/0 positives and 21 exact
 262/1 controls. Its constructor/enroll/register witness reaches Reserved, not
-Pending. Production still uses the standard-library sorting/search operations.
+Pending. Production now uses shared, actual-type-proved key/slot searches;
+sorting still uses the standard library.
 
 `context_version_journal_begin_v1.rs` adds a separate raw Begin executor with
 exact ordered preflight, prestate-derived scratch plans, sequential member and
@@ -333,7 +334,12 @@ Before enabling runtime admission, the remaining work is:
    and the proved logical admission/release and unread guards.
    Shared executable source now covers the settlement scalar return guard,
    retained-chain admission/Unknown transition and settlement scratch scan/staging/commit.
-   Remaining bodies include construction/enrollment and sorting/search, Begin,
+   The [ordering packet](evidence/dev-journal-enrollment-ordering-2026-09-21/README.md)
+   adds actual-type shared binary searches and a verified, test-only heap-sort
+   candidate. Production retains standard sorting because the candidate regressed
+   CPU performance. Full enrollment admission/rollback/commit composition and
+   caller-precondition derivation are not yet proved on actual types.
+   Remaining bodies include construction/enrollment and production sorting, Begin,
    stable/producer reader admission/release and unread guards.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

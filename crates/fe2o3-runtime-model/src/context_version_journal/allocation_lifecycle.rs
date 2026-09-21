@@ -2,12 +2,12 @@
 
 use super::*;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContextAllocationEnrollmentV1 {
-    pub key: ContextAllocationKeyV1,
-    pub device: ContextJournalDeviceKeyV1,
-    pub byte_extent: u64,
+mod ordering;
+
+macro_rules! enrollment_declarations_v1 {
+    ($($declaration:tt)*) => { $($declaration)* };
 }
+include!("enrollment_declarations.rs");
 
 impl ContextVersionJournalV1 {
     pub fn remaining_allocation_slots(&self) -> usize {
@@ -61,11 +61,10 @@ impl ContextVersionJournalV1 {
             return Err(E::InvalidState);
         }
         for index in 0..self.allocations.len() {
-            if self.read_allocation(index).is_some_and(|entry| {
-                canonical
-                    .binary_search_by_key(&entry.key, |new| new.key)
-                    .is_ok()
-            }) {
+            if self
+                .read_allocation(index)
+                .is_some_and(|entry| ordering::contains_key(canonical, entry.key))
+            {
                 return Err(E::AllocationReplay);
             }
         }
@@ -95,11 +94,9 @@ impl ContextVersionJournalV1 {
         if output
             .windows(2)
             .any(|pair| pair[0].unwrap().slot == pair[1].unwrap().slot)
-            || self.allocation_free[..remaining].iter().any(|slot| {
-                output
-                    .binary_search_by_key(slot, |reference| reference.unwrap().slot)
-                    .is_ok()
-            })
+            || self.allocation_free[..remaining]
+                .iter()
+                .any(|&slot| ordering::contains_slot(output, slot))
         {
             output.fill(None);
             return Err(E::InvalidState);

@@ -1,0 +1,2158 @@
+{
+  "heap_build": {
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "verifying root module, function context_journal_enrollment_ordering_v1::enrollment_heapsort (selected functions)",
+        "rendered": "note: verifying root module, function context_journal_enrollment_ordering_v1::enrollment_heapsort (selected functions)\n\n",
+        "spans": []
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:173:20\n    |\n173 |             assert((c - 1) / 2 < start);\n    |                    ^^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 8299,
+            "byte_start": 8280,
+            "column_end": 39,
+            "column_start": 20,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 173,
+            "line_start": 173,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 39,
+                "highlight_start": 20,
+                "text": "            assert((c - 1) / 2 < start);"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "aborting due to 1 previous error",
+        "rendered": "error: aborting due to 1 previous error\n\n",
+        "spans": []
+      }
+    ],
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "errors": 1,
+      "is-verifying-entire-crate": false,
+      "verified": 2
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "heap_extract": {
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "verifying root module, function context_journal_enrollment_ordering_v1::enrollment_heapsort (selected functions)",
+        "rendered": "note: verifying root module, function context_journal_enrollment_ordering_v1::enrollment_heapsort (selected functions)\n\n",
+        "spans": []
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "rendered": "note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs:86:13\n    |\n 86 |               while $end > 1\n    |               ^^^^^^^^^^^^^^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:169:5\n    |\n169 | /     enrollment_heapsort_body!(verus_exec_expr, values, len, start, end,\n170 | |         [proof {\n171 | |         assert forall|c: int| 0 < c < len && start <= (c - 1) / 2\n172 | |             implies #[trigger] enrollment_heap_edge_v1(values@, c) by {\n...   |\n218 | |         }]\n219 | |     )\n    | |_____- in this macro invocation\n    |\n    = note: this note originates in the macro `enrollment_heapsort_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n",
+        "spans": [
+          {
+            "byte_end": 2847,
+            "byte_start": 2833,
+            "column_end": 27,
+            "column_start": 13,
+            "expansion": {
+              "def_site_span": {
+                "byte_end": 0,
+                "byte_start": 0,
+                "column_end": 1,
+                "column_start": 1,
+                "expansion": null,
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_v1.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 1,
+                "line_start": 1,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": []
+              },
+              "macro_decl_name": "desugaring of `while` loop",
+              "span": {
+                "byte_end": 3137,
+                "byte_start": 2833,
+                "column_end": 14,
+                "column_start": 13,
+                "expansion": {
+                  "def_site_span": {
+                    "byte_end": 2255,
+                    "byte_start": 2218,
+                    "column_end": 38,
+                    "column_start": 1,
+                    "expansion": null,
+                    "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+                    "is_primary": false,
+                    "label": null,
+                    "line_end": 71,
+                    "line_start": 71,
+                    "suggested_replacement": null,
+                    "suggestion_applicability": null,
+                    "text": [
+                      {
+                        "highlight_end": 38,
+                        "highlight_start": 1,
+                        "text": "macro_rules! enrollment_heapsort_body {"
+                      }
+                    ]
+                  },
+                  "macro_decl_name": "enrollment_heapsort_body!",
+                  "span": {
+                    "byte_end": 10720,
+                    "byte_start": 8038,
+                    "column_end": 6,
+                    "column_start": 5,
+                    "expansion": null,
+                    "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+                    "is_primary": false,
+                    "label": null,
+                    "line_end": 219,
+                    "line_start": 169,
+                    "suggested_replacement": null,
+                    "suggestion_applicability": null,
+                    "text": [
+                      {
+                        "highlight_end": 72,
+                        "highlight_start": 5,
+                        "text": "    enrollment_heapsort_body!(verus_exec_expr, values, len, start, end,"
+                      },
+                      {
+                        "highlight_end": 17,
+                        "highlight_start": 1,
+                        "text": "        [proof {"
+                      },
+                      {
+                        "highlight_end": 66,
+                        "highlight_start": 1,
+                        "text": "        assert forall|c: int| 0 < c < len && start <= (c - 1) / 2"
+                      },
+                      {
+                        "highlight_end": 72,
+                        "highlight_start": 1,
+                        "text": "            implies #[trigger] enrollment_heap_edge_v1(values@, c) by {"
+                      },
+                      {
+                        "highlight_end": 41,
+                        "highlight_start": 1,
+                        "text": "            assert((c - 1) / 2 < start);"
+                      },
+                      {
+                        "highlight_end": 10,
+                        "highlight_start": 1,
+                        "text": "        }"
+                      },
+                      {
+                        "highlight_end": 82,
+                        "highlight_start": 1,
+                        "text": "    }], [invariant start <= len / 2, values.len() == len, before == old(values)@,"
+                      },
+                      {
+                        "highlight_end": 76,
+                        "highlight_start": 1,
+                        "text": "            values@.len() == before.len(), enrollment_all_some_v1(values@),"
+                      },
+                      {
+                        "highlight_end": 59,
+                        "highlight_start": 1,
+                        "text": "            values@.to_multiset() == before.to_multiset(),"
+                      },
+                      {
+                        "highlight_end": 72,
+                        "highlight_start": 1,
+                        "text": "            enrollment_heap_from_v1(values@, start as int, len as int),"
+                      },
+                      {
+                        "highlight_end": 95,
+                        "highlight_start": 1,
+                        "text": "        decreases start,], [invariant end <= len, values.len() == len, before == old(values)@,"
+                      },
+                      {
+                        "highlight_end": 76,
+                        "highlight_start": 1,
+                        "text": "            values@.len() == before.len(), enrollment_all_some_v1(values@),"
+                      },
+                      {
+                        "highlight_end": 59,
+                        "highlight_start": 1,
+                        "text": "            values@.to_multiset() == before.to_multiset(),"
+                      },
+                      {
+                        "highlight_end": 61,
+                        "highlight_start": 1,
+                        "text": "            enrollment_heap_from_v1(values@, 0, end as int),"
+                      },
+                      {
+                        "highlight_end": 62,
+                        "highlight_start": 1,
+                        "text": "            enrollment_sort_frontier_v1(values@, end as int),"
+                      },
+                      {
+                        "highlight_end": 25,
+                        "highlight_start": 1,
+                        "text": "        decreases end,],"
+                      },
+                      {
+                        "highlight_end": 39,
+                        "highlight_start": 1,
+                        "text": "        [let ghost previous = values@;"
+                      },
+                      {
+                        "highlight_end": 16,
+                        "highlight_start": 1,
+                        "text": "        proof {"
+                      },
+                      {
+                        "highlight_end": 56,
+                        "highlight_start": 1,
+                        "text": "            assert forall|i: int| 0 <= i <= end implies"
+                      },
+                      {
+                        "highlight_end": 89,
+                        "highlight_start": 1,
+                        "text": "                (#[trigger] previous[i]).unwrap().slot <= previous[0].unwrap().slot by {"
+                      },
+                      {
+                        "highlight_end": 66,
+                        "highlight_start": 1,
+                        "text": "                enrollment_heap_maximum_v1(previous, end + 1, i);"
+                      },
+                      {
+                        "highlight_end": 14,
+                        "highlight_start": 1,
+                        "text": "            }"
+                      },
+                      {
+                        "highlight_end": 42,
+                        "highlight_start": 1,
+                        "text": "        }], [let ghost swapped = values@;"
+                      },
+                      {
+                        "highlight_end": 16,
+                        "highlight_start": 1,
+                        "text": "        proof {"
+                      },
+                      {
+                        "highlight_end": 74,
+                        "highlight_start": 1,
+                        "text": "            assert forall|c: int| 0 < c < end && 1 <= (c - 1) / 2 implies"
+                      },
+                      {
+                        "highlight_end": 68,
+                        "highlight_start": 1,
+                        "text": "                #[trigger] enrollment_heap_edge_v1(swapped, c) by {"
+                      },
+                      {
+                        "highlight_end": 62,
+                        "highlight_start": 1,
+                        "text": "                assert(enrollment_heap_edge_v1(previous, c));"
+                      },
+                      {
+                        "highlight_end": 14,
+                        "highlight_start": 1,
+                        "text": "            }"
+                      },
+                      {
+                        "highlight_end": 55,
+                        "highlight_start": 1,
+                        "text": "            assert forall|i: int| 0 <= i < end implies"
+                      },
+                      {
+                        "highlight_end": 89,
+                        "highlight_start": 1,
+                        "text": "                (#[trigger] swapped[i]).unwrap().slot <= previous[0].unwrap().slot by {}"
+                      },
+                      {
+                        "highlight_end": 21,
+                        "highlight_start": 1,
+                        "text": "        }], [proof {"
+                      },
+                      {
+                        "highlight_end": 56,
+                        "highlight_start": 1,
+                        "text": "            assert forall|i: int| 0 <= i <= end implies"
+                      },
+                      {
+                        "highlight_end": 88,
+                        "highlight_start": 1,
+                        "text": "                (#[trigger] values@[i]).unwrap().slot <= previous[0].unwrap().slot by {"
+                      },
+                      {
+                        "highlight_end": 29,
+                        "highlight_start": 1,
+                        "text": "                if i < end {"
+                      },
+                      {
+                        "highlight_end": 95,
+                        "highlight_start": 1,
+                        "text": "                    assert(enrollment_interval_origin_v1(swapped, values@[i], 0, end as int));"
+                      },
+                      {
+                        "highlight_end": 85,
+                        "highlight_start": 1,
+                        "text": "                    let p = choose|p: int| 0 <= p < end && swapped[p] == values@[i];"
+                      },
+                      {
+                        "highlight_end": 83,
+                        "highlight_start": 1,
+                        "text": "                    assert(swapped[p].unwrap().slot <= previous[0].unwrap().slot);"
+                      },
+                      {
+                        "highlight_end": 18,
+                        "highlight_start": 1,
+                        "text": "                }"
+                      },
+                      {
+                        "highlight_end": 14,
+                        "highlight_start": 1,
+                        "text": "            }"
+                      },
+                      {
+                        "highlight_end": 89,
+                        "highlight_start": 1,
+                        "text": "            assert forall|i: int, j: int| 0 <= i < j < values@.len() && end <= j implies"
+                      },
+                      {
+                        "highlight_end": 100,
+                        "highlight_start": 1,
+                        "text": "                (#[trigger] values@[i]).unwrap().slot <= (#[trigger] values@[j]).unwrap().slot by {"
+                      },
+                      {
+                        "highlight_end": 30,
+                        "highlight_start": 1,
+                        "text": "                if j == end {"
+                      },
+                      {
+                        "highlight_end": 55,
+                        "highlight_start": 1,
+                        "text": "                    assert(values@[j] == previous[0]);"
+                      },
+                      {
+                        "highlight_end": 37,
+                        "highlight_start": 1,
+                        "text": "                } else if i <= end {"
+                      },
+                      {
+                        "highlight_end": 84,
+                        "highlight_start": 1,
+                        "text": "                    assert(previous[0].unwrap().slot <= previous[j].unwrap().slot);"
+                      },
+                      {
+                        "highlight_end": 25,
+                        "highlight_start": 1,
+                        "text": "                } else {"
+                      },
+                      {
+                        "highlight_end": 84,
+                        "highlight_start": 1,
+                        "text": "                    assert(previous[i].unwrap().slot <= previous[j].unwrap().slot);"
+                      },
+                      {
+                        "highlight_end": 18,
+                        "highlight_start": 1,
+                        "text": "                }"
+                      },
+                      {
+                        "highlight_end": 14,
+                        "highlight_start": 1,
+                        "text": "            }"
+                      },
+                      {
+                        "highlight_end": 11,
+                        "highlight_start": 1,
+                        "text": "        }]"
+                      },
+                      {
+                        "highlight_end": 6,
+                        "highlight_start": 1,
+                        "text": "    )"
+                      }
+                    ]
+                  }
+                },
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 95,
+                "line_start": 86,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 27,
+                    "highlight_start": 13,
+                    "text": "            while $end > 1"
+                  },
+                  {
+                    "highlight_end": 37,
+                    "highlight_start": 1,
+                    "text": "                $($sort_invariants)*"
+                  },
+                  {
+                    "highlight_end": 14,
+                    "highlight_start": 1,
+                    "text": "            {"
+                  },
+                  {
+                    "highlight_end": 26,
+                    "highlight_start": 1,
+                    "text": "                $end = 1;"
+                  },
+                  {
+                    "highlight_end": 33,
+                    "highlight_start": 1,
+                    "text": "                $($before_swap)*"
+                  },
+                  {
+                    "highlight_end": 51,
+                    "highlight_start": 1,
+                    "text": "                enrollment_swap($values, 0, $end);"
+                  },
+                  {
+                    "highlight_end": 32,
+                    "highlight_start": 1,
+                    "text": "                $($after_swap)*"
+                  },
+                  {
+                    "highlight_end": 51,
+                    "highlight_start": 1,
+                    "text": "                enrollment_sift($values, 0, $end);"
+                  },
+                  {
+                    "highlight_end": 32,
+                    "highlight_start": 1,
+                    "text": "                $($after_sift)*"
+                  },
+                  {
+                    "highlight_end": 14,
+                    "highlight_start": 1,
+                    "text": "            }"
+                  }
+                ]
+              }
+            },
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 86,
+            "line_start": 86,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 27,
+                "highlight_start": 13,
+                "text": "            while $end > 1"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:213:28\n    |\n213 |                     assert(previous[0].unwrap().slot <= previous[j].unwrap().slot);\n    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 10560,
+            "byte_start": 10506,
+            "column_end": 82,
+            "column_start": 28,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 213,
+            "line_start": 213,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 82,
+                "highlight_start": 28,
+                "text": "                    assert(previous[0].unwrap().slot <= previous[j].unwrap().slot);"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:215:28\n    |\n215 |                     assert(previous[i].unwrap().slot <= previous[j].unwrap().slot);\n    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 10669,
+            "byte_start": 10615,
+            "column_end": 82,
+            "column_start": 28,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 215,
+            "line_start": 215,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 82,
+                "highlight_start": 28,
+                "text": "                    assert(previous[i].unwrap().slot <= previous[j].unwrap().slot);"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "aborting due to 2 previous errors",
+        "rendered": "error: aborting due to 2 previous errors\n\n",
+        "spans": []
+      }
+    ],
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "errors": 1,
+      "is-verifying-entire-crate": false,
+      "verified": 2
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "key_order": {
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "verifying root module (selected functions)",
+        "rendered": "note: verifying root module (selected functions)\n\n",
+        "spans": []
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "postcondition not satisfied",
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:13:13\n   |\n13 |       ensures result == enrollment_key_less_v1(left, right),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs:3:37\n   |\n 3 |       ($left:ident, $right:ident) => {{\n   |  _____________________________________-\n 4 | |         $left.context_generation > $right.context_generation\n 5 | |             || ($left.context_generation == $right.context_generation && $left.local < $right.local)\n 6 | |     }};\n   | |_____- at the end of the function body\n\n",
+        "spans": [
+          {
+            "byte_end": 325,
+            "byte_start": 156,
+            "column_end": 6,
+            "column_start": 37,
+            "expansion": {
+              "def_site_span": {
+                "byte_end": 117,
+                "byte_start": 84,
+                "column_end": 34,
+                "column_start": 1,
+                "expansion": null,
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 2,
+                "line_start": 2,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 34,
+                    "highlight_start": 1,
+                    "text": "macro_rules! enrollment_less_body {"
+                  }
+                ]
+              },
+              "macro_decl_name": "enrollment_less_body!",
+              "span": {
+                "byte_end": 599,
+                "byte_start": 565,
+                "column_end": 39,
+                "column_start": 5,
+                "expansion": null,
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 15,
+                "line_start": 15,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 39,
+                    "highlight_start": 5,
+                    "text": "    enrollment_less_body!(left, right)"
+                  }
+                ]
+              }
+            },
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+            "is_primary": false,
+            "label": "at the end of the function body",
+            "line_end": 6,
+            "line_start": 3,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 38,
+                "highlight_start": 37,
+                "text": "    ($left:ident, $right:ident) => {{"
+              },
+              {
+                "highlight_end": 61,
+                "highlight_start": 1,
+                "text": "        $left.context_generation > $right.context_generation"
+              },
+              {
+                "highlight_end": 101,
+                "highlight_start": 1,
+                "text": "            || ($left.context_generation == $right.context_generation && $left.local < $right.local)"
+              },
+              {
+                "highlight_end": 6,
+                "highlight_start": 1,
+                "text": "    }};"
+              }
+            ]
+          },
+          {
+            "byte_end": 557,
+            "byte_start": 512,
+            "column_end": 58,
+            "column_start": 13,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "failed this postcondition",
+            "line_end": 13,
+            "line_start": 13,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 58,
+                "highlight_start": 13,
+                "text": "    ensures result == enrollment_key_less_v1(left, right),"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "aborting due to 1 previous error",
+        "rendered": "error: aborting due to 1 previous error\n\n",
+        "spans": []
+      }
+    ],
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "errors": 1,
+      "is-verifying-entire-crate": false,
+      "verified": 0
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "key_result": {
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "verifying root module, function context_journal_enrollment_ordering_v1::contains_key (selected functions)",
+        "rendered": "note: verifying root module, function context_journal_enrollment_ordering_v1::contains_key (selected functions)\n\n",
+        "spans": []
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:254:20\n    |\n254 |             assert(entries@[lo as int].key == key);\n    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 12625,
+            "byte_start": 12595,
+            "column_end": 50,
+            "column_start": 20,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 254,
+            "line_start": 254,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 50,
+                "highlight_start": 20,
+                "text": "            assert(entries@[lo as int].key == key);"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "aborting due to 1 previous error",
+        "rendered": "error: aborting due to 1 previous error\n\n",
+        "spans": []
+      }
+    ],
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "errors": 1,
+      "is-verifying-entire-crate": false,
+      "verified": 1
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "sift_child": {
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "verifying root module, function context_journal_enrollment_ordering_v1::enrollment_sift (selected functions)",
+        "rendered": "note: verifying root module, function context_journal_enrollment_ordering_v1::enrollment_sift (selected functions)\n\n",
+        "spans": []
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "rendered": "note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs:46:13\n    |\n 46 |               while $root < $end / 2\n    |               ^^^^^^^^^^^^^^^^^^^^^^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:86:5\n    |\n 86 | /     enrollment_sift_body!(verus_exec_expr, values, start, end, root, left, child,\n 87 | |         [proof {\n 88 | |         assert forall|i: int| start <= i < end implies\n 89 | |             #[trigger] enrollment_interval_origin_v1(before, values@[i], start as int, end as int) by {\n...   |\n134 | |     }]\n135 | |     )\n    | |_____- in this macro invocation\n    |\n    = note: this note originates in the macro `enrollment_sift_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n",
+        "spans": [
+          {
+            "byte_end": 1493,
+            "byte_start": 1471,
+            "column_end": 35,
+            "column_start": 13,
+            "expansion": {
+              "def_site_span": {
+                "byte_end": 0,
+                "byte_start": 0,
+                "column_end": 1,
+                "column_start": 1,
+                "expansion": null,
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_v1.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 1,
+                "line_start": 1,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": []
+              },
+              "macro_decl_name": "desugaring of `while` loop",
+              "span": {
+                "byte_end": 2148,
+                "byte_start": 1471,
+                "column_end": 14,
+                "column_start": 13,
+                "expansion": {
+                  "def_site_span": {
+                    "byte_end": 1135,
+                    "byte_start": 1102,
+                    "column_end": 34,
+                    "column_start": 1,
+                    "expansion": null,
+                    "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+                    "is_primary": false,
+                    "label": null,
+                    "line_end": 38,
+                    "line_start": 38,
+                    "suggested_replacement": null,
+                    "suggestion_applicability": null,
+                    "text": [
+                      {
+                        "highlight_end": 34,
+                        "highlight_start": 1,
+                        "text": "macro_rules! enrollment_sift_body {"
+                      }
+                    ]
+                  },
+                  "macro_decl_name": "enrollment_sift_body!",
+                  "span": {
+                    "byte_end": 6729,
+                    "byte_start": 4166,
+                    "column_end": 6,
+                    "column_start": 5,
+                    "expansion": null,
+                    "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+                    "is_primary": false,
+                    "label": null,
+                    "line_end": 135,
+                    "line_start": 86,
+                    "suggested_replacement": null,
+                    "suggestion_applicability": null,
+                    "text": [
+                      {
+                        "highlight_end": 82,
+                        "highlight_start": 5,
+                        "text": "    enrollment_sift_body!(verus_exec_expr, values, start, end, root, left, child,"
+                      },
+                      {
+                        "highlight_end": 17,
+                        "highlight_start": 1,
+                        "text": "        [proof {"
+                      },
+                      {
+                        "highlight_end": 55,
+                        "highlight_start": 1,
+                        "text": "        assert forall|i: int| start <= i < end implies"
+                      },
+                      {
+                        "highlight_end": 104,
+                        "highlight_start": 1,
+                        "text": "            #[trigger] enrollment_interval_origin_v1(before, values@[i], start as int, end as int) by {"
+                      },
+                      {
+                        "highlight_end": 45,
+                        "highlight_start": 1,
+                        "text": "            assert(values@[i] == before[i]);"
+                      },
+                      {
+                        "highlight_end": 10,
+                        "highlight_start": 1,
+                        "text": "        }"
+                      },
+                      {
+                        "highlight_end": 8,
+                        "highlight_start": 1,
+                        "text": "    }],"
+                      },
+                      {
+                        "highlight_end": 87,
+                        "highlight_start": 1,
+                        "text": "        [invariant start <= root < end <= values.len(), values@.len() == before.len(),"
+                      },
+                      {
+                        "highlight_end": 36,
+                        "highlight_start": 1,
+                        "text": "            before == old(values)@,"
+                      },
+                      {
+                        "highlight_end": 54,
+                        "highlight_start": 1,
+                        "text": "            root == start || start <= (root - 1) / 2,"
+                      },
+                      {
+                        "highlight_end": 92,
+                        "highlight_start": 1,
+                        "text": "            enrollment_all_some_v1(values@), values@.to_multiset() == before.to_multiset(),"
+                      },
+                      {
+                        "highlight_end": 85,
+                        "highlight_start": 1,
+                        "text": "            enrollment_heap_hole_v1(values@, start as int, end as int, root as int),"
+                      },
+                      {
+                        "highlight_end": 105,
+                        "highlight_start": 1,
+                        "text": "            forall|i: int| 0 <= i < before.len() && (i < start || i >= end) ==> values@[i] == before[i],"
+                      },
+                      {
+                        "highlight_end": 44,
+                        "highlight_start": 1,
+                        "text": "            forall|i: int| start <= i < end"
+                      },
+                      {
+                        "highlight_end": 108,
+                        "highlight_start": 1,
+                        "text": "                ==> #[trigger] enrollment_interval_origin_v1(before, values@[i], start as int, end as int),"
+                      },
+                      {
+                        "highlight_end": 32,
+                        "highlight_start": 1,
+                        "text": "        decreases end - root,],"
+                      },
+                      {
+                        "highlight_end": 17,
+                        "highlight_start": 1,
+                        "text": "        [proof {"
+                      },
+                      {
+                        "highlight_end": 73,
+                        "highlight_start": 1,
+                        "text": "                assert forall|c: int| 0 < c < end && (c - 1) / 2 == root"
+                      },
+                      {
+                        "highlight_end": 80,
+                        "highlight_start": 1,
+                        "text": "                    implies #[trigger] enrollment_heap_edge_v1(values@, c) by {"
+                      },
+                      {
+                        "highlight_end": 56,
+                        "highlight_start": 1,
+                        "text": "                    assert(c == left || c == left + 1);"
+                      },
+                      {
+                        "highlight_end": 18,
+                        "highlight_start": 1,
+                        "text": "                }"
+                      },
+                      {
+                        "highlight_end": 84,
+                        "highlight_start": 1,
+                        "text": "                assert(enrollment_heap_from_v1(values@, start as int, end as int));"
+                      },
+                      {
+                        "highlight_end": 82,
+                        "highlight_start": 1,
+                        "text": "                assert(enrollment_sift_relation_v1(before, values@, start, end));"
+                      },
+                      {
+                        "highlight_end": 16,
+                        "highlight_start": 1,
+                        "text": "            }],"
+                      },
+                      {
+                        "highlight_end": 43,
+                        "highlight_start": 1,
+                        "text": "        [let ghost old_values = values@;],"
+                      },
+                      {
+                        "highlight_end": 17,
+                        "highlight_start": 1,
+                        "text": "        [proof {"
+                      },
+                      {
+                        "highlight_end": 94,
+                        "highlight_start": 1,
+                        "text": "            assert forall|c: int| 0 < c < end && start <= (c - 1) / 2 && (c - 1) / 2 != child"
+                      },
+                      {
+                        "highlight_end": 76,
+                        "highlight_start": 1,
+                        "text": "                implies #[trigger] enrollment_heap_edge_v1(values@, c) by {"
+                      },
+                      {
+                        "highlight_end": 37,
+                        "highlight_start": 1,
+                        "text": "                let p = (c - 1) / 2;"
+                      },
+                      {
+                        "highlight_end": 31,
+                        "highlight_start": 1,
+                        "text": "                if p == root {"
+                      },
+                      {
+                        "highlight_end": 56,
+                        "highlight_start": 1,
+                        "text": "                    assert(c == left || c == left + 1);"
+                      },
+                      {
+                        "highlight_end": 38,
+                        "highlight_start": 1,
+                        "text": "                } else if c == root {"
+                      },
+                      {
+                        "highlight_end": 99,
+                        "highlight_start": 1,
+                        "text": "                    assert(old_values[p].unwrap().slot >= old_values[child as int].unwrap().slot);"
+                      },
+                      {
+                        "highlight_end": 25,
+                        "highlight_start": 1,
+                        "text": "                } else {"
+                      },
+                      {
+                        "highlight_end": 68,
+                        "highlight_start": 1,
+                        "text": "                    assert(enrollment_heap_edge_v1(old_values, c));"
+                      },
+                      {
+                        "highlight_end": 18,
+                        "highlight_start": 1,
+                        "text": "                }"
+                      },
+                      {
+                        "highlight_end": 14,
+                        "highlight_start": 1,
+                        "text": "            }"
+                      },
+                      {
+                        "highlight_end": 78,
+                        "highlight_start": 1,
+                        "text": "            assert forall|c: int| 0 < c < end && (c - 1) / 2 == child implies"
+                      },
+                      {
+                        "highlight_end": 101,
+                        "highlight_start": 1,
+                        "text": "                values@[(child - 1) / 2].unwrap().slot >= (#[trigger] values@[c]).unwrap().slot by {"
+                      },
+                      {
+                        "highlight_end": 64,
+                        "highlight_start": 1,
+                        "text": "                assert(enrollment_heap_edge_v1(old_values, c));"
+                      },
+                      {
+                        "highlight_end": 14,
+                        "highlight_start": 1,
+                        "text": "            }"
+                      },
+                      {
+                        "highlight_end": 12,
+                        "highlight_start": 1,
+                        "text": "        }],"
+                      },
+                      {
+                        "highlight_end": 17,
+                        "highlight_start": 1,
+                        "text": "        [proof {"
+                      },
+                      {
+                        "highlight_end": 66,
+                        "highlight_start": 1,
+                        "text": "        assert forall|c: int| 0 < c < end && start <= (c - 1) / 2"
+                      },
+                      {
+                        "highlight_end": 72,
+                        "highlight_start": 1,
+                        "text": "            implies #[trigger] enrollment_heap_edge_v1(values@, c) by {"
+                      },
+                      {
+                        "highlight_end": 41,
+                        "highlight_start": 1,
+                        "text": "            assert((c - 1) / 2 != root);"
+                      },
+                      {
+                        "highlight_end": 10,
+                        "highlight_start": 1,
+                        "text": "        }"
+                      },
+                      {
+                        "highlight_end": 74,
+                        "highlight_start": 1,
+                        "text": "        assert(enrollment_sift_relation_v1(before, values@, start, end));"
+                      },
+                      {
+                        "highlight_end": 7,
+                        "highlight_start": 1,
+                        "text": "    }]"
+                      },
+                      {
+                        "highlight_end": 6,
+                        "highlight_start": 1,
+                        "text": "    )"
+                      }
+                    ]
+                  }
+                },
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 64,
+                "line_start": 46,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 35,
+                    "highlight_start": 13,
+                    "text": "            while $root < $end / 2"
+                  },
+                  {
+                    "highlight_end": 32,
+                    "highlight_start": 1,
+                    "text": "                $($invariants)*"
+                  },
+                  {
+                    "highlight_end": 14,
+                    "highlight_start": 1,
+                    "text": "            {"
+                  },
+                  {
+                    "highlight_end": 43,
+                    "highlight_start": 1,
+                    "text": "                let $left = $root * 2 + 1;"
+                  },
+                  {
+                    "highlight_end": 40,
+                    "highlight_start": 1,
+                    "text": "                let mut $child = $left;"
+                  },
+                  {
+                    "highlight_end": 36,
+                    "highlight_start": 1,
+                    "text": "                if $left + 1 < $end"
+                  },
+                  {
+                    "highlight_end": 87,
+                    "highlight_start": 1,
+                    "text": "                    && $values[$left].unwrap().slot > $values[$left + 1].unwrap().slot"
+                  },
+                  {
+                    "highlight_end": 18,
+                    "highlight_start": 1,
+                    "text": "                {"
+                  },
+                  {
+                    "highlight_end": 40,
+                    "highlight_start": 1,
+                    "text": "                    $child = $left + 1;"
+                  },
+                  {
+                    "highlight_end": 18,
+                    "highlight_start": 1,
+                    "text": "                }"
+                  },
+                  {
+                    "highlight_end": 83,
+                    "highlight_start": 1,
+                    "text": "                if $values[$root].unwrap().slot >= $values[$child].unwrap().slot {"
+                  },
+                  {
+                    "highlight_end": 30,
+                    "highlight_start": 1,
+                    "text": "                    $($exit)*"
+                  },
+                  {
+                    "highlight_end": 28,
+                    "highlight_start": 1,
+                    "text": "                    return;"
+                  },
+                  {
+                    "highlight_end": 18,
+                    "highlight_start": 1,
+                    "text": "                }"
+                  },
+                  {
+                    "highlight_end": 33,
+                    "highlight_start": 1,
+                    "text": "                $($before_swap)*"
+                  },
+                  {
+                    "highlight_end": 57,
+                    "highlight_start": 1,
+                    "text": "                enrollment_swap($values, $root, $child);"
+                  },
+                  {
+                    "highlight_end": 32,
+                    "highlight_start": 1,
+                    "text": "                $($after_swap)*"
+                  },
+                  {
+                    "highlight_end": 32,
+                    "highlight_start": 1,
+                    "text": "                $root = $child;"
+                  },
+                  {
+                    "highlight_end": 14,
+                    "highlight_start": 1,
+                    "text": "            }"
+                  }
+                ]
+              }
+            },
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 46,
+            "line_start": 46,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 35,
+                "highlight_start": 13,
+                "text": "            while $root < $end / 2"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:104:40\n    |\n104 |                     implies #[trigger] enrollment_heap_edge_v1(values@, c) by {\n    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 5290,
+            "byte_start": 5255,
+            "column_end": 75,
+            "column_start": 40,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 104,
+            "line_start": 104,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 75,
+                "highlight_start": 40,
+                "text": "                    implies #[trigger] enrollment_heap_edge_v1(values@, c) by {"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:113:36\n    |\n113 |                 implies #[trigger] enrollment_heap_edge_v1(values@, c) by {\n    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 5776,
+            "byte_start": 5741,
+            "column_end": 71,
+            "column_start": 36,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 113,
+            "line_start": 113,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 71,
+                "highlight_start": 36,
+                "text": "                implies #[trigger] enrollment_heap_edge_v1(values@, c) by {"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "aborting due to 2 previous errors",
+        "rendered": "error: aborting due to 2 previous errors\n\n",
+        "spans": []
+      }
+    ],
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "errors": 1,
+      "is-verifying-entire-crate": false,
+      "verified": 1
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "slot_result": {
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "verifying root module, function context_journal_enrollment_ordering_v1::contains_slot (selected functions)",
+        "rendered": "note: verifying root module, function context_journal_enrollment_ordering_v1::contains_slot (selected functions)\n\n",
+        "spans": []
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:261:1\n    |\n261 | pub fn contains_slot(values: &[Option<AllocationReferenceV1>], slot: usize) -> (found: bool)\n    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n",
+        "spans": [
+          {
+            "byte_end": 12773,
+            "byte_start": 12682,
+            "column_end": 92,
+            "column_start": 1,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 261,
+            "line_start": 261,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 92,
+                "highlight_start": 1,
+                "text": "pub fn contains_slot(values: &[Option<AllocationReferenceV1>], slot: usize) -> (found: bool)"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:279:66\n    |\n279 |             assert forall|i: int| 0 <= i < values@.len() implies (#[trigger] values@[i]).unwrap().slot != slot by {\n    |                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 14080,
+            "byte_start": 14035,
+            "column_end": 111,
+            "column_start": 66,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 279,
+            "line_start": 279,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 111,
+                "highlight_start": 66,
+                "text": "            assert forall|i: int| 0 <= i < values@.len() implies (#[trigger] values@[i]).unwrap().slot != slot by {"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:282:25\n    |\n282 |         } else { assert(values@[lo as int].unwrap().slot == slot); }\n    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 14264,
+            "byte_start": 14224,
+            "column_end": 65,
+            "column_start": 25,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 282,
+            "line_start": 282,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 65,
+                "highlight_start": 25,
+                "text": "        } else { assert(values@[lo as int].unwrap().slot == slot); }"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "aborting due to 2 previous errors",
+        "rendered": "error: aborting due to 2 previous errors\n\n",
+        "spans": []
+      }
+    ],
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "errors": 1,
+      "is-verifying-entire-crate": false,
+      "verified": 1
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "sort_skip": {
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "verifying root module (selected functions)",
+        "rendered": "note: verifying root module (selected functions)\n\n",
+        "spans": []
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "postcondition not satisfied",
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:303:13\n    |\n303 |       ensures enrollment_sort_relation_v1(old(values)@, final(values)@),\n    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs:102:25\n    |\n102 |       ($values:ident) => {{\n    |  _________________________-\n103 | |         if false {\n104 | |             enrollment_heapsort($values);\n105 | |         }\n106 | |     }};\n    | |_____- at the end of the function body\n\n",
+        "spans": [
+          {
+            "byte_end": 3322,
+            "byte_start": 3244,
+            "column_end": 6,
+            "column_start": 25,
+            "expansion": {
+              "def_site_span": {
+                "byte_end": 3217,
+                "byte_start": 3184,
+                "column_end": 34,
+                "column_start": 1,
+                "expansion": null,
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 101,
+                "line_start": 101,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 34,
+                    "highlight_start": 1,
+                    "text": "macro_rules! enrollment_sort_body {"
+                  }
+                ]
+              },
+              "macro_decl_name": "enrollment_sort_body!",
+              "span": {
+                "byte_end": 15177,
+                "byte_start": 15148,
+                "column_end": 34,
+                "column_start": 5,
+                "expansion": null,
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 306,
+                "line_start": 306,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 34,
+                    "highlight_start": 5,
+                    "text": "    enrollment_sort_body!(values)"
+                  }
+                ]
+              }
+            },
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+            "is_primary": false,
+            "label": "at the end of the function body",
+            "line_end": 106,
+            "line_start": 102,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 26,
+                "highlight_start": 25,
+                "text": "    ($values:ident) => {{"
+              },
+              {
+                "highlight_end": 19,
+                "highlight_start": 1,
+                "text": "        if false {"
+              },
+              {
+                "highlight_end": 42,
+                "highlight_start": 1,
+                "text": "            enrollment_heapsort($values);"
+              },
+              {
+                "highlight_end": 10,
+                "highlight_start": 1,
+                "text": "        }"
+              },
+              {
+                "highlight_end": 6,
+                "highlight_start": 1,
+                "text": "    }};"
+              }
+            ]
+          },
+          {
+            "byte_end": 15051,
+            "byte_start": 14994,
+            "column_end": 70,
+            "column_start": 13,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "failed this postcondition",
+            "line_end": 303,
+            "line_start": 303,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 70,
+                "highlight_start": 13,
+                "text": "    ensures enrollment_sort_relation_v1(old(values)@, final(values)@),"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "aborting due to 1 previous error",
+        "rendered": "error: aborting due to 1 previous error\n\n",
+        "spans": []
+      }
+    ],
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "errors": 1,
+      "is-verifying-entire-crate": false,
+      "verified": 0
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "sorted_direction": {
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "verifying root module (selected functions)",
+        "rendered": "note: verifying root module (selected functions)\n\n",
+        "spans": []
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "rendered": "note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs:24:13\n    |\n 24 |               while $index < $values.len()\n    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:292:5\n    |\n292 | /     enrollment_sorted_body!(verus_exec_expr, values, index, [\n293 | |         invariant 1 <= index <= values.len() + 1,\n294 | |             enrollment_all_some_v1(values@),\n295 | |             forall|i: int, j: int| 0 <= i < j < index && j < values.len()\n296 | |                 ==> (#[trigger] values@[i]).unwrap().slot <= (#[trigger] values@[j]).unwrap().slot,\n297 | |         decreases values.len() + 1 - index,\n298 | |     ])\n    | |______- in this macro invocation\n    |\n    = note: this note originates in the macro `enrollment_sorted_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n",
+        "spans": [
+          {
+            "byte_end": 811,
+            "byte_start": 783,
+            "column_end": 41,
+            "column_start": 13,
+            "expansion": {
+              "def_site_span": {
+                "byte_end": 0,
+                "byte_start": 0,
+                "column_end": 1,
+                "column_start": 1,
+                "expansion": null,
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_v1.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 1,
+                "line_start": 1,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": []
+              },
+              "macro_decl_name": "desugaring of `while` loop",
+              "span": {
+                "byte_end": 1039,
+                "byte_start": 783,
+                "column_end": 14,
+                "column_start": 13,
+                "expansion": {
+                  "def_site_span": {
+                    "byte_end": 636,
+                    "byte_start": 601,
+                    "column_end": 36,
+                    "column_start": 1,
+                    "expansion": null,
+                    "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+                    "is_primary": false,
+                    "label": null,
+                    "line_end": 20,
+                    "line_start": 20,
+                    "suggested_replacement": null,
+                    "suggestion_applicability": null,
+                    "text": [
+                      {
+                        "highlight_end": 36,
+                        "highlight_start": 1,
+                        "text": "macro_rules! enrollment_sorted_body {"
+                      }
+                    ]
+                  },
+                  "macro_decl_name": "enrollment_sorted_body!",
+                  "span": {
+                    "byte_end": 14863,
+                    "byte_start": 14486,
+                    "column_end": 7,
+                    "column_start": 5,
+                    "expansion": null,
+                    "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+                    "is_primary": false,
+                    "label": null,
+                    "line_end": 298,
+                    "line_start": 292,
+                    "suggested_replacement": null,
+                    "suggestion_applicability": null,
+                    "text": [
+                      {
+                        "highlight_end": 62,
+                        "highlight_start": 5,
+                        "text": "    enrollment_sorted_body!(verus_exec_expr, values, index, ["
+                      },
+                      {
+                        "highlight_end": 50,
+                        "highlight_start": 1,
+                        "text": "        invariant 1 <= index <= values.len() + 1,"
+                      },
+                      {
+                        "highlight_end": 45,
+                        "highlight_start": 1,
+                        "text": "            enrollment_all_some_v1(values@),"
+                      },
+                      {
+                        "highlight_end": 74,
+                        "highlight_start": 1,
+                        "text": "            forall|i: int, j: int| 0 <= i < j < index && j < values.len()"
+                      },
+                      {
+                        "highlight_end": 100,
+                        "highlight_start": 1,
+                        "text": "                ==> (#[trigger] values@[i]).unwrap().slot <= (#[trigger] values@[j]).unwrap().slot,"
+                      },
+                      {
+                        "highlight_end": 44,
+                        "highlight_start": 1,
+                        "text": "        decreases values.len() + 1 - index,"
+                      },
+                      {
+                        "highlight_end": 7,
+                        "highlight_start": 1,
+                        "text": "    ])"
+                      }
+                    ]
+                  }
+                },
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 31,
+                "line_start": 24,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 41,
+                    "highlight_start": 13,
+                    "text": "            while $index < $values.len()"
+                  },
+                  {
+                    "highlight_end": 32,
+                    "highlight_start": 1,
+                    "text": "                $($invariants)*"
+                  },
+                  {
+                    "highlight_end": 14,
+                    "highlight_start": 1,
+                    "text": "            {"
+                  },
+                  {
+                    "highlight_end": 87,
+                    "highlight_start": 1,
+                    "text": "                if $values[$index - 1].unwrap().slot < $values[$index].unwrap().slot {"
+                  },
+                  {
+                    "highlight_end": 34,
+                    "highlight_start": 1,
+                    "text": "                    return false;"
+                  },
+                  {
+                    "highlight_end": 18,
+                    "highlight_start": 1,
+                    "text": "                }"
+                  },
+                  {
+                    "highlight_end": 29,
+                    "highlight_start": 1,
+                    "text": "                $index += 1;"
+                  },
+                  {
+                    "highlight_end": 14,
+                    "highlight_start": 1,
+                    "text": "            }"
+                  }
+                ]
+              }
+            },
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 24,
+            "line_start": 24,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 41,
+                "highlight_start": 13,
+                "text": "            while $index < $values.len()"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "postcondition not satisfied",
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:290:13\n    |\n290 |     ensures result == enrollment_sort_frontier_v1(values@, 0),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs:28:21\n    |\n 28 |                     return false;\n    |                     ------------ at this exit\n\n",
+        "spans": [
+          {
+            "byte_end": 977,
+            "byte_start": 965,
+            "column_end": 33,
+            "column_start": 21,
+            "expansion": {
+              "def_site_span": {
+                "byte_end": 636,
+                "byte_start": 601,
+                "column_end": 36,
+                "column_start": 1,
+                "expansion": null,
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 20,
+                "line_start": 20,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 36,
+                    "highlight_start": 1,
+                    "text": "macro_rules! enrollment_sorted_body {"
+                  }
+                ]
+              },
+              "macro_decl_name": "enrollment_sorted_body!",
+              "span": {
+                "byte_end": 14863,
+                "byte_start": 14486,
+                "column_end": 7,
+                "column_start": 5,
+                "expansion": null,
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 298,
+                "line_start": 292,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 62,
+                    "highlight_start": 5,
+                    "text": "    enrollment_sorted_body!(verus_exec_expr, values, index, ["
+                  },
+                  {
+                    "highlight_end": 50,
+                    "highlight_start": 1,
+                    "text": "        invariant 1 <= index <= values.len() + 1,"
+                  },
+                  {
+                    "highlight_end": 45,
+                    "highlight_start": 1,
+                    "text": "            enrollment_all_some_v1(values@),"
+                  },
+                  {
+                    "highlight_end": 74,
+                    "highlight_start": 1,
+                    "text": "            forall|i: int, j: int| 0 <= i < j < index && j < values.len()"
+                  },
+                  {
+                    "highlight_end": 100,
+                    "highlight_start": 1,
+                    "text": "                ==> (#[trigger] values@[i]).unwrap().slot <= (#[trigger] values@[j]).unwrap().slot,"
+                  },
+                  {
+                    "highlight_end": 44,
+                    "highlight_start": 1,
+                    "text": "        decreases values.len() + 1 - index,"
+                  },
+                  {
+                    "highlight_end": 7,
+                    "highlight_start": 1,
+                    "text": "    ])"
+                  }
+                ]
+              }
+            },
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_ordering_bodies.rs",
+            "is_primary": false,
+            "label": "at this exit",
+            "line_end": 28,
+            "line_start": 28,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 33,
+                "highlight_start": 21,
+                "text": "                    return false;"
+              }
+            ]
+          },
+          {
+            "byte_end": 14478,
+            "byte_start": 14429,
+            "column_end": 62,
+            "column_start": 13,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "failed this postcondition",
+            "line_end": 290,
+            "line_start": 290,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 62,
+                "highlight_start": 13,
+                "text": "    ensures result == enrollment_sort_frontier_v1(values@, 0),"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "invariant not satisfied at end of loop body",
+        "rendered": "error: invariant not satisfied at end of loop body\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:295:13\n    |\n295 | /             forall|i: int, j: int| 0 <= i < j < index && j < values.len()\n296 | |                 ==> (#[trigger] values@[i]).unwrap().slot <= (#[trigger] values@[j]).unwrap().slot,\n    | |__________________________________________________________________________________________________^\n\n",
+        "spans": [
+          {
+            "byte_end": 14811,
+            "byte_start": 14651,
+            "column_end": 99,
+            "column_start": 13,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 296,
+            "line_start": 295,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 74,
+                "highlight_start": 13,
+                "text": "            forall|i: int, j: int| 0 <= i < j < index && j < values.len()"
+              },
+              {
+                "highlight_end": 99,
+                "highlight_start": 1,
+                "text": "                ==> (#[trigger] values@[i]).unwrap().slot <= (#[trigger] values@[j]).unwrap().slot,"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "aborting due to 2 previous errors",
+        "rendered": "error: aborting due to 2 previous errors\n\n",
+        "spans": []
+      }
+    ],
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "errors": 1,
+      "is-verifying-entire-crate": false,
+      "verified": 1
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "swap_payload": {
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "verifying root module (selected functions)",
+        "rendered": "note: verifying root module (selected functions)\n\n",
+        "spans": []
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "note",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:29:1\n   |\n29 | pub fn enrollment_swap(values: &mut [Option<AllocationReferenceV1>], left: usize, right: usize)\n   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n",
+        "spans": [
+          {
+            "byte_end": 1282,
+            "byte_start": 1187,
+            "column_end": 96,
+            "column_start": 1,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 29,
+            "line_start": 29,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 96,
+                "highlight_start": 1,
+                "text": "pub fn enrollment_swap(values: &mut [Option<AllocationReferenceV1>], left: usize, right: usize)"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:42:35\n   |\n42 |         if left == right { assert(values@ =~= before); }\n   |                                   ^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 1937,
+            "byte_start": 1919,
+            "column_end": 53,
+            "column_start": 35,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 42,
+            "line_start": 42,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 53,
+                "highlight_start": 35,
+                "text": "        if left == right { assert(values@ =~= before); }"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "assertion failed",
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs:43:23\n   |\n43 |         else { assert(values@.to_multiset() =~= before.to_multiset()); }\n   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n",
+        "spans": [
+          {
+            "byte_end": 2010,
+            "byte_start": 1964,
+            "column_end": 69,
+            "column_start": 23,
+            "expansion": null,
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_ordering_bodies_v1.rs",
+            "is_primary": true,
+            "label": "assertion failed",
+            "line_end": 43,
+            "line_start": 43,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 69,
+                "highlight_start": 23,
+                "text": "        else { assert(values@.to_multiset() =~= before.to_multiset()); }"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "error",
+        "message": "aborting due to 2 previous errors",
+        "rendered": "error: aborting due to 2 previous errors\n\n",
+        "spans": []
+      }
+    ],
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "errors": 1,
+      "is-verifying-entire-crate": false,
+      "verified": 0
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "verus": {
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+    "platform": {
+      "arch": "x86_64",
+      "os": "linux"
+    },
+    "profile": "release",
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "version": "0.2026.08.09.92f466f"
+  }
+}
