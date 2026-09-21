@@ -33,6 +33,245 @@ fn reject_enrollment(
     assert!(output.iter().all(Option::is_none));
 }
 
+// Deliberately quadratic and immutable: this oracle neither sorts references
+// nor uses staged allocation entries to recognize corrupt free-stack aliases.
+fn enrollment_oracle(
+    journal: &Journal,
+    entries: &[ContextAllocationEnrollmentV1],
+    output: &[Option<ContextAllocationReferenceV1>],
+) -> Result<Vec<Option<ContextAllocationReferenceV1>>, Error> {
+    if entries.len() > journal.allocation_capacity || output.len() != entries.len() {
+        return Err(Error::RosterCapacity);
+    }
+    if output.iter().any(Option::is_some) {
+        return Err(Error::InvalidState);
+    }
+    for (index, value) in entries.iter().enumerate() {
+        if value.key.context_generation != journal.context_generation
+            || value.device.context_generation != journal.context_generation
+        {
+            return Err(Error::ForeignContext);
+        }
+        if !issuable_context_id(value.key.local) {
+            return Err(Error::InvalidAllocationId);
+        }
+        if !issuable_context_id(value.device.local) {
+            return Err(Error::InvalidDeviceId);
+        }
+        if value.byte_extent == 0 {
+            return Err(Error::InvalidExtent);
+        }
+        if index != 0 && entries[index - 1].key >= value.key {
+            return Err(Error::NonCanonicalRoster);
+        }
+    }
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    if journal.allocation_free.len() > journal.allocation_capacity {
+        return Err(Error::InvalidState);
+    }
+    if journal
+        .allocations
+        .iter()
+        .flatten()
+        .any(|old| entries.iter().any(|new| new.key == old.key))
+    {
+        return Err(Error::AllocationReplay);
+    }
+    let remaining = journal
+        .allocation_free
+        .len()
+        .checked_sub(entries.len())
+        .ok_or(Error::AllocationCapacity)?;
+    let selected = &journal.allocation_free[remaining..];
+    if selected
+        .iter()
+        .any(|&slot| journal.allocations.get(slot) != Some(&None))
+        || selected.iter().enumerate().any(|(index, slot)| {
+            selected[..index].contains(slot) || journal.allocation_free[..remaining].contains(slot)
+        })
+    {
+        return Err(Error::InvalidState);
+    }
+    Ok(entries
+        .iter()
+        .zip(selected.iter().rev())
+        .map(|(entry, &slot)| {
+            Some(ContextAllocationReferenceV1 {
+                slot,
+                key: entry.key,
+            })
+        })
+        .collect())
+}
+
+fn check_enrollment_oracle(
+    journal: &mut Journal,
+    entries: &[ContextAllocationEnrollmentV1],
+    mut output: Vec<Option<ContextAllocationReferenceV1>>,
+) {
+    let decision = enrollment_oracle(journal, entries, &output);
+    let mut expected = snapshot(journal);
+    let original_output = output.clone();
+    let output_storage = (output.as_ptr(), output.capacity());
+    if let Ok(references) = &decision {
+        for (entry, reference) in entries.iter().zip(references) {
+            expected.allocations[reference.unwrap().slot] = Some(AllocationEntryV1 {
+                key: entry.key,
+                device: entry.device,
+                byte_extent: entry.byte_extent,
+                attempt_epoch: 0,
+                content_lineage: 0,
+                pending_member: None,
+            });
+        }
+        expected
+            .allocation_free
+            .truncate(expected.allocation_free.len() - entries.len());
+    }
+    assert_eq!(
+        journal.enroll_allocations(entries, &mut output),
+        decision.as_ref().map(|_| ()).map_err(|e| *e)
+    );
+    assert_eq!(output, decision.unwrap_or(original_output));
+    assert_eq!((output.as_ptr(), output.capacity()), output_storage);
+    assert_eq!(snapshot(journal), expected);
+}
+
+#[test]
+fn enrollment_matches_immutable_oracle_for_small_malformed_arenas() {
+    let mut cases = 0;
+    // Four states per allocation: vacant, unrelated, replay, or same local ID
+    // in another generation. Include oversized stacks and two invalid indices.
+    for encoding in 0usize..64 {
+        for free_len in 0u32..=4 {
+            for free_encoding in 0usize..5usize.pow(free_len) {
+                for count in 0..=3 {
+                    let mut journal = Journal::new(7, 3, 1).unwrap();
+                    let mut state = encoding;
+                    for (index, value) in journal.allocations.iter_mut().enumerate() {
+                        let kind = state % 4;
+                        state /= 4;
+                        if kind != 0 {
+                            let mut metadata =
+                                entry(if kind == 1 { 100 + index as u64 } else { 10 });
+                            if kind == 3 {
+                                metadata.key.context_generation = 8;
+                            }
+                            *value = Some(AllocationEntryV1 {
+                                key: metadata.key,
+                                device: metadata.device,
+                                byte_extent: metadata.byte_extent,
+                                attempt_epoch: 17,
+                                content_lineage: 9,
+                                pending_member: None,
+                            });
+                        }
+                    }
+                    let mut digits = free_encoding;
+                    journal.allocation_free = (0..free_len)
+                        .map(|_| {
+                            let slot = [0, 1, 2, 3, usize::MAX][digits % 5];
+                            digits /= 5;
+                            slot
+                        })
+                        .collect();
+                    let entries: Vec<_> = (0..count).map(|i| entry(10 + i as u64 * 10)).collect();
+                    check_enrollment_oracle(&mut journal, &entries, vec![None; count]);
+                    cases += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(cases, 199_936);
+}
+
+#[test]
+fn enrollment_oracle_covers_independent_capacity_shape_and_header_precedence() {
+    for arena_len in 0..=4 {
+        for capacity in 0..=4 {
+            for free in [vec![], vec![0], vec![2, 1, 0], vec![usize::MAX, 0]] {
+                for case in 0..10 {
+                    let mut journal = Journal::new(7, 4, 1).unwrap();
+                    journal.allocations.truncate(arena_len);
+                    journal.allocation_capacity = capacity;
+                    journal.allocation_free = free.clone();
+                    let mut entries = vec![entry(10), entry(20)];
+                    let mut output = vec![None; 2];
+                    match case {
+                        0 => {}
+                        1 => {
+                            entries.clear();
+                            output.clear();
+                        }
+                        2 => {
+                            output.pop();
+                        }
+                        3 => {
+                            output[0] = Some(ContextAllocationReferenceV1 {
+                                slot: usize::MAX,
+                                key: entry(1).key,
+                            });
+                        }
+                        4 => {
+                            entries[0].key.context_generation = 8;
+                            entries[0].key.local = 0;
+                        }
+                        5 => {
+                            entries[0].key.local = 0;
+                            entries[0].device.local = 0;
+                        }
+                        6 => {
+                            entries[0].device.local = 0;
+                            entries[0].byte_extent = 0;
+                        }
+                        7 => {
+                            entries[0].byte_extent = 0;
+                            entries[1].key.local = 0;
+                        }
+                        8 => {
+                            entries[1].key = entries[0].key;
+                        }
+                        _ => {
+                            entries[1].key.local = 1;
+                            entries[1].byte_extent = 0;
+                        }
+                    }
+                    check_enrollment_oracle(&mut journal, &entries, output);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn enrollment_preserves_replay_scan_access_counts() {
+    for replay in [None, Some(0), Some(2), Some(4)] {
+        let mut journal = Journal::new(7, 5, 1).unwrap();
+        if let Some(slot) = replay {
+            journal.allocations[slot] = Some(AllocationEntryV1 {
+                key: entry(10).key,
+                device: entry(10).device,
+                byte_extent: 64,
+                attempt_epoch: 0,
+                content_lineage: 0,
+                pending_member: None,
+            });
+        }
+        journal.indexed_accesses.set(0);
+        let result = journal.enroll_allocations(&[entry(10)], &mut [None]);
+        assert_eq!(
+            result,
+            replay.map_or(Ok(()), |_| Err(Error::AllocationReplay))
+        );
+        assert_eq!(
+            journal.indexed_accesses.get(),
+            replay.map_or(5, |slot| slot + 1)
+        );
+    }
+}
+
 #[test]
 fn batch_enrollment_preserves_key_coordinates_across_permuted_slots_and_out_of_order_batches() {
     let mut journal = Journal::new(7, 6, 2).unwrap();

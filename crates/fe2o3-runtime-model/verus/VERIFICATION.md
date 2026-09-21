@@ -83,6 +83,17 @@ records both 263/0 positives and all 21 exact 262/1 controls, with portable offl
 validation and 26 adverse-evidence tests. It does not rerun the shared runner or
 claim production/native acceptance.
 
+The separate `context_version_journal_enrollment_transaction_v1.rs` experiment
+adds 12 obligations to that 263-obligation root. It proves no-sort installation,
+reverse undo and retained-overlap detection over logical contents, plus combined
+invariant preservation. Its named error relation restores allocation sequence
+contents, not the historical opaque Vec object identity. The historical contract
+is unchanged and implies this relation, not conversely. Production is unchanged;
+the experiment is not registered in the shared runner. Its
+[development packet](../../../docs/evidence/dev-enrollment-transaction-2026-09-21/README.md)
+contains a separately compiled Rust candidate, oracle tests and scoped CPU
+measurements, not Rust refinement or a native milestone.
+
 The strong chain graph is a reachable-state premise, not a whole-arena check
 performed by Rust settlement. Begin-write and settlement composition
 with issuance history, production enrollment correspondence, physical storage, fallible allocation, panic/unwind behavior

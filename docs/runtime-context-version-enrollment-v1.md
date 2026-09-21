@@ -1,6 +1,6 @@
 # Context Batch Enrollment V1
 
-The current development candidate verifies a complete executable enrollment
+The qualified development candidate verifies a complete executable enrollment
 operation over logical journal contents. It composes admission, replay search,
 capacity and free-slot checks, temporary output sorting, rollback, canonical
 restoration and commit. It preserves the combined producer, stable-reader,
@@ -91,6 +91,47 @@ Full begin-write, settlement, retirement and Unknown-disposal trace composition,
 physical storage/capacity, fallible allocation, unwind behavior and production
 Rust/native refinement remain separate work. The candidate does not advance a
 native milestone or establish HIP/HSA parity or performance.
+
+## No-Sort Experiment
+
+`context_version_journal_enrollment_transaction_v1.rs` explores a different
+algorithm without replacing production. After the unchanged admission and
+selected-vacancy checks, it installs inert metadata into the selected slots.
+An occupied selected slot then identifies a duplicate of the installed prefix.
+After unique installation, full-key membership identifies selected/retained
+overlap because replay preflight excluded every matching old occupied key.
+Either failure rolls back exactly the installed prefix and clears the output.
+Success retains the existing canonical coordinates and free prefix.
+
+Its separately named `enrollment_transaction_relation_v1` retains the exact
+decision and historical success relation. On error it restores all logical
+contents and preserves untouched vector objects, but proves only the allocation
+vector's sequence equality. This is strictly weaker than the historical error
+contract's whole-object equality: pinned `Vec::set` contracts do not establish
+opaque vector identity from equal views. The historical relation implies the
+new one; no converse, replacement, extra axiom or stronger refinement is claimed.
+
+The candidate proves bounds, installed-prefix distinctness, exact reverse undo,
+retained-overlap equivalence, and combined reader/producer/custody/issuance
+preservation. The error invariant proof transports the restored logical state
+through the existing empty-enrollment preservation theorem; it does not change
+the actual error into a successful enrollment. Its whole root has 275 obligations,
+including the 263 inherited obligations, not 275 new ones.
+
+Production remains unchanged. An independent immutable quadratic Rust oracle
+checks 199,936 small malformed states, plus 1,000 independent capacity, shape
+and header-precedence cases. It checks exact results, all journal fields, output,
+and vector storage identities. Replay-scan accounting has a separate test.
+The same new tests are exercised against baseline and archived candidate source.
+
+The [development packet](evidence/dev-enrollment-transaction-2026-09-21/README.md)
+contains the candidate, release CPU comparison harness and proof checks. CPU
+measurements cover healthy success only; they are neither rollback timing nor
+HIP/HSA comparison. Mixed performance and the changed proof boundary prevent
+promotion. Physical vector identity/capacity, allocation and unwind behavior,
+Rust source correspondence, begin-write reachability and native acceptance
+remain separate obligations. This experiment is not registered in the shared
+proof runner and advances no native milestone.
 
 ## Qualification
 
