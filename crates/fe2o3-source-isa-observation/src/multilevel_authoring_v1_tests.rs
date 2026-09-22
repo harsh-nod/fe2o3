@@ -682,3 +682,6 @@ fn scalar_details_retain_opcodes_and_full_width_literal_bits() {
 
 #[path = "multilevel_authoring_const_u32_v1_tests.rs"]
 mod const_u32_helper;
+
+#[path = "multilevel_authoring_call_target_v1_tests.rs"]
+mod call_target;
