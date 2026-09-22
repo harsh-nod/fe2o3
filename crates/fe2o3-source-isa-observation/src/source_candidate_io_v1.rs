@@ -136,6 +136,26 @@ pub fn publish(
     candidate: &str,
     bytes: &[u8],
 ) -> Result<Published, String> {
+    publish_inner(
+        source,
+        candidate,
+        bytes,
+        #[cfg(test)]
+        None,
+    )
+}
+
+// The test-only callback has no global state and cannot be supplied by a
+// dependent crate. Ordinary builds have neither this type nor a hook parameter.
+#[cfg(test)]
+type DirectorySyncHook<'a> = &'a mut dyn FnMut(&File, &File) -> std::io::Result<()>;
+
+fn publish_inner(
+    source: &mut RetainedSource,
+    candidate: &str,
+    bytes: &[u8],
+    #[cfg(test)] directory_sync: Option<DirectorySyncHook<'_>>,
+) -> Result<Published, String> {
     if bytes.is_empty() || bytes.len() > MAX_SOURCE_EDIT_OUTPUT_BYTES_V1 {
         return Err("candidate exceeds the bounded source-output profile".into());
     }
@@ -178,7 +198,16 @@ pub fn publish(
     .map_err(|error| {
         format!("candidate publication failed without replacing an existing entry: {error}")
     })?;
-    directory.sync_all().map_err(|error| {
+    // Inject only the final directory-sync result in crate-local unit tests.
+    // All staging, readback, source checks and the no-replace link above are real.
+    #[cfg(not(test))]
+    let directory_sync_result = directory.sync_all();
+    #[cfg(test)]
+    let directory_sync_result = match directory_sync {
+        Some(sync) => sync(&directory, &temporary),
+        None => directory.sync_all(),
+    };
+    directory_sync_result.map_err(|error| {
         format!("candidate {candidate:?} was created but directory durability is unconfirmed; candidate was retained: {error}")
     })?;
     Ok(Published {
