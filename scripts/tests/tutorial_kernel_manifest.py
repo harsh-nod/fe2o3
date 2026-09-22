@@ -361,8 +361,17 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
     def test_scalar_gemm_adds_compile_and_pending_oracle_obligations(self):
         fixture = next(f for f in self.manifest["compilerFixtures"] if f["fixtureId"] == "gfx942-scalar-gemm")
         self.assertEqual(fixture["compilerInput"]["kernelSymbols"], ["scalar_gemm_v1"])
-        self.assertEqual(fixture["simulation"]["status"], "pending-design")
-        self.assertIsNone(fixture["simulation"]["requestSha256"])
+        simulation = fixture["simulation"]
+        self.assertEqual(simulation["status"], "pending-reconciliation")
+        self.assertEqual((simulation["bundleVersion"], simulation["canonicalKirVersion"]), (7, 12))
+        for kind in ("request", "expectation"):
+            with self.subTest(kind=kind):
+                payload = (ROOT / simulation[f"{kind}Path"]).read_bytes()
+                self.assertEqual(simulation[f"{kind}Bytes"], len(payload))
+                self.assertEqual(simulation[f"{kind}Sha256"], hashlib.sha256(payload).hexdigest())
+        suite = next(row for row in self.manifest["qualification"]["suites"]
+                     if row["suiteId"] == "semantic-simulation-scalar-gemm")
+        self.assertEqual(suite["availability"], "pending")
         for lesson in ("gemm-proof-plan", "gemm-tiling"):
             entry = next(e for e in self.manifest["entries"] if e["lessonId"] == lesson)
             self.assertIn(fixture["fixtureId"], entry["compilerFixtureIds"])
@@ -463,7 +472,9 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertTrue(all(row["lexicalKernelNames"] is None
                             for row in report["displayObservations"]))
         self.assertEqual(report["stageStatus"], "not-evaluated")
-        self.assertEqual(report["variantBindingStatus"], "pending")
+        self.assertEqual(report["variantBindingStatus"], "partial")
+        self.assertEqual(report["sourceBoundVariantCount"], 1)
+        self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["productionContract"], self.original["productionContract"])
 
     def kernel_pair_report(self, inventory=None):
@@ -487,16 +498,22 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "6de34282e7b77ac295c9321eb7bfa2a3a02e191d0b489333ea33040fea349476")
+                         "0f6999473bdbb5635444ad7b69515fd678805bbf3d6b9590f1c05bbcb78f4c60")
         self.assertEqual(len(inventory["kernels"]), 60)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 74, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 56, "source-driver-contract": 13, "fixture-source-contract": 8,
+                         {"pending": 54, "source-driver-contract": 13, "fixture-source-contract": 10,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
-        self.assertTrue(all(variant["status"] == "pending" and variant["source"] is None
-                            for row in inventory["kernels"] for variant in row["variants"]))
+        bound = [(row["kernelId"], variant["kind"])
+                 for row in inventory["kernels"] for variant in row["variants"]
+                 if variant["status"] == "source-bound"]
+        self.assertEqual(bound, [("fixture:gfx942-fill-simulation:fill", "simt")])
+        pending = [variant for row in inventory["kernels"] for variant in row["variants"]
+                   if variant["status"] == "pending"]
+        self.assertEqual(len(pending), 119)
+        self.assertTrue(all(variant["source"] is None for variant in pending))
         display = {(row["lessonId"], row["tabOrdinal"], row["kernelSymbol"]): row
                    for row in inventory["displayItems"]}
         self.assertEqual(display[("typed-vecadd", 3, "vecadd")]["bindingStatus"], "pending")
@@ -553,7 +570,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertIs(report["qualified"], False)
         self.assertEqual(report["qualifiedPairCount"], 0)
         self.assertIsNone(report["requiredPairCount"])
-        self.assertEqual(report["variantBindingStatus"], "pending")
+        self.assertEqual(report["variantBindingStatus"], "partial")
 
     def test_attention_bindings_reject_same_symbol_source_substitution(self):
         lesson_id = "gfx950-gpt-oss-120b-megakernel"
@@ -622,6 +639,60 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertIsNone(without_runtime["requiredPairCount"])
         self.assertEqual(sum("selection" in row for row in without_runtime["unresolvedBindings"]), 6)
 
+    def gpt_excerpt_document(self):
+        """A two-display source association, not a complete curriculum census."""
+        document = copy.deepcopy(self.original)
+        lessons = {"gfx950-gpt-oss-120b-megakernel", "gfx950-gpt-oss-megakernel-performance-lab"}
+        fixture_id = "gfx950-gpt-oss-decode"
+        kernel_id = f"fixture:{fixture_id}:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        document["compilerFixtures"] = [row for row in document["compilerFixtures"]
+                                        if row["fixtureId"] == fixture_id]
+        inventory = document["kernelInventory"]
+        inventory["kernels"] = [row for row in inventory["kernels"] if row["kernelId"] == kernel_id]
+        inventory["negativeCases"] = []
+        inventory["displayItems"] = [row for row in inventory["displayItems"]
+                                     if row["lessonId"] in lessons and row["tabOrdinal"] == 0]
+        self.assertEqual(len(inventory["displayItems"]), 2)
+        document["curriculum"]["lessons"] = [row for row in document["curriculum"]["lessons"]
+                                             if row["lessonId"] in lessons]
+        runtime = {"schema": self.validator.SITE_INVENTORY_SCHEMA,
+                   "site": document["curriculum"]["site"], "lessons": []}
+        for lesson in document["curriculum"]["lessons"]:
+            lesson["codeTabs"] = lesson["codeTabs"][:1]
+            tab = lesson["codeTabs"][0]
+            physical = (ROOT / tab["sourcePath"]).read_bytes()
+            excerpt = physical[1261:1261 + tab["displayedUtf8Bytes"]].decode("utf-8")
+            runtime["lessons"].append({"id": lesson["lessonId"], "codeTabs": [
+                {**tab, "displayedCode": excerpt, "sourceFragments": [excerpt]},
+            ]})
+        return document, runtime
+
+    def test_checked_in_gpt_excerpts_bind_without_qualifying_variants(self):
+        document, runtime = self.gpt_excerpt_document()
+        before = copy.deepcopy((document, runtime))
+        self.validator.validate_site_inventory(document["curriculum"], runtime)
+        result = self.validator.validate_kernel_inventory(document, runtime, repo_root=ROOT)
+        self.assertEqual(result["unresolvedBindings"], [])
+        self.assertEqual(result["displayItemCount"], 2)
+        self.assertEqual(result["sourceBoundVariantCount"], 0)
+        self.assertEqual(result["sourceBoundPairCount"], 0)
+        missing = self.validator.validate_kernel_inventory(document, None, repo_root=ROOT)
+        self.assertFalse(missing["runtimeCensusValidated"])
+        self.assertFalse(missing["inventoryComplete"])
+        self.assertIsNone(missing["requiredPairCount"])
+        self.assertEqual((document, runtime), before)
+
+    def test_checked_in_gpt_excerpt_rejects_stale_coordinates_and_bytes(self):
+        document, runtime = self.gpt_excerpt_document()
+        document["kernelInventory"]["displayItems"][0]["functionUtf8Offset"] += 1
+        with self.assertRaisesRegex(SystemExit, "missing from the live function census"):
+            self.validator.validate_kernel_inventory(document, runtime, repo_root=ROOT)
+        document, runtime = self.gpt_excerpt_document()
+        tab = runtime["lessons"][0]["codeTabs"][0]
+        tab["displayedCode"] += " "
+        with self.assertRaisesRegex(SystemExit, "displayed bytes do not match"):
+            self.validator.validate_site_inventory(document["curriculum"], runtime)
+
     def bind_source_variant(self, document, root, kernel_id):
         inventory = self.validator.validate_kernel_inventory(document, None, repo_root=root)
         retained = next(row for row in inventory["kernelIdentities"] if row["kernelId"] == kernel_id)
@@ -648,13 +719,32 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         kernel["variants"][0].update(status="source-bound", source=binding)
         return binding
 
+    def test_checked_in_fill_simt_source_binding_matches_current_physical_source(self):
+        kernel_id = "fixture:gfx942-fill-simulation:fill"
+        kernel = next(row for row in self.manifest["kernelInventory"]["kernels"]
+                      if row["kernelId"] == kernel_id)
+        expected = copy.deepcopy(kernel["variants"][0]["source"])
+        before = copy.deepcopy(self.manifest)
+        self.assertEqual(self.bind_source_variant(self.manifest, ROOT, kernel_id), expected)
+        self.assertEqual(self.manifest, before)
+        self.assertEqual(expected["sourcePath"], "examples/fill/src/lib.rs")
+        report = self.kernel_pair_report()
+        self.assertEqual(report["sourceBoundVariantCount"], 1)
+        self.assertEqual(report["sourceBoundPairCount"], 0)
+        self.assertEqual(report["qualifiedPairCount"], 0)
+        self.assertEqual(report["stageStatus"], "not-evaluated")
+        self.assertIs(report["qualified"], False)
+        self.assertIs(report["inventoryComplete"], False)
+        self.assertIsNone(report["requiredPairCount"])
+        self.assertEqual(kernel["variants"][1]["status"], "pending")
+
     def test_real_source_bound_variant_report_does_not_qualify_or_complete_census(self):
         # A physical source association, not a new tile implementation or receipt.
         kernel_id = "fixture:gfx950-gpt-oss-serial-router:gfx950_gpt_oss_120b_decode_megakernel_v1"
         foreign_id = "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
         binding = self.bind_source_variant(self.manifest, ROOT, kernel_id)
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 1)
+        self.assertEqual(report["sourceBoundVariantCount"], 2)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["variantBindingStatus"], "partial")
         self.assertIs(report["qualified"], False)
@@ -1482,6 +1572,10 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             self.validator.validate_source_item(root, "whole-file", tab, {})
             reference = {"kind": "source-driver-case", "lessonId": "whole-file", "tabOrdinal": 0, "caseOrdinal": 0}
             offset = source.index(b"selected")
+            variants = copy.deepcopy(self.original["kernelInventory"]["kernels"][0]["variants"])
+            for variant in variants:
+                variant.update(status="pending", source=None)
+                variant["blocker"]["reason"] = "Constructed source association is pending."
             document = {
                 "compilerFixtures": [],
                 "curriculum": {"schema": self.validator.CURRICULUM_SCHEMA_V2,
@@ -1489,7 +1583,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                 "kernelInventory": {
                     "schema": "fe2o3-tutorial-kernel-identities-v1",
                     "kernels": [{"kernelId": "selected", "selections": [reference],
-                                 "variants": copy.deepcopy(self.original["kernelInventory"]["kernels"][0]["variants"])}],
+                                 "variants": variants}],
                     "negativeCases": [], "displayItems": [{
                         "lessonId": "whole-file", "tabOrdinal": 0, "functionUtf8Offset": offset,
                         "kernelSymbol": "selected", "classification": "kernel", "kernelIds": ["selected"],
