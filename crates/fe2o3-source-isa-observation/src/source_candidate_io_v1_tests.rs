@@ -305,3 +305,77 @@ fn staged_readback_refuses_a_named_file_even_when_bytes_and_metadata_match() {
     );
     assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 1);
 }
+
+#[test]
+fn directory_sync_failure_after_link_retains_candidate_and_original() {
+    let directory = Directory::new();
+    let source_path = directory.path("source.rs");
+    let candidate_path = directory.path("candidate.rs");
+    let original = fs::read(&source_path).unwrap();
+    let original_metadata = fs::symlink_metadata(&source_path).unwrap();
+    let parent_metadata = fs::metadata(&directory.0).unwrap();
+    let mut source = RetainedSource::open(&source_path).unwrap();
+    let bytes = b"fn retained_after_sync_refusal() {}\n";
+    let mut linked_identity = None;
+    let mut sync_calls = 0;
+    let error = {
+        let mut refuse_sync = |parent: &File, staged: &File| {
+            sync_calls += 1;
+            let parent_observed = parent.metadata()?;
+            assert_eq!(parent_observed.dev(), parent_metadata.dev());
+            assert_eq!(parent_observed.ino(), parent_metadata.ino());
+            let staged_metadata = staged.metadata()?;
+            let named_metadata = fs::symlink_metadata(&candidate_path)?;
+            // This hook is reached only after the actual no-replace link.
+            assert!(named_metadata.is_file());
+            assert_eq!(staged_metadata.nlink(), 1);
+            assert_eq!(named_metadata.nlink(), 1);
+            assert_eq!(named_metadata.dev(), staged_metadata.dev());
+            assert_eq!(named_metadata.ino(), staged_metadata.ino());
+            assert_eq!(staged_metadata.mode() & 0o7777, 0o600);
+            assert_eq!(fs::read(&candidate_path)?, bytes);
+            linked_identity = Some((staged_metadata.dev(), staged_metadata.ino()));
+            Err(std::io::Error::other("injected directory-sync refusal"))
+        };
+        publish_inner(&mut source, &candidate_path, bytes, Some(&mut refuse_sync))
+            .err()
+            .unwrap()
+    };
+    assert_eq!(sync_calls, 1);
+    assert_eq!(
+        error,
+        format!(
+            "candidate {candidate_path:?} was created but directory durability is unconfirmed; candidate was retained: injected directory-sync refusal"
+        )
+    );
+    // The staging descriptor has now been dropped. The published name, exact
+    // inode, bytes and private mode must remain; no implicit rollback is allowed.
+    let retained_metadata = fs::symlink_metadata(&candidate_path).unwrap();
+    assert!(retained_metadata.is_file());
+    assert_eq!(retained_metadata.nlink(), 1);
+    assert_eq!(
+        Some((retained_metadata.dev(), retained_metadata.ino())),
+        linked_identity
+    );
+    assert_eq!(retained_metadata.mode() & 0o7777, 0o600);
+    assert_eq!(fs::read(&candidate_path).unwrap(), bytes);
+    assert_eq!(fs::read(&source_path).unwrap(), original);
+    assert_eq!(source.original(), original);
+    let source_after = fs::symlink_metadata(&source_path).unwrap();
+    assert!(same_snapshot(&original_metadata, &source_after));
+    assert_eq!(source_after.mode(), original_metadata.mode());
+    assert_eq!(source_after.nlink(), original_metadata.nlink());
+    source.recheck().unwrap();
+    let mut names: Vec<_> = fs::read_dir(&directory.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            std::ffi::OsString::from("candidate.rs"),
+            std::ffi::OsString::from("source.rs"),
+        ]
+    );
+}
