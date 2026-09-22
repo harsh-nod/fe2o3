@@ -1,4 +1,5 @@
-//! Test-only typed-source capture from the collector's sealed Instance.
+//! Compiler-private typed-source capture from the collector's sealed Instance.
+//! Shared by bounded Linux promotion and test-only diagnostic observers.
 //! No serialized record, name, range, or caller-selected function is authority.
 //! This deliberately refuses normalization instead of mixing coordinate spaces.
 

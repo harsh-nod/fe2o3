@@ -1,4 +1,5 @@
-//! Test-only same-session replacement. No public source admission or resume.
+//! Compiler-private replacement eligibility shared by bounded source promotion.
+//! Adversarial callbacks and diagnostic observers remain test-only. No resume.
 
 use super::*;
 use crate::collector::source_census_v1::bitselect_feasibility::retained::{
@@ -10,17 +11,24 @@ use fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1;
 use fe2o3_source_isa_observation::multilevel_authoring_v1::ordered_program_materialization_v1::render_bitselect_expression_v1;
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
 #[path = "source_bitselect_candidate_fresh_v1_tests.rs"]
 mod fresh;
+#[path = "source_bitselect_promotion_pipeline_v1.rs"]
+mod headless;
+#[cfg(test)]
 #[path = "source_local_order_pipeline_v1_tests.rs"]
 mod local_order;
+#[cfg(test)]
 #[path = "source_bitselect_candidate_checks_v1_tests.rs"]
 mod tests;
 
+#[cfg(test)]
 pub(super) fn registers() -> Gfx942OrderedProgramRegistersV1 {
     Gfx942OrderedProgramRegistersV1::new(4, 5, [0, 1, 2]).expect("fixed distinct fixture registers")
 }
 
+#[cfg(test)]
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     pub(crate) fn publish_source_bitselect_candidate(
         self,

@@ -20,7 +20,7 @@ mod coordinates;
 #[path = "production_source_census_io_v1.rs"]
 mod output;
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "linux"))]
 #[path = "source_bitselect_feasibility_v1_tests.rs"]
 pub(crate) mod bitselect_feasibility;
 
