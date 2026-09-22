@@ -27,6 +27,13 @@ macro_rules! context_journal_declarations_v1 {
 
 include!("context_version_journal/declarations.rs");
 include!("context_version_journal/lookup_bodies.rs");
+include!("context_version_journal/writer_lookup_bodies.rs");
+
+#[cfg(test)]
+mod query_baseline;
+
+#[cfg(test)]
+mod writer_lookup_tests;
 
 fn issuable_context_id(value: u64) -> bool {
     value != 0 && value != u64::MAX
@@ -251,26 +258,12 @@ impl ContextVersionJournalV1 {
         &self,
         reference: ContextWriterReferenceV1,
     ) -> Result<ContextWriterStateV1, ContextVersionJournalErrorV1> {
-        let (key, state) = match self.read_slot(reference.slot).copied().flatten() {
-            Some(WriterEntryV1::Reserved(key)) => (key, ContextWriterStateV1::Reserved),
-            Some(WriterEntryV1::Pending { key, count, .. }) => (
-                key,
-                ContextWriterStateV1::Pending {
-                    member_count: count,
-                },
-            ),
-            Some(WriterEntryV1::Unknown { key, count, .. }) => (
-                key,
-                ContextWriterStateV1::Unknown {
-                    member_count: count,
-                },
-            ),
-            None => return Err(ContextVersionJournalErrorV1::InvalidReference),
-        };
-        if key != reference.key || key.context_generation != self.context_generation {
-            return Err(ContextVersionJournalErrorV1::InvalidReference);
-        }
-        Ok(state)
+        writer_lookup_body!(
+            self,
+            reference,
+            retained::shared_retained_writer_key_v1,
+            ContextVersionJournalV1::count_indexed_access
+        )
     }
 
     #[cfg(test)]

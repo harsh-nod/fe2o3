@@ -4,6 +4,8 @@ use alloc::string::String;
 type Error = ContextVersionJournalErrorV1;
 type Status = ContextProducerReadStatusV1;
 
+mod query_shared;
+
 mod begin_guards {
     use super::*;
     type Owner = ContextProducerReadJournalV1;

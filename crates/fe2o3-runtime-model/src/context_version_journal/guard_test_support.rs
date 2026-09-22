@@ -1,6 +1,26 @@
 use super::*;
 
 impl ContextVersionJournalV1 {
+    pub(crate) fn query_replace_writer_for_test_v1(
+        &mut self,
+        reference: ContextWriterReferenceV1,
+        state: Option<ContextWriterStateV1>,
+    ) {
+        self.writers[reference.slot] = state.map(|state| match state {
+            ContextWriterStateV1::Reserved => WriterEntryV1::Reserved(reference.key),
+            ContextWriterStateV1::Pending { member_count } => WriterEntryV1::Pending {
+                key: reference.key,
+                head: Some(usize::MAX),
+                count: member_count,
+            },
+            ContextWriterStateV1::Unknown { member_count } => WriterEntryV1::Unknown {
+                key: reference.key,
+                head: Some(usize::MAX),
+                count: member_count,
+            },
+        });
+    }
+
     pub(crate) fn guard_break_backlink_for_test_v1(
         &mut self,
         allocation: ContextAllocationReferenceV1,

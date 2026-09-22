@@ -1,6 +1,15 @@
 use super::*;
 
 impl ContextReadLeasedJournalV1 {
+    pub(crate) fn query_replace_writer_for_test_v1(
+        &mut self,
+        reference: ContextWriterReferenceV1,
+        state: Option<ContextWriterStateV1>,
+    ) {
+        self.journal
+            .query_replace_writer_for_test_v1(reference, state);
+    }
+
     pub(crate) fn guard_break_backlink_for_test_v1(
         &mut self,
         allocation: ContextAllocationReferenceV1,

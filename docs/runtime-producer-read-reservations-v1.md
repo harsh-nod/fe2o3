@@ -409,6 +409,18 @@ Before enabling runtime admission, the remaining work is:
    are not formally refined. Raw safety requires matching reader/allocation storage
    lengths. Malformed-prefix and undercount witnesses do not claim valid custody.
    Instrumented frozen-baseline comparisons are not native performance evidence.
+   The [actual producer query packet](evidence/dev-producer-query-2026-09-22/README.md)
+   shares writer lookup, producer status/validation and full-reference retained
+   lookup/status. Raw contracts are unconditional; paired actual and historical
+   queries execute independently without custody or successful-admission premises.
+   Successful public status eliminates its redundant second journal traversal.
+   Synthetic witnesses cover all four statuses, irrelevant malformed storage,
+   resolved invalid/reused writer slots and identity-before-device error precedence.
+   CPU fixtures compare exact results, complete contents, storage and variant-specific
+   access counts against frozen methods. The immutable Deref receiver projection is
+   source-authenticated, not newly proved as a trait implementation. This read-only
+   refinement does not establish construction or acquisition/settlement reachability,
+   physical storage guarantees, native pending-consumer authority or performance parity.
    Remaining bodies include construction and producer admission/release;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but

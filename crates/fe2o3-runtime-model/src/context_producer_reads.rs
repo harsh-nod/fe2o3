@@ -11,6 +11,9 @@ macro_rules! context_producer_read_declarations_v1 {
 
 include!("context_producer_reads/declarations.rs");
 
+#[macro_use]
+mod query;
+
 #[allow(unused_macros)]
 #[macro_use]
 mod guard_templates {
@@ -110,61 +113,19 @@ impl ContextProducerReadJournalV1 {
         Ok(())
     }
 
+    #[allow(clippy::question_mark)]
     fn status(
         &self,
         request: &ContextProducerReadV1,
     ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
-        use ContextProducerReadStatusV1 as S;
-        use ContextVersionJournalErrorV1 as E;
-        let read = request.read;
-        let state = self.stable.lookup_allocation(read.allocation)?;
-        if state.device != read.device {
-            return Err(E::AllocationDeviceMismatch);
-        }
-        if state.byte_extent != read.byte_extent {
-            return Err(E::AllocationExtentMismatch);
-        }
-        if read.byte_len == 0
-            || read
-                .byte_offset
-                .checked_add(read.byte_len)
-                .is_none_or(|end| end > read.byte_extent)
-        {
-            return Err(E::InvalidExtent);
-        }
-        if request.producer.key.context_generation != self.context_generation()
-            || request.producer.key.kind != ContextWriterKindV1::Submission
-            || read.content_lineage >= read.attempt_epoch
-            || state.attempt_epoch != read.attempt_epoch
-        {
-            return Err(E::InvalidState);
-        }
-        match state.pending_writer {
-            Some(writer) => {
-                if writer != request.producer || state.content_lineage != read.content_lineage {
-                    return Err(E::InvalidState);
-                }
-                match self.stable.lookup_writer(writer)? {
-                    ContextWriterStateV1::Pending { .. } => Ok(S::Pending),
-                    ContextWriterStateV1::Unknown { .. } => Ok(S::Unknown),
-                    ContextWriterStateV1::Reserved => Err(E::InvalidState),
-                }
-            }
-            // The old producer slot may already have been reused elsewhere.
-            None if state.content_lineage == read.attempt_epoch => Ok(S::Success),
-            None if state.content_lineage == read.content_lineage => Ok(S::NoEffect),
-            None => Err(E::InvalidState),
-        }
+        producer_status_body!(&self.stable, request, query::producer_writer_same_exec_v1)
     }
 
     pub fn validate_producer_read(
         &self,
         request: &ContextProducerReadV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        if self.status(request)? != ContextProducerReadStatusV1::Pending {
-            return Err(ContextVersionJournalErrorV1::AllocationBusy);
-        }
-        Ok(())
+        producer_validate_body!(self, request)
     }
 
     /// Atomic canonical-roster acquisition. The caller authenticates each exact
@@ -238,26 +199,27 @@ impl ContextProducerReadJournalV1 {
         Ok(())
     }
 
+    #[allow(clippy::question_mark)]
+    fn inspect_producer_read(
+        &self,
+        reference: ContextProducerReadReferenceV1,
+    ) -> Result<(ContextProducerReadV1, ContextProducerReadStatusV1), ContextVersionJournalErrorV1>
+    {
+        producer_inspect_body!(self, reference, query::producer_reference_same_exec_v1)
+    }
+
     pub fn lookup_producer_read(
         &self,
         reference: ContextProducerReadReferenceV1,
     ) -> Result<ContextProducerReadV1, ContextVersionJournalErrorV1> {
-        let entry = self
-            .reservations
-            .get(reference.slot)
-            .copied()
-            .flatten()
-            .filter(|entry| entry.reference == reference)
-            .ok_or(ContextVersionJournalErrorV1::InvalidReference)?;
-        self.status(&entry.request)?;
-        Ok(entry.request)
+        producer_lookup_body!(self, reference)
     }
 
     pub fn producer_read_status(
         &self,
         reference: ContextProducerReadReferenceV1,
     ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
-        self.status(&self.lookup_producer_read(reference)?)
+        producer_query_body!(self, reference)
     }
 
     /// Quiescence releases custody even when the producer is still Pending or
@@ -473,3 +435,6 @@ mod guard_baseline;
 
 #[cfg(test)]
 mod guard_test_support;
+
+#[cfg(test)]
+mod query_baseline;
