@@ -14,6 +14,16 @@ fn producer_acquire_fixture_v1() -> (result: (ContextProducerReadJournalV1, logi
         result.0.stable.readers@ == seq![0usize], result.0.stable.next_incarnation == 1,
         producer_read_view(result.2) == result.3,
         result.2.producer.key.local == 10,
+        result.2.producer.slot == 0,
+        result.0.stable.journal.allocation_capacity == 1,
+        result.0.stable.journal.writers@ == seq![Some(WriterEntryV1::Pending {
+            key: result.2.producer.key, head: Some(0usize), count: 1usize })],
+        result.0.stable.journal.members@ == seq![Some(MemberEntryV1 {
+            writer: result.2.producer, allocation: result.2.read.allocation,
+            prior_lineage: 0u64, attempt_epoch: 1u64, next: None })],
+        result.0.stable.journal.allocations@ == seq![Some(AllocationEntryV1 {
+            key: result.2.read.allocation.key, device: result.2.read.device, byte_extent: 16u64,
+            attempt_epoch: 1u64, content_lineage: 0u64, pending_member: Some(0usize) })],
         result.2.read.allocation.slot == 0, result.2.read.allocation.key.local == 1,
         result.2.read.byte_offset == 0, result.2.read.byte_len == 8,
         producer_status_decision_v1(result.0.stable.journal, result.2) == Ok(ContextProducerReadStatusV1::Pending),

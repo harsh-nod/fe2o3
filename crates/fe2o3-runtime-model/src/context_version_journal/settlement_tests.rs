@@ -1066,7 +1066,11 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
         .split("fn retained_header(")
         .next()
         .unwrap();
-    assert!(unknown.contains("retained::shared_retained_unknown_v1(self, writer)"));
+    assert!(unknown.contains(
+        "journal_unknown_wrapper_body!(self, writer, retained::shared_retained_unknown_v1)"
+    ));
+    let adapter = include_str!("unknown_wrapper_bodies.rs");
+    assert!(adapter.contains("$execute($journal, $writer)"));
     assert!(source.contains("retained::shared_retained_header_v1(self, writer, allow_unknown)"));
     assert!(source.contains("retained::shared_retained_chain_v1(self, writer, head, count)"));
     for forbidden in [

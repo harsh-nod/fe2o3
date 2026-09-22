@@ -35,6 +35,12 @@ mod acquire;
 #[macro_use]
 mod release;
 
+#[allow(unused_macros)]
+#[macro_use]
+mod unknown_templates {
+    include!("context_version_journal/unknown_wrapper_bodies.rs");
+}
+
 impl Deref for ContextReadLeasedJournalV1 {
     type Target = ContextVersionJournalV1;
 
@@ -280,7 +286,7 @@ impl ContextReadLeasedJournalV1 {
         &mut self,
         writer: ContextWriterReferenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.journal.mark_unknown(writer)
+        stable_unknown_wrapper_body!(self, writer)
     }
 }
 
@@ -298,3 +304,6 @@ mod acquire_baseline;
 
 #[cfg(test)]
 mod release_baseline;
+
+#[cfg(test)]
+mod unknown_baseline;

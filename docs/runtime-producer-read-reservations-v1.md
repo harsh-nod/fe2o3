@@ -453,7 +453,20 @@ Before enabling runtime admission, the remaining work is:
    Frozen comparisons use unchanged current stable leaves, not older leaf baselines.
    CPU qualification includes shared resolved allocations and legal combined-budget
    exhaustion, without claiming constructor/settlement reachability or native parity.
-   Remaining bodies include construction, enrollment/retirement and settlement wrappers;
+   The three `mark_unknown` adapters now share executable delegation with
+   `context_owner_unknown_execution_v1.rs`. Their raw contracts are total: no
+   reader/producer count-storage, budget, custody, capacity observation or issuer
+   premise is required. The complete retained chain is checked on every call,
+   including already-Unknown calls. Rejection and idempotent success preserve exact
+   normal-state owner values; Pending success changes only the selected writer.
+   `context_owner_unknown_historical_v1.rs` independently executes the historical
+   journal operation and lifts it through unchanged reader and producer fields.
+   Producer invariant preservation is conditional on the initial invariant, not
+   a raw execution precondition. Synthetic witnesses and actual-lifecycle frozen
+   comparisons do not establish physical allocation, constructor reachability or
+   native admission. The developer runner is `verus/check-owner-unknown.py`; its
+   records are not a native qualification or elapsed-time performance claim.
+   Remaining bodies include construction, enrollment/retirement and other settlement wrappers;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

@@ -2,6 +2,16 @@ use super::*;
 
 mod disposal;
 
+#[cfg(test)]
+#[path = "unknown_baseline.rs"]
+mod unknown_baseline;
+
+#[allow(unused_macros)]
+#[macro_use]
+mod unknown_templates {
+    include!("unknown_wrapper_bodies.rs");
+}
+
 impl ContextVersionJournalV1 {
     /// Settles a complete retained writer using an inert success premise.
     pub fn settle_success(
@@ -26,7 +36,7 @@ impl ContextVersionJournalV1 {
         &mut self,
         writer: ContextWriterReferenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        retained::shared_retained_unknown_v1(self, writer)
+        journal_unknown_wrapper_body!(self, writer, retained::shared_retained_unknown_v1)
     }
 
     fn retained_header(

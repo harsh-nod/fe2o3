@@ -35,6 +35,12 @@ mod release;
 #[macro_use]
 mod stable_wrappers;
 
+#[allow(unused_macros)]
+#[macro_use]
+mod unknown_templates {
+    include!("context_version_journal/unknown_wrapper_bodies.rs");
+}
+
 impl Deref for ContextProducerReadJournalV1 {
     type Target = ContextReadLeasedJournalV1;
 
@@ -346,7 +352,7 @@ impl ContextProducerReadJournalV1 {
         &mut self,
         writer: ContextWriterReferenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.stable.mark_unknown(writer)
+        producer_unknown_wrapper_body!(self, writer)
     }
 }
 
@@ -370,3 +376,6 @@ mod release_baseline;
 
 #[cfg(test)]
 mod stable_wrapper_baseline;
+
+#[cfg(test)]
+mod unknown_baseline;
