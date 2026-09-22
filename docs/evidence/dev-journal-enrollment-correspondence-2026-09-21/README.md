@@ -59,6 +59,11 @@ status preservation, and missing reservation/count custody. Every negative must
 fail for its exact source-bound verification diagnostics, not a syntax error,
 timeout, unrelated failure or arbitrary nonzero exit.
 
+Only case paths and top-level diagnostic emission order are normalized. Every
+complete diagnostic record, nested ordering, JSON type and duplicate count is
+retained. Self-tests accept reordered diagnostics but reject missing or duplicated
+records, altered fields and solver results, and rehashed artifact substitutions.
+
 The source commit binds 27 proof inputs, the runtime adapters/public forwarder,
 all model source and the recorder/auditor. The three shared macro families have
 10, 13 and 8 bodies. Staged sources, include envelopes, typed diagnostics, input

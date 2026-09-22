@@ -127,9 +127,10 @@ def command(verus, source, mutation):
 def normalized(base, stdout, stderr, folder):
     report = base.unique_json(stdout)
     diagnostics = [base.unique_json(line) for line in stderr.splitlines()]
-    # Paths are the only normalized fields. All bytes, spans, expansion trees,
-    # diagnostic text and JSON value types remain part of the expected result.
+    # Paths are the only normalized fields. Canonicalize top-level emission
+    # order, retaining every complete record, nested order and duplicate count.
     diagnostics = base.unique_json(json.dumps(diagnostics).replace(str(folder), '<CASE>'))
+    diagnostics.sort(key=lambda row: json.dumps(row, sort_keys=True))
     return {'result': report['verification-results'], 'diagnostics': diagnostics, 'verus': report['verus']}
 
 

@@ -241,6 +241,19 @@ def selftest(repo, packet):
                 raise ValueError('accepted altered solver result')
         if mutation:
             rows = [base.unique_json(line) for line in stderr.splitlines()]
+            check.check_result(base, receipt['status'], stdout,
+                               '\n'.join(json.dumps(row) for row in reversed(rows)), case, mutation, expected)
+            diagnostic = next(row for row in rows if row['spans'])
+            missing = list(rows)
+            missing.remove(diagnostic)
+            for changed in (missing, [*rows, diagnostic]):
+                try:
+                    check.check_result(base, receipt['status'], stdout,
+                                       '\n'.join(json.dumps(row) for row in changed), case, mutation, expected)
+                except ValueError:
+                    rejected += 1
+                else:
+                    raise ValueError('accepted missing or duplicated diagnostic')
             for field, value in [('message', 'unrelated error'), ('is_primary', 1), ('byte_start', 0)]:
                 changed = copy.deepcopy(rows)
                 target = next(row for row in changed if row['spans'])
@@ -255,6 +268,7 @@ def selftest(repo, packet):
                 else:
                     raise ValueError('accepted altered diagnostic')
     print('PASS: rejected', rejected, 'altered solver results/diagnostics')
+    print('PASS: accepted', len(check.MUTATIONS), 'top-level diagnostic-order reversals')
     modifications = [
         ('source', 'proof/positive-before/' + str(check.BODY), b'// changed source\n'),
         ('extra', 'proof/positive-before/unexpected.rs', b'// extra staged source\n'),

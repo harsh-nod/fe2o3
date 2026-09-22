@@ -20,43 +20,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 2 previous errors",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
-      },
-      {
-        "$message_type": "diagnostic",
-        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
-        "code": null,
-        "level": "note",
-        "spans": [
-          {
-            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_value_views_v1.rs",
-            "byte_start": 1132,
-            "byte_end": 1201,
-            "line_start": 28,
-            "line_end": 28,
-            "column_start": 7,
-            "column_end": 76,
-            "is_primary": true,
-            "text": [
-              {
-                "text": "proof fn enrollment_entry_correspondence(context: u64, entry: EnrollmentV1)",
-                "highlight_start": 7,
-                "highlight_end": 76
-              }
-            ],
-            "label": null,
-            "suggested_replacement": null,
-            "suggestion_applicability": null,
-            "expansion": null
-          }
-        ],
-        "children": [],
-        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_value_views_v1.rs:28:7\n   |\n28 | proof fn enrollment_entry_correspondence(context: u64, entry: EnrollmentV1)\n   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+        "rendered": "error: aborting due to 2 previous errors\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -169,12 +138,43 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 2 previous errors",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
         "code": null,
-        "level": "error",
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_value_views_v1.rs",
+            "byte_start": 1132,
+            "byte_end": 1201,
+            "line_start": 28,
+            "line_end": 28,
+            "column_start": 7,
+            "column_end": 76,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "proof fn enrollment_entry_correspondence(context: u64, entry: EnrollmentV1)",
+                "highlight_start": 7,
+                "highlight_end": 76
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_value_views_v1.rs:28:7\n   |\n28 | proof fn enrollment_entry_correspondence(context: u64, entry: EnrollmentV1)\n   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 2 previous errors\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -199,43 +199,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 2 previous errors",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
-      },
-      {
-        "$message_type": "diagnostic",
-        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
-        "code": null,
-        "level": "note",
-        "spans": [
-          {
-            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_value_views_v1.rs",
-            "byte_start": 1178,
-            "byte_end": 1247,
-            "line_start": 28,
-            "line_end": 28,
-            "column_start": 7,
-            "column_end": 76,
-            "is_primary": true,
-            "text": [
-              {
-                "text": "proof fn enrollment_entry_correspondence(context: u64, entry: EnrollmentV1)",
-                "highlight_start": 7,
-                "highlight_end": 76
-              }
-            ],
-            "label": null,
-            "suggested_replacement": null,
-            "suggestion_applicability": null,
-            "expansion": null
-          }
-        ],
-        "children": [],
-        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_value_views_v1.rs:28:7\n   |\n28 | proof fn enrollment_entry_correspondence(context: u64, entry: EnrollmentV1)\n   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+        "rendered": "error: aborting due to 2 previous errors\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -348,12 +317,43 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 2 previous errors",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
         "code": null,
-        "level": "error",
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_value_views_v1.rs",
+            "byte_start": 1178,
+            "byte_end": 1247,
+            "line_start": 28,
+            "line_end": 28,
+            "column_start": 7,
+            "column_end": 76,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "proof fn enrollment_entry_correspondence(context: u64, entry: EnrollmentV1)",
+                "highlight_start": 7,
+                "highlight_end": 76
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_value_views_v1.rs:28:7\n   |\n28 | proof fn enrollment_entry_correspondence(context: u64, entry: EnrollmentV1)\n   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 2 previous errors\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -378,12 +378,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -423,12 +423,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -453,12 +453,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -493,12 +493,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -523,12 +523,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -604,12 +604,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -634,12 +634,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -720,12 +720,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -750,58 +750,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 2 previous errors",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
-      },
-      {
-        "$message_type": "diagnostic",
-        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
-        "code": null,
-        "level": "note",
-        "spans": [
-          {
-            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
-            "byte_start": 7938,
-            "byte_end": 8313,
-            "line_start": 135,
-            "line_end": 138,
-            "column_start": 1,
-            "column_end": 89,
-            "is_primary": true,
-            "text": [
-              {
-                "text": "fn enrollment_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::JournalContentsV1,",
-                "highlight_start": 1,
-                "highlight_end": 105
-              },
-              {
-                "text": "    entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],",
-                "highlight_start": 1,
-                "highlight_end": 71
-              },
-              {
-                "text": "    output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>])",
-                "highlight_start": 1,
-                "highlight_end": 111
-              },
-              {
-                "text": "    -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))",
-                "highlight_start": 1,
-                "highlight_end": 89
-              }
-            ],
-            "label": null,
-            "suggested_replacement": null,
-            "suggestion_applicability": null,
-            "expansion": null
-          }
-        ],
-        "children": [],
-        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs:135:1\n    |\n135 | / fn enrollment_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::JournalContentsV1,\n136 | |     entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],\n137 | |     output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>])\n138 | |     -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))\n    | |________________________________________________________________________________________^\n\n"
+        "rendered": "error: aborting due to 2 previous errors\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -959,45 +913,6 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 2 previous errors",
-        "code": null,
-        "level": "error",
-        "spans": [],
-        "children": [],
-        "rendered": "error: aborting due to 2 previous errors\n\n"
-      }
-    ],
-    "verus": {
-      "profile": "release",
-      "version": "0.2026.08.09.92f466f",
-      "platform": {
-        "os": "linux",
-        "arch": "x86_64"
-      },
-      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
-      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
-    }
-  },
-  "raw_model_skip": {
-    "result": {
-      "encountered-error": true,
-      "encountered-vir-error": false,
-      "verified": 0,
-      "errors": 1,
-      "is-verifying-entire-crate": false
-    },
-    "diagnostics": [
-      {
-        "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
-        "code": null,
-        "level": "note",
-        "spans": [],
-        "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
-      },
-      {
-        "$message_type": "diagnostic",
         "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
         "code": null,
         "level": "note",
@@ -1041,6 +956,45 @@
         ],
         "children": [],
         "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs:135:1\n    |\n135 | / fn enrollment_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::JournalContentsV1,\n136 | |     entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],\n137 | |     output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>])\n138 | |     -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))\n    | |________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "raw_model_skip": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -1208,12 +1162,58 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 2 previous errors",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
         "code": null,
-        "level": "error",
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
+            "byte_start": 7938,
+            "byte_end": 8313,
+            "line_start": 135,
+            "line_end": 138,
+            "column_start": 1,
+            "column_end": 89,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn enrollment_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::JournalContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 105
+              },
+              {
+                "text": "    entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],",
+                "highlight_start": 1,
+                "highlight_end": 71
+              },
+              {
+                "text": "    output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>])",
+                "highlight_start": 1,
+                "highlight_end": 111
+              },
+              {
+                "text": "    -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 89
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs:135:1\n    |\n135 | / fn enrollment_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::JournalContentsV1,\n136 | |     entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],\n137 | |     output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>])\n138 | |     -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))\n    | |________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 2 previous errors\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -1238,69 +1238,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
-        "code": null,
-        "level": "note",
-        "spans": [],
-        "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
-      },
-      {
-        "$message_type": "diagnostic",
-        "message": "precondition not satisfied",
+        "message": "aborting due to 2 previous errors",
         "code": null,
         "level": "error",
-        "spans": [
-          {
-            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
-            "byte_start": 6607,
-            "byte_end": 6689,
-            "line_start": 112,
-            "line_end": 112,
-            "column_start": 9,
-            "column_end": 91,
-            "is_primary": false,
-            "text": [
-              {
-                "text": "        enrollment_execution_relation_v1(before, after, entries, original, output, result),",
-                "highlight_start": 9,
-                "highlight_end": 91
-              }
-            ],
-            "label": "failed precondition",
-            "suggested_replacement": null,
-            "suggestion_applicability": null,
-            "expansion": null
-          },
-          {
-            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
-            "byte_start": 10867,
-            "byte_end": 11037,
-            "line_start": 176,
-            "line_end": 177,
-            "column_start": 13,
-            "column_end": 74,
-            "is_primary": true,
-            "text": [
-              {
-                "text": "    proof { enrollment_paired_transition(before, *actual, model_before.stable.journal, model.stable.journal,",
-                "highlight_start": 13,
-                "highlight_end": 109
-              },
-              {
-                "text": "        entries@, original, output@, model_output@, result, model_result); }",
-                "highlight_start": 1,
-                "highlight_end": 74
-              }
-            ],
-            "label": null,
-            "suggested_replacement": null,
-            "suggestion_applicability": null,
-            "expansion": null
-          }
-        ],
+        "spans": [],
         "children": [],
-        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs:176:13\n    |\n112 |           enrollment_execution_relation_v1(before, after, entries, original, output, result),\n    |           ---------------------------------------------------------------------------------- failed precondition\n...\n176 |       proof { enrollment_paired_transition(before, *actual, model_before.stable.journal, model.stable.journal,\n    |  _____________^\n177 | |         entries@, original, output@, model_output@, result, model_result); }\n    | |_________________________________________________________________________^\n\n"
+        "rendered": "error: aborting due to 2 previous errors\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -1401,6 +1344,63 @@
       },
       {
         "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
+            "byte_start": 6607,
+            "byte_end": 6689,
+            "line_start": 112,
+            "line_end": 112,
+            "column_start": 9,
+            "column_end": 91,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        enrollment_execution_relation_v1(before, after, entries, original, output, result),",
+                "highlight_start": 9,
+                "highlight_end": 91
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
+            "byte_start": 10867,
+            "byte_end": 11037,
+            "line_start": 176,
+            "line_end": 177,
+            "column_start": 13,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    proof { enrollment_paired_transition(before, *actual, model_before.stable.journal, model.stable.journal,",
+                "highlight_start": 13,
+                "highlight_end": 109
+              },
+              {
+                "text": "        entries@, original, output@, model_output@, result, model_result); }",
+                "highlight_start": 1,
+                "highlight_end": 74
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs:176:13\n    |\n112 |           enrollment_execution_relation_v1(before, after, entries, original, output, result),\n    |           ---------------------------------------------------------------------------------- failed precondition\n...\n176 |       proof { enrollment_paired_transition(before, *actual, model_before.stable.journal, model.stable.journal,\n    |  _____________^\n177 | |         entries@, original, output@, model_output@, result, model_result); }\n    | |_________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
         "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
         "code": null,
         "level": "note",
@@ -1452,12 +1452,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 2 previous errors",
+        "message": "verifying module production (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 2 previous errors\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -1482,63 +1482,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 2 previous errors",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
-      },
-      {
-        "$message_type": "diagnostic",
-        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
-        "code": null,
-        "level": "note",
-        "spans": [
-          {
-            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
-            "byte_start": 9379,
-            "byte_end": 9879,
-            "line_start": 157,
-            "line_end": 161,
-            "column_start": 1,
-            "column_end": 89,
-            "is_primary": true,
-            "text": [
-              {
-                "text": "fn enrollment_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,",
-                "highlight_start": 1,
-                "highlight_end": 117
-              },
-              {
-                "text": "    entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],",
-                "highlight_start": 1,
-                "highlight_end": 71
-              },
-              {
-                "text": "    output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>],",
-                "highlight_start": 1,
-                "highlight_end": 111
-              },
-              {
-                "text": "    Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
-                "highlight_start": 1,
-                "highlight_end": 113
-              },
-              {
-                "text": "    -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))",
-                "highlight_start": 1,
-                "highlight_end": 89
-              }
-            ],
-            "label": null,
-            "suggested_replacement": null,
-            "suggestion_applicability": null,
-            "expansion": null
-          }
-        ],
-        "children": [],
-        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs:157:1\n    |\n157 | / fn enrollment_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,\n158 | |     entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],\n159 | |     output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>],\n160 | |     Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n161 | |     -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))\n    | |________________________________________________________________________________________^\n\n"
+        "rendered": "error: aborting due to 2 previous errors\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -1706,12 +1655,63 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 2 previous errors",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
         "code": null,
-        "level": "error",
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
+            "byte_start": 9379,
+            "byte_end": 9879,
+            "line_start": 157,
+            "line_end": 161,
+            "column_start": 1,
+            "column_end": 89,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn enrollment_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 117
+              },
+              {
+                "text": "    entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],",
+                "highlight_start": 1,
+                "highlight_end": 71
+              },
+              {
+                "text": "    output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>],",
+                "highlight_start": 1,
+                "highlight_end": 111
+              },
+              {
+                "text": "    Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 113
+              },
+              {
+                "text": "    -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 89
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs:157:1\n    |\n157 | / fn enrollment_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,\n158 | |     entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],\n159 | |     output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>],\n160 | |     Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n161 | |     -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))\n    | |________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 2 previous errors\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -1736,12 +1736,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -1857,12 +1857,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -1887,12 +1887,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -2008,12 +2008,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -2038,12 +2038,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -2159,12 +2159,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -2189,12 +2189,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying root module, function context_journal_enrollment_historical_v1::enrollment_issued_exec_v1 (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying root module, function context_journal_enrollment_historical_v1::enrollment_issued_exec_v1 (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -2255,12 +2255,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying root module, function context_journal_enrollment_historical_v1::enrollment_issued_exec_v1 (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying root module, function context_journal_enrollment_historical_v1::enrollment_issued_exec_v1 (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -2285,12 +2285,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -2325,12 +2325,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -2355,12 +2355,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production, function context_journal_enrollment_historical_v1::production::enrollment_live_custody_witness_v1 (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production, function context_journal_enrollment_historical_v1::production::enrollment_live_custody_witness_v1 (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -2395,12 +2395,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production, function context_journal_enrollment_historical_v1::production::enrollment_live_custody_witness_v1 (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production, function context_journal_enrollment_historical_v1::production::enrollment_live_custody_witness_v1 (selected functions)\n\n"
       }
     ],
     "verus": {
@@ -2425,12 +2425,12 @@
     "diagnostics": [
       {
         "$message_type": "diagnostic",
-        "message": "verifying module production, function context_journal_enrollment_historical_v1::production::enrollment_live_custody_witness_v1 (selected functions)",
+        "message": "aborting due to 1 previous error",
         "code": null,
-        "level": "note",
+        "level": "error",
         "spans": [],
         "children": [],
-        "rendered": "note: verifying module production, function context_journal_enrollment_historical_v1::production::enrollment_live_custody_witness_v1 (selected functions)\n\n"
+        "rendered": "error: aborting due to 1 previous error\n\n"
       },
       {
         "$message_type": "diagnostic",
@@ -2465,12 +2465,12 @@
       },
       {
         "$message_type": "diagnostic",
-        "message": "aborting due to 1 previous error",
+        "message": "verifying module production, function context_journal_enrollment_historical_v1::production::enrollment_live_custody_witness_v1 (selected functions)",
         "code": null,
-        "level": "error",
+        "level": "note",
         "spans": [],
         "children": [],
-        "rendered": "error: aborting due to 1 previous error\n\n"
+        "rendered": "note: verifying module production, function context_journal_enrollment_historical_v1::production::enrollment_live_custody_witness_v1 (selected functions)\n\n"
       }
     ],
     "verus": {
