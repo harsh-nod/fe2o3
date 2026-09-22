@@ -5,6 +5,9 @@ use crate::{
     validate_native_compiler_unit_local_erased_source_packet_v1,
 };
 use fe2o3_compiler_ffi::read_inert_refined_forwarding_output_v1;
+use fe2o3_compiler_lineage::{
+    NATIVE_REFINED_FORWARDING_CARRIER_WORKING_STORAGE_V1, read_native_refined_forwarding_carrier_v1,
+};
 use fe2o3_kernel_opt::{
     materialize_refined_forwarding_history_v1, read_refined_forwarding_history_v1,
 };
@@ -86,6 +89,42 @@ impl RecoveredCompilerRefinedForwardingOutputV1 {
     pub const fn authenticates_rustc_abi(&self) -> bool {
         false
     }
+}
+
+/// Recovers the exact source/output pair from its mandatory versioned carrier.
+/// Both fields borrow the same prepaid input allocation; no raw input is copied.
+/// The unchanged complete checker below performs all nested semantic admission.
+///
+/// Prepay the entire carrier before calling and reserve the returned owner receipt
+/// before retaining/using it. The returned owner/receipt and authority boundaries
+/// are unchanged; the carrier itself is not retained for later durable replay.
+pub fn recover_compiler_refined_forwarding_carrier_v1(
+    bytes: &[u8],
+    budget: &mut Budget<'_>,
+) -> R<(
+    RecoveredCompilerRefinedForwardingOutputV1,
+    RecoveredCompilerRefinedForwardingStorageV1,
+)> {
+    scoped(budget, |budget| {
+        budget.charge_work(8)?;
+        if budget.storage_limit() > MAX_STORAGE {
+            return Err(E::Mismatch("bounded storage cap"));
+        }
+        if budget.storage() < bytes.len() {
+            return Err(Resource::Accounting.into());
+        }
+        budget.reserve_storage(NATIVE_REFINED_FORWARDING_CARRIER_WORKING_STORAGE_V1)?;
+        let limit = budget.storage_limit();
+        let carrier = read_native_refined_forwarding_carrier_v1(bytes, limit, |work| {
+            budget.charge_work(work)
+        })
+        .map_err(E::Carrier)?;
+        recover_compiler_refined_forwarding_output_v1(
+            carrier.output(),
+            carrier.source_packet(),
+            budget,
+        )
+    })
 }
 
 /// Recovers both source and actual F through the existing independent checkers.

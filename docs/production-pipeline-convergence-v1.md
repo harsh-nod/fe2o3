@@ -136,9 +136,11 @@ schema and an explicit aggregate 4 MiB limit, including duplicate nested bytes.
 This source-packet limit is independent of the existing refined-forwarding
 output limit (64 MiB, including its complete B/C/S/O/I/J/K/P/H/L/R/F history).
 The legacy ProofBinding receipt's 4 MiB cap cannot carry every admitted pair.
-Integrating both requires explicit versioned receipt/capsule dispatch while
-preserving historical limits, not silently narrowing advanced output to 4 MiB
-or selecting the older single-transition route. That integration is not landed.
+The paired `F2NRF1` carrier preserves both constituent formats and limits, with
+an additional fixed 80 bytes of framing and terminal content identity. This is
+not a legacy ProofBinding receipt. Capsule/receipt dispatch still needs explicit
+versioning; that integration is not landed. It may neither narrow advanced
+output to 4 MiB nor select the older single-transition route.
 
 `recover_compiler_refined_forwarding_output_v1` independently recovers the signed
 Direct or UnitLocal source from its complete packet, freshly admits every graph
@@ -149,9 +151,18 @@ an immutable owner alongside the recovered source proof and checked content
 identities. The temporary history and packet adapters are not retained. No
 replacement graph is decoded or synthesized during that move.
 
-The existing nondefault refined-forwarding backend wire check now uses this
-independent recovery while retaining its live compiler owner and exact field
-comparisons. The recovered owner is currently dropped after that check; Worker
+The nondefault refined-forwarding producer encodes F2RFO1 directly into the
+carrier's final allocation, then copies the complete source packet from its
+retained live owner into the other region. There is no intermediate full output
+buffer. Both the live packet and the new carrier backing remain charged. The
+legacy output getter still borrows only F2RFO1; a separate getter exposes the
+complete carrier. Replay independently parses the carrier, compares its source
+to the live owner and its fourteen output fields to freshly derived fields, and
+uses `recover_compiler_refined_forwarding_carrier_v1` without format fallback.
+Carrier framing, hashing and getters allocate no heap payloads; nested semantic
+admission still runs through the existing complete source-to-F checker.
+
+The recovered owner is currently dropped after that check; Worker
 evidence retention/publication is not wired. Its output identity binds the
 embedded fields, not an external Worker request: later admission must bind that
 exact frame, NativeV2 and descriptor to the actual request and finalizer. Dropped
@@ -163,7 +174,11 @@ after producer and both input buffers are dropped. They retain exact N/E/source
 rosters and actual F, reject cross-source histories and final output, and preserve
 resource floors at exact/one-short limits. Separate nonzero-history tests confirm
 the transferred allocation is actual F after induction and forwarding rewrites.
-These remain CPU consistency tests using public test keys, not hardware results.
+These cover both separate-input and paired recovery, and remain CPU consistency
+tests using public test keys, not hardware results. The recovery ends at F and
+uses descriptor V1. The separate loop-unroll route ends at U and requires actual
+U and its F-to-U relation; nominal descriptor V3 also requires explicit applicable
+admission. Neither may be substituted through this F/descriptor-V1 interface.
 
 Work and live logical payload use the shared verification ledger. Resolver
 callbacks can charge work but cannot replace or release the storage ledger;

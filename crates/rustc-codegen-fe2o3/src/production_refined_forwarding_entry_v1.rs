@@ -1,4 +1,4 @@
-//! One fixed, nondefault owning route from ranked source to inert final-F bytes.
+//! One fixed, nondefault route from ranked source to paired source/final-F bytes.
 use super::super::{
     PreparedRefinedForwardingWireV1, RefinedForwardingWireErrorV1, RefinedForwardingWireStorageV1,
 };

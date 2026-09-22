@@ -23,7 +23,11 @@ use fe2o3_compiler_lineage::{
     InertProofBindingAssociationV4 as Association, LineageErrorV3, MultiRootProofRosterErrorV3,
     MultiRootProofRosterInputsV3 as RosterInputs, MultiRootProofRosterKindV3 as Kind,
     MultiRootProofRosterRootInputV3 as Row, MultiRootProofRosterTranscriptV3 as Roster,
-    NativeNeutralModuleErrorV1, NativeNeutralSubjectErrorV1, encode_native_neutral_module_v1,
+    NATIVE_REFINED_FORWARDING_CARRIER_WORKING_STORAGE_V1 as CARRIER_STORAGE,
+    NativeNeutralModuleErrorV1, NativeNeutralSubjectErrorV1,
+    NativeRefinedForwardingCarrierErrorV1 as CarrierError,
+    NativeRefinedForwardingCarrierLayoutV1 as CarrierLayout, encode_native_neutral_module_v1,
+    read_native_refined_forwarding_carrier_v1, seal_native_refined_forwarding_carrier_v1,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -42,7 +46,7 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_verifier::{
     CompilerRefinedForwardingOutputErrorV1, RefinedForwardingOriginalSourceProofV1 as Source,
-    recover_compiler_refined_forwarding_output_v1,
+    recover_compiler_refined_forwarding_carrier_v1,
 };
 use std::{
     fmt,
@@ -56,6 +60,7 @@ pub(crate) enum RefinedForwardingWireErrorV1 {
     Live(ProductionPipelineError),
     History(RefinedForwardingHistoryWireErrorV1),
     Framing(FrameError<Resource>),
+    Carrier(CarrierError<Resource>),
     OriginalFormal(OriginalNativeFormalMemoryErrorV1),
     Formal(FormalMemoryReceiptErrorV1),
     Subject(NativeNeutralSubjectErrorV1),
@@ -94,12 +99,16 @@ impl RefinedForwardingWireStorageV1 {
 /// remains retained; independent byte replay does not authenticate its origin.
 pub(crate) struct PreparedRefinedForwardingWireV1 {
     live: Live,
-    wire: Vec<u8>,
+    carrier: Vec<u8>,
+    layout: CarrierLayout,
     retained_floor: usize,
 }
 impl PreparedRefinedForwardingWireV1 {
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
-        &self.wire
+        &self.carrier[self.layout.output_range()]
+    }
+    pub(crate) fn carrier_bytes(&self) -> &[u8] {
+        &self.carrier
     }
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
@@ -119,9 +128,15 @@ impl PreparedRefinedForwardingWireV1 {
             scoped(budget, |budget| {
                 let parts = prepare(&self.live, budget)?;
                 let fields = fields(&self.live, &parts);
-                budget.reserve_storage(READ_STORAGE)?;
+                budget.reserve_storage(READ_STORAGE + CARRIER_STORAGE)?;
                 let limit = budget.storage_limit();
-                let frame = read_inert_refined_forwarding_output_v1(&self.wire, limit, |w| {
+                let carrier =
+                    read_native_refined_forwarding_carrier_v1(&self.carrier, limit, |w| {
+                        budget.charge_work(w)
+                    })
+                    .map_err(E::Carrier)?;
+                same(carrier.source_packet(), source_packet(&self.live), budget)?;
+                let frame = read_inert_refined_forwarding_output_v1(carrier.output(), limit, |w| {
                     budget.charge_work(w)
                 })
                 .map_err(E::Framing)?;
@@ -132,7 +147,7 @@ impl PreparedRefinedForwardingWireV1 {
                 drop(parts);
                 Ok(())
             })?;
-            verify(&self.live, &self.wire, budget)?;
+            verify(&self.carrier, budget)?;
             budget.charge_work(1)?;
             Ok(())
         })
@@ -161,7 +176,7 @@ impl Live {
                 .checked_sub(size_of::<Live>())
                 .ok_or(Resource::Arithmetic)?;
             budget.reserve_storage(header)?;
-            let wire = scoped(budget, |budget| {
+            let (carrier, layout) = scoped(budget, |budget| {
                 let parts = prepare(&self, budget)?;
                 let fields = fields(&self, &parts);
                 let length = inert_refined_forwarding_output_len_v1::<Resource>(&fields)
@@ -169,28 +184,36 @@ impl Live {
                 if length > MAX_BYTES {
                     return Err(E::Mismatch("bounded complete output"));
                 }
-                let mut wire = vector::<u8>(length, budget)?;
-                budget.charge_work(length)?;
-                wire.resize(length, 0);
-                budget.reserve_storage(ENCODE_STORAGE)?;
+                let packet = source_packet(&self);
+                let layout = CarrierLayout::new(length, packet.len()).map_err(E::Carrier)?;
+                let mut carrier = vector::<u8>(layout.encoded_len(), budget)?;
+                budget.charge_work(layout.encoded_len())?;
+                carrier.resize(layout.encoded_len(), 0);
+                budget.reserve_storage(ENCODE_STORAGE + CARRIER_STORAGE)?;
                 let limit = budget.storage_limit();
                 encode_inert_refined_forwarding_output_into_v1(
                     fields,
                     route(&self),
-                    &mut wire,
+                    &mut carrier[layout.output_range()],
                     limit,
                     |w| budget.charge_work(w),
                 )
                 .map_err(E::Framing)?;
+                budget.charge_work(packet.len())?;
+                carrier[layout.source_range()].copy_from_slice(packet);
+                seal_native_refined_forwarding_carrier_v1(layout, &mut carrier, limit, |w| {
+                    budget.charge_work(w)
+                })
+                .map_err(E::Carrier)?;
                 drop(parts);
-                Ok(wire)
+                Ok((carrier, layout))
             })?;
             // The new owner header already covers the Vec handle. Only its
             // actual transferred backing is added before independent decoding.
-            budget.reserve_storage(wire.capacity())?;
-            verify(&self, &wire, budget)?;
+            budget.reserve_storage(carrier.capacity())?;
+            verify(&carrier, budget)?;
             let retained = header
-                .checked_add(wire.capacity())
+                .checked_add(carrier.capacity())
                 .ok_or(Resource::Arithmetic)?;
             let retained_floor = entry_floor
                 .checked_add(retained)
@@ -199,7 +222,8 @@ impl Live {
             Ok((
                 PreparedRefinedForwardingWireV1 {
                     live: self,
-                    wire,
+                    carrier,
+                    layout,
                     retained_floor,
                 },
                 RefinedForwardingWireStorageV1(retained),
@@ -741,15 +765,17 @@ fn word(out: &mut Vec<u8>, value: usize) -> R<()> {
     Ok(())
 }
 
-fn verify(live: &Live, wire: &[u8], budget: &mut Budget<'_>) -> R<()> {
+fn source_packet(live: &Live) -> &[u8] {
+    match &live.source {
+        SourceLineage::Direct(source) => source.source_packet(),
+        SourceLineage::Erased(source) => source.source_packet(),
+    }
+}
+
+fn verify(carrier: &[u8], budget: &mut Budget<'_>) -> R<()> {
     scoped(budget, |budget| {
-        let source_packet = match &live.source {
-            SourceLineage::Direct(source) => source.source_packet(),
-            SourceLineage::Erased(source) => source.source_packet(),
-        };
-        let (checked, receipt) =
-            recover_compiler_refined_forwarding_output_v1(wire, source_packet, budget)
-                .map_err(E::Verification)?;
+        let (checked, receipt) = recover_compiler_refined_forwarding_carrier_v1(carrier, budget)
+            .map_err(E::Verification)?;
         budget.reserve_storage(receipt.retained_storage())?;
         budget.charge_work(1)?;
         drop(checked);

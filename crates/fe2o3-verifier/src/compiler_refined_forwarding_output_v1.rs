@@ -61,7 +61,7 @@ mod joins;
 mod recovery;
 pub use recovery::{
     RecoveredCompilerRefinedForwardingOutputV1, RecoveredCompilerRefinedForwardingStorageV1,
-    recover_compiler_refined_forwarding_output_v1,
+    recover_compiler_refined_forwarding_carrier_v1, recover_compiler_refined_forwarding_output_v1,
 };
 
 /// Bytes cannot construct this input: both variants retain independently imported
@@ -80,6 +80,7 @@ pub enum CompilerRefinedForwardingOutputErrorV1 {
     History(CanonicalRefinedForwardingHistoryErrorV1),
     HistoryWire(fe2o3_kernel_opt::RefinedForwardingHistoryWireErrorV1),
     SourcePacket(crate::NativeCompilerSourceProofErrorV1),
+    Carrier(fe2o3_compiler_lineage::NativeRefinedForwardingCarrierErrorV1<Resource>),
     Source(ProductionSemanticKirErrorV1),
     OriginalFormal(OriginalNativeFormalMemoryErrorV1),
     FinalFormal(CanonicalOutputGuardedFormalMemoryErrorV1),

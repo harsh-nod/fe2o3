@@ -457,6 +457,7 @@ fn assert_hostile_declared_length_rejected_without_allocation(
 
 #[test]
 fn v3_owned_decode_allocation_qualification() {
+    assert_native_carrier_has_no_payload_copies();
     assert_maximum_bound_formulas();
 
     let representative =
@@ -520,4 +521,36 @@ fn v3_owned_decode_allocation_qualification() {
         (MAX_COMPILER_MODULE_HANDOFF_BYTES_V2 as u64) + 1,
         InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffByteBoundExceeded,
     );
+}
+
+fn assert_native_carrier_has_no_payload_copies() {
+    use fe2o3_compiler_lineage::{
+        MAX_NATIVE_REFINED_FORWARDING_CARRIER_STORAGE_V1 as LIMIT,
+        MAX_NATIVE_REFINED_FORWARDING_OUTPUT_BYTES_V1 as OUTPUT,
+        MAX_NATIVE_REFINED_FORWARDING_SOURCE_BYTES_V1 as SOURCE,
+        NativeRefinedForwardingCarrierLayoutV1 as Layout,
+        read_native_refined_forwarding_carrier_v1 as read,
+        seal_native_refined_forwarding_carrier_v1 as seal,
+    };
+    for (output, source) in [(19, 7), (OUTPUT, SOURCE)] {
+        let layout = Layout::new::<()>(output, source).unwrap();
+        let mut bytes = vec![0x37; layout.encoded_len()];
+        let (identity, allocations) =
+            measure_allocations(|| seal(layout, &mut bytes, LIMIT, |_| Ok::<_, ()>(())).unwrap());
+        assert_eq!(allocations.sizes, []);
+        assert_eq!(allocations.unrecorded_events, 0);
+        let (frame, allocations) =
+            measure_allocations(|| read(&bytes, LIMIT, |_| Ok::<_, ()>(())).unwrap());
+        assert_eq!(allocations.sizes, []);
+        assert_eq!(allocations.unrecorded_events, 0);
+        assert_eq!(frame.identity(), identity);
+        assert_eq!(
+            frame.output().as_ptr(),
+            bytes[layout.output_range()].as_ptr()
+        );
+        assert_eq!(
+            frame.source_packet().as_ptr(),
+            bytes[layout.source_range()].as_ptr()
+        );
+    }
 }

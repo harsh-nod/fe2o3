@@ -2,6 +2,7 @@
 use super::*;
 use crate::{
     RefinedForwardingOriginalSourceProofV1 as Original,
+    recover_compiler_refined_forwarding_carrier_v1 as recover_carrier,
     recover_compiler_refined_forwarding_output_v1 as recover,
 };
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
@@ -24,6 +25,9 @@ use fe2o3_compiler_lineage::{
     InertMirToKirCorrespondenceReceiptV3,
     InertProofBindingAssociationInputsV4 as AssociationInputs,
     InertProofBindingAssociationV4 as Association,
+    NATIVE_REFINED_FORWARDING_CARRIER_WORKING_STORAGE_V1 as CARRIER_STORAGE,
+    NativeRefinedForwardingCarrierLayoutV1 as CarrierLayout,
+    seal_native_refined_forwarding_carrier_v1,
 };
 use fe2o3_kernel_descriptor as kd;
 use fe2o3_kernel_ir::{
@@ -446,6 +450,48 @@ fn frame(fields: &[Vec<u8>; 14], route: Route) -> Vec<u8> {
     bytes
 }
 
+enum RecoveryInput {
+    Separate { output: Vec<u8>, packet: Vec<u8> },
+    Carrier(Vec<u8>),
+}
+impl RecoveryInput {
+    fn new(output: Vec<u8>, packet: Vec<u8>, paired: bool) -> Self {
+        if !paired {
+            return Self::Separate { output, packet };
+        }
+        let layout = CarrierLayout::new::<Resource>(output.len(), packet.len()).unwrap();
+        let mut bytes = vec![0; layout.encoded_len()];
+        bytes[layout.output_range()].copy_from_slice(&output);
+        bytes[layout.source_range()].copy_from_slice(&packet);
+        seal_native_refined_forwarding_carrier_v1(layout, &mut bytes, LIMIT, |_| {
+            Ok::<_, Resource>(())
+        })
+        .unwrap();
+        Self::Carrier(bytes)
+    }
+    fn storage(&self) -> usize {
+        match self {
+            Self::Separate { output, packet } => output.capacity() + packet.capacity(),
+            Self::Carrier(bytes) => bytes.capacity(),
+        }
+    }
+    fn recover(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<
+        (
+            crate::RecoveredCompilerRefinedForwardingOutputV1,
+            crate::RecoveredCompilerRefinedForwardingStorageV1,
+        ),
+        crate::CompilerRefinedForwardingOutputErrorV1,
+    > {
+        match self {
+            Self::Separate { output, packet } => recover(output, packet, budget),
+            Self::Carrier(bytes) => recover_carrier(bytes, budget),
+        }
+    }
+}
+
 fn fixture(unit: bool, profile: Profile) -> (Vec<u8>, [Vec<u8>; 14]) {
     fixture_with_stores(unit, profile, &STORES)
 }
@@ -501,124 +547,130 @@ fn final_f_owned_recovery_rejects_cross_source_history_and_output_substitution()
         .reserve_storage(foreign_packet.capacity() + foreign_output.capacity())
         .unwrap();
     recover(&foreign_output, &foreign_packet, &mut budget).unwrap();
-    for mutation in 0..11 {
-        let mut changed = fields.clone();
-        let source = match mutation {
-            0 => &foreign_packet,
-            1 => &unit_packet,
-            2..=6 => {
-                let field = [0, 8, 9, 1, 10][mutation - 2];
-                assert_ne!(changed[field], foreign[field]);
-                changed[field] = foreign[field].clone();
-                &packet
-            }
-            7..=9 => {
-                // Swap a complete permutation, not a duplicate rejected by framing.
-                let word = [36, 72, 80][mutation - 7];
-                let first = 4 + word;
-                let second = 4 + 219 + 2 * STORES[0].name.len() + word;
-                for byte in 0..4 {
-                    changed[13].swap(first + byte, second + byte);
+    for paired in [false, true] {
+        for mutation in 0..11 {
+            let mut changed = fields.clone();
+            let source = match mutation {
+                0 => &foreign_packet,
+                1 => &unit_packet,
+                2..=6 => {
+                    let field = [0, 8, 9, 1, 10][mutation - 2];
+                    assert_ne!(changed[field], foreign[field]);
+                    changed[field] = foreign[field].clone();
+                    &packet
                 }
-                &packet
-            }
-            10 => {
-                changed = unit_fields.clone();
-                &packet
-            }
-            _ => unreachable!(),
-        };
-        let output = frame(
-            &changed,
-            if mutation == 10 {
-                Route::Erased
-            } else {
-                Route::Direct
-            },
-        );
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
-        let mut budget = Budget::new(&mut work, LIMIT);
-        let floor = 37 + output.capacity() + source.capacity();
-        budget.reserve_storage(floor).unwrap();
-        assert!(budget.reserve_storage(usize::MAX).is_err());
-        let ledger = budget.work_ledger_identity_v1();
-        let error = recover(&output, source, &mut budget).err().unwrap();
-        let expected = match mutation {
-            0 => matches!(error, Failure::Mismatch("semantic source bytes")),
-            1 | 10 => matches!(error, Failure::SourcePacket(E::PacketWire(_))),
-            2 => matches!(error, Failure::Coordinates(_)),
-            3 => matches!(error, Failure::Mismatch("exact native envelope subject")),
-            4 => matches!(error, Failure::Mismatch("complete fresh formal roster")),
-            5 => matches!(error, Failure::TextDescriptor(_)),
-            6 => matches!(error, Failure::Mismatch("signed middle roster")),
-            7..=9 => matches!(
-                error,
-                Failure::Mismatch("exact semantic/N/F/descriptor root axes")
-            ),
-            _ => unreachable!(),
-        };
-        assert!(expected, "mutation {mutation}: {error:?}");
-        assert_eq!(budget.storage(), floor);
-        assert_eq!(budget.failed_storage(), Some(usize::MAX));
-        assert!(budget.work_ledger_identity_v1() == ledger);
-        assert!(budget.work() > 0);
-        assert!(budget.peak_storage() > floor);
+                7..=9 => {
+                    // Swap a complete permutation, not a duplicate rejected by framing.
+                    let word = [36, 72, 80][mutation - 7];
+                    let first = 4 + word;
+                    let second = 4 + 219 + 2 * STORES[0].name.len() + word;
+                    for byte in 0..4 {
+                        changed[13].swap(first + byte, second + byte);
+                    }
+                    &packet
+                }
+                10 => {
+                    changed = unit_fields.clone();
+                    &packet
+                }
+                _ => unreachable!(),
+            };
+            let output = frame(
+                &changed,
+                if mutation == 10 {
+                    Route::Erased
+                } else {
+                    Route::Direct
+                },
+            );
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
+            let mut budget = Budget::new(&mut work, LIMIT);
+            let input = RecoveryInput::new(output, source.clone(), paired);
+            let floor = 37 + input.storage();
+            budget.reserve_storage(floor).unwrap();
+            assert!(budget.reserve_storage(usize::MAX).is_err());
+            let ledger = budget.work_ledger_identity_v1();
+            let error = input.recover(&mut budget).err().unwrap();
+            let expected = match mutation {
+                0 => matches!(error, Failure::Mismatch("semantic source bytes")),
+                1 | 10 => matches!(error, Failure::SourcePacket(E::PacketWire(_))),
+                2 => matches!(error, Failure::Coordinates(_)),
+                3 => matches!(error, Failure::Mismatch("exact native envelope subject")),
+                4 => matches!(error, Failure::Mismatch("complete fresh formal roster")),
+                5 => matches!(error, Failure::TextDescriptor(_)),
+                6 => matches!(error, Failure::Mismatch("signed middle roster")),
+                7..=9 => matches!(
+                    error,
+                    Failure::Mismatch("exact semantic/N/F/descriptor root axes")
+                ),
+                _ => unreachable!(),
+            };
+            assert!(expected, "mutation {mutation}: {error:?}");
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.failed_storage(), Some(usize::MAX));
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert!(budget.work() > 0);
+            assert!(budget.peak_storage() > floor);
+        }
     }
 }
 
 #[test]
 fn final_f_owned_recovery_exact_and_one_short_limits_keep_floor_and_history() {
     use crate::CompilerRefinedForwardingOutputErrorV1 as Failure;
-    for unit in [false, true] {
-        let (packet, fields) = fixture(unit, Profile::Gfx942);
-        let output = frame(&fields, if unit { Route::Erased } else { Route::Direct });
-        let floor = 37 + packet.capacity() + output.capacity();
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
-        let mut budget = Budget::new(&mut work, LIMIT);
-        budget.reserve_storage(floor).unwrap();
-        let (checked, baseline) = recover(&output, &packet, &mut budget).unwrap();
-        let (used, peak) = (budget.work(), budget.peak_storage());
-        drop(checked);
-        for (work_limit, storage_limit, success) in [
-            (used, peak, true),
-            (used - 1, peak, false),
-            (used, peak - 1, false),
-        ] {
-            let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
-            let mut budget = Budget::new(&mut work, storage_limit);
+    for paired in [false, true] {
+        for unit in [false, true] {
+            let (packet, fields) = fixture(unit, Profile::Gfx942);
+            let output = frame(&fields, if unit { Route::Erased } else { Route::Direct });
+            let input = RecoveryInput::new(output, packet, paired);
+            let floor = 37 + input.storage();
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
+            let mut budget = Budget::new(&mut work, LIMIT);
             budget.reserve_storage(floor).unwrap();
-            assert!(budget.reserve_storage(usize::MAX).is_err());
-            let ledger = budget.work_ledger_identity_v1();
-            let result = recover(&output, &packet, &mut budget);
-            assert_eq!(result.is_ok(), success);
-            match result {
-                Ok((checked, receipt)) => {
-                    assert_eq!(receipt, baseline);
-                    drop(checked);
+            let (checked, baseline) = input.recover(&mut budget).unwrap();
+            let (used, peak) = (budget.work(), budget.peak_storage());
+            drop(checked);
+            for (work_limit, storage_limit, success) in [
+                (used, peak, true),
+                (used - 1, peak, false),
+                (used, peak - 1, false),
+            ] {
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+                let mut budget = Budget::new(&mut work, storage_limit);
+                budget.reserve_storage(floor).unwrap();
+                assert!(budget.reserve_storage(usize::MAX).is_err());
+                let ledger = budget.work_ledger_identity_v1();
+                let result = input.recover(&mut budget);
+                assert_eq!(result.is_ok(), success);
+                match result {
+                    Ok((checked, receipt)) => {
+                        assert_eq!(receipt, baseline);
+                        drop(checked);
+                    }
+                    Err(error) if work_limit < used => assert!(
+                        matches!(error, Failure::Resource(Resource::Work(_))),
+                        "{error:?}"
+                    ),
+                    Err(error) => assert!(
+                        matches!(error, Failure::TextDescriptor(fe2o3_amdgcn_model::NativeV12TextDescriptorReplayErrorV1::Resource(Resource::Storage(limit))) if limit.actual() == peak && limit.limit() == peak - 1),
+                        "{error:?}"
+                    ),
                 }
-                Err(error) if work_limit < used => assert!(
-                    matches!(error, Failure::Resource(Resource::Work(_))),
-                    "{error:?}"
-                ),
-                Err(error) => assert!(
-                    matches!(error, Failure::TextDescriptor(fe2o3_amdgcn_model::NativeV12TextDescriptorReplayErrorV1::Resource(Resource::Storage(limit))) if limit.actual() == peak && limit.limit() == peak - 1),
-                    "{error:?}"
-                ),
+                assert_eq!(budget.storage(), floor);
+                assert_eq!(budget.failed_storage(), Some(usize::MAX));
+                assert!(budget.work_ledger_identity_v1() == ledger);
             }
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(used);
+            let mut budget = Budget::new(&mut work, peak - 1);
+            budget.reserve_storage(floor).unwrap();
+            let error = input.recover(&mut budget).err().unwrap();
+            assert!(
+                matches!(error, Failure::TextDescriptor(fe2o3_amdgcn_model::NativeV12TextDescriptorReplayErrorV1::Resource(Resource::Storage(limit))) if limit.actual() == peak && limit.limit() == peak - 1),
+                "{error:?}"
+            );
             assert_eq!(budget.storage(), floor);
-            assert_eq!(budget.failed_storage(), Some(usize::MAX));
-            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.failed_storage(), Some(peak));
         }
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(used);
-        let mut budget = Budget::new(&mut work, peak - 1);
-        budget.reserve_storage(floor).unwrap();
-        let error = recover(&output, &packet, &mut budget).err().unwrap();
-        assert!(
-            matches!(error, Failure::TextDescriptor(fe2o3_amdgcn_model::NativeV12TextDescriptorReplayErrorV1::Resource(Resource::Storage(limit))) if limit.actual() == peak && limit.limit() == peak - 1),
-            "{error:?}"
-        );
-        assert_eq!(budget.storage(), floor);
-        assert_eq!(budget.failed_storage(), Some(peak));
     }
 }
 
@@ -629,136 +681,217 @@ fn final_f_owned_recovery_prepays_both_inputs_and_wrapper_before_parsing() {
         RecoveredCompilerRefinedForwardingOutputV1 as Owned,
     };
     use fe2o3_compiler_ffi::INERT_REFINED_FORWARDING_READ_STORAGE_V1;
-    let (packet, fields) = fixture(false, Profile::Gfx942);
-    let output = frame(&fields, Route::Direct);
-    let input = output.len() + packet.len();
-    let header = std::mem::size_of::<Owned>() + INERT_REFINED_FORWARDING_READ_STORAGE_V1;
-    for case in 0..3 {
-        let (floor, limit) = match case {
-            0 => (input - 1, LIMIT),
-            1 => (input + 37, input + 37 + header - 1),
-            2 => (input + 37, LIMIT + 1),
-            _ => unreachable!(),
+    for paired in [false, true] {
+        let (packet, fields) = fixture(false, Profile::Gfx942);
+        let input = RecoveryInput::new(frame(&fields, Route::Direct), packet, paired);
+        let size = input.storage();
+        let header = if paired {
+            CARRIER_STORAGE
+        } else {
+            std::mem::size_of::<Owned>() + INERT_REFINED_FORWARDING_READ_STORAGE_V1
         };
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
-        let mut budget = Budget::new(&mut work, limit);
-        budget.reserve_storage(floor).unwrap();
-        let ledger = budget.work_ledger_identity_v1();
-        let error = recover(&output, &packet, &mut budget).err().unwrap();
-        let expected = match case {
-            0 => matches!(error, Failure::Resource(Resource::Accounting)),
-            1 => {
-                matches!(error, Failure::Resource(Resource::Storage(denied)) if denied.actual() == floor + header && denied.limit() == limit)
-            }
-            2 => matches!(error, Failure::Mismatch("bounded storage cap")),
-            _ => unreachable!(),
-        };
-        assert!(expected, "{error:?}");
-        assert_eq!(budget.work(), 8);
-        assert_eq!(budget.storage(), floor);
-        assert_eq!(budget.peak_storage(), floor);
-        assert_eq!(
-            budget.failed_storage(),
-            if case == 1 {
-                Some(floor + header)
-            } else {
-                None
-            }
-        );
-        assert!(budget.work_ledger_identity_v1() == ledger);
+        for case in 0..3 {
+            let (floor, limit) = match case {
+                0 => (size - 1, LIMIT),
+                1 => (size + 37, size + 37 + header - 1),
+                2 => (size + 37, LIMIT + 1),
+                _ => unreachable!(),
+            };
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
+            let mut budget = Budget::new(&mut work, limit);
+            budget.reserve_storage(floor).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let error = input.recover(&mut budget).err().unwrap();
+            let expected = match case {
+                0 => matches!(error, Failure::Resource(Resource::Accounting)),
+                1 => {
+                    matches!(error, Failure::Resource(Resource::Storage(denied)) if denied.actual() == floor + header && denied.limit() == limit)
+                }
+                2 => matches!(error, Failure::Mismatch("bounded storage cap")),
+                _ => unreachable!(),
+            };
+            assert!(expected, "{error:?}");
+            assert_eq!(budget.work(), 8);
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.peak_storage(), floor);
+            assert_eq!(
+                budget.failed_storage(),
+                if case == 1 {
+                    Some(floor + header)
+                } else {
+                    None
+                }
+            );
+            assert!(budget.work_ledger_identity_v1() == ledger);
+        }
     }
 }
 
 #[test]
 fn final_f_owned_recovery_retains_two_signed_roots_after_both_inputs_drop() {
-    for unit in [false, true] {
-        for profile in [Profile::Gfx942, Profile::Gfx950] {
-            let (packet, fields) = fixture(unit, profile);
-            let output = frame(&fields, if unit { Route::Erased } else { Route::Direct });
-            let expected = NativeNeutralModuleRefV1::decode(&fields[8])
-                .unwrap()
-                .graph_bytes()
-                .to_vec();
-            let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
-            let mut budget = Budget::new(&mut work, LIMIT);
-            let input_storage = packet.capacity() + output.capacity();
-            budget.reserve_storage(37 + input_storage).unwrap();
-            let floor = budget.storage();
-            let (checked, storage) = recover(&output, &packet, &mut budget).unwrap();
-            assert_eq!(budget.storage(), floor);
-            budget.reserve_storage(storage.retained_storage()).unwrap();
-            drop(packet);
-            drop(output);
-            budget.release_storage(input_storage).unwrap();
-            assert_eq!(checked.output().canonical().canonical_bytes(), expected);
-            match checked.source_proof() {
-                Original::Direct(p) => {
-                    assert!(!unit);
-                    assert_eq!(p.root_count(), 2);
-                    assert_eq!(p.middle_end_roster().canonical_kernel_order(), &[1, 0]);
-                    let source = p.source().source();
-                    assert_eq!(source.semantic().semantic().canonical_encoding(), fields[3]);
-                    assert_eq!(
-                        source
-                            .pre_ranked_executable()
-                            .unwrap()
-                            .canonical()
-                            .canonical_bytes(),
-                        NativeNeutralModuleRefV1::decode(&fields[4])
-                            .unwrap()
-                            .graph_bytes()
-                    );
-                    assert_eq!(
-                        p.source().catalog().canonical_bytes(),
-                        NativeNeutralModuleRefV1::decode(&fields[4])
-                            .unwrap()
-                            .catalog_bytes()
-                    );
-                    assert_eq!(p.middle_end_roster().canonical_bytes(), fields[10]);
-                    assert_eq!(p.correspondence_roster().canonical_bytes(), fields[11]);
-                    assert_eq!(p.verus_roster().canonical_bytes(), fields[12]);
+    for paired in [false, true] {
+        for unit in [false, true] {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                let (packet, fields) = fixture(unit, profile);
+                let output = frame(&fields, if unit { Route::Erased } else { Route::Direct });
+                let expected = NativeNeutralModuleRefV1::decode(&fields[8])
+                    .unwrap()
+                    .graph_bytes()
+                    .to_vec();
+                let separate_receipt = if paired {
+                    let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
+                    let mut budget = Budget::new(&mut work, LIMIT);
+                    budget
+                        .reserve_storage(packet.capacity() + output.capacity())
+                        .unwrap();
+                    let (owner, receipt) = recover(&output, &packet, &mut budget).unwrap();
+                    drop(owner);
+                    Some(receipt)
+                } else {
+                    None
+                };
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
+                let mut budget = Budget::new(&mut work, LIMIT);
+                let input = RecoveryInput::new(output, packet, paired);
+                let input_storage = input.storage();
+                budget.reserve_storage(37 + input_storage).unwrap();
+                let floor = budget.storage();
+                let (checked, storage) = input.recover(&mut budget).unwrap();
+                assert_eq!(budget.storage(), floor);
+                budget.reserve_storage(storage.retained_storage()).unwrap();
+                if let Some(receipt) = separate_receipt {
+                    assert_eq!(storage, receipt);
                 }
-                Original::Erased(p) => {
-                    assert!(unit);
-                    assert_eq!(p.root_count(), 2);
-                    assert_eq!(p.middle_end_roster().canonical_kernel_order(), &[1, 0]);
-                    let source = p.source().source();
-                    assert_eq!(
-                        source
-                            .original_source()
-                            .semantic_ssa()
-                            .source_semantic()
-                            .canonical_encoding(),
-                        fields[3]
-                    );
-                    assert_eq!(
-                        source
-                            .original_source()
-                            .executable()
-                            .canonical()
-                            .canonical_bytes(),
-                        NativeNeutralModuleRefV1::decode(&fields[4])
-                            .unwrap()
-                            .graph_bytes()
-                    );
-                    assert_eq!(source.erased().canonical().canonical_bytes(), fields[5]);
-                    assert_eq!(
-                        p.source().catalog().canonical_bytes(),
-                        NativeNeutralModuleRefV1::decode(&fields[4])
-                            .unwrap()
-                            .catalog_bytes()
-                    );
-                    assert_eq!(p.middle_end_roster().canonical_bytes(), fields[10]);
-                    assert_eq!(p.correspondence_roster().canonical_bytes(), fields[11]);
-                    assert_eq!(p.verus_roster().canonical_bytes(), fields[12]);
+                drop(input);
+                budget.release_storage(input_storage).unwrap();
+                assert_eq!(checked.output().canonical().canonical_bytes(), expected);
+                match checked.source_proof() {
+                    Original::Direct(p) => {
+                        assert!(!unit);
+                        assert_eq!(p.root_count(), 2);
+                        assert_eq!(p.middle_end_roster().canonical_kernel_order(), &[1, 0]);
+                        let source = p.source().source();
+                        assert_eq!(source.semantic().semantic().canonical_encoding(), fields[3]);
+                        assert_eq!(
+                            source
+                                .pre_ranked_executable()
+                                .unwrap()
+                                .canonical()
+                                .canonical_bytes(),
+                            NativeNeutralModuleRefV1::decode(&fields[4])
+                                .unwrap()
+                                .graph_bytes()
+                        );
+                        assert_eq!(
+                            p.source().catalog().canonical_bytes(),
+                            NativeNeutralModuleRefV1::decode(&fields[4])
+                                .unwrap()
+                                .catalog_bytes()
+                        );
+                        assert_eq!(p.middle_end_roster().canonical_bytes(), fields[10]);
+                        assert_eq!(p.correspondence_roster().canonical_bytes(), fields[11]);
+                        assert_eq!(p.verus_roster().canonical_bytes(), fields[12]);
+                    }
+                    Original::Erased(p) => {
+                        assert!(unit);
+                        assert_eq!(p.root_count(), 2);
+                        assert_eq!(p.middle_end_roster().canonical_kernel_order(), &[1, 0]);
+                        let source = p.source().source();
+                        assert_eq!(
+                            source
+                                .original_source()
+                                .semantic_ssa()
+                                .source_semantic()
+                                .canonical_encoding(),
+                            fields[3]
+                        );
+                        assert_eq!(
+                            source
+                                .original_source()
+                                .executable()
+                                .canonical()
+                                .canonical_bytes(),
+                            NativeNeutralModuleRefV1::decode(&fields[4])
+                                .unwrap()
+                                .graph_bytes()
+                        );
+                        assert_eq!(source.erased().canonical().canonical_bytes(), fields[5]);
+                        assert_eq!(
+                            p.source().catalog().canonical_bytes(),
+                            NativeNeutralModuleRefV1::decode(&fields[4])
+                                .unwrap()
+                                .catalog_bytes()
+                        );
+                        assert_eq!(p.middle_end_roster().canonical_bytes(), fields[10]);
+                        assert_eq!(p.correspondence_roster().canonical_bytes(), fields[11]);
+                        assert_eq!(p.verus_roster().canonical_bytes(), fields[12]);
+                    }
                 }
+                assert!(!checked.grants_artifact_or_launch_authority());
+                assert!(!checked.authenticates_execution());
+                assert!(!checked.authenticates_rustc_abi());
+                drop(checked);
+                budget.release_storage(storage.retained_storage()).unwrap();
+                assert_eq!(budget.storage(), 37);
             }
-            assert!(!checked.grants_artifact_or_launch_authority());
-            assert!(!checked.authenticates_execution());
-            assert!(!checked.authenticates_rustc_abi());
-            drop(checked);
-            budget.release_storage(storage.retained_storage()).unwrap();
-            assert_eq!(budget.storage(), 37);
         }
+    }
+}
+
+#[test]
+fn final_f_carrier_recovery_rejects_tampering_and_never_falls_back() {
+    use crate::CompilerRefinedForwardingOutputErrorV1 as Failure;
+    use fe2o3_compiler_lineage::NativeRefinedForwardingCarrierErrorV1 as CarrierError;
+    let (packet, fields) = fixture(false, Profile::Gfx942);
+    let output = frame(&fields, Route::Direct);
+    let layout = CarrierLayout::new::<Resource>(output.len(), packet.len()).unwrap();
+    let RecoveryInput::Carrier(carrier) = RecoveryInput::new(output.clone(), packet.clone(), true)
+    else {
+        unreachable!()
+    };
+    for case in 0..7 {
+        let mut bytes = match case {
+            0 => output.clone(),
+            1 => packet.clone(),
+            _ => carrier.clone(),
+        };
+        match case {
+            2 => bytes[layout.output_range().start] ^= 1,
+            3 => bytes[layout.source_range().start] ^= 1,
+            4 => bytes[40] = 1,
+            5 | 6 => {
+                let range = if case == 5 {
+                    layout.output_range()
+                } else {
+                    layout.source_range()
+                };
+                bytes[range.start] ^= 1;
+                seal_native_refined_forwarding_carrier_v1(layout, &mut bytes, LIMIT, |_| {
+                    Ok::<_, Resource>(())
+                })
+                .unwrap();
+            }
+            _ => {}
+        }
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        let floor = 37 + bytes.capacity();
+        budget.reserve_storage(floor).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let error = recover_carrier(&bytes, &mut budget).err().unwrap();
+        let expected = match case {
+            0 | 1 => matches!(error, Failure::Carrier(CarrierError::Header)),
+            2 | 3 => matches!(error, Failure::Carrier(CarrierError::Identity)),
+            4 => matches!(error, Failure::Carrier(CarrierError::Reserved)),
+            5 => matches!(
+                error,
+                Failure::Framing(fe2o3_compiler_ffi::InertRefinedForwardingOutputErrorV1::Header)
+            ),
+            6 => matches!(error, Failure::SourcePacket(E::PacketWire(_))),
+            _ => unreachable!(),
+        };
+        assert!(expected, "case {case}: {error:?}");
+        assert_eq!(budget.storage(), floor);
+        assert!(budget.work_ledger_identity_v1() == ledger);
     }
 }

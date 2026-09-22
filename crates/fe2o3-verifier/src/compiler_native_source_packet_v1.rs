@@ -17,10 +17,10 @@ const VERSION: u16 = 1;
 const MAX_ROOTS: usize = fe2o3_compiler_lineage::MAX_MULTI_ROOT_PROOF_ROSTER_ROOTS_V3;
 
 /// Aggregate transport limit, not the sum of the nested codecs' larger limits.
-/// A containing ProofBinding envelope must additionally fit its own overhead
+/// A legacy ProofBinding envelope must additionally fit its own overhead
 /// within the existing receipt cap. No historical receipt schema is widened.
 pub const MAX_NATIVE_COMPILER_SOURCE_PACKET_BYTES_V1: usize =
-    fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3;
+    fe2o3_compiler_lineage::MAX_NATIVE_REFINED_FORWARDING_SOURCE_BYTES_V1;
 
 /// Output byte capacity, excluding the caller's inline Vec header. Reserve this
 /// receipt before further controlled allocations while retaining encoded bytes.

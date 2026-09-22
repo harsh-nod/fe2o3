@@ -1,7 +1,10 @@
 use super::super::super::super::{
     Composed, source_lane_tests::RefinedForwardingSourceObservationV1 as SourceObservation,
 };
-use super::super::{FIELDS, READ_STORAGE, read_inert_refined_forwarding_output_v1};
+use super::super::{
+    CARRIER_STORAGE, CarrierError, FIELDS, READ_STORAGE, read_inert_refined_forwarding_output_v1,
+    read_native_refined_forwarding_carrier_v1, source_packet,
+};
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::cell::Cell;
@@ -35,9 +38,18 @@ impl PreparedRefinedForwardingWireV1 {
         scoped(budget, |budget| {
             self.verify_equivalence(budget)?;
             let inputs = self.live.source.replay_inputs(budget).map_err(E::Live)?;
-            budget.reserve_storage(READ_STORAGE + std::mem::size_of::<EntryObservation<'_>>())?;
+            budget.reserve_storage(
+                READ_STORAGE + CARRIER_STORAGE + std::mem::size_of::<EntryObservation<'_>>(),
+            )?;
             let limit = budget.storage_limit();
-            let frame = read_inert_refined_forwarding_output_v1(&self.wire, limit, |w| {
+            let carrier =
+                read_native_refined_forwarding_carrier_v1(self.carrier_bytes(), limit, |w| {
+                    budget.charge_work(w)
+                })
+                .map_err(E::Carrier)?;
+            assert_eq!(carrier.output().as_ptr(), self.canonical_bytes().as_ptr());
+            assert_eq!(carrier.source_packet(), source_packet(&self.live));
+            let frame = read_inert_refined_forwarding_output_v1(carrier.output(), limit, |w| {
                 budget.charge_work(w)
             })
             .map_err(E::Framing)?;
@@ -132,18 +144,13 @@ impl PreparedRefinedForwardingWireV1 {
         assert_eq!(budget.work(), before);
         budget.reserve_storage(1).unwrap();
 
-        let original = self.wire[0];
-        self.wire[0] ^= 1;
+        let original = self.carrier[0];
+        self.carrier[0] ^= 1;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.verify_equivalence(budget)
         }));
-        self.wire[0] = original;
-        assert!(matches!(
-            result,
-            Ok(Err(E::Framing(
-                fe2o3_compiler_ffi::InertRefinedForwardingOutputErrorV1::Header
-            )))
-        ));
+        self.carrier[0] = original;
+        assert!(matches!(result, Ok(Err(E::Carrier(CarrierError::Header)))));
         assert_eq!(budget.storage(), floor);
         let result: R<()> = scoped(budget, |budget| {
             budget.reserve_storage(17)?;

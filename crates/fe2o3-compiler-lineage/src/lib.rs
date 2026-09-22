@@ -11,6 +11,7 @@ mod multi_root_target_lineage_v3;
 mod native_neutral_module_v1;
 mod native_neutral_subject_v1;
 mod native_output_transition_association_v1;
+mod native_refined_forwarding_carrier_v1;
 mod proof_binding;
 mod proof_binding_v4;
 mod receipt;
@@ -74,6 +75,7 @@ pub use native_output_transition_association_v1::{
     NativeOutputTransitionRootV1, encode_native_output_transition_association_v1,
     native_output_transition_association_length_v1,
 };
+pub use native_refined_forwarding_carrier_v1::*;
 pub use proof_binding::{
     INERT_PROOF_BINDING_ASSOCIATION_MAGIC_V3, INERT_PROOF_BINDING_ASSOCIATION_VERSION_V3,
     InertLineageContentIdentityV3, InertProofBindingAssociationErrorV3,

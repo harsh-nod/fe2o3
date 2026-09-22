@@ -7,7 +7,8 @@ pub const INERT_REFINED_FORWARDING_OUTPUT_MAGIC_V1: [u8; 8] = *b"F2RFO1\0\0";
 /// Complete B/C/S/O/I/J/K/P/H/L/R/F frame discriminator.
 pub const INERT_REFINED_FORWARDING_HISTORY_MAGIC_V1: [u8; 8] = *b"F2RFH1\0\0";
 /// Maximum complete output frame, including repeated constituent bytes.
-pub const MAX_INERT_REFINED_FORWARDING_OUTPUT_BYTES_V1: usize = 64 * 1024 * 1024;
+pub const MAX_INERT_REFINED_FORWARDING_OUTPUT_BYTES_V1: usize =
+    fe2o3_compiler_lineage::MAX_NATIVE_REFINED_FORWARDING_OUTPUT_BYTES_V1;
 /// Maximum complete history frame.
 pub const MAX_INERT_REFINED_FORWARDING_HISTORY_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum configured storage of the later single caller budget, including siblings.
