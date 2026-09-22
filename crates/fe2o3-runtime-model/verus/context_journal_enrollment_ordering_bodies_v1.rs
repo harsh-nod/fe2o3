@@ -1,6 +1,6 @@
-use ContextAllocationReferenceV1 as AllocationReferenceV1;
-use ContextAllocationKeyV1 as AllocationKeyV1;
-use ContextAllocationEnrollmentV1 as EnrollmentV1;
+use self::ContextAllocationReferenceV1 as AllocationReferenceV1;
+use self::ContextAllocationKeyV1 as AllocationKeyV1;
+use self::ContextAllocationEnrollmentV1 as EnrollmentV1;
 
 verus! {
 

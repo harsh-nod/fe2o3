@@ -124,8 +124,9 @@ The [signed-source enrollment qualification](evidence/dev-enrollment-execution-v
 connects complete logical batch admission, sorting/search, rollback and commit to
 producer custody and issuance preservation: two 263/0 positives and 21 exact
 262/1 controls. Its constructor/enroll/register witness reaches Reserved, not
-Pending. Production now uses shared, actual-type-proved key/slot searches;
-sorting still uses the standard library.
+Pending. At that packet's source, production used shared, actual-type-proved
+key/slot searches and standard-library sorting; later sorting packets below
+supersede that implementation.
 
 `context_version_journal_begin_v1.rs` adds a separate raw Begin executor with
 exact ordered preflight, prestate-derived scratch plans, sequential member and
@@ -353,10 +354,17 @@ Before enabling runtime admission, the remaining work is:
    frames, including caller derivation of sort/search/vacancy premises.
    Its runtime adapter and one-line public forwarder are source-bound and
    inspected; the public forwarder itself is not compiled into the proof root.
-   Historical enrollment projection and reader/producer custody/status transport
-   remain separate, as do physical storage and unwind behavior. Matched CPU
-   controls now include occupied and raw rejection paths, without a parity claim.
-   Remaining bodies include construction, historical custody projection, Begin,
+   Matched CPU controls include occupied and raw rejection paths, without a parity claim.
+   The [enrollment correspondence packet](evidence/dev-journal-enrollment-correspondence-2026-09-21/README.md)
+   connects exact actual/historical decisions, plans, commit frames and rejection
+   identity through paired verified executions. The raw harness adds only
+   represented pre-state/input premises; the issued harness adds the existing
+   logical issued invariant and preserves reader/producer custody and status in
+   that represented model. Concrete witnesses include late rollback and a live
+   Pending reservation during enrollment of another allocation. They do not
+   establish actual reader-wrapper refinement, universal issued-model existence,
+   physical storage/unwind guarantees or production constructor/Begin reachability.
+   Remaining bodies include construction, Begin,
    stable/producer reader admission/release and unread guards.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

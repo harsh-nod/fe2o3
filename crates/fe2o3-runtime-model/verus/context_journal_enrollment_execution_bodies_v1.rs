@@ -1,5 +1,5 @@
-use ContextVersionJournalV1 as JournalContentsV1;
-use ContextVersionJournalErrorV1 as EnrollmentErrorV1;
+use self::ContextVersionJournalV1 as JournalContentsV1;
+use self::ContextVersionJournalErrorV1 as EnrollmentErrorV1;
 
 verus! {
 
