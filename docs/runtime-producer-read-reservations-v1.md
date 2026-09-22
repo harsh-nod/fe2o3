@@ -347,9 +347,16 @@ Before enabling runtime admission, the remaining work is:
    verification/performance tradeoff, not the earlier no-regression gate:
    some valid workloads retain measured overhead, and performance parity remains
    open. The complete enrollment benchmark now invokes the production method.
-   Full enrollment admission/rollback/commit composition and
-   caller-precondition derivation are not yet proved on actual types.
-   Remaining bodies include construction/full enrollment composition, Begin,
+   The [batch composition packet](evidence/dev-journal-enrollment-composition-2026-09-21/README.md)
+   then proves shared actual-type enrollment with no admission precondition:
+   exact error precedence, rollback, canonical refill, commit and other-field
+   frames, including caller derivation of sort/search/vacancy premises.
+   Its runtime adapter and one-line public forwarder are source-bound and
+   inspected; the public forwarder itself is not compiled into the proof root.
+   Historical enrollment projection and reader/producer custody/status transport
+   remain separate, as do physical storage and unwind behavior. Matched CPU
+   controls now include occupied and raw rejection paths, without a parity claim.
+   Remaining bodies include construction, historical custody projection, Begin,
    stable/producer reader admission/release and unread guards.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

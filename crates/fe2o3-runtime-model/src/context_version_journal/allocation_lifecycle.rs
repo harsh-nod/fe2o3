@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod enrollment;
 mod ordering;
 
 macro_rules! enrollment_declarations_v1 {
@@ -26,106 +27,7 @@ impl ContextVersionJournalV1 {
         canonical: &[ContextAllocationEnrollmentV1],
         output: &mut [Option<ContextAllocationReferenceV1>],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        if canonical.len() > self.allocation_capacity || output.len() != canonical.len() {
-            return Err(E::RosterCapacity);
-        }
-        if output.iter().any(Option::is_some) {
-            return Err(E::InvalidState);
-        }
-        let mut previous = None;
-        for entry in canonical {
-            if entry.key.context_generation != self.context_generation
-                || entry.device.context_generation != self.context_generation
-            {
-                return Err(E::ForeignContext);
-            }
-            if !issuable_context_id(entry.key.local) {
-                return Err(E::InvalidAllocationId);
-            }
-            if !issuable_context_id(entry.device.local) {
-                return Err(E::InvalidDeviceId);
-            }
-            if entry.byte_extent == 0 {
-                return Err(E::InvalidExtent);
-            }
-            if previous.is_some_and(|key| key >= entry.key) {
-                return Err(E::NonCanonicalRoster);
-            }
-            previous = Some(entry.key);
-        }
-        if canonical.is_empty() {
-            return Ok(());
-        }
-        if self.allocation_free.len() > self.allocation_capacity {
-            return Err(E::InvalidState);
-        }
-        for index in 0..self.allocations.len() {
-            if self
-                .read_allocation(index)
-                .is_some_and(|entry| ordering::contains_key(canonical, entry.key))
-            {
-                return Err(E::AllocationReplay);
-            }
-        }
-        let remaining = self
-            .allocation_free
-            .len()
-            .checked_sub(canonical.len())
-            .ok_or(E::AllocationCapacity)?;
-        for &slot in &self.allocation_free[remaining..] {
-            if self.allocations.get(slot) != Some(&None) {
-                return Err(E::InvalidState);
-            }
-        }
-        // Use the caller's inert output as temporary sort storage. On a corrupt
-        // free stack, restore its original all-None contents before returning.
-        for ((entry, out), &slot) in canonical
-            .iter()
-            .zip(output.iter_mut())
-            .zip(self.allocation_free[remaining..].iter().rev())
-        {
-            *out = Some(ContextAllocationReferenceV1 {
-                slot,
-                key: entry.key,
-            });
-        }
-        ordering::sort_enrollment_slots(output);
-        if output
-            .windows(2)
-            .any(|pair| pair[0].unwrap().slot == pair[1].unwrap().slot)
-            || self.allocation_free[..remaining]
-                .iter()
-                .any(|&slot| ordering::contains_slot(output, slot))
-        {
-            output.fill(None);
-            return Err(E::InvalidState);
-        }
-        // Restore canonical key/slot associations from the unchanged free stack
-        // in linear time, rather than sorting the temporary output a second time.
-        for ((entry, out), &slot) in canonical
-            .iter()
-            .zip(output.iter_mut())
-            .zip(self.allocation_free[remaining..].iter().rev())
-        {
-            *out = Some(ContextAllocationReferenceV1 {
-                slot,
-                key: entry.key,
-            });
-        }
-        // All fallible validation precedes the journal commit.
-        for (entry, reference) in canonical.iter().zip(output.iter()) {
-            self.allocations[reference.unwrap().slot] = Some(AllocationEntryV1 {
-                key: entry.key,
-                device: entry.device,
-                byte_extent: entry.byte_extent,
-                attempt_epoch: 0,
-                content_lineage: 0,
-                pending_member: None,
-            });
-        }
-        self.allocation_free.truncate(remaining);
-        Ok(())
+        enrollment::enrollment_journal_exec_v1(self, canonical, output)
     }
 
     /// Preflights the entire exact roster in O(k), without mutating any state.

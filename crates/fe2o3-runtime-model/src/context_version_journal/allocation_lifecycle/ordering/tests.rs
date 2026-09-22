@@ -285,11 +285,24 @@ fn search_performance() {
 #[test]
 fn production_uses_shared_sort_and_searches() {
     let source = include_str!("../../allocation_lifecycle.rs");
-    assert!(source.contains("ordering::sort_enrollment_slots(output)"));
-    assert!(source.contains("ordering::contains_key(canonical, entry.key)"));
-    assert!(source.contains("ordering::contains_slot(output, slot)"));
+    assert!(source.contains("enrollment::enrollment_journal_exec_v1(self, canonical, output)"));
     assert!(!source.contains("ordering::sort_slots"));
     assert!(!source.contains("sort_unstable"));
+    let enrollment = include_str!("../enrollment.rs");
+    assert!(enrollment.contains("include!(\"../enrollment_bodies.rs\")"));
+    assert!(enrollment.contains("sort_enrollment_slots as adaptive_sort_slots"));
+    let shared = include_str!("../../enrollment_bodies.rs");
+    assert!(shared.contains("adaptive_sort_slots($output)"));
+    assert!(shared.contains("contains_key($entries, entry.key)"));
+    assert!(shared.contains("contains_slot($values, $journal.allocation_free[$index])"));
+    assert_eq!(
+        shared
+            .matches("enrollment_indexed_access_v1($journal)")
+            .count(),
+        1
+    );
+    let proof = include_str!("../../../../verus/context_journal_enrollment_execution_v1.rs");
+    assert!(proof.contains("include!(\"../src/context_version_journal/enrollment_bodies.rs\")"));
     let adapter = include_str!("../ordering.rs");
     assert!(
         adapter.contains("pub(super) use adaptive::adaptive_sort_slots as sort_enrollment_slots;")

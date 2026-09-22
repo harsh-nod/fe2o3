@@ -273,6 +273,108 @@ fn enrollment_preserves_replay_scan_access_counts() {
 }
 
 #[test]
+fn enrollment_accepts_selected_arena_slot_above_capacity_with_unrelated_prefix_corruption() {
+    let mut journal = Journal::new(7, 6, 1).unwrap();
+    journal.allocation_capacity = 4;
+    journal.allocation_free = vec![usize::MAX, 0, 0, 5];
+    journal.allocations[0] = Some(AllocationEntryV1 {
+        key: entry(99).key,
+        device: entry(99).device,
+        byte_extent: 17,
+        attempt_epoch: 9,
+        content_lineage: 8,
+        pending_member: Some(usize::MAX),
+    });
+    journal.indexed_accesses.set(0);
+    check_enrollment_oracle(&mut journal, &[entry(10)], vec![None]);
+    assert_eq!(journal.allocation_free, [usize::MAX, 0, 0]);
+    assert_eq!(journal.allocations[5].unwrap().key, entry(10).key);
+    assert_eq!(journal.indexed_accesses.get(), 6);
+}
+
+#[test]
+fn enrollment_dirty_output_tail_wins_before_roster_and_free_corruption() {
+    let mut journal = Journal::new(7, 3, 1).unwrap();
+    journal.allocation_free.push(usize::MAX);
+    let mut entries = [entry(20), entry(10), entry(30)];
+    entries[0].key.context_generation = 8;
+    let dirty = Some(ContextAllocationReferenceV1 {
+        slot: usize::MAX,
+        key: entry(91).key,
+    });
+    let mut output = [None, None, dirty];
+    let before = snapshot(&journal);
+    journal.indexed_accesses.set(0);
+    assert_eq!(
+        journal.enroll_allocations(&entries, &mut output),
+        Err(Error::InvalidState)
+    );
+    assert_eq!(output, [None, None, dirty]);
+    assert_eq!(snapshot(&journal), before);
+    assert_eq!(journal.indexed_accesses.get(), 0);
+}
+
+#[test]
+fn enrollment_late_rejections_count_only_the_actual_replay_scan() {
+    for free in [vec![], vec![usize::MAX, 0], vec![0, 0], vec![0, 1, 0]] {
+        let mut journal = Journal::new(7, 5, 1).unwrap();
+        journal.allocation_free = free;
+        journal.indexed_accesses.set(0);
+        check_enrollment_oracle(&mut journal, &[entry(10), entry(20)], vec![None; 2]);
+        assert_eq!(journal.indexed_accesses.get(), 5);
+    }
+    let mut journal = Journal::new(7, 5, 1).unwrap();
+    journal.allocation_free.push(usize::MAX);
+    journal.indexed_accesses.set(0);
+    check_enrollment_oracle(&mut journal, &[], vec![]);
+    assert_eq!(journal.indexed_accesses.get(), 0);
+    check_enrollment_oracle(&mut journal, &[entry(10)], vec![None]);
+    assert_eq!(journal.indexed_accesses.get(), 0);
+}
+
+#[test]
+fn enrollment_frames_dirty_unrelated_journal_state_on_success_and_rollback() {
+    for alias in [false, true] {
+        let mut journal = Journal::new(7, 4, 1).unwrap();
+        let writer = Reference {
+            slot: usize::MAX,
+            key: key(87),
+        };
+        let allocation = ContextAllocationReferenceV1 {
+            slot: usize::MAX,
+            key: entry(91).key,
+        };
+        journal.writers[0] = Some(WriterEntryV1::Unknown {
+            key: writer.key,
+            head: Some(usize::MAX),
+            count: usize::MAX,
+        });
+        journal.free[0] = usize::MAX;
+        journal.members[0] = Some(MemberEntryV1 {
+            writer,
+            allocation,
+            prior_lineage: u64::MAX,
+            attempt_epoch: 0,
+            next: Some(usize::MAX),
+        });
+        journal.member_free[0] = usize::MAX;
+        journal.scratch[0] = Some(BeginMemberPlanV1 {
+            member_slot: usize::MAX,
+            allocation,
+            prior_lineage: u64::MAX,
+            attempt_epoch: 0,
+        });
+        journal.writer_capacity = usize::MAX;
+        journal.registration_watermark = u64::MAX;
+        journal.reserved_count = usize::MAX;
+        if alias {
+            journal.allocation_free[0] = journal.allocation_free[3];
+        }
+        check_enrollment_oracle(&mut journal, &[entry(10), entry(20)], vec![None; 2]);
+    }
+}
+
+#[test]
 fn batch_enrollment_preserves_key_coordinates_across_permuted_slots_and_out_of_order_batches() {
     let mut journal = Journal::new(7, 6, 2).unwrap();
     journal.allocation_free = vec![4, 0, 5, 2, 1, 3];

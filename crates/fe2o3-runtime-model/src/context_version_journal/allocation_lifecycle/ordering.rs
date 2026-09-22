@@ -9,7 +9,7 @@ macro_rules! enrollment_rust_expr {
 }
 
 #[inline]
-fn enrollment_less(left: ContextAllocationKeyV1, right: ContextAllocationKeyV1) -> bool {
+pub(super) fn enrollment_less(left: ContextAllocationKeyV1, right: ContextAllocationKeyV1) -> bool {
     enrollment_less_body!(left, right)
 }
 
