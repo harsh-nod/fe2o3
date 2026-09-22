@@ -105,3 +105,6 @@ pub(super) fn contains_slot(values: &[Option<ContextAllocationReferenceV1>], slo
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod adaptive;

@@ -337,7 +337,11 @@ Before enabling runtime admission, the remaining work is:
    The [ordering packet](evidence/dev-journal-enrollment-ordering-2026-09-21/README.md)
    adds actual-type shared binary searches and a verified, test-only heap-sort
    candidate. Production retains standard sorting because the candidate regressed
-   CPU performance. Full enrollment admission/rollback/commit composition and
+   CPU performance. The [adaptive sorting packet](evidence/dev-journal-enrollment-adaptive-2026-09-21/README.md)
+   adds an actual-type depth-limited candidate with run handling, insertion sort
+   and partitioning, plus matched sort-only and full-enrollment controls. It is
+   also test-only: noisy end-to-end results do not override direct sort regressions.
+   Full enrollment admission/rollback/commit composition and
    caller-precondition derivation are not yet proved on actual types.
    Remaining bodies include construction/enrollment and production sorting, Begin,
    stable/producer reader admission/release and unread guards.
