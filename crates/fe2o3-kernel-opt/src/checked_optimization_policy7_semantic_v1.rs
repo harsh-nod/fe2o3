@@ -52,7 +52,16 @@ impl fmt::Display for Error {
         write!(f, "Policy7 semantic composition: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Policy6(error) => Some(error.as_ref()),
+            Self::Continuation(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::Record | Self::Rows | Self::Panicked => None,
+        }
+    }
+}
 
 /// Existing record and typed rows stay caller-owned. This is not a row decoder.
 #[derive(Clone, Copy)]

@@ -64,6 +64,7 @@ fn consuming_unit_local_moves_whole_n_e_history_and_checks_mutation_and_noop() {
                     .unwrap();
                 assert_eq!(budget.storage(), floor);
                 budget.reserve_storage(storage.retained_storage()).unwrap();
+                owner.assert_independent_added_receipt_v1(storage);
                 assert_eq!(
                     pointers,
                     (

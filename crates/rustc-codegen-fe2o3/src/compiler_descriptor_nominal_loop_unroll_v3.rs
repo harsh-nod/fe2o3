@@ -115,7 +115,7 @@ fn nominal_arguments(
     Ok(())
 }
 
-fn validate_view(
+pub(super) fn validate_view(
     typed_roots: &[TypedDescriptorRootV1],
     admitted: &CheckedDescriptorViewV1<'_>,
     profile: ProductionAmdTargetProfileV1,

@@ -760,3 +760,138 @@ fn unroll_history_fresh_materializations_and_replay_are_deterministic() {
     }
     assert_eq!(observations[0], observations[1]);
 }
+
+fn wire_source_resource_cases() -> [Resource; 5] {
+    let mut work = Work::new(3);
+    let mut budget = Budget::new(&mut work, 5);
+    [
+        budget.charge_work(4).unwrap_err(),
+        budget.reserve_storage(6).unwrap_err(),
+        budget.release_storage(1).unwrap_err(),
+        // Typed leaf fixtures, not attempts to exhaust the host allocator.
+        Resource::Allocation,
+        Resource::Arithmetic,
+    ]
+}
+
+fn assert_wire_borrowed_source<T: std::error::Error + 'static>(
+    error: &dyn std::error::Error,
+    child: &T,
+) {
+    let actual = error.source().unwrap().downcast_ref::<T>().unwrap();
+    assert!(std::ptr::eq(actual, child));
+}
+
+fn assert_wire_resource_source_chain(
+    error: &(dyn std::error::Error + 'static),
+    expected: Resource,
+    depth: usize,
+) {
+    let mut cause = error;
+    for _ in 0..depth {
+        cause = cause.source().expect("complete typed resource cause chain");
+    }
+    assert_eq!(cause.downcast_ref::<Resource>(), Some(&expected));
+    match expected {
+        Resource::Work(expected) => {
+            let leaf = cause.source().unwrap();
+            assert_eq!(
+                leaf.downcast_ref::<fe2o3_kernel_ir::CanonicalKernelIrWorkLimitV1>(),
+                Some(&expected)
+            );
+            assert!(leaf.source().is_none());
+        }
+        Resource::Storage(expected) => {
+            let leaf = cause.source().unwrap();
+            assert_eq!(
+                leaf.downcast_ref::<fe2o3_kernel_ir::CanonicalKernelIrVerificationStorageLimitV1>(),
+                Some(&expected)
+            );
+            assert!(leaf.source().is_none());
+        }
+        Resource::Accounting | Resource::Allocation | Resource::Arithmetic => {
+            assert!(cause.source().is_none());
+        }
+    }
+}
+
+#[test]
+fn wire_error_sources_preserve_direct_prefix_and_tail_resources() {
+    use fe2o3_kernel_ir::CanonicalKirTransitionReceiptErrorV1 as TailError;
+    for resource in wire_source_resource_cases() {
+        let direct = Error::Resource(resource);
+        let Error::Resource(child) = &direct else {
+            unreachable!()
+        };
+        assert_wire_borrowed_source(&direct, child);
+        assert_wire_resource_source_chain(&direct, resource, 1);
+
+        let prefix = Error::Prefix(PrefixError::Resource(resource));
+        let Error::Prefix(child) = &prefix else {
+            unreachable!()
+        };
+        assert_wire_borrowed_source(&prefix, child);
+        assert_wire_resource_source_chain(&prefix, resource, 2);
+
+        let nested = Error::Prefix(PrefixError::Tail(TailError::Resource(resource)));
+        assert_wire_resource_source_chain(&nested, resource, 3);
+    }
+}
+
+#[test]
+fn wire_error_sources_preserve_admission_and_nested_policy_wrappers() {
+    for resource in wire_source_resource_cases() {
+        let admission = Error::Admission(Admission::Resource(resource));
+        let Error::Admission(child) = &admission else {
+            unreachable!()
+        };
+        assert_wire_borrowed_source(&admission, child);
+        assert!(matches!(child, Admission::Resource(actual) if *actual == resource));
+
+        let policy = Error::Prefix(PrefixError::Policy7(
+            crate::CanonicalPolicy7SemanticErrorV1::Resource(resource),
+        ));
+        let Error::Prefix(prefix) = &policy else {
+            unreachable!()
+        };
+        assert_wire_borrowed_source(&policy, prefix);
+        let PrefixError::Policy7(child) = prefix else {
+            unreachable!()
+        };
+        assert_wire_borrowed_source(prefix, child);
+        assert!(matches!(
+            child,
+            crate::CanonicalPolicy7SemanticErrorV1::Resource(actual) if *actual == resource
+        ));
+    }
+}
+
+#[test]
+fn wire_error_sources_distinguish_markers_from_nonresource_children() {
+    use std::error::Error as _;
+    for error in [
+        Error::Length,
+        Error::Header,
+        Error::Reserved,
+        Error::Limit,
+        Error::Field(7),
+        Error::Rows { family: 2 },
+        Error::Tag { family: 4 },
+        Error::Settings,
+        Error::Panicked,
+    ] {
+        assert!(error.source().is_none());
+    }
+    let prefix = Error::Prefix(PrefixError::Header);
+    let Error::Prefix(child) = &prefix else {
+        unreachable!()
+    };
+    assert_wire_borrowed_source(&prefix, child);
+    assert!(prefix.source().unwrap().source().is_none());
+    let admission = Error::Admission(Admission::CanonicalMismatch);
+    let Error::Admission(child) = &admission else {
+        unreachable!()
+    };
+    assert_wire_borrowed_source(&admission, child);
+    assert!(admission.source().unwrap().source().is_none());
+}

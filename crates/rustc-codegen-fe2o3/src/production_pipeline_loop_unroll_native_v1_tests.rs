@@ -95,16 +95,20 @@ fn with_prepared(
     bound: Option<u64>,
     run: impl FnOnce(&mut PreparedLoopUnrollNativeOutputV1, &mut Budget<'_>),
 ) {
-    with_prefix(erased, profile, bound, |prefix, budget| {
-        let floor = budget.storage();
-        let ledger = budget.work_ledger_identity_v1();
-        let (mut owner, receipt) = prepare_checked_fixture(prefix, profile, bound, budget);
-        run(&mut owner, budget);
-        drop(owner);
-        budget.release_storage(receipt.retained_storage()).unwrap();
-        assert_eq!(budget.storage(), floor);
-        assert!(budget.work_ledger_identity_v1() == ledger);
-    });
+    let mut work = Work::new(
+        usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
+    );
+    let mut budget = Budget::new(
+        &mut work,
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+    );
+    let ledger = budget.work_ledger_identity_v1();
+    let mut fixture = prepare_pair_fixture_with_bound(erased, profile, bound, &mut budget);
+    let floor = budget.storage();
+    run(&mut fixture.native, &mut budget);
+    assert_eq!(budget.storage(), floor);
+    release_pair_fixture(fixture, &mut budget);
+    assert!(budget.work_ledger_identity_v1() == ledger);
 }
 
 // Caller-owned meters stay live while each complete construction scope returns.
@@ -122,21 +126,31 @@ fn prepare_pair_fixture(
     profile: Profile,
     budget: &mut Budget<'_>,
 ) -> PreparedPairFixture {
+    prepare_pair_fixture_with_bound(erased, profile, Some(3), budget)
+}
+
+#[inline(never)]
+fn prepare_pair_fixture_with_bound(
+    erased: bool,
+    profile: Profile,
+    bound: Option<u64>,
+    budget: &mut Budget<'_>,
+) -> PreparedPairFixture {
     assert_eq!(budget.storage(), 0);
     let ledger = budget.work_ledger_identity_v1();
     let (prefix, ranked, p6_storage, source_storage) = if erased {
         let (owner, ranked, p6_storage, source_storage) =
-            prepare_backend_unroll_erased_prefix_v1(profile, Some(3), budget);
+            prepare_backend_unroll_erased_prefix_v1(profile, bound, budget);
         (Prefix6::Erased(owner), ranked, p6_storage, source_storage)
     } else {
         let (owner, ranked, p6_storage, source_storage) =
-            prepare_backend_unroll_direct_prefix_v1(profile, Some(3), budget);
+            prepare_backend_unroll_direct_prefix_v1(profile, bound, budget);
         (Prefix6::Direct(owner), ranked, p6_storage, source_storage)
     };
     assert_eq!(ranked.root_count(), 2);
     let prefix_floor = budget.storage();
     assert_eq!(prefix_floor, 29 + source_storage + p6_storage);
-    let (native, native_storage) = prepare_checked_fixture(prefix, profile, Some(3), budget);
+    let (native, native_storage) = prepare_checked_fixture(prefix, profile, bound, budget);
     assert!(budget.work_ledger_identity_v1() == ledger);
     PreparedPairFixture {
         native,

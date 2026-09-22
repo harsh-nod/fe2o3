@@ -315,6 +315,45 @@ fn reaches_entry(
     Ok(false)
 }
 
+// Independently inspect the actual condition definition, never a producer flag.
+fn excluded_external_successor(
+    i: &Inventory<'_>,
+    coordinate: Edge,
+    budget: &mut Budget<'_>,
+) -> Result<bool> {
+    budget.charge_work(8)?;
+    let source = &i.blocks()[block_index(i, coordinate.source, budget)?];
+    let condition = match source.terminator {
+        Terminator::ConditionalBranch { condition, .. } => *condition,
+        _ => return Ok(false),
+    };
+    let definition = resolve(i, coordinate.source, condition, budget)?;
+    let site = match definition {
+        Definition::Result {
+            operation,
+            result: 0,
+        } => operation,
+        _ => return Ok(false),
+    };
+    let actual = operation(i, site, budget)?.operation;
+    match &actual.kind {
+        OperationKind::Constant(fe2o3_kernel_ir::Constant::Bool(value)) => {
+            if actual.results.len() != 1
+                || actual.results[0].id != condition
+                || actual.results[0].ty != Type::BOOL
+                || coordinate.successor > 1
+            {
+                return Err(Error::ReplayMismatch);
+            }
+            Ok(matches!(
+                (*value, coordinate.successor),
+                (false, 0) | (true, 1)
+            ))
+        }
+        _ => Ok(false),
+    }
+}
+
 // Independent color/stack DFS detects every body cycle. It does not consume a
 // producer topological order, member count or Kahn-indegree result.
 fn complete_body(
@@ -353,7 +392,13 @@ fn complete_body(
             budget.charge_work(3)?;
             let row = &i.edges()[ordinal];
             let target = block_index(i, row.target, budget)?;
-            if scratch.members[target] == 0 || (target == header && row.coordinate != latch[0]) {
+            if scratch.members[target] == 0 {
+                if excluded_external_successor(i, row.coordinate, budget)? {
+                    continue;
+                }
+                return Ok(Iterations::Unavailable);
+            }
+            if target == header && row.coordinate != latch[0] {
                 return Ok(Iterations::Unavailable);
             }
         }
@@ -376,7 +421,13 @@ fn complete_body(
             }
             let last = scratch.pending.len() - 1;
             scratch.pending[last].1 = next.checked_add(1).ok_or(Resource::Arithmetic)?;
-            let target = block_index(i, i.edges()[edges.start + next].target, budget)?;
+            let row = &i.edges()[edges.start + next];
+            let target = block_index(i, row.target, budget)?;
+            if scratch.members[target] == 0
+                && excluded_external_successor(i, row.coordinate, budget)?
+            {
+                continue;
+            }
             if target == header {
                 continue;
             }

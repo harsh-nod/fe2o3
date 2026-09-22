@@ -12701,6 +12701,12 @@ include!("production_execution_cfg_transport_v29.rs");
 include!("production_execution_transport_v1.rs");
 include!("production_call_destination_v1.rs");
 include!("production_saturating_integer_v1.rs");
+include!("production_semantic_kir_v1/intrinsic_lds_calls_v1.rs");
+include!("production_semantic_kir_v1/intrinsic_numeric_calls_v1.rs");
+include!("production_semantic_kir_v1/intrinsic_collective_calls_v1.rs");
+include!("production_semantic_kir_v1/intrinsic_matrix_calls_v1.rs");
+include!("production_semantic_kir_v1/intrinsic_index_calls_v1.rs");
+include!("production_semantic_kir_v1/intrinsic_memory_calls_v1.rs");
 include!("production_semantic_kir_v1/dynamic_local_array_v1.rs");
 include!("production_emission_read_only_v1.rs");
 include!("production_semantic_kir_v1/function_construction_v1.rs");
@@ -16365,721 +16371,76 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 element_storage,
                 elements,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 1)?;
-                // Post-borrow-check rustc MIR may reclassify this final use of
-                // a non-Copy authority reference as `Copy`. Taking its local
-                // binding below still consumes the compiler-issued authority.
-                let (SemanticOperandV1::Copy(scope_place) | SemanticOperandV1::Move(scope_place)) =
-                    &call.arguments()[0]
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "exact LDS scope authority must be transferred exactly once",
-                    ));
-                };
-                if !scope_place.projections().is_empty() {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "exact LDS scope authority has a projected carrier",
-                    ));
-                }
-                let scope_local = self.require_local(block, None, scope_place.local().index())?;
-                let scope = self.locals[scope_local].take().ok_or(
-                    ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                        function: 0,
-                        block: block.index(),
-                        statement: None,
-                        local: scope_place.local().index(),
-                    },
-                )?;
-                if !matches!(scope, SemanticValueBindingV1::WorkgroupLdsScope) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "exact LDS allocation lacks compiler-authenticated scope authority",
-                    ));
-                }
-                let element = lower_dynamic_lds_element_type_v1(self.types, *element_storage)?;
-                let storage = self
-                    .types
-                    .get(element_storage.index() as usize)
-                    .ok_or_else(|| {
-                        unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "exact LDS storage type is missing",
-                        )
-                    })?;
-                let element_size = storage.layout().size_bytes().ok_or_else(|| {
-                    unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "exact LDS storage is dynamically sized",
-                    )
-                })?;
-                let byte_extent = elements.checked_mul(element_size).ok_or_else(|| {
-                    unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "exact LDS byte extent overflows",
-                    )
-                })?;
-                let extent = u32::try_from(*elements).map_err(|_| {
-                    unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "exact LDS element extent exceeds Kernel IR",
-                    )
-                })?;
-                let alignment =
-                    u32::try_from(storage.layout().alignment_bytes()).map_err(|_| {
-                        unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "exact LDS alignment exceeds Kernel IR",
-                        )
-                    })?;
-                let pointer_type = Type::pointer(
-                    element.clone(),
-                    AddressSpace::Workgroup,
-                    AccessMode::ReadWrite,
-                );
-                let pointer = self.emit(
-                    operations,
-                    pointer_type,
-                    OperationKind::WorkgroupMemory(WorkgroupMemory {
-                        element,
-                        extent: WorkgroupMemoryExtent::Static(extent),
-                        alignment,
-                    }),
-                )?;
-                let len = self.emit(
-                    operations,
-                    Type::INDEX,
-                    OperationKind::Constant(Constant::Index(*elements)),
-                )?;
-                let byte_len = self.emit(
-                    operations,
-                    Type::INDEX,
-                    OperationKind::Constant(Constant::Index(byte_extent)),
-                )?;
-                let (base, base_ty) = pointer
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let (len, _) = len
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let (byte_len, _) = byte_len
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                SemanticValueBindingV1::DynamicLds {
-                    base,
-                    base_ty,
-                    len,
-                    byte_len,
-                    dynamic_lds: *dynamic_lds,
-                    element_storage: *element_storage,
-                    elements: extent,
-                    byte_extent,
-                    alignment,
-                    producer_function: self.semantic_function,
-                    producer_block: block,
-                }
-            }
+            } => self.lower_intrinsic_dynamic_lds_exact_v1(
+                block,
+                call,
+                dynamic_lds,
+                element_storage,
+                elements,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts {
                 raw_parts,
                 element_storage,
                 element,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 1)?;
-                let SemanticOperandV1::Move(dynamic_lds_place) = &call.arguments()[0] else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "collective LDS conversion must consume dynamic LDS exactly once",
-                    ));
-                };
-                if !dynamic_lds_place.projections().is_empty() {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "collective LDS conversion has a projected dynamic-LDS carrier",
-                    ));
-                }
-                let local = self.require_local(block, None, dynamic_lds_place.local().index())?;
-                let dynamic_lds_binding = self.locals[local].take().ok_or(
-                    ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                        function: self.semantic_function.index(),
-                        block: block.index(),
-                        statement: None,
-                        local: dynamic_lds_place.local().index(),
-                    },
-                )?;
-                let SemanticValueBindingV1::DynamicLds {
-                    base: pointer,
-                    base_ty: pointer_ty,
-                    len,
-                    byte_len,
-                    dynamic_lds,
-                    element_storage: issued_element_storage,
-                    elements,
-                    byte_extent,
-                    alignment,
-                    producer_function,
-                    producer_block,
-                } = dynamic_lds_binding
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "collective LDS conversion input is not compiler-issued dynamic LDS",
-                    ));
-                };
-                let storage_element =
-                    lower_dynamic_lds_element_type_v1(self.types, *element_storage)?;
-                let semantic_element = lower_scalar_type(self.types, *element)?;
-                let storage = self
-                    .types
-                    .get(element_storage.index() as usize)
-                    .ok_or_else(|| {
-                        unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            "collective LDS conversion storage type is missing",
-                        )
-                    })?;
-                let expected_byte_extent = u64::from(elements)
-                    .checked_mul(storage.layout().size_bytes().ok_or_else(|| {
-                        unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            "collective LDS conversion storage is dynamically sized",
-                        )
-                    })?)
-                    .ok_or_else(|| {
-                        unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            "collective LDS conversion byte extent overflows",
-                        )
-                    })?;
-                let Type::Pointer(pointer_contract) = &pointer_ty else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "collective LDS conversion input is not a lowered pointer",
-                    ));
-                };
-                if pointer_contract.address_space != AddressSpace::Workgroup
-                    || pointer_contract.access != AccessMode::ReadWrite
-                    || *pointer_contract.pointee != storage_element
-                    || storage_element != semantic_element
-                    || dynamic_lds != call.arguments()[0].ty()
-                    || issued_element_storage != *element_storage
-                    || producer_function != self.semantic_function
-                    || producer_block == block
-                    || !self
-                        .enum_payload_dominance
-                        .block_dominates(producer_block, block)
-                    || byte_extent != expected_byte_extent
-                    || u64::from(alignment) != storage.layout().alignment_bytes()
-                    || self.emitted_workgroup_memory_extents.get(&pointer).copied()
-                        != Some(elements)
-                    || self.emitted_unsigned_constants.get(&len).copied()
-                        != Some(u64::from(elements))
-                    || self.emitted_unsigned_constants.get(&byte_len).copied() != Some(byte_extent)
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "collective LDS conversion pointer, element, or length changed",
-                    ));
-                }
-                let values = [
-                    ValueDef::new(pointer, pointer_ty),
-                    ValueDef::new(len, Type::INDEX),
-                ];
-                binding_from_value_defs_with_validation(self.types, *raw_parts, &values, false)?
-            }
+            } => self.lower_intrinsic_dynamic_lds_raw_parts_v1(
+                block,
+                call,
+                raw_parts,
+                element_storage,
+                element,
+            )?,
             SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
                 pipeline,
                 buffers,
                 elements,
                 prefetch_distance,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 1)?;
-                let scope = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                if !matches!(scope, SemanticValueBindingV1::WorkgroupLdsScope) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "workgroup pipeline creation lacks compiler-authenticated LDS scope",
-                    ));
-                }
-                if !(2..=8).contains(buffers)
-                    || *elements == 0
-                    || *prefetch_distance == 0
-                    || prefetch_distance >= buffers
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "workgroup pipeline geometry is outside the executable contract",
-                    ));
-                }
-                let contract = self
-                    .workgroup_pipeline_contracts
-                    .get(pipeline)
-                    .cloned()
-                    .ok_or_else(|| {
-                        unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "workgroup pipeline has no consistent typed payload contract",
-                        )
-                    })?;
-                let extent = u64::from(*buffers)
-                    .checked_mul(*elements)
-                    .and_then(|extent| u32::try_from(extent).ok())
-                    .ok_or_else(|| {
-                        unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "workgroup pipeline LDS extent exceeds Kernel IR",
-                        )
-                    })?;
-                let pointer_type = Type::pointer(
-                    contract.packed_type.clone(),
-                    AddressSpace::Workgroup,
-                    AccessMode::ReadWrite,
-                );
-                let storage = self.emit_id(
-                    operations,
-                    pointer_type,
-                    OperationKind::WorkgroupMemory(WorkgroupMemory {
-                        element: contract.packed_type.clone(),
-                        extent: WorkgroupMemoryExtent::Static(extent),
-                        alignment: contract.alignment,
-                    }),
-                )?;
-                SemanticValueBindingV1::WorkgroupPipeline {
-                    storage,
-                    pipeline: *pipeline,
-                    element: contract.element,
-                    payload_binding: contract.payload_binding,
-                    component_types: contract.component_types,
-                    packed_type: contract.packed_type,
-                    buffers: *buffers,
-                    elements: *elements,
-                    prefetch_distance: *prefetch_distance,
-                    alignment: contract.alignment,
-                }
-            }
+            } => self.lower_intrinsic_workgroup_pipeline_create_v1(
+                block,
+                call,
+                pipeline,
+                buffers,
+                elements,
+                prefetch_distance,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { pipeline, event } => {
-                self.require_call_argument_count(block, call, 2)?;
-                let receiver = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let SemanticValueBindingV1::WorkgroupPipeline {
-                    pipeline: actual_pipeline,
-                    buffers,
-                    elements,
-                    prefetch_distance,
-                    ..
-                } = receiver
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "workgroup pipeline event lacks its compiler-owned storage capability",
-                    ));
-                };
-                if actual_pipeline != *pipeline
-                    || !(2..=8).contains(&buffers)
-                    || elements == 0
-                    || prefetch_distance == 0
-                    || prefetch_distance >= buffers
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "workgroup pipeline event changed its authenticated contract",
-                    ));
-                }
-                let epoch = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                let _ = self.coerce_index(block, operations, epoch)?;
-                if *event == SemanticWorkgroupPipelineEventV1::Wait {
-                    self.emit_workgroup_pipeline_barrier(operations)?;
-                }
-                SemanticValueBindingV1::Unit
+                self.lower_intrinsic_workgroup_pipeline_event_v1(
+                    block, call, pipeline, event, operations,
+                )?
             }
             SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { pipeline, element } => {
-                self.require_call_argument_count(block, call, 4)?;
-                let receiver = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let SemanticValueBindingV1::WorkgroupPipeline {
-                    storage,
-                    pipeline: actual_pipeline,
-                    element: actual_element,
-                    payload_binding,
-                    component_types,
-                    packed_type,
-                    buffers,
-                    elements,
-                    prefetch_distance: _,
-                    alignment,
-                } = receiver
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "workgroup pipeline write lacks its compiler-owned storage capability",
-                    ));
-                };
-                let contract = self
-                    .workgroup_pipeline_contracts
-                    .get(pipeline)
-                    .cloned()
-                    .ok_or_else(|| {
-                        unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "workgroup pipeline write has no typed payload contract",
-                        )
-                    })?;
-                if actual_pipeline != *pipeline
-                    || actual_element != *element
-                    || contract.element != *element
-                    || payload_binding != contract.payload_binding
-                    || component_types.as_ref() != contract.component_types.as_ref()
-                    || packed_type != contract.packed_type
-                    || alignment != contract.alignment
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "workgroup pipeline write changed its authenticated storage contract",
-                    ));
-                }
-                let slot = self.lower_workgroup_pipeline_slot(
-                    block,
-                    &call.arguments()[1],
-                    &call.arguments()[2],
-                    buffers,
-                    elements,
-                    operations,
-                )?;
-                let payload = self.lower_operand(block, None, &call.arguments()[3], operations)?;
-                let packed =
-                    self.pack_workgroup_pipeline_payload(block, payload, &contract, operations)?;
-                let pointer = self.emit_id(
-                    operations,
-                    Type::pointer(
-                        contract.packed_type.clone(),
-                        AddressSpace::Workgroup,
-                        AccessMode::ReadWrite,
-                    ),
-                    OperationKind::GetElementPointer {
-                        base: storage,
-                        offset: slot,
-                    },
-                )?;
-                self.push_operation(operations, || {
-                    Operation::new(
-                        Vec::new(),
-                        OperationKind::Store {
-                            pointer,
-                            value: packed,
-                            access: MemoryAccess::new(AddressSpace::Workgroup, alignment),
-                        },
-                    )
-                })?;
-                SemanticValueBindingV1::Unit
+                self.lower_intrinsic_workgroup_pipeline_write_v1(
+                    block, call, pipeline, element, operations,
+                )?
             }
             SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { pipeline, element } => {
-                self.require_call_argument_count(block, call, 3)?;
-                let receiver = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let SemanticValueBindingV1::WorkgroupPipeline {
-                    storage,
-                    pipeline: actual_pipeline,
-                    element: actual_element,
-                    payload_binding,
-                    component_types,
-                    packed_type,
-                    buffers,
-                    elements,
-                    prefetch_distance: _,
-                    alignment,
-                } = receiver
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "workgroup pipeline read lacks its compiler-owned storage capability",
-                    ));
-                };
-                let contract = self
-                    .workgroup_pipeline_contracts
-                    .get(pipeline)
-                    .cloned()
-                    .ok_or_else(|| {
-                        unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "workgroup pipeline read has no typed payload contract",
-                        )
-                    })?;
-                if actual_pipeline != *pipeline
-                    || actual_element != *element
-                    || contract.element != *element
-                    || payload_binding != contract.payload_binding
-                    || component_types.as_ref() != contract.component_types.as_ref()
-                    || packed_type != contract.packed_type
-                    || alignment != contract.alignment
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "workgroup pipeline read changed its authenticated storage contract",
-                    ));
-                }
-                let slot = self.lower_workgroup_pipeline_slot(
-                    block,
-                    &call.arguments()[1],
-                    &call.arguments()[2],
-                    buffers,
-                    elements,
-                    operations,
-                )?;
-                let pointer = self.emit_id(
-                    operations,
-                    Type::pointer(
-                        contract.packed_type.clone(),
-                        AddressSpace::Workgroup,
-                        AccessMode::ReadWrite,
-                    ),
-                    OperationKind::GetElementPointer {
-                        base: storage,
-                        offset: slot,
-                    },
-                )?;
-                let packed = self.emit_id(
-                    operations,
-                    contract.packed_type.clone(),
-                    OperationKind::Load {
-                        pointer,
-                        access: MemoryAccess::new(AddressSpace::Workgroup, alignment),
-                    },
-                )?;
-                self.unpack_workgroup_pipeline_payload(block, packed, &contract, operations)?
+                self.lower_intrinsic_workgroup_pipeline_read_v1(
+                    block, call, pipeline, element, operations,
+                )?
             }
             SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. } => {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::MathContext
             }
             SemanticCompilerIntrinsicOperationV1::MathF32 { function, .. } => {
-                self.require_call_argument_count(block, call, function.arity() + 1)?;
-                let context = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                if !matches!(context, SemanticValueBindingV1::MathContext) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "device math operation lacks compiler-issued math authority",
-                    ));
-                }
-                let function = lower_f32_math_function(*function);
-                let mut arguments = Vec::with_capacity(function.arity());
-                for argument in &call.arguments()[1..] {
-                    let (id, ty) = self
-                        .lower_operand(block, None, argument, operations)?
-                        .value()
-                        .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                    if ty != Type::Scalar(ScalarType::F32) {
-                        return Err(unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "device math argument is not f32",
-                        ));
-                    }
-                    arguments.push(id);
-                }
-                self.emit_float_operation(
-                    operations,
-                    FloatOperation::F32Math {
-                        function,
-                        implementation: function.required_implementation(),
-                        arguments,
-                    },
-                )?
+                self.lower_intrinsic_math_f32_v1(block, call, function, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
                 kind,
                 input,
                 output,
-            } => {
-                self.require_call_argument_count(block, call, 1)?;
-                if semantic_operand_type(&call.arguments()[0]) != *input
-                    || destination.place().ty() != *output
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "BF16 conversion semantic input or output type changed",
-                    ));
-                }
-                let argument = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                match kind {
-                    SemanticBf16ConversionKindV1::FromBits => {
-                        let (bits, ty) = argument
-                            .value()
-                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                        if ty != Type::Scalar(ScalarType::U16) {
-                            return Err(unsupported(
-                                0,
-                                Some(block.index()),
-                                None,
-                                "BF16 from_bits input is not u16",
-                            ));
-                        }
-                        binding_from_value_defs(self.types, *output, &[ValueDef::new(bits, ty)])?
-                    }
-                    SemanticBf16ConversionKindV1::ToBits => {
-                        let values = argument
-                            .values()
-                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                        let [(bits, ty)] = values.as_slice() else {
-                            return Err(unsupported(
-                                0,
-                                Some(block.index()),
-                                None,
-                                "BF16 to_bits storage is not one scalar",
-                            ));
-                        };
-                        if *ty != Type::Scalar(ScalarType::U16) {
-                            return Err(unsupported(
-                                0,
-                                Some(block.index()),
-                                None,
-                                "BF16 to_bits storage is not u16",
-                            ));
-                        }
-                        binding_from_value_defs(
-                            self.types,
-                            *output,
-                            &[ValueDef::new(*bits, ty.clone())],
-                        )?
-                    }
-                    SemanticBf16ConversionKindV1::FromF32RoundTiesEven => {
-                        let (value, ty) = argument
-                            .value()
-                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                        if ty != Type::Scalar(ScalarType::F32) {
-                            return Err(unsupported(
-                                0,
-                                Some(block.index()),
-                                None,
-                                "BF16 from_f32 input is not f32",
-                            ));
-                        }
-                        let (narrowed, narrowed_ty) = self
-                            .emit_float_operation(
-                                operations,
-                                FloatOperation::Convert {
-                                    kind: FloatConversionKind::F32ToBf16RoundTiesEven,
-                                    value,
-                                },
-                            )?
-                            .value()
-                            .expect("BF16 conversion emits one value");
-                        let bits_ty = Type::Scalar(ScalarType::U16);
-                        let bits = self.emit_id(
-                            operations,
-                            bits_ty.clone(),
-                            OperationKind::Cast {
-                                kind: CastKind::Bitcast,
-                                value: narrowed,
-                                to: bits_ty.clone(),
-                            },
-                        )?;
-                        debug_assert_eq!(narrowed_ty, Type::Scalar(ScalarType::Bf16));
-                        binding_from_value_defs(
-                            self.types,
-                            *output,
-                            &[ValueDef::new(bits, bits_ty)],
-                        )?
-                    }
-                    SemanticBf16ConversionKindV1::ToF32 => {
-                        let values = argument
-                            .values()
-                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                        let [(bits, ty)] = values.as_slice() else {
-                            return Err(unsupported(
-                                0,
-                                Some(block.index()),
-                                None,
-                                "BF16 to_f32 storage is not one scalar",
-                            ));
-                        };
-                        if *ty != Type::Scalar(ScalarType::U16) {
-                            return Err(unsupported(
-                                0,
-                                Some(block.index()),
-                                None,
-                                "BF16 to_f32 storage is not u16",
-                            ));
-                        }
-                        let bf16 = self.emit_id(
-                            operations,
-                            Type::Scalar(ScalarType::Bf16),
-                            OperationKind::Cast {
-                                kind: CastKind::Bitcast,
-                                value: *bits,
-                                to: Type::Scalar(ScalarType::Bf16),
-                            },
-                        )?;
-                        self.emit_float_operation(
-                            operations,
-                            FloatOperation::Convert {
-                                kind: FloatConversionKind::Bf16ToF32,
-                                value: bf16,
-                            },
-                        )?
-                    }
-                }
-            }
+            } => self.lower_intrinsic_bf16_conversion_v1(
+                block,
+                call,
+                destination,
+                kind,
+                input,
+                output,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. } => {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::CollectiveContext
@@ -17117,18 +16478,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 NeutralWorkgroupRecipeKindV1::from_scan(*kind),
             )?,
             SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { width, kind, .. } => {
-                self.require_call_argument_count(block, call, 2)?;
-                let context = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                if !matches!(context, SemanticValueBindingV1::CollectiveContext) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "subgroup reduction lacks compiler-issued collective authority",
-                    ));
-                }
-                let value = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                self.lower_subgroup_reduce_f32(block, operations, value, *width, *kind)?
+                self.lower_intrinsic_subgroup_reduce_f32_v1(block, call, width, kind, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { .. } => {
                 self.require_call_argument_count(block, call, 0)?;
@@ -17136,187 +16486,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 {
                 width, kind, ..
-            } => {
-                self.require_call_argument_count(block, call, 2)?;
-                let context = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                if !matches!(context, SemanticValueBindingV1::CollectiveContext) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "gfx950 subgroup reduction lacks compiler-issued authority",
-                    ));
-                }
-                let (value, ty) = self
-                    .lower_operand(block, None, &call.arguments()[1], operations)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                if ty != Type::Scalar(ScalarType::F32)
-                    || *width == 0
-                    || !width.is_power_of_two()
-                    || *width > 64
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "gfx950 subgroup reduction type or width changed",
-                    ));
-                }
-                let kind = match kind {
-                    SemanticSubgroupReductionKindV1::Sum => WaveF32ReductionKindV1::Sum,
-                    SemanticSubgroupReductionKindV1::Maximum => WaveF32ReductionKindV1::Maximum,
-                };
-                self.emit(
-                    operations,
-                    Type::Scalar(ScalarType::F32),
-                    OperationKind::Wave(WaveOperation::full(
-                        WaveOperationKind::ReduceF32 {
-                            value,
-                            tile_width: *width,
-                            kind,
-                        },
-                        WaveWidth::Wave64,
-                    )),
-                )?
-            }
+            } => self.lower_intrinsic_gfx950_subgroup_reduce_f32_v1(
+                block, call, width, kind, operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 { width, .. } => {
-                self.require_call_argument_count(block, call, 3)?;
-                let context = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                if !matches!(context, SemanticValueBindingV1::CollectiveContext) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "gfx950 subgroup broadcast lacks compiler-issued authority",
-                    ));
-                }
-                let (value, value_ty) = self
-                    .lower_operand(block, None, &call.arguments()[1], operations)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let authenticated_source_bound = authenticated_unsigned_operand_exclusive_bound_v1(
-                    self.types,
-                    self.function,
-                    &self.authenticated_loop_induction_bounds,
-                    block,
-                    &call.arguments()[2],
-                );
-                let (source_lane, source_ty) = self
-                    .lower_operand(block, None, &call.arguments()[2], operations)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let authenticated_source_bound = authenticated_source_bound.filter(|bound| {
-                    source_ty == Type::Scalar(ScalarType::U32)
-                        && authenticated_subgroup_broadcast_source_is_bounded(*bound, *width)
-                });
-                let source_lane = if authenticated_source_bound.is_some() {
-                    let mask = self
-                        .emit(
-                            operations,
-                            Type::Scalar(ScalarType::U32),
-                            OperationKind::Constant(Constant::U32(*width - 1)),
-                        )?
-                        .value()
-                        .expect("authenticated subgroup mask has one value")
-                        .0;
-                    self.emit(
-                        operations,
-                        Type::Scalar(ScalarType::U32),
-                        OperationKind::Binary {
-                            op: BinaryOp::BitAnd,
-                            lhs: source_lane,
-                            rhs: mask,
-                        },
-                    )?
-                    .value()
-                    .expect("authenticated subgroup source mask has one value")
-                    .0
-                } else {
-                    source_lane
-                };
-                if let Some(bound) = authenticated_source_bound {
-                    self.emitted_unsigned_exclusive_bounds
-                        .insert(source_lane, bound);
-                }
-                let bounded_source = subgroup_broadcast_source_is_statically_bounded(
-                    operations,
-                    source_lane,
-                    *width,
-                ) || self
-                    .emitted_u32_constants
-                    .get(&source_lane)
-                    .is_some_and(|lane| *lane < *width)
-                    || self
-                        .emitted_u32_bitand_masks
-                        .get(&source_lane)
-                        .is_some_and(|mask| *mask < *width)
-                    || self
-                        .emitted_unsigned_exclusive_bounds
-                        .get(&source_lane)
-                        .is_some_and(|bound| {
-                            authenticated_subgroup_broadcast_source_is_bounded(*bound, *width)
-                        });
-                if value_ty != Type::Scalar(ScalarType::F32)
-                    || source_ty != Type::Scalar(ScalarType::U32)
-                    || *width == 0
-                    || !width.is_power_of_two()
-                    || *width > 64
-                    || !bounded_source
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "gfx950 subgroup broadcast requires f32, a valid width, and a statically bounded source lane",
-                    ));
-                }
-                self.emit(
-                    operations,
-                    Type::Scalar(ScalarType::F32),
-                    OperationKind::Wave(WaveOperation::full(
-                        WaveOperationKind::BroadcastF32 {
-                            value,
-                            source_lane,
-                            tile_width: *width,
-                        },
-                        WaveWidth::Wave64,
-                    )),
-                )?
+                self.lower_intrinsic_subgroup_broadcast_f32_v1(block, call, width, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { .. } => {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::MatrixContext
             }
-            SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => {
-                self.require_call_argument_count(block, call, 0)?;
-                if *wave_width != 64 {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "typed MFMA lane requires the authenticated wave64 profile",
-                    ));
-                }
-                let lane_id = self.emit_results(
-                    operations,
-                    vec![Type::Scalar(ScalarType::U32)],
-                    OperationKind::Wave(WaveOperation::full(
-                        WaveOperationKind::LaneId,
-                        WaveWidth::Wave64,
-                    )),
-                )?;
-                let lane_binding = binding_from_value_defs(self.types, *lane, &lane_id)?;
-                let value = require_single_u32_component(
-                    block,
-                    lane_binding,
-                    "typed MFMA lane has no exact u32 representation",
-                )?;
-                SemanticValueBindingV1::WaveLane {
-                    value,
-                    wave: SemanticCurrentWaveV1::new(*wave_width),
-                }
-            }
+            SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => self
+                .lower_intrinsic_wave_lane_current_v1(block, call, lane, wave_width, operations)?,
             SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
                 result,
                 view,
@@ -17463,332 +16644,31 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 fragment,
                 contract,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 1)?;
-                let (_, wave) = require_current_wave_lane(
-                    block,
-                    self.lower_operand(block, None, &call.arguments()[0], operations)?,
-                    contract.wave_width,
-                    "zero accumulator lane",
-                )?;
-                let mut values = Vec::with_capacity(4);
-                for _ in 0..4 {
-                    let (id, ty) = self
-                        .emit(
-                            operations,
-                            Type::Scalar(ScalarType::F32),
-                            OperationKind::Constant(Constant::F32Bits(0.0_f32.to_bits())),
-                        )?
-                        .value()
-                        .expect("emitted zero accumulator component");
-                    values.push((id, ty));
-                }
-                let _ = fragment;
-                SemanticValueBindingV1::AccumulatorFragment {
-                    values,
-                    contract: *contract,
-                    wave,
-                }
-            }
+            } => self.lower_intrinsic_f32_matrix_accumulator_zero_v1(
+                block, call, fragment, contract, operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
                 values, ..
-            } => {
-                self.require_call_argument_count(block, call, 1)?;
-                let fragment = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let SemanticValueBindingV1::AccumulatorFragment {
-                    values: fragment, ..
-                } = fragment
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "FP32 matrix accumulator lacks typed producer metadata",
-                    ));
-                };
-                let fragment = require_components(
-                    block,
-                    fragment,
-                    Type::Scalar(ScalarType::F32),
-                    4,
-                    "FP32 matrix accumulator fragment",
-                )?
-                .into_iter()
-                .map(|(id, ty)| ValueDef::new(id, ty))
-                .collect::<Vec<_>>();
-                binding_from_value_defs(self.types, *values, &fragment)?
-            }
+            } => self.lower_intrinsic_f32_matrix_accumulator_values_v1(
+                block, call, values, operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
                 accumulator_fragment,
                 lhs: expected_lhs,
                 rhs: expected_rhs,
                 accumulator: expected_accumulator,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 4)?;
-                let context = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                if !matches!(context, SemanticValueBindingV1::MatrixContext) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "matrix operation lacks compiler-issued context authority",
-                    ));
-                }
-                let lhs = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                let rhs = self.lower_operand(block, None, &call.arguments()[2], operations)?;
-                let accumulator =
-                    self.lower_operand(block, None, &call.arguments()[3], operations)?;
-                let SemanticValueBindingV1::MatrixFragment {
-                    values: lhs,
-                    contract: lhs_contract,
-                    storage_layout: lhs_storage,
-                    wave: lhs_wave,
-                } = lhs
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "matrix lhs lacks an authenticated checked-load producer",
-                    ));
-                };
-                let SemanticValueBindingV1::MatrixFragment {
-                    values: rhs,
-                    contract: rhs_contract,
-                    storage_layout: rhs_storage,
-                    wave: rhs_wave,
-                } = rhs
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "matrix rhs lacks an authenticated checked-load producer",
-                    ));
-                };
-                let SemanticValueBindingV1::AccumulatorFragment {
-                    values: accumulator,
-                    contract: accumulator_contract,
-                    wave: accumulator_wave,
-                } = accumulator
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "matrix accumulator lacks an authenticated zero/MFMA producer",
-                    ));
-                };
-                if lhs_contract != *expected_lhs
-                    || rhs_contract != *expected_rhs
-                    || accumulator_contract != *expected_accumulator
-                    || lhs_wave != rhs_wave
-                    || lhs_wave != accumulator_wave
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "matrix operand producer contracts or wave associations differ",
-                    ));
-                }
-                if matches!(
-                    expected_accumulator.profile,
-                    SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
-                        | SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
-                ) {
-                    if lhs_storage != SemanticMfmaStorageLayoutV1::RowMajor
-                        || rhs_storage != SemanticMfmaStorageLayoutV1::RowMajor
-                    {
-                        return Err(unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "gfx950 low-precision matrix operands require checked row-major producers",
-                        ));
-                    }
-                    let lhs = require_components(
-                        block,
-                        lhs,
-                        Type::Scalar(ScalarType::U32),
-                        8,
-                        "gfx950 low-precision matrix lhs fragment",
-                    )?
-                    .into_iter()
-                    .map(|(id, _)| id)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .expect("eight checked gfx950 lhs dwords");
-                    let rhs = require_components(
-                        block,
-                        rhs,
-                        Type::Scalar(ScalarType::U32),
-                        8,
-                        "gfx950 low-precision matrix rhs fragment",
-                    )?
-                    .into_iter()
-                    .map(|(id, _)| id)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .expect("eight checked gfx950 rhs dwords");
-                    let accumulator = require_components(
-                        block,
-                        accumulator,
-                        Type::Scalar(ScalarType::F32),
-                        4,
-                        "gfx950 low-precision matrix accumulator fragment",
-                    )?
-                    .into_iter()
-                    .map(|(id, _)| id)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .expect("four checked gfx950 accumulator components");
-                    let matrix = if expected_accumulator.profile
-                        == SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
-                    {
-                        let layout = if expected_lhs.profile
-                            == SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
-                            && expected_rhs.profile == SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
-                        {
-                            TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64()
-                        } else {
-                            TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64()
-                        };
-                        MatrixOperation::scaled_multiply_accumulate_fp4_e2m1(lhs, rhs, accumulator)
-                            .with_declared_tensor_layout(layout)
-                    } else {
-                        MatrixOperation::scaled_multiply_accumulate_fp8_e4m3(
-                            lhs,
-                            rhs,
-                            accumulator,
-                        )
-                        .with_declared_tensor_layout(
-                            TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64(),
-                        )
-                    };
-                    let results = self.emit_results(
-                        operations,
-                        vec![Type::Scalar(ScalarType::F32); 4],
-                        OperationKind::Matrix(matrix),
-                    )?;
-                    let _ = accumulator_fragment;
-                    SemanticValueBindingV1::AccumulatorFragment {
-                        values: results
-                            .into_iter()
-                            .map(|value| (value.id, value.ty))
-                            .collect(),
-                        contract: accumulator_contract,
-                        wave: accumulator_wave,
-                    }
-                } else {
-                    if !matches!(
-                        lhs_storage,
-                        SemanticMfmaStorageLayoutV1::RowMajor
-                            | SemanticMfmaStorageLayoutV1::LdsXor4
-                    ) || !matches!(
-                        rhs_storage,
-                        SemanticMfmaStorageLayoutV1::RowMajor
-                            | SemanticMfmaStorageLayoutV1::LdsXor4
-                            | SemanticMfmaStorageLayoutV1::ColumnMajor
-                    ) {
-                        return Err(unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "BF16 matrix source layout is not admitted for its operand role",
-                        ));
-                    }
-                    let lhs = require_components(
-                        block,
-                        lhs,
-                        Type::Scalar(ScalarType::Bf16),
-                        4,
-                        "matrix lhs fragment",
-                    )?;
-                    let rhs = require_components(
-                        block,
-                        rhs,
-                        Type::Scalar(ScalarType::Bf16),
-                        4,
-                        "matrix rhs fragment",
-                    )?;
-                    let accumulator = require_components(
-                        block,
-                        accumulator,
-                        Type::Scalar(ScalarType::F32),
-                        4,
-                        "matrix accumulator fragment",
-                    )?;
-                    let lhs = lhs
-                        .into_iter()
-                        .map(|(id, _)| id)
-                        .collect::<Vec<_>>()
-                        .try_into()
-                        .expect("four checked lhs components");
-                    let rhs = rhs
-                        .into_iter()
-                        .map(|(id, _)| id)
-                        .collect::<Vec<_>>()
-                        .try_into()
-                        .expect("four checked rhs components");
-                    let accumulator = accumulator
-                        .into_iter()
-                        .map(|(id, _)| id)
-                        .collect::<Vec<_>>()
-                        .try_into()
-                        .expect("four checked accumulator components");
-                    let mut tensor_layout =
-                        TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
-                            .with_zero_filled_predicate_inputs();
-                    if lhs_storage == SemanticMfmaStorageLayoutV1::LdsXor4 {
-                        tensor_layout = tensor_layout.with_a_lds_xor4();
-                    }
-                    if rhs_storage == SemanticMfmaStorageLayoutV1::LdsXor4 {
-                        tensor_layout = tensor_layout.with_b_lds_xor4();
-                    }
-                    let results = self.emit_results(
-                        operations,
-                        vec![Type::Scalar(ScalarType::F32); 4],
-                        OperationKind::Matrix(
-                            MatrixOperation::multiply_accumulate(lhs, rhs, accumulator)
-                                .with_declared_tensor_layout(tensor_layout),
-                        ),
-                    )?;
-                    let _ = accumulator_fragment;
-                    SemanticValueBindingV1::AccumulatorFragment {
-                        values: results
-                            .into_iter()
-                            .map(|value| (value.id, value.ty))
-                            .collect(),
-                        contract: accumulator_contract,
-                        wave: accumulator_wave,
-                    }
-                }
-            }
+            } => self.lower_intrinsic_matrix_multiply_accumulate_v1(
+                block,
+                call,
+                accumulator_fragment,
+                expected_lhs,
+                expected_rhs,
+                expected_accumulator,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
-                if !call.arguments().is_empty() {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "thread index intrinsic has arguments",
-                    ));
-                }
-                let (id, _) = self
-                    .emit(
-                        operations,
-                        Type::INDEX,
-                        OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
-                    )?
-                    .value()
-                    .expect("emitted index value");
-                SemanticValueBindingV1::IndexWitness {
-                    id,
-                    index_space: SemanticDisjointIndexSpaceV1::Index1d,
-                    disjoint: false,
-                    availability: None,
-                }
+                self.lower_intrinsic_thread_index_1d_v1(block, call, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. } => {
                 self.require_call_argument_count(block, call, 1)?;
@@ -17796,38 +16676,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
                 index_space, ..
-            } => {
-                self.require_call_argument_count(block, call, 1)?;
-                let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let SemanticValueBindingV1::IndexWitness {
-                    id,
-                    availability,
-                    index_space: actual,
-                    disjoint: false,
-                } = binding
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "into_disjoint receiver is not a thread-index witness",
-                    ));
-                };
-                if actual != *index_space {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "into_disjoint mapping identity changed",
-                    ));
-                }
-                SemanticValueBindingV1::IndexWitness {
-                    availability,
-                    id,
-                    index_space: actual,
-                    disjoint: true,
-                }
-            }
+            } => self.lower_intrinsic_thread_index_into_disjoint_v1(
+                block,
+                call,
+                index_space,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
                 input_space,
                 output_space,
@@ -17892,131 +16746,22 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 *elements_per_lane,
             )?,
             SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { index_space, .. } => {
-                self.require_call_argument_count(block, call, 1)?;
-                let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let SemanticValueBindingV1::IndexWitness {
-                    id,
-                    index_space: actual,
-                    disjoint: true,
-                    ..
-                } = binding
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "DisjointIndex::get receiver is not disjoint authority",
-                    ));
-                };
-                if actual != *index_space {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "DisjointIndex::get mapping identity changed",
-                    ));
-                }
-                SemanticValueBindingV1::Value {
-                    id,
-                    ty: Type::INDEX,
-                }
+                self.lower_intrinsic_disjoint_index_get_v1(block, call, index_space, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
                 index_space,
                 lanes_per_block,
                 elements_per_lane,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 2)?;
-                let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
-                    lanes_per_block: *lanes_per_block,
-                    elements_per_lane: *elements_per_lane,
-                };
-                if *index_space != expected {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "DisjointBlock::component_index mapping identity changed",
-                    ));
-                }
-                let witness = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let raw = require_block_component_witness_v1(block, witness, expected)?;
-                let component =
-                    self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                let component = self.coerce_index(block, operations, component)?;
-                let (component, _) = component
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let (index, present) = self.lower_block_component_index(
-                    block,
-                    operations,
-                    raw,
-                    component,
-                    *lanes_per_block,
-                    *elements_per_lane,
-                )?;
-                let result_type = destination.place().ty();
-                let (discriminant, variants) = semantic_enum_shape(self.types, result_type)?;
-                let [none, some] = variants else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "component-index result is not an exact two-variant Option",
-                    ));
-                };
-                if none.discriminant() != 0
-                    || !none.fields().fields().is_empty()
-                    || some.discriminant() != 1
-                    || some.fields().fields() != [call.arguments()[1].ty()]
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "component-index Option layout changed",
-                    ));
-                }
-                let discriminant_ty = lower_scalar_type(self.types, discriminant)?;
-                let none_discriminant = self
-                    .emit(
-                        operations,
-                        discriminant_ty.clone(),
-                        OperationKind::Constant(integer_constant(&discriminant_ty, 0)?),
-                    )?
-                    .value()
-                    .expect("emitted None discriminant")
-                    .0;
-                let some_discriminant = self
-                    .emit(
-                        operations,
-                        discriminant_ty.clone(),
-                        OperationKind::Constant(integer_constant(&discriminant_ty, 1)?),
-                    )?
-                    .value()
-                    .expect("emitted Some discriminant")
-                    .0;
-                let discriminant_value = self
-                    .emit(
-                        operations,
-                        discriminant_ty.clone(),
-                        OperationKind::Select {
-                            condition: present,
-                            true_value: some_discriminant,
-                            false_value: none_discriminant,
-                        },
-                    )?
-                    .value()
-                    .expect("emitted component-index discriminant")
-                    .0;
-                ordinary_option_index_binding_v1(
-                    result_type,
-                    discriminant_value,
-                    discriminant_ty,
-                    index,
-                )
-            }
+            } => self.lower_intrinsic_disjoint_block_component_index_v1(
+                block,
+                call,
+                destination,
+                index_space,
+                lanes_per_block,
+                elements_per_lane,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
                 input_space,
                 output_space,
@@ -18065,195 +16810,39 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 )?,
             SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. }
             | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. } => {
-                self.require_call_argument_count(block, call, 1)?;
-                let (slice, slice_ty) = self
-                    .lower_operand(block, None, &call.arguments()[0], operations)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                if !matches!(slice_ty, Type::Slice(_)) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "DisjointSlice::len receiver is not a lowered slice",
-                    ));
-                }
-                let (id, _) = self
-                    .emit(
-                        operations,
-                        Type::INDEX,
-                        OperationKind::SliceLength { slice },
-                    )?
-                    .value()
-                    .expect("emitted slice length");
-                SemanticValueBindingV1::Value {
-                    id,
-                    ty: Type::INDEX,
-                }
+                self.lower_intrinsic_disjoint_slice_len_v1(block, call, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. } => {
-                self.require_call_argument_count(block, call, 2)?;
-                let index_binding =
-                    self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                if !matches!(
-                    index_binding,
-                    SemanticValueBindingV1::IndexWitness {
-                        index_space: SemanticDisjointIndexSpaceV1::Index1d,
-                        disjoint: false,
-                        ..
-                    }
-                ) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "DisjointSlice::get_mut requires the identity thread-index witness",
-                    ));
-                }
-                self.lower_checked_slice_access(block, call, operations, 0, index_binding, None)?
+                self.lower_intrinsic_disjoint_slice_get_mut_v1(block, call, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
                 index_space,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 2)?;
-                let index_binding =
-                    self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                if !matches!(index_binding, SemanticValueBindingV1::IndexWitness {
-                    index_space: actual,
-                    disjoint: true,
-                    ..
-                } if actual == *index_space)
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "get_disjoint_mut mapping authority does not match the slice",
-                    ));
-                }
-                self.lower_checked_slice_access(block, call, operations, 0, index_binding, None)?
-            }
+            } => self.lower_intrinsic_disjoint_slice_get_disjoint_mut_v1(
+                block,
+                call,
+                index_space,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. } => {
-                self.require_call_argument_count(block, call, 0)?;
-                let (index, _) = self
-                    .emit(
-                        operations,
-                        Type::INDEX,
-                        OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
-                    )?
-                    .value()
-                    .expect("emitted index value");
-                let (one, _) = self
-                    .emit(
-                        operations,
-                        Type::INDEX,
-                        OperationKind::Constant(Constant::Index(1)),
-                    )?
-                    .value()
-                    .expect("emitted index constant");
-                let (present, _) = self
-                    .emit(
-                        operations,
-                        Type::BOOL,
-                        OperationKind::Compare {
-                            predicate: ComparePredicate::LessThan,
-                            lhs: index,
-                            rhs: one,
-                        },
-                    )?
-                    .value()
-                    .expect("emitted leader predicate");
-                let availability = self
-                    .option_dominance
-                    .availability(destination.place().local())
-                    .ok_or_else(|| {
-                        unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "grid-leader Option lacks an authenticated Some edge",
-                        )
-                    })?;
-                SemanticValueBindingV1::OptionGridLeader {
-                    present,
-                    availability,
-                }
+                self.lower_intrinsic_grid_leader_current_v1(block, call, destination, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. } => {
-                self.require_call_argument_count(block, call, 3)?;
-                let leader = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                if !matches!(leader, SemanticValueBindingV1::GridLeader { .. }) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "exclusive access lacks grid-leader authority",
-                    ));
-                }
-                let index = self.lower_operand(block, None, &call.arguments()[2], operations)?;
-                let index = self.coerce_index(block, operations, index)?;
-                self.lower_checked_slice_access(block, call, operations, 0, index, None)?
+                self.lower_intrinsic_disjoint_slice_get_mut_exclusive_v1(block, call, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
                 index_space,
                 lanes_per_block,
                 elements_per_lane,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 3)?;
-                let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                let SemanticValueBindingV1::ComponentWitness {
-                    raw,
-                    index_space: actual,
-                    ..
-                } = witness
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "get_block_mut lacks blocked ownership authority",
-                    ));
-                };
-                let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
-                    lanes_per_block: *lanes_per_block,
-                    elements_per_lane: *elements_per_lane,
-                };
-                if actual != expected || *index_space != expected {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "get_block_mut mapping identity changed",
-                    ));
-                }
-                let component =
-                    self.lower_operand(block, None, &call.arguments()[2], operations)?;
-                let component = self.coerce_index(block, operations, component)?;
-                let (component, _) = component
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let (index, present) = self.lower_block_component_index(
-                    block,
-                    operations,
-                    raw,
-                    component,
-                    *lanes_per_block,
-                    *elements_per_lane,
-                )?;
-                self.lower_checked_slice_access(
-                    block,
-                    call,
-                    operations,
-                    0,
-                    SemanticValueBindingV1::Value {
-                        id: index,
-                        ty: Type::INDEX,
-                    },
-                    Some(present),
-                )?
-            }
+            } => self.lower_intrinsic_disjoint_slice_get_block_mut_v1(
+                block,
+                call,
+                index_space,
+                lanes_per_block,
+                elements_per_lane,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
                 index_space,
                 lanes_per_tile,
@@ -18261,150 +16850,29 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 tile_columns,
                 elements_per_lane,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 6)?;
-                let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                let SemanticValueBindingV1::ComponentWitness {
-                    raw,
-                    index_space: actual,
-                    ..
-                } = witness
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "get_tiled_2d_mut lacks tiled ownership authority",
-                    ));
-                };
-                let expected = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
-                    lanes_per_tile: *lanes_per_tile,
-                    tile_rows: *tile_rows,
-                    tile_columns: *tile_columns,
-                    elements_per_lane: *elements_per_lane,
-                };
-                if actual != expected || *index_space != expected {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "get_tiled_2d_mut mapping identity changed",
-                    ));
-                }
-                let mut indices = Vec::with_capacity(4);
-                for argument in &call.arguments()[2..6] {
-                    let value = self.lower_operand(block, None, argument, operations)?;
-                    let value = self.coerce_index(block, operations, value)?;
-                    indices.push(
-                        value
-                            .value()
-                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
-                            .0,
-                    );
-                }
-                let [component, rows, columns, row_stride] = indices
-                    .try_into()
-                    .expect("four checked tiled-2d index operands");
-                let (index, present) = self.lower_tiled_2d_component_index(
-                    block,
-                    operations,
-                    raw,
-                    component,
-                    rows,
-                    columns,
-                    row_stride,
-                    *lanes_per_tile,
-                    *tile_rows,
-                    *tile_columns,
-                    *elements_per_lane,
-                )?;
-                self.lower_checked_slice_access(
-                    block,
-                    call,
-                    operations,
-                    0,
-                    SemanticValueBindingV1::Value {
-                        id: index,
-                        ty: Type::INDEX,
-                    },
-                    Some(present),
-                )?
-            }
+            } => self.lower_intrinsic_disjoint_slice_get_tiled_2d_mut_v1(
+                block,
+                call,
+                index_space,
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
                 index_space,
                 lanes_per_row,
                 elements_per_lane,
                 ..
-            } => {
-                self.require_call_argument_count(block, call, 6)?;
-                let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                let SemanticValueBindingV1::ComponentWitness {
-                    raw,
-                    index_space: actual,
-                    ..
-                } = witness
-                else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "get_row_striped_2d_mut lacks row ownership authority",
-                    ));
-                };
-                let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
-                    lanes_per_row: *lanes_per_row,
-                    elements_per_lane: *elements_per_lane,
-                };
-                if actual != expected || *index_space != expected {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "get_row_striped_2d_mut mapping identity changed",
-                    ));
-                }
-                let mut indices = Vec::with_capacity(4);
-                for argument in &call.arguments()[2..6] {
-                    let value = self.lower_operand(block, None, argument, operations)?;
-                    let value = self.coerce_index(block, operations, value)?;
-                    indices.push(
-                        value
-                            .value()
-                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
-                            .0,
-                    );
-                }
-                let [component, rows, columns, row_stride] = indices.try_into().map_err(|_| {
-                    unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "row-striped operand count changed",
-                    )
-                })?;
-                let (index, present) = self.lower_row_striped_2d_component_index(
-                    block,
-                    operations,
-                    raw,
-                    component,
-                    rows,
-                    columns,
-                    row_stride,
-                    *lanes_per_row,
-                    *elements_per_lane,
-                )?;
-                self.lower_checked_slice_access(
-                    block,
-                    call,
-                    operations,
-                    0,
-                    SemanticValueBindingV1::Value {
-                        id: index,
-                        ty: Type::INDEX,
-                    },
-                    Some(present),
-                )?
-            }
+            } => self.lower_intrinsic_disjoint_slice_get_row_striped_2d_mut_v1(
+                block,
+                call,
+                index_space,
+                lanes_per_row,
+                elements_per_lane,
+                operations,
+            )?,
             SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
                 index_space,
                 kind,
@@ -18441,155 +16909,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 self.lower_saturating_integer_v1(block, call, *operation, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::FabsF32 => {
-                self.require_call_argument_count(block, call, 1)?;
-                if semantic_operand_type(&call.arguments()[0]) != destination.place().ty() {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "fabs input and destination types changed",
-                    ));
-                }
-                let (argument, ty) = self
-                    .lower_operand(block, None, &call.arguments()[0], operations)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                if ty != Type::Scalar(ScalarType::F32) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "fabs input is not f32",
-                    ));
-                }
-                self.emit_float_operation(
-                    operations,
-                    FloatOperation::F32Math {
-                        function: F32MathFunction::Abs,
-                        implementation: F32MathFunction::Abs.required_implementation(),
-                        arguments: vec![argument],
-                    },
-                )?
+                self.lower_intrinsic_fabs_f32_v1(block, call, destination, operations)?
             }
-            SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
-                self.require_call_argument_count(block, call, 2)?;
-                if !semantic_volatile_load_contract_v1(
-                    self.types,
-                    semantic_operand_type(&call.arguments()[0]),
-                    semantic_operand_type(&call.arguments()[1]),
-                    *element,
-                ) || destination.place().ty() != *element
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "volatile load semantic slice, index, or result contract changed",
-                    ));
-                }
-                let (slice, slice_ty) = self
-                    .lower_operand(block, None, &call.arguments()[0], operations)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let Type::Slice(slice_contract) = slice_ty else {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "volatile load source is not a lowered slice",
-                    ));
-                };
-                if slice_contract.address_space != AddressSpace::Global
-                    || slice_contract.access != AccessMode::ReadOnly
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "volatile load source does not retain immutable global-slice access",
-                    ));
-                }
-                let element_ty = lower_scalar_type(self.types, *element)?;
-                if *slice_contract.element != element_ty || destination.place().ty() != *element {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "volatile load source or destination element type changed",
-                    ));
-                }
-                let index = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                let index = self
-                    .coerce_index(block, operations, index)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
-                    .0;
-                let length = self.emit_id(
+            SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => self
+                .lower_intrinsic_memory_volatile_load_v1(
+                    block,
+                    call,
+                    destination,
+                    element,
+                    &mut runtime_guard,
                     operations,
-                    Type::INDEX,
-                    OperationKind::SliceLength { slice },
-                )?;
-                let present =
-                    self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
-                let zero_index = self.emit_index_constant(operations, 0)?;
-                let safe_index = self.emit_select_index(operations, present, index, zero_index)?;
-                let pointer_ty = Type::pointer(
-                    element_ty.clone(),
-                    slice_contract.address_space,
-                    slice_contract.access,
-                );
-                let base = self.emit_id(
-                    operations,
-                    pointer_ty.clone(),
-                    OperationKind::SliceData { slice },
-                )?;
-                let pointer = self.emit_id(
-                    operations,
-                    pointer_ty,
-                    OperationKind::GetElementPointer {
-                        base,
-                        offset: safe_index,
-                    },
-                )?;
-                let fallback = volatile_load_zero_constant_v1(&element_ty).ok_or_else(|| {
-                    unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "volatile load element has no supported scalar fallback",
-                    )
-                })?;
-                let fallback = self.emit_id(
-                    operations,
-                    element_ty.clone(),
-                    OperationKind::Constant(fallback),
-                )?;
-                let alignment = strided_read_scalar_alignment_v1(&element_ty).ok_or_else(|| {
-                    unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "volatile load element has no supported scalar alignment",
-                    )
-                })?;
-                let mut access = MemoryAccess::new(slice_contract.address_space, alignment);
-                access.volatile = true;
-                let value = self.emit_id(
-                    operations,
-                    element_ty.clone(),
-                    OperationKind::GuardedLoad {
-                        pointer,
-                        predicate: present,
-                        fallback,
-                        access,
-                    },
-                )?;
-                runtime_guard = Some(present);
-                SemanticValueBindingV1::Value {
-                    id: value,
-                    ty: element_ty,
-                }
-            }
+                )?,
             SemanticCompilerIntrinsicOperationV1::WaveBarrier => {
                 return Err(unsupported(
                     0,
@@ -27219,6 +25549,10 @@ mod resource_tests {
 
     mod guarded_call_destination_tests {
         include!("production_guarded_call_destination_tests.rs");
+
+        mod intrinsic_call_dispatch_tests {
+            include!("production_semantic_kir_v1/intrinsic_call_dispatch_tests.rs");
+        }
     }
 
     #[test]

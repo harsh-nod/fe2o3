@@ -266,3 +266,229 @@ fn counter_extent_failure_never_advances_or_omits_materialized_bytes() {
     ));
     assert_eq!(counter.length(), 1);
 }
+
+fn wire_cause_borrow<T: std::error::Error + 'static>(parent: &dyn std::error::Error, child: &T) {
+    assert!(std::ptr::eq(
+        parent.source().unwrap().downcast_ref::<T>().unwrap(),
+        child
+    ));
+}
+
+#[test]
+fn wire_cause_links_preserve_direct_work_nested_encode_and_all_resources() {
+    use crate::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+    };
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(3);
+    let mut budget = Budget::new(&mut work, 5);
+    let work_error = budget.charge_work(4).unwrap_err();
+    let storage_error = budget.reserve_storage(6).unwrap_err();
+    let accounting = budget.release_storage(1).unwrap_err();
+    assert_eq!(accounting, Resource::Accounting);
+    assert_eq!(
+        (budget.work(), budget.storage(), budget.peak_storage()),
+        (0, 0, 0)
+    );
+    assert_eq!(budget.failed_storage(), Some(6));
+    drop(budget);
+    assert_eq!(work.failed_work(), Some(4));
+    // These wrappers test diagnostic structure, not decoder execution.
+    for resource in [
+        work_error,
+        storage_error,
+        accounting,
+        Resource::Allocation,
+        Resource::Arithmetic,
+    ] {
+        let error = KernelIrDecodeError::Resource(resource);
+        let KernelIrDecodeError::Resource(child) = &error else {
+            unreachable!()
+        };
+        wire_cause_borrow(&error, child);
+        assert_eq!(*child, resource);
+        match child {
+            Resource::Work(leaf) => wire_cause_borrow(child, leaf),
+            Resource::Storage(leaf) => wire_cause_borrow(child, leaf),
+            Resource::Allocation | Resource::Accounting | Resource::Arithmetic => {
+                assert!(std::error::Error::source(child).is_none())
+            }
+        }
+    }
+    let Resource::Work(leaf) = work_error else {
+        unreachable!()
+    };
+    let error = KernelIrEncodeError::WorkLimit(leaf);
+    let KernelIrEncodeError::WorkLimit(child) = &error else {
+        unreachable!()
+    };
+    wire_cause_borrow(&error, child);
+    let error = KernelIrDecodeError::WorkLimit(leaf);
+    let KernelIrDecodeError::WorkLimit(child) = &error else {
+        unreachable!()
+    };
+    wire_cause_borrow(&error, child);
+    let error = KernelIrDecodeError::Encode(KernelIrEncodeError::WorkLimit(leaf));
+    let KernelIrDecodeError::Encode(child) = &error else {
+        unreachable!()
+    };
+    wire_cause_borrow(&error, child);
+    let KernelIrEncodeError::WorkLimit(grandchild) = child else {
+        unreachable!()
+    };
+    wire_cause_borrow(child, grandchild);
+    assert_eq!((grandchild.actual(), grandchild.limit()), (4, 3));
+    let error = KernelIrDecodeError::Encode(KernelIrEncodeError::Allocation);
+    let KernelIrDecodeError::Encode(child) = &error else {
+        unreachable!()
+    };
+    wire_cause_borrow(&error, child);
+    assert!(std::error::Error::source(child).is_none());
+}
+
+#[test]
+fn wire_cause_links_keep_every_structural_marker_terminal() {
+    for error in [
+        KernelIrEncodeError::TooLarge { max: 1 },
+        KernelIrEncodeError::LimitExceeded {
+            field: "fixture",
+            actual: 2,
+            max: 1,
+        },
+        KernelIrEncodeError::TypeNestingTooDeep { max: 1 },
+        KernelIrEncodeError::Overflow { field: "fixture" },
+        KernelIrEncodeError::UnsupportedInVersion {
+            version: 1,
+            feature: "fixture",
+        },
+        KernelIrEncodeError::NonCanonical { field: "fixture" },
+        KernelIrEncodeError::Allocation,
+    ] {
+        assert!(std::error::Error::source(&error).is_none());
+    }
+    for error in [
+        KernelIrDecodeError::TooLarge { max: 1 },
+        KernelIrDecodeError::InvalidMagic,
+        KernelIrDecodeError::UnknownVersion(99),
+        KernelIrDecodeError::UnsupportedFlags(1),
+        KernelIrDecodeError::InvalidLength { declared: 1 },
+        KernelIrDecodeError::Truncated,
+        KernelIrDecodeError::TrailingBytes,
+        KernelIrDecodeError::ReservedNonZero { field: "fixture" },
+        KernelIrDecodeError::UnknownTag {
+            kind: "fixture",
+            tag: 255,
+        },
+        KernelIrDecodeError::InvalidUtf8 { field: "fixture" },
+        KernelIrDecodeError::LimitExceeded {
+            field: "fixture",
+            actual: 2,
+            max: 1,
+        },
+        KernelIrDecodeError::TypeNestingTooDeep { max: 1 },
+        KernelIrDecodeError::NonCanonical,
+        KernelIrDecodeError::InvalidSemanticOperationInstance,
+    ] {
+        assert!(std::error::Error::source(&error).is_none());
+    }
+    let old = encode_module_v11(&Module::new("m")).unwrap();
+    // The legacy reader accepts older versions; exact allocation admission does not.
+    assert_eq!(decode_module_v12(&old).unwrap(), Module::new("m"));
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000);
+    let mut budget = crate::CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 0);
+    let error = decode_module_v12_with_allocation_budget_v1(&old, &mut budget).unwrap_err();
+    assert_eq!(error, KernelIrDecodeError::UnknownVersion(11));
+    assert!(std::error::Error::source(&error).is_none());
+    assert_eq!(
+        (budget.work(), budget.storage(), budget.peak_storage()),
+        (10, 0, 0)
+    );
+    assert_eq!(budget.failed_storage(), None);
+    drop(budget);
+    assert_eq!(work.failed_work(), None);
+}
+
+#[test]
+fn reached_wire_work_causes_preserve_distinct_encoder_decoder_and_reencode_phases() {
+    const PRIOR: usize = 11;
+    let module = Module::new("m");
+    let bytes = encode_module_v12(&module).unwrap();
+    assert_eq!(bytes.len(), 37);
+    assert_eq!(decode_module_v12(&bytes).unwrap(), module);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(PRIOR);
+    work.charge_work(PRIOR).unwrap();
+    let error = encode_module_v12_with_work_v1(&module, &mut work).unwrap_err();
+    let KernelIrEncodeError::WorkLimit(child) = &error else {
+        panic!("{error:?}")
+    };
+    wire_cause_borrow(&error, child);
+    // The counting encoder admits one schema token before its magic extent.
+    assert_eq!((child.actual(), child.limit()), (PRIOR + 1, PRIOR));
+    assert_eq!(work.work(), PRIOR);
+    assert_eq!(work.failed_work(), Some(PRIOR + 1));
+
+    for reencode in [false, true] {
+        // Decode37 + UTF8/copy2 precedes the first comparison writer's eight bytes.
+        let allowance = if reencode { 39 } else { 7 };
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(PRIOR + allowance);
+        work.charge_work(PRIOR).unwrap();
+        let error = decode_module_v12_with_work_v1(&bytes, &mut work).unwrap_err();
+        let child = if reencode {
+            let KernelIrDecodeError::Encode(encoded) = &error else {
+                panic!("{error:?}")
+            };
+            wire_cause_borrow(&error, encoded);
+            let KernelIrEncodeError::WorkLimit(child) = encoded else {
+                panic!("{encoded:?}")
+            };
+            wire_cause_borrow(encoded, child);
+            child
+        } else {
+            let KernelIrDecodeError::WorkLimit(child) = &error else {
+                panic!("{error:?}")
+            };
+            wire_cause_borrow(&error, child);
+            child
+        };
+        let accepted = PRIOR + if reencode { 39 } else { 0 };
+        assert_eq!(
+            (child.actual(), child.limit()),
+            (accepted + 8, PRIOR + allowance)
+        );
+        assert_eq!(work.work(), accepted);
+        assert_eq!(work.failed_work(), Some(accepted + 8));
+    }
+}
+
+#[test]
+fn reached_allocation_budgeted_decoder_storage_cause_keeps_literal_prefix_and_floor() {
+    use crate::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+    };
+    const PRIOR: usize = 11;
+    const FLOOR: usize = 7;
+    let bytes = encode_module_v12(&Module::new("m")).unwrap();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+    work.charge_work(PRIOR).unwrap();
+    let mut budget = Budget::new(&mut work, FLOOR);
+    budget.reserve_storage(FLOOR).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    let error = decode_module_v12_with_allocation_budget_v1(&bytes, &mut budget).unwrap_err();
+    let KernelIrDecodeError::Resource(child) = &error else {
+        panic!("{error:?}")
+    };
+    wire_cause_borrow(&error, child);
+    let Resource::Storage(leaf) = child else {
+        panic!("{child:?}")
+    };
+    wire_cause_borrow(child, leaf);
+    assert_eq!((leaf.actual(), leaf.limit()), (FLOOR + 1, FLOOR));
+    // Header20, text length4, text byte1 and UTF8/copy2 precede the first allocation.
+    assert_eq!(budget.work(), PRIOR + 27);
+    assert_eq!((budget.storage(), budget.peak_storage()), (FLOOR, FLOOR));
+    assert_eq!(budget.failed_storage(), Some(FLOOR + 1));
+    assert!(budget.work_ledger_identity_v1() == ledger);
+    drop(budget);
+    assert_eq!(work.failed_work(), None);
+}

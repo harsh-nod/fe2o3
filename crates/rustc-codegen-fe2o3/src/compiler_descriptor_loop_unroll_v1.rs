@@ -1,5 +1,7 @@
 //! Actual U descriptor evidence only; no producer, codec or publication grant.
 use super::*;
+#[path = "compiler_descriptor_expanded_nominal_v3.rs"]
+pub(crate) mod expanded_v3;
 #[path = "compiler_descriptor_nominal_loop_unroll_v3.rs"]
 pub(crate) mod nominal_v3;
 use fe2o3_lower_mir_kernel::{

@@ -153,7 +153,7 @@ pub(super) fn check_sites(
 pub(super) fn check_decoded_expanded_sites_v1(
     source: GeneralSourceContextV1<'_>,
     history: &fe2o3_kernel_opt::CheckedLoopUnrollHistoryV1<'_>,
-    scalar: &fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1,
+    scalar: ExpandedScalarViewV1<'_, '_, '_, '_>,
     final_origins: &mut Vec<ProductionExpandedSourceOriginV1>,
     required: usize,
     budget: &mut AssertOriginBudgetV1<'_>,
@@ -267,7 +267,7 @@ fn decoded_expanded_from_bound_sites_v1(
     history: &fe2o3_kernel_opt::CheckedLoopUnrollHistoryV1<'_>,
     bound: &CanonicalKirInventoryV1<'_>,
     bound_sites: &[Site],
-    scalar: &fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1,
+    scalar: ExpandedScalarViewV1<'_, '_, '_, '_>,
     final_origins: &mut Vec<ProductionExpandedSourceOriginV1>,
     budget: &mut AssertOriginBudgetV1<'_>,
     binding: &PromotionBinding,

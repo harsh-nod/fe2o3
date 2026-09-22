@@ -380,6 +380,24 @@ impl ProductionOwnedLoopUnrollContinuationV1 {
         required: usize,
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> UResult<Box<[FormalMemoryObligations]>> {
+        Self::check_replayed_expanded_sites_v1(
+            source,
+            history,
+            ExpandedScalarViewV1::Live(scalar),
+            origins,
+            required,
+            budget,
+        )
+    }
+
+    pub(in crate::production_semantic_kir_v1::checked_output_admission_policy3_v1::general) fn check_replayed_expanded_sites_v1(
+        source: CanonicalOutputFormalSourceAnchorV1<'_>,
+        history: &fe2o3_kernel_opt::CheckedLoopUnrollHistoryV1<'_>,
+        scalar: ExpandedScalarViewV1<'_, '_, '_, '_>,
+        origins: &mut Vec<ProductionExpandedSourceOriginV1>,
+        required: usize,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> UResult<Box<[FormalMemoryObligations]>> {
         scoped(required, budget, |budget, binding| {
             let source = match source {
                 CanonicalOutputFormalSourceAnchorV1::Direct(v) => GeneralSourceContextV1::Direct(v),
@@ -531,7 +549,7 @@ macro_rules! owner {
                                     refinement,
                                     forwarding,
                                     pair,
-                                    core,
+                                    ExpandedScalarViewV1::Live(core),
                                     final_origins,
                                     budget,
                                 )?;

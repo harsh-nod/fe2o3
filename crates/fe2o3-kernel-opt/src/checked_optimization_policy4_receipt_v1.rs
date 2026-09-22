@@ -53,7 +53,20 @@ impl fmt::Display for CanonicalPolicy4ExecutionReceiptErrorV1 {
         write!(f, "Policy4 receipt: {self:?}")
     }
 }
-impl std::error::Error for CanonicalPolicy4ExecutionReceiptErrorV1 {}
+impl std::error::Error for CanonicalPolicy4ExecutionReceiptErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Policy3(error) => Some(error),
+            Self::Forwarding(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::Header
+            | Self::Limit
+            | Self::ExecutionClaim
+            | Self::ExecutionWitness
+            | Self::Panicked => None,
+        }
+    }
+}
 type Error = CanonicalPolicy4ExecutionReceiptErrorV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

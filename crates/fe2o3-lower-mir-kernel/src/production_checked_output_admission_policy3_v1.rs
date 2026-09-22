@@ -1,9 +1,9 @@
 use super::*;
 pub use general::ProductionExpandedSourceOriginV1;
 pub use general::expanded_policy::{
-    ProductionExpandedHistoryV1, ProductionExpandedPolicyErrorV1,
-    ProductionExpandedPolicyStorageV1, ProductionExpandedPrefixV1,
-    ProductionOwnedExpandedContinuationV1,
+    CheckedDecodedExpandedSourceV1, DecodedExpandedSourceErrorV1, ProductionExpandedHistoryV1,
+    ProductionExpandedPolicyErrorV1, ProductionExpandedPolicyStorageV1, ProductionExpandedPrefixV1,
+    ProductionOwnedExpandedContinuationV1, with_checked_decoded_expanded_source_v1,
 };
 #[cfg(test)]
 pub(super) use general::expanded_source_tests;

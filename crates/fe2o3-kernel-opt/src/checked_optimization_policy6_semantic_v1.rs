@@ -50,7 +50,22 @@ impl fmt::Display for Error {
         write!(f, "Policy6 semantic composition: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Claim(error) => Some(error),
+            Self::Policy5(error) => Some(error),
+            Self::Transition(error) => Some(error),
+            Self::Map(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::Composition
+            | Self::ExecutionWitness
+            | Self::InputHistory
+            | Self::Occurrences
+            | Self::Panicked => None,
+        }
+    }
+}
 
 /// Borrowed existing records only, not a new frame or execution authority.
 #[derive(Clone, Copy)]

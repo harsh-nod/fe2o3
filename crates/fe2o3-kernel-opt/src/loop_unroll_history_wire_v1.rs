@@ -65,7 +65,24 @@ impl fmt::Display for Error {
         write!(f, "inert loop-unroll history: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Prefix(error) => Some(error),
+            Self::Admission(error) => Some(error),
+            Self::Length
+            | Self::Header
+            | Self::Reserved
+            | Self::Limit
+            | Self::Field(_)
+            | Self::Rows { .. }
+            | Self::Tag { .. }
+            | Self::Settings
+            | Self::Panicked => None,
+        }
+    }
+}
 
 /// Added owned/view storage only, returned unreserved. Wire backing stays caller-paid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

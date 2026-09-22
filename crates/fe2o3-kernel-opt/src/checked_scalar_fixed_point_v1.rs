@@ -231,6 +231,15 @@ fn record(
     meter: &mut Meter<'_, '_>,
 ) -> Result<[u8; SCALAR_FIXED_POINT_EXECUTION_BYTES_V1]> {
     meter.work(SCALAR_FIXED_POINT_EXECUTION_BYTES_V1 * 2)?;
+    execution_header(input, output, count).map_err(Into::into)
+}
+
+// Shared byte construction only. A decoded claim never becomes an execution witness.
+pub(crate) fn execution_header(
+    input: &Owner,
+    output: &Owner,
+    count: usize,
+) -> std::result::Result<[u8; SCALAR_FIXED_POINT_EXECUTION_BYTES_V1], Resource> {
     let count = u16::try_from(count).map_err(|_| Resource::Arithmetic)?;
     let mut bytes = [0; SCALAR_FIXED_POINT_EXECUTION_BYTES_V1];
     bytes[..8].copy_from_slice(b"F2SFP1\0\0");

@@ -42,6 +42,7 @@ fn consuming_direct_preserves_source_allocations_and_replays_genuine_j_and_noop_
                 owner.additional_retained_storage_v1()
             );
             budget.reserve_storage(receipt.retained_storage()).unwrap();
+            owner.assert_independent_added_receipt_v1(receipt);
             assert_eq!(
                 owner.retained_input_storage_floor_v1().unwrap(),
                 inherited_minimum + receipt.retained_storage()

@@ -1,6 +1,8 @@
 //! Ordinary Rust through the checked-output stage, without a shipping selector.
 use super::*;
 
+#[path = "production_rustc_driver_expanded_native_v3_tests.rs"]
+mod expanded_native_v3;
 #[path = "production_rustc_driver_guarded_loop_read_source_v1_tests.rs"]
 mod guarded_loop_read;
 #[path = "production_rustc_driver_nominal_abi_v3_tests.rs"]

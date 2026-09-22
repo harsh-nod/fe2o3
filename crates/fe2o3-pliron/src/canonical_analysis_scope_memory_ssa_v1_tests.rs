@@ -193,22 +193,47 @@ fn memory_ssa_header_failure_keeps_the_existing_sparse_cache_live() {
     let inventory = size_of::<CanonicalKirInventoryV1<'_>>();
     let sparse = size_of::<CanonicalKirSparseV1<'_, '_>>();
     let memory = size_of::<CanonicalKirMemorySsaV1<'_, '_>>();
+    let scratch = sparse_engine_extra_header_bytes();
+    let sparse_floor = retained + inventory + sparse;
+    let peak = sparse_floor + scratch;
+    let attempted = peak + memory;
+    let limit = attempted - 1;
     let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000);
-    let mut budget = Budget::new(&mut work, retained + inventory + sparse + memory - 1);
+    let mut budget = Budget::new(&mut work, limit);
     budget.reserve_storage(retained).unwrap();
     with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| -> ScopeResult<()> {
         request(scope, false)?;
         let first = std::ptr::from_ref(scope.sparse.as_ref().unwrap());
+        assert_eq!(scope.budget.storage(), sparse_floor);
+        assert_eq!(scope.budget.peak_storage(), peak);
+        assert_eq!(scope.budget.work(), 4 + 2 + 6 + 8 + 2);
+        assert_eq!(scope.budget.failed_storage(), None);
+        // Private fixture pressure admits sparse preparation, then makes the
+        // MemorySSA header the first denied reservation. There is no backing
+        // allocation; only finish_request may refund this logical scratch.
+        scope.budget.reserve_storage(scratch).unwrap();
+        assert_eq!(scope.budget.storage(), peak);
         let failed: ScopeResult<()> = scope.with_memory_ssa_v1(|_, _| panic!("header failed"));
-        assert!(matches!(failed, Err(CanonicalAnalysisScopeErrorV1::MemorySsa(CanonicalKirMemorySsaErrorV1::Resource(Resource::Storage(error)))) if error.actual() == retained + inventory + sparse + memory));
+        assert!(matches!(failed, Err(CanonicalAnalysisScopeErrorV1::MemorySsa(CanonicalKirMemorySsaErrorV1::Resource(Resource::Storage(error)))) if error.actual() == attempted && error.limit() == limit));
         assert!(scope.memory_ssa.is_none());
-        assert_eq!(scope.budget.storage(), retained + inventory + sparse);
-        scope.with_sparse_v1(|report, _| -> ScopeResult<()> {
+        assert_eq!(scope.budget.storage(), sparse_floor);
+        assert_eq!(scope.budget.peak_storage(), peak);
+        // Prior22 + request6 + derive(initial6 + counts3 + header1).
+        assert_eq!(scope.budget.work(), 22 + 6 + 6 + 3 + 1);
+        assert_eq!(scope.budget.failed_storage(), Some(attempted));
+        scope.with_sparse_v1(|report, budget| -> ScopeResult<()> {
             assert_eq!(std::ptr::from_ref(report), first);
+            assert_eq!(budget.storage(), sparse_floor);
+            assert_eq!(budget.work(), 38 + 6);
             Ok(())
         })
     }).unwrap();
     assert_eq!(budget.storage(), retained);
+    assert_eq!(budget.peak_storage(), peak);
+    assert_eq!(budget.work(), 44);
+    assert_eq!(budget.failed_storage(), Some(attempted));
+    drop(budget);
+    assert_eq!(work.failed_work(), None);
 }
 
 #[test]
@@ -251,6 +276,13 @@ fn callback_exit(mode: u8) -> ScopeResult<()> {
 #[test]
 fn clean_callback_errors_and_caught_panics_preserve_cache_and_release_scratch() {
     let (owner, retained) = admit(&Module::new("empty"));
+    let inventory = size_of::<CanonicalKirInventoryV1<'_>>();
+    let sparse = size_of::<CanonicalKirSparseV1<'_, '_>>();
+    let memory_header = size_of::<CanonicalKirMemorySsaV1<'_, '_>>();
+    let entry_floor = retained + 17;
+    let cache_floor = entry_floor + inventory + sparse + memory_header;
+    let peak = (entry_floor + inventory + sparse + sparse_engine_extra_header_bytes())
+        .max(cache_floor + 19);
     for memory in [false, true] {
         for mode in 0..3 {
             let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000);
@@ -260,6 +292,10 @@ fn clean_callback_errors_and_caught_panics_preserve_cache_and_release_scratch() 
                 request(scope, false)?;
                 request(scope, true)?;
                 let floor = scope.budget.storage();
+                assert_eq!(floor, cache_floor);
+                // Scope4 + inventory2 + sparse(request6 + derive8 + transfer2)
+                // + MemorySSA(request6 + derive40 + transfer2).
+                assert_eq!(scope.budget.work(), 4 + 2 + 6 + 8 + 2 + 6 + 40 + 2);
                 let sparse = std::ptr::from_ref(scope.sparse.as_ref().unwrap());
                 let memory_ptr = std::ptr::from_ref(scope.memory_ssa.as_ref().unwrap());
                 let invoke = |budget: &mut Budget<'_>| -> ScopeResult<()> {
@@ -285,7 +321,9 @@ fn clean_callback_errors_and_caught_panics_preserve_cache_and_release_scratch() 
                     (_, other) => panic!("changed clean callback result: {other:?}"),
                 }
                 assert_eq!(scope.budget.storage(), floor);
-                assert_eq!(scope.budget.peak_storage(), floor + 19);
+                assert_eq!(scope.budget.peak_storage(), peak);
+                assert_eq!(scope.budget.work(), 70 + 6);
+                assert_eq!(scope.budget.failed_storage(), None);
                 assert_eq!(std::ptr::from_ref(scope.sparse.as_ref().unwrap()), sparse);
                 assert_eq!(
                     std::ptr::from_ref(scope.memory_ssa.as_ref().unwrap()),
@@ -295,6 +333,11 @@ fn clean_callback_errors_and_caught_panics_preserve_cache_and_release_scratch() 
             })
             .unwrap();
             assert_eq!(budget.storage(), retained + 17);
+            assert_eq!(budget.peak_storage(), peak);
+            assert_eq!(budget.work(), 70 + 6 + 6);
+            assert_eq!(budget.failed_storage(), None);
+            drop(budget);
+            assert_eq!(work.failed_work(), None);
         }
     }
 }
@@ -530,4 +573,55 @@ fn inventory_only_full_floor_loss_is_not_hidden_by_the_incoming_floor() {
         ));
         assert_eq!(budget.storage(), retained + 17);
     }
+}
+
+#[test]
+fn memory_ssa_header_pressure_cap_allows_clean_cache_installation() {
+    let (owner, retained) = admit(&Module::new("empty"));
+    let inventory = size_of::<CanonicalKirInventoryV1<'_>>();
+    let sparse = size_of::<CanonicalKirSparseV1<'_, '_>>();
+    let memory = size_of::<CanonicalKirMemorySsaV1<'_, '_>>();
+    let sparse_floor = retained + inventory + sparse;
+    let sparse_peak = sparse_floor + sparse_engine_extra_header_bytes();
+    // Same global cap as the pressure case, but no scratch survives into
+    // receipt transfer. A successful derive must preserve the exact live floor.
+    let limit = sparse_peak + memory - 1;
+    let cache_floor = sparse_floor + memory;
+    let peak = sparse_peak.max(cache_floor);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000);
+    let mut budget = Budget::new(&mut work, limit);
+    budget.reserve_storage(retained).unwrap();
+    with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| -> ScopeResult<()> {
+        let inventory_ptr = std::ptr::from_ref(scope.inventory());
+        request(scope, false)?;
+        let sparse_ptr = std::ptr::from_ref(scope.sparse.as_ref().unwrap());
+        assert_eq!(scope.budget.storage(), sparse_floor);
+        assert_eq!(scope.budget.peak_storage(), sparse_peak);
+        assert_eq!(scope.budget.work(), 4 + 2 + 6 + 8 + 2);
+        scope.with_memory_ssa_v1(|report, budget| -> ScopeResult<()> {
+            assert_eq!(std::ptr::from_ref(report.inventory()), inventory_ptr);
+            assert!(report.inventory().belongs_to(&owner));
+            assert_eq!(report.node_count(), 0);
+            assert_eq!(budget.storage(), cache_floor);
+            assert_eq!(budget.peak_storage(), peak);
+            assert_eq!(budget.work(), 22 + 6 + 40 + 2);
+            assert_eq!(budget.failed_storage(), None);
+            Ok(())
+        })?;
+        assert!(scope.memory_ssa.is_some());
+        scope.with_sparse_v1(|report, budget| -> ScopeResult<()> {
+            assert_eq!(std::ptr::from_ref(report), sparse_ptr);
+            assert_eq!(std::ptr::from_ref(report.inventory()), inventory_ptr);
+            assert_eq!(budget.storage(), cache_floor);
+            assert_eq!(budget.work(), 22 + 6 + 40 + 2 + 6);
+            Ok(())
+        })
+    })
+    .unwrap();
+    assert_eq!(budget.storage(), retained);
+    assert_eq!(budget.peak_storage(), peak);
+    assert_eq!(budget.work(), 76);
+    assert_eq!(budget.failed_storage(), None);
+    drop(budget);
+    assert_eq!(work.failed_work(), None);
 }

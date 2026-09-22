@@ -570,3 +570,160 @@ fn loop_unroll_native_scoped_unwind_drops_new_storage_and_preserves_denial_histo
     }
     assert_eq!(work.failed_work(), Some(65));
 }
+
+// Complete the owning source frames before measuring the native handoff.
+#[inline(never)]
+fn source_seed_for_native_handoff(
+    erased: bool,
+    profile: Profile,
+    budget: &mut Budget<'_>,
+) -> (
+    PreparedLoopUnrollSourceSeedV1,
+    LoopUnrollNativeStorageV1,
+    AuthenticatedRankedVerificationRosterV1,
+    usize,
+    usize,
+) {
+    let (prefix, ranked, p6, source) = if erased {
+        let (owner, ranked, p6, source) =
+            prepare_backend_unroll_erased_prefix_v1(profile, Some(3), budget);
+        (Prefix6::Erased(owner), ranked, p6, source)
+    } else {
+        let (owner, ranked, p6, source) =
+            prepare_backend_unroll_direct_prefix_v1(profile, Some(3), budget);
+        (Prefix6::Direct(owner), ranked, p6, source)
+    };
+    assert_eq!(ranked.root_count(), 2);
+    let floor = budget.storage();
+    assert_eq!(floor, 29 + p6 + source);
+    let ledger = budget.work_ledger_identity_v1();
+    let (seed, receipt) = prepare_source_seed_v1(
+        prefix,
+        profile,
+        Limits::default(),
+        ForwardingLimits::default(),
+        UnrollLimits::default(),
+        budget,
+    )
+    .unwrap();
+    assert_eq!(budget.storage(), floor);
+    assert_eq!(seed.retained_floor, floor + receipt.retained_storage());
+    assert_resource_selection(&seed.owner, Some(3));
+    assert!(budget.work_ledger_identity_v1() == ledger);
+    (seed, receipt, ranked, p6, source)
+}
+
+#[test]
+fn loop_unroll_native_seed_handoff_denial_precedes_native_work_and_preserves_caller_credit() {
+    for erased in [false, true] {
+        for profile in PROFILES {
+            let mut setup_work = Work::new(
+                usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
+            );
+            let mut setup = Budget::new(
+                &mut setup_work,
+                crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+            );
+            let (seed, receipt, ranked, p6, source) =
+                source_seed_for_native_handoff(erased, profile, &mut setup);
+            let setup_floor = setup.storage();
+            let setup_ledger = setup.work_ledger_identity_v1();
+            let sibling = vec![0x3bu8; 31];
+            let floor = setup_floor + size_of_val(&sibling) + sibling.capacity();
+            let attempted = floor.checked_add(receipt.retained_storage()).unwrap();
+            assert!(receipt.retained_storage() > 0);
+            let mut work = Work::new(64);
+            {
+                // A separately prepaid next-phase ledger, as in measure().
+                let mut budget = Budget::new(&mut work, attempted - 1);
+                budget.reserve_storage(floor).unwrap();
+                budget.charge_work(17).unwrap();
+                let ledger = budget.work_ledger_identity_v1();
+                let result = scoped(floor, &mut budget, move |budget| {
+                    finish_source_seed_native_v1(seed, receipt, erased, floor, budget)
+                });
+                match result {
+                    Err(ProductionPipelineError::InductionRefinementNativeStage(
+                        InductionRefinementNativeStageErrorV1::ForwardingComposition(
+                            RefinedForwardingNativeStageErrorV1::BoundedUnroll(
+                                LoopUnrollNativeStageErrorV1::Resource(Resource::Storage(error)),
+                            ),
+                        ),
+                    )) => assert_eq!((error.actual(), error.limit()), (attempted, attempted - 1)),
+                    _ => panic!("exact first native handoff reservation refusal"),
+                }
+                assert_eq!(
+                    (budget.work(), budget.storage(), budget.peak_storage()),
+                    (17, floor, floor)
+                );
+                assert_eq!(budget.failed_storage(), Some(attempted));
+                assert!(budget.work_ledger_identity_v1() == ledger);
+                assert_eq!(sibling, [0x3b; 31]);
+            }
+            assert_eq!(work.failed_work(), None);
+            assert_eq!(setup.storage(), setup_floor);
+            drop(ranked);
+            setup.release_storage(p6).unwrap();
+            assert_eq!(setup.storage(), 29 + source);
+            setup.release_storage(source).unwrap();
+            assert_eq!(setup.storage(), 29);
+            assert!(setup.work_ledger_identity_v1() == setup_ledger);
+        }
+    }
+}
+
+#[test]
+fn loop_unroll_native_outer_scope_preserves_inner_panic_payload_destructor_refusal() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Payload(Arc<AtomicUsize>);
+    impl Drop for Payload {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            panic!("inner panic payload destructor");
+        }
+    }
+    struct Dependent(Arc<AtomicUsize>);
+    impl Drop for Dependent {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let payload_drops = Arc::new(AtomicUsize::new(0));
+    let dependent_drops = Arc::new(AtomicUsize::new(0));
+    let sibling = vec![0x59u8; 23];
+    let floor = size_of_val(&sibling) + sibling.capacity();
+    let mut work = Work::new(64);
+    let mut budget = Budget::new(&mut work, floor + 73);
+    budget.reserve_storage(floor).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    let mut inner_returned = false;
+    let result: Result<()> = scoped(floor, &mut budget, |budget| {
+        let _inner: Result<()> = scoped(floor, budget, |budget| {
+            budget.reserve_storage(73).map_err(resource)?;
+            budget.charge_work(2).map_err(resource)?;
+            let _dependent = Dependent(dependent_drops.clone());
+            std::panic::panic_any(Payload(payload_drops.clone()));
+        });
+        inner_returned = true;
+        Ok(())
+    });
+    assert!(matches!(
+        result,
+        Err(ProductionPipelineError::CheckedOutputPolicy7Stage(
+            crate::production_pipeline::checked_output_policy7_v1::CheckedOutputPolicy7StageErrorV1::Panicked
+        ))
+    ));
+    assert_eq!(payload_drops.load(Ordering::SeqCst), 1);
+    assert_eq!(dependent_drops.load(Ordering::SeqCst), 1);
+    assert!(!inner_returned);
+    assert_eq!(
+        (budget.work(), budget.storage(), budget.peak_storage()),
+        (2, floor, floor + 73)
+    );
+    assert_eq!(budget.failed_storage(), None);
+    assert!(budget.work_ledger_identity_v1() == ledger);
+    assert_eq!(sibling, [0x59; 23]);
+}

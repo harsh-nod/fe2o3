@@ -10,6 +10,29 @@
 //! neither establishes target binding nor changes those historical endpoints.
 
 #![forbid(unsafe_code)]
+mod expanded_history_v1;
+mod scalar_fixed_point_history_decode_v1;
+mod scalar_fixed_point_history_v1;
+pub use expanded_history_v1::{
+    DecodedExpandedHistoryV1, EXPANDED_HISTORY_DOMAIN_V1, EXPANDED_HISTORY_MAGIC_V1,
+    EXPANDED_HISTORY_POLICY_ID_V1, ExpandedHistoryErrorV1, ExpandedHistoryStorageV1,
+    InertExpandedHistoryBytesV1, InertExpandedHistoryRefV1, MAX_EXPANDED_HISTORY_BYTES_V1,
+    ReplayedExpandedHistoryV1, encode_expanded_history_v1, materialize_expanded_history_v1,
+    read_expanded_history_v1,
+};
+pub use scalar_fixed_point_history_decode_v1::{
+    DecodedScalarFixedPointHistoryV1, DecodedScalarFixedPointRoundV1,
+    ReplayedScalarFixedPointHistoryV1, ReplayedScalarFixedPointRoundV1,
+    materialize_scalar_fixed_point_history_v1,
+};
+pub use scalar_fixed_point_history_v1::{
+    InertScalarFixedPointHistoryBytesV1, InertScalarFixedPointHistoryRefV1,
+    InertScalarFixedPointRoundRefV1, MAX_SCALAR_FIXED_POINT_HISTORY_BYTES_V1,
+    SCALAR_FIXED_POINT_HISTORY_DOMAIN_V1, SCALAR_FIXED_POINT_HISTORY_MAGIC_V1,
+    ScalarFixedPointHistoryErrorV1, ScalarFixedPointHistoryStorageV1,
+    encode_scalar_fixed_point_history_v1, read_scalar_fixed_point_history_v1,
+    reencode_scalar_fixed_point_history_v1,
+};
 mod loop_unroll_history_decode_v1;
 mod loop_unroll_history_rows_v1;
 mod loop_unroll_history_wire_v1;

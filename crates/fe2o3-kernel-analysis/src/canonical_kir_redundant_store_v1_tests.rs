@@ -699,3 +699,237 @@ fn scoped_failure_panic_and_ledger_replacement_never_release_unrelated_storage()
     assert_eq!(result, Err(Error::Resource(Resource::Accounting)));
     assert_eq!(budget.storage(), 19);
 }
+
+type CauseInventory = crate::CanonicalKirInventoryErrorV1;
+type CauseMemory = crate::CanonicalKirMemorySsaErrorV1;
+type CauseLoad = crate::CanonicalKirLoadForwardingErrorV1;
+type CauseStore = crate::CanonicalKirStoreForwardingErrorV1;
+type CauseTransition = crate::CanonicalKirTransitionErrorV1;
+
+fn analysis_cause_borrow<T: std::error::Error + 'static>(
+    parent: &dyn std::error::Error,
+    child: &T,
+) {
+    assert!(std::ptr::eq(
+        parent.source().unwrap().downcast_ref::<T>().unwrap(),
+        child
+    ));
+}
+fn analysis_cause_walk(
+    mut error: &(dyn std::error::Error + 'static),
+    depth: usize,
+    expected: Resource,
+) {
+    for _ in 0..depth {
+        error = error.source().unwrap();
+    }
+    let resource = error.downcast_ref::<Resource>().unwrap();
+    assert_eq!(*resource, expected);
+    match resource {
+        Resource::Work(child) => analysis_cause_borrow(resource, child),
+        Resource::Storage(child) => analysis_cause_borrow(resource, child),
+        Resource::Allocation | Resource::Accounting | Resource::Arithmetic => {
+            assert!(std::error::Error::source(resource).is_none())
+        }
+    }
+}
+fn analysis_cause_cases() -> [Resource; 5] {
+    let mut work = Work::new(3);
+    let mut budget = Budget::new(&mut work, 5);
+    let work_error = budget.charge_work(4).unwrap_err();
+    let storage_error = budget.reserve_storage(6).unwrap_err();
+    let accounting = budget.release_storage(1).unwrap_err();
+    assert_eq!(
+        (budget.work(), budget.storage(), budget.peak_storage()),
+        (0, 0, 0)
+    );
+    assert_eq!(budget.failed_storage(), Some(6));
+    assert_eq!(accounting, Resource::Accounting);
+    drop(budget);
+    assert_eq!(work.failed_work(), Some(4));
+    // Last two are typed diagnostic cases, not allocator/fault injection.
+    [
+        work_error,
+        storage_error,
+        accounting,
+        Resource::Allocation,
+        Resource::Arithmetic,
+    ]
+}
+
+#[test]
+fn analysis_cause_links_borrow_every_immediate_child_and_nested_resource() {
+    // Constructed error envelopes test the cause API, not executed analysis history.
+    for resource in analysis_cause_cases() {
+        macro_rules! check {
+            ($ty:ident, $variant:ident, $child:expr, $depth:expr) => {{
+                let error = $ty::$variant($child);
+                let $ty::$variant(child) = &error else {
+                    unreachable!()
+                };
+                analysis_cause_borrow(&error, child);
+                analysis_cause_walk(&error, $depth, resource);
+            }};
+        }
+        check!(Error, Resource, resource, 1);
+        check!(CauseInventory, Resource, resource, 1);
+        check!(CauseMemory, Resource, resource, 1);
+        check!(CauseTransition, Resource, resource, 1);
+        check!(CauseLoad, Resource, resource, 1);
+        check!(CauseStore, Resource, resource, 1);
+        check!(Error, Inventory, CauseInventory::Resource(resource), 2);
+        check!(Error, MemorySsa, CauseMemory::Resource(resource), 2);
+        check!(CauseLoad, Inventory, CauseInventory::Resource(resource), 2);
+        check!(CauseLoad, MemorySsa, CauseMemory::Resource(resource), 2);
+        check!(CauseStore, MemorySsa, CauseMemory::Resource(resource), 2);
+    }
+}
+
+#[test]
+fn analysis_cause_links_leave_all_structural_markers_terminal() {
+    fn none(error: impl std::error::Error) {
+        assert!(error.source().is_none());
+    }
+    for error in [
+        Error::ForeignSubject,
+        Error::StaleCandidate,
+        Error::Rule("fixture"),
+        Error::Panicked,
+    ] {
+        none(error);
+    }
+    none(CauseInventory::InconsistentOwner);
+    for error in [
+        CauseTransition::Arithmetic,
+        CauseTransition::InvalidCoordinate,
+        CauseTransition::IncompleteRows,
+        CauseTransition::Rule("fixture"),
+    ] {
+        none(error);
+    }
+    for error in [
+        CauseLoad::ForeignSubject,
+        CauseLoad::StaleCandidate,
+        CauseLoad::Rule("fixture"),
+    ] {
+        none(error);
+    }
+    for error in [
+        CauseStore::ForeignSubject,
+        CauseStore::StaleCandidate,
+        CauseStore::Rule("fixture"),
+    ] {
+        none(error);
+    }
+    with_memory(fixture(ScalarType::U32), |_, memory, budget| {
+        let node = memory.operation(coordinate(1), budget).unwrap().unwrap();
+        for error in [
+            CauseMemory::InputLimit {
+                resource: crate::CanonicalKirMemorySsaResourceV1::Operations,
+                actual: 2,
+                limit: 1,
+            },
+            CauseMemory::InconsistentInventory,
+            CauseMemory::InvalidBlock(coordinate(0).block),
+            CauseMemory::InvalidOperation(coordinate(0)),
+            CauseMemory::InvalidNode(node),
+            CauseMemory::NotPhi(node),
+        ] {
+            none(error);
+        }
+    });
+    let error = Error::Inventory(CauseInventory::InconsistentOwner);
+    let Error::Inventory(child) = &error else {
+        unreachable!()
+    };
+    analysis_cause_borrow(&error, child);
+    let error = Error::MemorySsa(CauseMemory::InconsistentInventory);
+    let Error::MemorySsa(child) = &error else {
+        unreachable!()
+    };
+    analysis_cause_borrow(&error, child);
+}
+
+#[test]
+fn reached_redundant_store_plan_and_replay_causes_keep_exact_entry_prefixes() {
+    const PRIOR: usize = 11;
+    with_memory(fixture(ScalarType::U32), |inventory, memory, outer| {
+        let (plan, _) = CanonicalKirRedundantStorePlanV1::derive(inventory, memory, outer).unwrap();
+        assert_eq!(plan.rows().len(), 2);
+        drop(plan);
+        with_output(inventory, memory, outer, |applied, output, outer| {
+            let (checked, _) = applied.check_output(output, outer).unwrap();
+            assert_eq!(checked.rows().len(), 2);
+            assert!(!checked.grants_authority());
+            drop(checked);
+            for replay in [false, true] {
+                let header = if replay {
+                    size_of::<CheckedCanonicalKirRedundantStoreV1<'_>>()
+                } else {
+                    size_of::<CanonicalKirRedundantStorePlanV1<'_, '_, '_>>()
+                };
+                let before_storage = if replay {
+                    3 + inventory.owner().canonical().canonical_bytes().len()
+                        + output.canonical().canonical_bytes().len()
+                } else {
+                    3
+                };
+                let floor = outer.storage();
+                for deny_storage in [false, true] {
+                    let work_limit = if deny_storage { WORK } else { PRIOR + 2 };
+                    let storage_limit = if deny_storage {
+                        floor + header - 1
+                    } else {
+                        STORAGE
+                    };
+                    let mut work = Work::new(work_limit);
+                    work.charge_work(PRIOR).unwrap();
+                    let mut budget = Budget::new(&mut work, storage_limit);
+                    budget.reserve_storage(floor).unwrap();
+                    let ledger = budget.work_ledger_identity_v1();
+                    let error = if replay {
+                        applied
+                            .check_output(output, &mut budget)
+                            .err()
+                            .expect("replay entry denial")
+                    } else {
+                        CanonicalKirRedundantStorePlanV1::derive(inventory, memory, &mut budget)
+                            .err()
+                            .expect("plan entry denial")
+                    };
+                    let Error::Resource(child) = &error else {
+                        panic!("{error:?}")
+                    };
+                    analysis_cause_borrow(&error, child);
+                    analysis_cause_walk(&error, 1, *child);
+                    if deny_storage {
+                        let Resource::Storage(leaf) = child else {
+                            panic!("{child:?}")
+                        };
+                        assert_eq!(
+                            (leaf.actual(), leaf.limit()),
+                            (floor + header, storage_limit)
+                        );
+                        assert_eq!(budget.work(), PRIOR + before_storage);
+                        assert_eq!(budget.failed_storage(), Some(floor + header));
+                    } else {
+                        let Resource::Work(leaf) = child else {
+                            panic!("{child:?}")
+                        };
+                        assert_eq!((leaf.actual(), leaf.limit()), (PRIOR + 3, work_limit));
+                        assert_eq!(budget.work(), PRIOR);
+                        assert_eq!(budget.failed_storage(), None);
+                    }
+                    assert_eq!(budget.storage(), floor);
+                    assert_eq!(budget.peak_storage(), floor);
+                    assert!(budget.work_ledger_identity_v1() == ledger);
+                    drop(budget);
+                    assert_eq!(
+                        work.failed_work(),
+                        if deny_storage { None } else { Some(PRIOR + 3) }
+                    );
+                }
+            }
+        });
+    });
+}

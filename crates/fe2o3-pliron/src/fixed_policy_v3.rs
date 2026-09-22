@@ -184,7 +184,14 @@ impl std::fmt::Display for Policy3ExecutionClaimErrorV1 {
         write!(f, "unauthenticated policy-3 execution claim: {self:?}")
     }
 }
-impl std::error::Error for Policy3ExecutionClaimErrorV1 {}
+impl std::error::Error for Policy3ExecutionClaimErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Framing | Self::Endpoint | Self::Profile | Self::Pass => None,
+        }
+    }
+}
 
 /// Borrowed, syntactically checked execution claims only. This does not
 /// establish publication provenance, execution occurrence, actual work, or a

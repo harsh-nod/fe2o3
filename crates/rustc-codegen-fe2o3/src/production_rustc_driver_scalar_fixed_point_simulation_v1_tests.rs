@@ -1,5 +1,6 @@
 //! Complete bounded component-SIM observations and independent source reference.
 use super::*;
+use component_assertion::{AssertionRoute, AssertionRow, assertion_route};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Scenario {
@@ -17,6 +18,97 @@ enum Effect {
     Return(u64),
     End(u64, bool),
 }
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TrapSiteRow {
+    pub(super) function: String,
+    pub(super) block: u32,
+    pub(super) operation: u32,
+}
+impl TrapSiteRow {
+    pub(super) fn from_site(site: &sim::SimulationSiteV1) -> ResultV1<Self> {
+        Ok(Self {
+            function: site.function.as_str().into(),
+            block: site.block.0,
+            operation: site
+                .operation
+                .ok_or_else(|| failure(Phase::Sim, "trap operation absent"))?,
+        })
+    }
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BranchRow {
+    lane: u64,
+    ordinal: usize,
+    function: usize,
+    block: u32,
+    target: u32,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FailureEdgeRow {
+    route: AssertionRoute,
+    observed: BranchRow,
+    trap_event: usize,
+}
+impl FailureEdgeRow {
+    fn valid(&self, trap: &TrapSiteRow) -> bool {
+        self.route.valid()
+            && &self.route.trap == trap
+            && self.observed.lane == 0
+            && self.observed.function == self.route.failure_edge[0] as usize
+            && self.observed.block == self.route.block
+            && self.observed.target == self.route.failure_target
+            && self.observed.ordinal > 0
+            && self.observed.ordinal < self.trap_event
+            && self.trap_event <= OBSERVATION_CAP
+    }
+}
+fn check_failure_edge(
+    route: &AssertionRoute,
+    branches: &[BranchRow],
+    trap: &TrapSiteRow,
+    trap_event: usize,
+    trap_lane: u64,
+) -> ResultV1<FailureEdgeRow> {
+    require(
+        trap_lane == 0
+            && branches.len() <= OBSERVATION_CAP
+            && branches
+                .iter()
+                .all(|event| event.ordinal > 0 && event.ordinal < trap_event)
+            && branches
+                .windows(2)
+                .all(|pair| pair[0].ordinal < pair[1].ordinal),
+        Phase::Sim,
+        "selected assertion failure lane/trace bound",
+    )?;
+    let mut selected = branches.iter().filter(|event| {
+        event.lane == trap_lane
+            && event.function == route.failure_edge[0] as usize
+            && event.block == route.block
+    });
+    let observed = selected
+        .next()
+        .ok_or_else(|| failure(Phase::Sim, "selected failure branch absent"))?;
+    require(
+        selected.next().is_none(),
+        Phase::Sim,
+        "duplicate selected assertion branch",
+    )?;
+    let row = FailureEdgeRow {
+        route: route.clone(),
+        observed: observed.clone(),
+        trap_event,
+    };
+    require(
+        row.valid(trap),
+        Phase::Sim,
+        "actual selected failure edge must precede exact trap",
+    )?;
+    Ok(row)
+}
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SimRow {
@@ -32,6 +124,10 @@ pub(super) struct SimRow {
     after_events: usize,
     before_debug: usize,
     after_debug: usize,
+    before_trap: Option<TrapSiteRow>,
+    after_trap: Option<TrapSiteRow>,
+    before_failure: Option<FailureEdgeRow>,
+    after_failure: Option<FailureEdgeRow>,
 }
 pub(super) fn scenarios(case: ScalarCase) -> Vec<Scenario> {
     if case == ScalarCase::NormalNoop {
@@ -53,12 +149,14 @@ pub(super) fn scenarios(case: ScalarCase) -> Vec<Scenario> {
                     choose,
                 });
             }
-            rows.push(Scenario {
-                root: case.roots()[1].into(),
-                length,
-                value,
-                choose: 0,
-            });
+            if case == ScalarCase::PreRankedCheckedOpt0 {
+                rows.push(Scenario {
+                    root: case.roots()[1].into(),
+                    length,
+                    value,
+                    choose: 0,
+                });
+            }
         }
     }
     rows
@@ -143,6 +241,26 @@ pub(super) fn validate_row(row: &SimRow, expected: &Scenario) -> ResultV1<()> {
             && row.after_events <= OBSERVATION_CAP
             && row.before_debug <= OBSERVATION_CAP
             && row.after_debug <= OBSERVATION_CAP
+            && row.before_trap.is_some() == trapped
+            && row.after_trap.is_some() == trapped
+            && row.before_failure.is_some() == trapped
+            && row.after_failure.is_some() == trapped
+            && row
+                .before_failure
+                .as_ref()
+                .is_none_or(|edge| edge.trap_event <= row.before_events)
+            && row
+                .after_failure
+                .as_ref()
+                .is_none_or(|edge| edge.trap_event <= row.after_events)
+            && [&row.before_failure, &row.after_failure]
+                .iter()
+                .zip([&row.before_trap, &row.after_trap])
+                .all(|(edge, trap)| match (edge.as_ref(), trap.as_ref()) {
+                    (Some(edge), Some(trap)) => edge.valid(trap),
+                    (None, None) => true,
+                    _ => false,
+                })
             && (expected.root == "scalar_noop_control"
                 || row.before_debug > 0 && row.after_debug > 0),
         Phase::Sim,
@@ -168,6 +286,18 @@ pub(super) fn protocol_rows(case: ScalarCase) -> Vec<SimRow> {
                 after_events: effects.len(),
                 before_debug: 1,
                 after_debug: 1,
+                before_trap: trapped.then(|| TrapSiteRow {
+                    function: "synthetic".into(),
+                    block: 0,
+                    operation: 0,
+                }),
+                after_trap: trapped.then(|| TrapSiteRow {
+                    function: "synthetic".into(),
+                    block: 0,
+                    operation: 0,
+                }),
+                before_failure: None,
+                after_failure: None,
             }
         })
         .collect()
@@ -182,6 +312,8 @@ struct Trace {
     debug_count: usize,
     hash: Sha256,
     trap_checkpoint: Option<sim::SimulationSiteV1>,
+    trap_event: Option<(usize, u64)>,
+    branches: Vec<BranchRow>,
     failure: Option<String>,
 }
 struct Events<'a> {
@@ -275,11 +407,35 @@ impl sim::SimulationEventSinkV1 for Events<'_> {
             } if Some(*allocation) == trace.allocation && *bytes == 4 => {
                 Some(Effect::PreparedWrite(lane, *offset))
             }
-            E::OperationBegin
-            | E::OperationEnd { .. }
-            | E::BlockEnter
-            | E::Terminator
-            | E::Branch { .. } => None,
+            E::Branch { target } => {
+                let function = &self.module.functions[event.site.function_ordinal];
+                let block = function
+                    .body
+                    .as_ref()
+                    .unwrap()
+                    .blocks
+                    .iter()
+                    .find(|block| block.id == event.site.block)
+                    .ok_or_else(bad)?;
+                if event.site.operation.is_some()
+                    || !block
+                        .terminator
+                        .as_ref()
+                        .is_some_and(|term| term.successors().contains(target))
+                {
+                    return Err(bad());
+                }
+                let ordinal = trace.event_count;
+                trace.branches.push(BranchRow {
+                    lane,
+                    ordinal,
+                    function: event.site.function_ordinal,
+                    block: event.site.block.0,
+                    target: target.0,
+                });
+                None
+            }
+            E::OperationBegin | E::OperationEnd { .. } | E::BlockEnter | E::Terminator => None,
             _ => return Err(bad()),
         };
         if let Some(effect) = effect {
@@ -343,6 +499,10 @@ impl Debugger<'_> {
                 if *phase == sim::SimulationDebugCheckpointPhaseV1::BeforeOperation
                     && operation_at(self.module, &actual_site).is_some_and(|op| is_trap(&op.kind))
                 {
+                    if trace.trap_checkpoint.is_some() {
+                        return Err(bad());
+                    }
+                    trace.trap_event = Some((trace.event_count, record.invocation.global[0]));
                     trace.trap_checkpoint = Some(actual_site);
                 }
             }
@@ -395,6 +555,8 @@ struct Run {
     hash: [u8; 32],
     events: usize,
     debug: usize,
+    trap: Option<TrapSiteRow>,
+    failure_edge: Option<FailureEdgeRow>,
 }
 fn request_for(s: &Scenario) -> ResultV1<sim::SimulationRequestV1> {
     let mut request =
@@ -450,6 +612,7 @@ fn simulate_one(
     owner: &Owner,
     admitted: &sim::AdmittedSimulationModuleV1,
     s: &Scenario,
+    expected_route: Option<&AssertionRoute>,
 ) -> ResultV1<Run> {
     let request = request_for(s)?;
     let saved = request.clone();
@@ -550,9 +713,46 @@ fn simulate_one(
                 Phase::Sim,
                 "expected typed actual assertion trap after committed effect",
             )?;
+            require(
+                error
+                    .site
+                    .as_ref()
+                    .map(TrapSiteRow::from_site)
+                    .transpose()?
+                    .as_ref()
+                    == expected_route.map(|route| &route.trap)
+                    && expected_route.is_some(),
+                Phase::Sim,
+                "trap did not reach exact selected assertion failure continuation",
+            )?;
         }
         Err(error) => return Err(failure(Phase::Sim, error)),
     }
+    let trap = trace
+        .trap_checkpoint
+        .as_ref()
+        .map(TrapSiteRow::from_site)
+        .transpose()?;
+    require(
+        trap.is_some() == trapped,
+        Phase::Sim,
+        "unexpected or missing actual trap checkpoint",
+    )?;
+    let failure_edge = if let Some(trap) = &trap {
+        let route = expected_route.ok_or_else(|| failure(Phase::Sim, "selected route absent"))?;
+        let (event, lane) = trace
+            .trap_event
+            .ok_or_else(|| failure(Phase::Sim, "trap event absent"))?;
+        Some(check_failure_edge(
+            route,
+            &trace.branches,
+            trap,
+            event,
+            lane,
+        )?)
+    } else {
+        None
+    };
     Ok(Run {
         bytes,
         effects,
@@ -560,13 +760,63 @@ fn simulate_one(
         hash: trace.hash.finalize().into(),
         events: trace.event_count,
         debug: trace.debug_count,
+        trap,
+        failure_edge,
     })
+}
+pub(super) fn validate_assertion_row(
+    row: &SimRow,
+    assertion: &AssertionRow,
+    before: &Subject,
+    after: &Subject,
+) -> ResultV1<()> {
+    for trap in [&row.before_trap, &row.after_trap].into_iter().flatten() {
+        require(
+            row.scenario.root == assertion.root && trap.function == assertion.entry,
+            Phase::Sim,
+            "reported trap is not selected source root/function",
+        )?;
+    }
+    for (edge, subject) in [(&row.before_failure, before), (&row.after_failure, after)] {
+        if let Some(edge) = edge {
+            require(
+                &edge.route.subject == subject
+                    && edge.route.function == assertion.entry
+                    && row.scenario.root == assertion.root,
+                Phase::Sim,
+                "reported selected branch actual subject/root/function",
+            )?;
+        }
+    }
+    if let Some(edge) = &row.before_failure {
+        require(
+            edge.route.failure_edge == assertion.failure_edge
+                && edge.route.success_successor == assertion.success_edge[2],
+            Phase::Sim,
+            "reported original branch sealed assertion coordinates",
+        )?;
+    }
+    Ok(())
 }
 pub(super) fn simulate_matrix(
     before: &Owner,
     after: &Owner,
     case: ScalarCase,
+    assertion: Option<&AssertionRow>,
 ) -> ResultV1<Vec<SimRow>> {
+    let traps = match (case, assertion) {
+        (ScalarCase::PreRankedCheckedOpt0, Some(assertion)) => Some((
+            assertion_route(before, assertion, true)?,
+            assertion_route(after, assertion, false)?,
+        )),
+        (ScalarCase::NormalNoop | ScalarCase::AdmittedCheckedOpt0, None) => None,
+        _ => {
+            return Err(failure(
+                Phase::Sim,
+                "source case/assertion custody mismatch",
+            ));
+        }
+    };
     let admit = |owner: &Owner| -> ResultV1<sim::AdmittedSimulationModuleV1> {
         let canonical = VerifiedCanonicalKernelIrV12::from_canonical_bytes(
             owner.canonical().canonical_bytes().to_vec(),
@@ -589,14 +839,14 @@ pub(super) fn simulate_matrix(
     let (b, a) = (admit(before)?, admit(after)?);
     let mut rows = Vec::new();
     for scenario in scenarios(case) {
-        let first = simulate_one(before, &b, &scenario)?;
-        let second = simulate_one(after, &a, &scenario)?;
+        let first = simulate_one(before, &b, &scenario, traps.as_ref().map(|p| &p.0))?;
+        let second = simulate_one(after, &a, &scenario, traps.as_ref().map(|p| &p.1))?;
         require(
             first.bytes == second.bytes
                 && first.effects == second.effects
                 && first.trapped == second.trapped
-                && first == simulate_one(before, &b, &scenario)?
-                && second == simulate_one(after, &a, &scenario)?,
+                && first == simulate_one(before, &b, &scenario, traps.as_ref().map(|p| &p.0))?
+                && second == simulate_one(after, &a, &scenario, traps.as_ref().map(|p| &p.1))?,
             Phase::Sim,
             "before/after effects or same-subject deterministic repetition",
         )?;
@@ -613,6 +863,10 @@ pub(super) fn simulate_matrix(
             after_events: second.events,
             before_debug: first.debug,
             after_debug: second.debug,
+            before_trap: first.trap,
+            after_trap: second.trap,
+            before_failure: first.failure_edge,
+            after_failure: second.failure_edge,
         });
     }
     Ok(rows)
@@ -671,7 +925,7 @@ fn scalar_source_effect_oracle_rejects_order_value_canary_initialization_and_tra
 }
 #[test]
 fn scalar_source_observation_limits_reject_incomplete_or_stopped_capture() {
-    let case = ScalarCase::CheckedOpt0;
+    let case = ScalarCase::PreRankedCheckedOpt0;
     let expected = scenarios(case).remove(0);
     for mutation in 0..5 {
         let mut row = protocol_rows(case).remove(0);
@@ -745,4 +999,155 @@ fn scalar_source_observation_limits_reject_incomplete_or_stopped_capture() {
         trace.borrow().failure.is_some(),
         "incomplete delivery cannot be accepted as success"
     );
+}
+
+#[test]
+fn scalar_dynamic_assertion_edge_rejects_unrelated_edge_to_same_shared_trap() {
+    use fe2o3_kernel_ir::{BasicBlock, BlockId, Signature};
+    use sim::SimulationEventSinkV1;
+    // A graph/event oracle fixture only; never a fabricated source qualification.
+    let branch = |id, condition, failure, success| {
+        let mut block = BasicBlock::new(BlockId(id));
+        block.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(condition),
+            then_target: BlockId(failure),
+            then_arguments: vec![],
+            else_target: BlockId(success),
+            else_arguments: vec![],
+        });
+        block
+    };
+    let mut trap = BasicBlock::new(BlockId(2));
+    trap.operations.push(Operation::new(
+        vec![],
+        Kind::Call {
+            callee: AmdGpuDiagnosticOperation::Trap.intrinsic_function_id(),
+            arguments: vec![],
+        },
+    ));
+    trap.terminator = Some(Terminator::Unreachable);
+    let mut success = BasicBlock::new(BlockId(3));
+    success.terminator = Some(Terminator::Return { values: vec![] });
+    let mut module = Module::new("shared-trap-oracle-only");
+    module.functions.push(Function::kernel_entry(
+        "entry",
+        Signature::new(vec![Type::Scalar(ScalarType::Bool); 2], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![branch(0, 0, 2, 1), branch(1, 1, 2, 3), trap, success],
+    ));
+    module.required_capabilities = AmdGpuDiagnosticOperation::Trap.required_capabilities();
+    module.functions[0].required_capabilities = module.required_capabilities.clone();
+    module
+        .functions
+        .push(AmdGpuDiagnosticOperation::Trap.declaration());
+    let mut kernel = fe2o3_kernel_ir::Kernel::new(
+        "entry",
+        "entry",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    kernel.required_capabilities = module.required_capabilities.clone();
+    module.kernels.push(kernel);
+    let mut work = Work::new(100_000_000);
+    let mut budget = Budget::new(&mut work, 1024 * 1024 * 1024);
+    let (owner, _) =
+        Owner::from_module_ref_with_verification_budget_v12(&module, &mut budget).unwrap();
+    assert_eq!(budget.storage(), 0);
+    let module = owner.module();
+    let trap = TrapSiteRow {
+        function: "entry".into(),
+        block: 2,
+        operation: 0,
+    };
+    let route = AssertionRoute {
+        subject: subject(&owner),
+        function: "entry".into(),
+        failure_edge: [0, 0, 0],
+        success_successor: 1,
+        block: 0,
+        success_target: 1,
+        failure_target: 2,
+        trap: trap.clone(),
+    };
+    let record_branch = |block| {
+        let trace = Rc::new(RefCell::new(Trace::default()));
+        let mut events = Events {
+            module,
+            trace: Rc::clone(&trace),
+        };
+        events
+            .record(&sim::SimulationEventV1 {
+                invocation: sim::SimulationInvocationV1 {
+                    global: [0, 0, 0],
+                    workgroup: [0, 0, 0],
+                    local: [0, 0, 0],
+                    workgroup_size: [64, 1, 1],
+                    workgroup_count: [1, 1, 1],
+                    launch_extent: [64, 1, 1],
+                },
+                site: sim::SimulationEventSiteV1 {
+                    function_ordinal: 0,
+                    block: BlockId(block),
+                    operation: None,
+                },
+                kind: sim::SimulationEventKindV1::Branch { target: BlockId(2) },
+            })
+            .unwrap();
+        drop(events);
+        Rc::try_unwrap(trace).ok().unwrap().into_inner().branches
+    };
+    let selected = record_branch(0);
+    let unrelated = record_branch(1);
+    assert_eq!(selected[0].target, unrelated[0].target);
+    let observed = check_failure_edge(&route, &selected, &trap, 2, 0).unwrap();
+    assert!(observed.valid(&trap));
+    assert!(check_failure_edge(&route, &unrelated, &trap, 2, 0).is_err());
+    for mutation in 0..9 {
+        let mut changed = selected.clone();
+        match mutation {
+            0 => changed.clear(),
+            1 => changed.push(changed[0].clone()),
+            2 => changed[0].lane = 1,
+            3 => changed[0].function = 1,
+            4 => changed[0].block = 1,
+            5 => changed[0].target = route.success_target,
+            6 => changed[0].ordinal = 2,
+            7 => changed[0].ordinal = 3,
+            _ => changed[0].ordinal = 0,
+        }
+        assert!(check_failure_edge(&route, &changed, &trap, 2, 0).is_err());
+    }
+    let mut foreign = trap.clone();
+    foreign.function = "foreign".into();
+    assert!(check_failure_edge(&route, &selected, &foreign, 2, 0).is_err());
+    assert!(check_failure_edge(&route, &selected, &trap, 2, 1).is_err());
+    let origin =
+        serde_json::json!({ "file": ([7; 32]), "bytes": [0, 9], "start": [1, 1], "end": [1, 10] });
+    let assertion: AssertionRow = serde_json::from_value(serde_json::json!({
+        "input": route.subject, "root": "scalar_effect_then_overflow", "entry": "entry",
+        "source_function": ([1; 32]), "source_body": ([2; 32]), "semantic_block": 0,
+        "expected": false, "condition_local": null, "expansion": origin, "call_site": origin,
+        "fixture_file": { "file": ([7; 32]), "bytes": [0, 10], "start": [1, 1], "end": [2, 1] },
+        "success_edge": [0, 0, 1], "failure_edge": [0, 0, 0]
+    }))
+    .unwrap();
+    let mut row = protocol_rows(ScalarCase::PreRankedCheckedOpt0)
+        .into_iter()
+        .find(|row| row.trapped)
+        .unwrap();
+    row.before_trap = Some(trap.clone());
+    row.after_trap = Some(trap.clone());
+    row.before_failure = Some(observed.clone());
+    row.after_failure = Some(observed);
+    validate_row(&row, &row.scenario).unwrap();
+    validate_assertion_row(&row, &assertion, &route.subject, &route.subject).unwrap();
+    row.after_failure.as_mut().unwrap().route.subject.digest[0] ^= 1;
+    assert!(validate_assertion_row(&row, &assertion, &route.subject, &route.subject).is_err());
+    row.after_failure.as_mut().unwrap().route.subject = route.subject.clone();
+    row.before_failure.as_mut().unwrap().route.failure_edge[1] += 1;
+    assert!(validate_assertion_row(&row, &assertion, &route.subject, &route.subject).is_err());
+    row.before_failure.as_mut().unwrap().trap_event = row.before_events + 1;
+    assert!(validate_row(&row, &row.scenario).is_err());
 }

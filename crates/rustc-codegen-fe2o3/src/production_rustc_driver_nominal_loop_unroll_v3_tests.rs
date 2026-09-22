@@ -1,6 +1,13 @@
 //! Actual ordinary Rust-to-U-to-LLVM and nominal V3, never a signed artifact.
+#[path = "production_rustc_driver_nominal_native_transport_v3_tests.rs"]
+mod transport;
 use super::*;
 use fe2o3_kernel_descriptor::{PhysicalAbiComponentKind, ScalarTypeV1};
+
+// Native continuation cumulatively prepays optimizer and replay work beyond the
+// ABI-only parent. This is diagnostic headroom, not a production/performance
+// bound; measured replay costs still drive exact and one-unit-short probes.
+const WORK: usize = 1 << 40;
 
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::nominal_abi_v3::native_unroll::nominal_unroll_source_child";
 const MIXED_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::nominal_abi_v3::native_unroll::nominal_unroll_mixed_source_child";
@@ -517,10 +524,12 @@ fn check_native(path: &Path, roots: &[&str], mixed: bool) {
         assert_ne!(hash, [0; 32]);
     }
     assert!(report.descriptor_bytes > 48 && report.llvm_bytes > 100);
-    assert!(report.work > 17 && report.peak >= report.floor);
+    assert!(report.work > 17 && report.work <= WORK && report.peak >= report.floor);
     assert_eq!(report.floor, 113 + report.receipt);
     assert!(!report.artifact_authority && !report.execution_authority);
-    assert!(report.replay_work > 17 && report.replay_peak > report.floor);
+    assert!(
+        report.replay_work > 17 && report.replay_work <= WORK && report.replay_peak > report.floor
+    );
     assert!(report.short_storage_error.starts_with("Err("));
 }
 fn check_ordinary(path: &Path, roots: &[&str]) {

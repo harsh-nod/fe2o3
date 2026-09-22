@@ -1,5 +1,7 @@
 //! Actual source F-to-U before the first LLVM emission. No wire/default authority.
 use super::*;
+#[path = "production_pipeline_expanded_native_v3.rs"]
+pub(crate) mod expanded_v3;
 #[path = "production_pipeline_nominal_loop_unroll_native_v3.rs"]
 pub(crate) mod nominal_v3;
 use super::history::ActualFinalFSourceRefV1 as FinalSource;
@@ -171,6 +173,21 @@ pub(crate) struct PreparedLoopUnrollNativeOutputV1 {
     profile: Profile,
     retained_floor: usize,
 }
+
+/// Move-only actual source/P7/F/U custody, before any native emission.
+/// The returned addition is unreserved; the original prefix receipt transfers.
+struct PreparedLoopUnrollSourceSeedV1 {
+    owner: Unrolled,
+    prefix_execution: Policy7ExecutionWitnessV1,
+    profile: Profile,
+    retained_floor: usize,
+}
+fn source_seed_header(erased: bool) -> Result<usize> {
+    size_of::<PreparedLoopUnrollSourceSeedV1>()
+        .checked_sub(Unrolled::active_header(erased))
+        .and_then(|n| n.checked_sub(size_of::<Policy7ExecutionWitnessV1>()))
+        .ok_or_else(|| resource(Resource::Arithmetic))
+}
 fn prepared_header(erased: bool) -> Result<usize> {
     size_of::<PreparedLoopUnrollNativeOutputV1>()
         .checked_sub(Unrolled::active_header(erased))
@@ -234,21 +251,21 @@ impl PreparedLoopUnrollNativeOutputV1 {
         })
     }
 }
-fn prepare(
+fn prepare_source_seed_v1(
     prefix: Prefix6,
     profile: Profile,
     refinement: Limits,
     forwarding: ForwardingLimits,
     unroll: UnrollLimits,
     budget: &mut Budget<'_>,
-) -> Result<(PreparedLoopUnrollNativeOutputV1, LoopUnrollNativeStorageV1)> {
+) -> Result<(PreparedLoopUnrollSourceSeedV1, LoopUnrollNativeStorageV1)> {
     let floor = budget.storage();
     let erased = matches!(&prefix, Prefix6::Erased(_));
     scoped(prefix.minimum()?, budget, move |budget| {
         budget.charge_work(3).map_err(resource)?;
         // Pay both the final enum/header slack and transient Composed slack
         // before those values coexist with any controlled source/native work.
-        let header = prepared_header(erased)?;
+        let header = source_seed_header(erased)?;
         budget.reserve_storage(header).map_err(resource)?;
         let transient = composed_header(erased)?;
         budget.reserve_storage(transient).map_err(resource)?;
@@ -264,8 +281,6 @@ fn prepare(
         ) = prepare_refined_forwarding_source_prefix_v1(prefix, refinement, forwarding, budget)?;
         let (owner, unrolled_added) = Unrolled::continue_once(f, unroll, budget)?;
         budget.release_storage(transient).map_err(resource)?;
-        let (llvm, native_storage) = lower_native(owner.output(), profile, budget)?;
-        budget.reserve_storage(native_storage).map_err(resource)?;
         let retained = [
             history_added,
             prefix_execution.retained_storage(),
@@ -275,7 +290,6 @@ fn prepare(
             refined_added,
             forwarded_added,
             unrolled_added,
-            native_storage,
             header,
         ]
         .into_iter()
@@ -283,19 +297,90 @@ fn prepare(
             n.checked_add(v)
                 .ok_or_else(|| resource(Resource::Arithmetic))
         })?;
-        let value = PreparedLoopUnrollNativeOutputV1 {
+        let value = PreparedLoopUnrollSourceSeedV1 {
             owner,
             prefix_execution,
-            llvm,
             profile,
             retained_floor: floor
                 .checked_add(retained)
                 .ok_or_else(|| resource(Resource::Arithmetic))?,
         };
-        value.verify_equivalence(budget)?;
-        budget.charge_work(1).map_err(resource)?;
         Ok((value, LoopUnrollNativeStorageV1(retained)))
     })
+}
+
+fn prepare(
+    prefix: Prefix6,
+    profile: Profile,
+    refinement: Limits,
+    forwarding: ForwardingLimits,
+    unroll: UnrollLimits,
+    budget: &mut Budget<'_>,
+) -> Result<(PreparedLoopUnrollNativeOutputV1, LoopUnrollNativeStorageV1)> {
+    let floor = budget.storage();
+    let erased = matches!(&prefix, Prefix6::Erased(_));
+    scoped(prefix.minimum()?, budget, move |budget| {
+        let (seed, receipt) =
+            prepare_source_seed_v1(prefix, profile, refinement, forwarding, unroll, budget)?;
+        finish_source_seed_native_v1(seed, receipt, erased, floor, budget)
+    })
+}
+
+// Keep native owning temporaries off the stack during the preceding source
+// replay. The caller's original scope still owns every refund and unwind.
+#[inline(never)]
+fn finish_source_seed_native_v1(
+    seed: PreparedLoopUnrollSourceSeedV1,
+    receipt: LoopUnrollNativeStorageV1,
+    erased: bool,
+    floor: usize,
+    budget: &mut Budget<'_>,
+) -> Result<(PreparedLoopUnrollNativeOutputV1, LoopUnrollNativeStorageV1)> {
+    budget
+        .reserve_storage(receipt.retained_storage())
+        .map_err(resource)?;
+    if budget.storage() < seed.retained_floor {
+        return Err(resource(Resource::Accounting));
+    }
+    let PreparedLoopUnrollSourceSeedV1 {
+        owner,
+        prefix_execution,
+        profile,
+        ..
+    } = seed;
+    // String storage pays its own header; only the replacement wrapper
+    // slack is transferred here, after the string-free seed was consumed.
+    let old_header = source_seed_header(erased)?;
+    let new_header = prepared_header(erased)?;
+    if new_header >= old_header {
+        budget
+            .reserve_storage(new_header - old_header)
+            .map_err(resource)?;
+    } else {
+        budget
+            .release_storage(old_header - new_header)
+            .map_err(resource)?;
+    }
+    let (llvm, native_storage) = lower_native(owner.output(), profile, budget)?;
+    budget.reserve_storage(native_storage).map_err(resource)?;
+    let retained = receipt
+        .retained_storage()
+        .checked_sub(old_header)
+        .and_then(|n| n.checked_add(new_header))
+        .and_then(|n| n.checked_add(native_storage))
+        .ok_or_else(|| resource(Resource::Arithmetic))?;
+    let value = PreparedLoopUnrollNativeOutputV1 {
+        owner,
+        prefix_execution,
+        llvm,
+        profile,
+        retained_floor: floor
+            .checked_add(retained)
+            .ok_or_else(|| resource(Resource::Arithmetic))?,
+    };
+    value.verify_equivalence(budget)?;
+    budget.charge_work(1).map_err(resource)?;
+    Ok((value, LoopUnrollNativeStorageV1(retained)))
 }
 
 /// Complete original authenticated custody plus separate F history and actual U.

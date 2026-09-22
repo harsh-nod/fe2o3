@@ -116,3 +116,18 @@ pub use target_lineage_v3::{
     TargetBindingTranscriptV3, TargetLineageClaimV3, TargetLineageIdentityV3,
     canonical_semantic_target_layout_transcript_v1, derive_semantic_target_layout_identity_v1,
 };
+
+mod capsule_v4;
+mod capsule_v4_decode;
+mod expanded_history_receipt_v4;
+mod expanded_output_association_v1;
+mod expanded_semantic_to_llvm_v1;
+pub use capsule_v4::*;
+pub use capsule_v4_decode::EXPANDED_INVOCATION_CHILD_STORAGE_V4;
+pub use expanded_history_receipt_v4::*;
+pub use expanded_output_association_v1::*;
+pub use expanded_semantic_to_llvm_v1::*;
+#[cfg(test)]
+mod expanded_publication_v4_resource_tests;
+#[cfg(test)]
+mod expanded_publication_v4_tests;

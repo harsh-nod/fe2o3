@@ -49,7 +49,21 @@ impl fmt::Display for CanonicalPolicy3ExecutionReceiptErrorV1 {
         write!(f, "policy-3 execution receipt: {self:?}")
     }
 }
-impl Error for CanonicalPolicy3ExecutionReceiptErrorV1 {}
+impl Error for CanonicalPolicy3ExecutionReceiptErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ExecutionClaim(error) => Some(error),
+            Self::Codec(error) => Some(error),
+            Self::Semantic(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::Header
+            | Self::Limit
+            | Self::InputHistory
+            | Self::ExecutionWitness
+            | Self::Panicked => None,
+        }
+    }
+}
 impl From<Resource> for CanonicalPolicy3ExecutionReceiptErrorV1 {
     fn from(error: Resource) -> Self {
         Self::Resource(error)

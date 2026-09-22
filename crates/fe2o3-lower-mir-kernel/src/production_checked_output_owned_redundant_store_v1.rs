@@ -3,8 +3,11 @@ use super::*;
 use fe2o3_kernel_opt::{
     OwnedRedundantStoreContinuationV1, prepare_owned_redundant_store_continuation_v1,
 };
+#[path = "production_checked_output_owned_prefix_v1.rs"]
+mod owned_prefix;
+use owned_prefix::OwnedPrefix;
 
-/// Additional J/metadata/report-row receipt only. The caller continues to own
+/// Additional J/metadata/report-row and heap-prefix receipt. The caller owns
 /// all pre-existing Prefix6, separately reserved B and unrelated reservations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionOwnedRedundantStoreStorageV1(usize);
@@ -34,7 +37,7 @@ struct StoreData {
 /// fn parts(value: ProductionOwnedRedundantStoreContinuationV1) { let _ = value.prefix; }
 /// ```
 pub struct ProductionOwnedRedundantStoreContinuationV1 {
-    prefix: ProductionCheckedOutputOwnerPolicy6V1,
+    prefix: OwnedPrefix<ProductionCheckedOutputOwnerPolicy6V1>,
     data: StoreData,
 }
 
@@ -46,22 +49,22 @@ pub struct ProductionOwnedRedundantStoreContinuationV1 {
 /// fn clone(value: ProductionOwnedUnitLocalRedundantStoreContinuationV1) { let _ = value.clone(); }
 /// ```
 pub struct ProductionOwnedUnitLocalRedundantStoreContinuationV1 {
-    prefix: ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1,
+    prefix: OwnedPrefix<ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1>,
     data: StoreData,
 }
 
-fn header<P, W>() -> StoreResult<usize> {
+fn header<W>() -> StoreResult<usize> {
     std::mem::size_of::<W>()
-        .checked_sub(std::mem::size_of::<P>())
-        .and_then(|n| n.checked_sub(std::mem::size_of::<OwnedRedundantStoreContinuationV1>()))
+        .checked_sub(std::mem::size_of::<OwnedRedundantStoreContinuationV1>())
         .ok_or_else(|| AssertOriginResourceV1::Arithmetic.into())
 }
 
-fn added_storage(data: &StoreData, wrapper: usize) -> StoreResult<usize> {
+fn added_storage(data: &StoreData, wrapper: usize, prefix_backing: usize) -> StoreResult<usize> {
     data.continuation
         .retained_storage()
         .checked_add(wrapper)
         .and_then(|n| n.checked_add(std::mem::size_of_val(data.kernels.as_ref())))
+        .and_then(|n| n.checked_add(prefix_backing))
         .ok_or_else(|| AssertOriginResourceV1::Arithmetic.into())
 }
 
@@ -90,12 +93,17 @@ fn prepare_data(
         kernels,
         added: 0,
     };
-    data.added = added_storage(&data, wrapper)?;
+    data.added = added_storage(&data, wrapper, 0)?;
     Ok(data)
 }
 
-fn required(prefix: StorePrefix<'_>, data: &StoreData, wrapper: usize) -> StoreResult<usize> {
-    if added_storage(data, wrapper)? != data.added {
+fn required(
+    prefix: StorePrefix<'_>,
+    data: &StoreData,
+    wrapper: usize,
+    prefix_backing: usize,
+) -> StoreResult<usize> {
+    if added_storage(data, wrapper, prefix_backing)? != data.added {
         return Err(AssertOriginResourceV1::Accounting.into());
     }
     prefix
@@ -108,22 +116,29 @@ fn replay_data(
     prefix: StorePrefix<'_>,
     data: &StoreData,
     wrapper: usize,
+    prefix_backing: usize,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> StoreResult<()> {
-    store_scope(required(prefix, data, wrapper)?, budget, |budget| {
-        let fresh = check_store_output(
-            prefix,
-            StoreDeletionView::Owned {
-                input: prefix.output(),
-                continuation: &data.continuation,
-            },
-            budget,
-        )?;
-        if fresh != data.kernels {
-            return Err(E::Formal(crate::ProductionFormalMemoryErrorV1::ObligationMismatch).into());
-        }
-        Ok(())
-    })
+    store_scope(
+        required(prefix, data, wrapper, prefix_backing)?,
+        budget,
+        |budget| {
+            let fresh = check_store_output(
+                prefix,
+                StoreDeletionView::Owned {
+                    input: prefix.output(),
+                    continuation: &data.continuation,
+                },
+                budget,
+            )?;
+            if fresh != data.kernels {
+                return Err(
+                    E::Formal(crate::ProductionFormalMemoryErrorV1::ObligationMismatch).into(),
+                );
+            }
+            Ok(())
+        },
+    )
 }
 
 impl ProductionCheckedOutputOwnerPolicy6V1 {
@@ -131,7 +146,8 @@ impl ProductionCheckedOutputOwnerPolicy6V1 {
     /// continuation. No external candidate can be attached. The whole caller
     /// entry floor is preserved on every exit, even after a consumed failure;
     /// the caller owns its pre-existing reservation cleanup. Success returns
-    /// only the additional J/header/report-row receipt unreserved.
+    /// only the additional J/header/report-row/heap receipt unreserved. The new
+    /// backing is fully paid; the inherited logical floor is not relocation credit.
     pub fn continue_redundant_private_stores_v1(
         self,
         budget: &mut AssertOriginBudgetV1<'_>,
@@ -141,14 +157,13 @@ impl ProductionCheckedOutputOwnerPolicy6V1 {
     )> {
         let required = StorePrefix::Direct(&self).floor()?;
         store_scope(required, budget, |budget| {
-            let data = prepare_data(
-                StorePrefix::Direct(&self),
-                header::<Self, ProductionOwnedRedundantStoreContinuationV1>()?,
-                budget,
-            )?;
+            let wrapper = header::<ProductionOwnedRedundantStoreContinuationV1>()?;
+            let mut data = prepare_data(StorePrefix::Direct(&self), wrapper, budget)?;
+            let prefix = OwnedPrefix::try_new(self, budget)?;
+            data.added = added_storage(&data, wrapper, prefix.retained_storage()?)?;
             let receipt = ProductionOwnedRedundantStoreStorageV1(data.added);
             Ok((
-                ProductionOwnedRedundantStoreContinuationV1 { prefix: self, data },
+                ProductionOwnedRedundantStoreContinuationV1 { prefix, data },
                 receipt,
             ))
         })
@@ -167,14 +182,13 @@ impl ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1 {
     )> {
         let required = StorePrefix::Erased(&self).floor()?;
         store_scope(required, budget, |budget| {
-            let data = prepare_data(
-                StorePrefix::Erased(&self),
-                header::<Self, ProductionOwnedUnitLocalRedundantStoreContinuationV1>()?,
-                budget,
-            )?;
+            let wrapper = header::<ProductionOwnedUnitLocalRedundantStoreContinuationV1>()?;
+            let mut data = prepare_data(StorePrefix::Erased(&self), wrapper, budget)?;
+            let prefix = OwnedPrefix::try_new(self, budget)?;
+            data.added = added_storage(&data, wrapper, prefix.retained_storage()?)?;
             let receipt = ProductionOwnedRedundantStoreStorageV1(data.added);
             Ok((
-                ProductionOwnedUnitLocalRedundantStoreContinuationV1 { prefix: self, data },
+                ProductionOwnedUnitLocalRedundantStoreContinuationV1 { prefix, data },
                 receipt,
             ))
         })
@@ -184,7 +198,7 @@ impl ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1 {
 impl ProductionOwnedRedundantStoreContinuationV1 {
     /// Actual retained Direct source/history; never reconstructed from J.
     pub const fn prefix(&self) -> &ProductionCheckedOutputOwnerPolicy6V1 {
-        &self.prefix
+        self.prefix.get()
     }
     /// Closed actual I/J continuation and complete inert deletion observations.
     pub const fn continuation(&self) -> &OwnedRedundantStoreContinuationV1 {
@@ -198,7 +212,7 @@ impl ProductionOwnedRedundantStoreContinuationV1 {
     pub fn kernels(&self) -> &[FormalMemoryObligations] {
         &self.data.kernels
     }
-    /// Additional J/header/report-row receipt, excluding all inherited storage.
+    /// Additional J/header/report-row/heap receipt, excluding inherited storage.
     pub const fn additional_retained_storage_v1(&self) -> usize {
         self.data.added
     }
@@ -209,17 +223,19 @@ impl ProductionOwnedRedundantStoreContinuationV1 {
     /// Inherited minimum plus the exact added receipt; B remains separately prepaid.
     pub fn retained_input_storage_floor_v1(&self) -> StoreResult<usize> {
         required(
-            StorePrefix::Direct(&self.prefix),
+            StorePrefix::Direct(self.prefix()),
             &self.data,
-            header::<ProductionCheckedOutputOwnerPolicy6V1, Self>()?,
+            header::<Self>()?,
+            self.prefix.retained_storage()?,
         )
     }
     /// Replay actual source/history, I/J relation and fresh J safety/report equality.
     pub fn verify_equivalence(&self, budget: &mut AssertOriginBudgetV1<'_>) -> StoreResult<()> {
         replay_data(
-            StorePrefix::Direct(&self.prefix),
+            StorePrefix::Direct(self.prefix()),
             &self.data,
-            header::<ProductionCheckedOutputOwnerPolicy6V1, Self>()?,
+            header::<Self>()?,
+            self.prefix.retained_storage()?,
             budget,
         )
     }
@@ -227,7 +243,7 @@ impl ProductionOwnedRedundantStoreContinuationV1 {
 impl ProductionOwnedUnitLocalRedundantStoreContinuationV1 {
     /// Actual retained UnitLocal original N/E source and Policy6 history.
     pub const fn prefix(&self) -> &ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1 {
-        &self.prefix
+        self.prefix.get()
     }
     /// Closed actual I/J continuation and complete inert deletion observations.
     pub const fn continuation(&self) -> &OwnedRedundantStoreContinuationV1 {
@@ -241,7 +257,7 @@ impl ProductionOwnedUnitLocalRedundantStoreContinuationV1 {
     pub fn kernels(&self) -> &[FormalMemoryObligations] {
         &self.data.kernels
     }
-    /// Additional J/header/report-row receipt, excluding all inherited storage.
+    /// Additional J/header/report-row/heap receipt, excluding inherited storage.
     pub const fn additional_retained_storage_v1(&self) -> usize {
         self.data.added
     }
@@ -252,17 +268,19 @@ impl ProductionOwnedUnitLocalRedundantStoreContinuationV1 {
     /// Inherited minimum plus the exact added receipt; B remains separately prepaid.
     pub fn retained_input_storage_floor_v1(&self) -> StoreResult<usize> {
         required(
-            StorePrefix::Erased(&self.prefix),
+            StorePrefix::Erased(self.prefix()),
             &self.data,
-            header::<ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1, Self>()?,
+            header::<Self>()?,
+            self.prefix.retained_storage()?,
         )
     }
     /// Replay actual original-source custody, I/J relation and fresh J reports.
     pub fn verify_equivalence(&self, budget: &mut AssertOriginBudgetV1<'_>) -> StoreResult<()> {
         replay_data(
-            StorePrefix::Erased(&self.prefix),
+            StorePrefix::Erased(self.prefix()),
             &self.data,
-            header::<ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1, Self>()?,
+            header::<Self>()?,
+            self.prefix.retained_storage()?,
             budget,
         )
     }

@@ -182,7 +182,20 @@ impl fmt::Display for KernelIrEncodeError {
     }
 }
 
-impl std::error::Error for KernelIrEncodeError {}
+impl std::error::Error for KernelIrEncodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::WorkLimit(error) => Some(error),
+            Self::TooLarge { .. }
+            | Self::LimitExceeded { .. }
+            | Self::TypeNestingTooDeep { .. }
+            | Self::Overflow { .. }
+            | Self::UnsupportedInVersion { .. }
+            | Self::NonCanonical { .. }
+            | Self::Allocation => None,
+        }
+    }
+}
 
 /// A bounded kernel IR decoding failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -263,7 +276,29 @@ impl fmt::Display for KernelIrDecodeError {
     }
 }
 
-impl std::error::Error for KernelIrDecodeError {}
+impl std::error::Error for KernelIrDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Encode(error) => Some(error),
+            Self::WorkLimit(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::TooLarge { .. }
+            | Self::InvalidMagic
+            | Self::UnknownVersion(_)
+            | Self::UnsupportedFlags(_)
+            | Self::InvalidLength { .. }
+            | Self::Truncated
+            | Self::TrailingBytes
+            | Self::ReservedNonZero { .. }
+            | Self::UnknownTag { .. }
+            | Self::InvalidUtf8 { .. }
+            | Self::LimitExceeded { .. }
+            | Self::TypeNestingTooDeep { .. }
+            | Self::NonCanonical
+            | Self::InvalidSemanticOperationInstance => None,
+        }
+    }
+}
 
 impl From<KernelIrEncodeError> for KernelIrDecodeError {
     fn from(error: KernelIrEncodeError) -> Self {
@@ -3826,3 +3861,6 @@ mod wire_count_tokens_v12_tests;
 #[cfg(test)]
 #[path = "wire_marker_v12_tests.rs"]
 mod wire_marker_v12_tests;
+
+#[path = "tensor_layout_payload_v12.rs"]
+pub(crate) mod tensor_layout_payload_v12;

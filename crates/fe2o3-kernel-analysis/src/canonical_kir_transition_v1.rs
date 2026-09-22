@@ -60,7 +60,16 @@ impl fmt::Display for Error {
         }
     }
 }
-impl StdError for Error {}
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Arithmetic | Self::InvalidCoordinate | Self::IncompleteRows | Self::Rule(_) => {
+                None
+            }
+        }
+    }
+}
 
 /// The result borrows the actual checked inventories and immutable candidate
 /// rows. It cannot outlive either graph or authorize adoption of another owner.

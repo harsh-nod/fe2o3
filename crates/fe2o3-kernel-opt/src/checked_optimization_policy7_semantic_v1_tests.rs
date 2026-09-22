@@ -559,3 +559,158 @@ fn complete_adapter_exact_work_and_storage_preserve_caller_floor() {
             .is_err()
     );
 }
+
+fn policy7_assert_borrowed_source<T: std::error::Error + 'static>(
+    parent: &dyn std::error::Error,
+    child: &T,
+) {
+    let actual = parent.source().unwrap().downcast_ref::<T>().unwrap();
+    assert!(std::ptr::eq(actual, child));
+}
+
+fn policy7_resource_cases() -> [Resource; 5] {
+    let mut work = Work::new(3);
+    let mut budget = Budget::new(&mut work, 5);
+    let denied_work = budget.charge_work(4).unwrap_err();
+    let denied_storage = budget.reserve_storage(6).unwrap_err();
+    let accounting = budget.release_storage(1).unwrap_err();
+    assert_eq!(budget.work(), 0);
+    assert_eq!(budget.storage(), 0);
+    assert_eq!(budget.peak_storage(), 0);
+    assert_eq!(budget.failed_storage(), Some(6));
+    assert_eq!(accounting, Resource::Accounting);
+    drop(budget);
+    assert_eq!(work.failed_work(), Some(4));
+    // Allocation/Arithmetic are typed diagnostics, not injected allocator failures.
+    [
+        denied_work,
+        denied_storage,
+        accounting,
+        Resource::Allocation,
+        Resource::Arithmetic,
+    ]
+}
+
+#[test]
+fn policy7_error_sources_borrow_resource_and_boxed_immediate_children() {
+    for resource in policy7_resource_cases() {
+        let error = Error::Resource(resource);
+        let Error::Resource(child) = &error else {
+            unreachable!()
+        };
+        policy7_assert_borrowed_source(&error, child);
+        match child {
+            Resource::Work(leaf) => {
+                policy7_assert_borrowed_source(child, leaf);
+                assert_eq!((leaf.actual(), leaf.limit()), (4, 3));
+            }
+            Resource::Storage(leaf) => {
+                policy7_assert_borrowed_source(child, leaf);
+                assert_eq!((leaf.actual(), leaf.limit()), (6, 5));
+            }
+            Resource::Allocation | Resource::Accounting | Resource::Arithmetic => {
+                assert!(std::error::Error::source(child).is_none());
+            }
+        }
+        let error = Error::Policy6(Box::new(CanonicalPolicy6SemanticErrorV1::Resource(
+            resource,
+        )));
+        let Error::Policy6(child) = &error else {
+            unreachable!()
+        };
+        policy7_assert_borrowed_source(&error, child.as_ref());
+        assert!(matches!(child.as_ref(),
+            CanonicalPolicy6SemanticErrorV1::Resource(actual) if *actual == resource));
+        let error = Error::Continuation(
+            fe2o3_kernel_analysis::CanonicalKirRedundantStoreErrorV1::Resource(resource),
+        );
+        let Error::Continuation(child) = &error else {
+            unreachable!()
+        };
+        policy7_assert_borrowed_source(&error, child);
+        assert!(matches!(child,
+            fe2o3_kernel_analysis::CanonicalKirRedundantStoreErrorV1::Resource(actual)
+                if *actual == resource));
+    }
+}
+
+#[test]
+fn policy7_error_sources_preserve_nonresource_children_and_markers() {
+    let error = Error::Policy6(Box::new(CanonicalPolicy6SemanticErrorV1::Composition));
+    let Error::Policy6(child) = &error else {
+        unreachable!()
+    };
+    policy7_assert_borrowed_source(&error, child.as_ref());
+    let error = Error::Continuation(
+        fe2o3_kernel_analysis::CanonicalKirRedundantStoreErrorV1::ForeignSubject,
+    );
+    let Error::Continuation(child) = &error else {
+        unreachable!()
+    };
+    policy7_assert_borrowed_source(&error, child);
+    for error in [Error::Record, Error::Rows, Error::Panicked] {
+        assert!(std::error::Error::source(&error).is_none());
+    }
+}
+
+#[test]
+fn policy7_reached_continuation_denials_keep_exact_borrowed_resource_causes() {
+    let p = prepared(true);
+    local(&p, p.inputs().continuation).unwrap();
+    let wrapper = std::mem::size_of::<CheckedCanonicalPolicy7ContinuationRelationV1<'_>>()
+        - std::mem::size_of::<fe2o3_kernel_analysis::CheckedCanonicalKirRedundantStoreV1<'_>>();
+    assert!(wrapper > 0);
+    for deny_storage in [false, true] {
+        let work_limit = if deny_storage { WORK } else { 2 };
+        let storage_limit = if deny_storage {
+            p.floor + wrapper - 1
+        } else {
+            STORAGE
+        };
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(p.floor).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let error = check_canonical_policy7_continuation_relation_v1(
+            p.checked.execution().canonical_bytes(),
+            p.checked.owner(),
+            p.continuation.output(),
+            p.inputs().continuation,
+            &mut budget,
+        )
+        .err()
+        .expect("entry reservation or first record work must be refused");
+        let Error::Resource(child) = &error else {
+            panic!("unexpected reached continuation denial: {error:?}");
+        };
+        policy7_assert_borrowed_source(&error, child);
+        if deny_storage {
+            let Resource::Storage(leaf) = child else {
+                panic!("{child:?}")
+            };
+            policy7_assert_borrowed_source(child, leaf);
+            assert_eq!(
+                (leaf.actual(), leaf.limit()),
+                (p.floor + wrapper, storage_limit)
+            );
+            assert_eq!(budget.peak_storage(), p.floor);
+            assert_eq!(budget.failed_storage(), Some(p.floor + wrapper));
+        } else {
+            let Resource::Work(leaf) = child else {
+                panic!("{child:?}")
+            };
+            policy7_assert_borrowed_source(child, leaf);
+            assert_eq!((leaf.actual(), leaf.limit()), (3, 2));
+            assert_eq!(budget.peak_storage(), p.floor + wrapper);
+            assert_eq!(budget.failed_storage(), None);
+        }
+        assert_eq!(budget.work(), 0);
+        assert_eq!(budget.storage(), p.floor);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        drop(budget);
+        assert_eq!(
+            work.failed_work(),
+            if deny_storage { None } else { Some(3) }
+        );
+    }
+}

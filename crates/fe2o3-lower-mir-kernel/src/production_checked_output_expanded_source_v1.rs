@@ -2,6 +2,57 @@
 // public rows are inert provenance, not an arithmetic or trap permission table.
 type ExpandedSiteV1 = Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>;
 
+// Private closed traversal: semantic replay constructs the decoded alternative;
+// this view never manufactures a sealed optimizer owner or source identity.
+#[derive(Clone, Copy)]
+enum ExpandedScalarViewV1<'s, 'd, 'f, 'w> {
+    Live(&'s fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1),
+    Decoded(&'s fe2o3_kernel_opt::ReplayedScalarFixedPointHistoryV1<'d, 'f, 'w>),
+}
+struct ExpandedRoundViewV1<'a> {
+    integer: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    integer_rows: fe2o3_kernel_ir::CanonicalKirTransitionCandidateV1<'a>,
+    output: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    scalar_rows: fe2o3_kernel_ir::CanonicalKirTransitionCandidateV1<'a>,
+}
+impl ExpandedScalarViewV1<'_, '_, '_, '_> {
+    fn output(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 {
+        match self {
+            Self::Live(v) => v.output(),
+            Self::Decoded(v) => v.output(),
+        }
+    }
+    fn round_count(&self) -> usize {
+        match self {
+            Self::Live(v) => v.rounds().len(),
+            Self::Decoded(v) => v.rounds().len(),
+        }
+    }
+    fn round(&self, ordinal: usize) -> R<ExpandedRoundViewV1<'_>> {
+        let missing = || refused("expanded source", "complete ordered scalar round");
+        Ok(match self {
+            Self::Live(v) => {
+                let row = v.rounds().get(ordinal).ok_or_else(missing)?;
+                ExpandedRoundViewV1 {
+                    integer: row.integer().owner(),
+                    integer_rows: row.integer().occurrences().candidate(),
+                    output: row.scalar().owner(),
+                    scalar_rows: row.scalar().occurrences().candidate(),
+                }
+            }
+            Self::Decoded(v) => {
+                let row = v.rounds().get(ordinal).ok_or_else(missing)?;
+                ExpandedRoundViewV1 {
+                    integer: row.integer_output(),
+                    integer_rows: row.integer_rows(),
+                    output: row.output(),
+                    scalar_rows: row.scalar_rows(),
+                }
+            }
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 enum GeneralOutputSubjectV1<'a> {
     Owned(&'a fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1),
@@ -295,7 +346,7 @@ fn check_expanded_source_v1(
     refinement: &fe2o3_kernel_analysis::CheckedCanonicalKirInductionRefinementV1<'_>,
     forwarding: &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV1<'_>,
     unroll: &fe2o3_kernel_analysis::CheckedCanonicalKirLoopUnrollPairV1<'_, '_, '_>,
-    core: &fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1,
+    core: ExpandedScalarViewV1<'_, '_, '_, '_>,
     retained: &mut Vec<ProductionExpandedSourceOriginV1>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<Box<[FormalMemoryObligations]>> {
@@ -307,12 +358,20 @@ fn check_expanded_source_v1(
     {
         return Err(refused("expanded source", "actual source-owned U seed"));
     }
+    budget
+        .reserve_storage(
+            std::mem::size_of::<ExpandedScalarViewV1<'_, '_, '_, '_>>()
+                .checked_add(std::mem::size_of::<ExpandedRoundViewV1<'_>>())
+                .ok_or_else(arithmetic)?,
+        )
+        .map_err(E::Resource)?;
     let mut maximum = seed.output().operations().len();
-    for round in core.rounds() {
+    for ordinal in 0..core.round_count() {
         charge(budget, 4)?;
+        let round = core.round(ordinal)?;
         maximum = maximum
-            .max(round.integer().occurrences().candidate().operations.len())
-            .max(round.scalar().occurrences().candidate().operations.len());
+            .max(round.integer_rows.operations.len())
+            .max(round.scalar_rows.operations.len());
     }
     let mut previous = scratch::<ProductionExpandedSourceOriginV1>(maximum, budget)?;
     let mut next = scratch::<ProductionExpandedSourceOriginV1>(maximum, budget)?;
@@ -325,16 +384,11 @@ fn check_expanded_source_v1(
         });
     }
     let mut actual = seed.output().owner();
-    for round in core.rounds() {
+    for ordinal in 0..core.round_count() {
+        let round = core.round(ordinal)?;
         for (output, rows) in [
-            (
-                round.integer().owner(),
-                round.integer().occurrences().candidate(),
-            ),
-            (
-                round.scalar().owner(),
-                round.scalar().occurrences().candidate(),
-            ),
+            (round.integer, round.integer_rows),
+            (round.output, round.scalar_rows),
         ] {
             expanded_transport_pair_v1(actual, output, rows, &previous, &mut next, budget)?;
             charge(

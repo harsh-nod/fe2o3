@@ -87,7 +87,27 @@ impl fmt::Display for Error {
         write!(f, "inert full history: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Policy7(error) => Some(error),
+            Self::Tail(error) => Some(error),
+            Self::Admission { error, .. } => Some(error),
+            Self::Length
+            | Self::Header
+            | Self::Reserved
+            | Self::Limit
+            | Self::Field(_)
+            | Self::Rows
+            | Self::Tag
+            | Self::Limits
+            | Self::TailIdentity
+            | Self::Policy7Rows
+            | Self::Panicked => None,
+        }
+    }
+}
 
 /// Complete new logical retained extent, returned unreserved.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

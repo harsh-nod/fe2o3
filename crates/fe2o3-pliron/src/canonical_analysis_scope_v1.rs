@@ -67,6 +67,85 @@ impl<'inventory, 'graph, 'work> CanonicalAnalysisScopeV1<'inventory, 'graph, '_,
         self.inventory
     }
 
+    /// Lends the existing inventory and original budget without deriving a cache.
+    /// Each request prepays the same six entry/postflight checks as cache queries.
+    /// Consumer traversal and output storage retain their own accounting.
+    ///
+    /// The inventory borrow cannot escape this callback. Immutable references to
+    /// the original graph owner may retain its existing lifetime; neither kind of
+    /// reference grants source, safety, artifact, or launch authority.
+    /// Consumer errors do not poison the scope. Observed ledger/slot/live-floor
+    /// violations do, even when caught. Scratch must drop before return/unwind;
+    /// escaping output storage must be prepaid before the outer scope.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_kernel_ir::{VerifiedCanonicalKernelIrModuleV12,
+    ///     CanonicalKernelIrVerificationResourceBudgetV1};
+    /// use fe2o3_pliron::{with_canonical_analysis_scope_v1, CanonicalAnalysisScopeErrorV1};
+    /// fn escape(owner: &VerifiedCanonicalKernelIrModuleV12,
+    ///     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>) {
+    ///     let _ = with_canonical_analysis_scope_v1(owner, budget, |scope| {
+    ///         scope.with_inventory_v1(|inventory, _|
+    ///             Ok::<_, CanonicalAnalysisScopeErrorV1>(inventory))
+    ///     });
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use fe2o3_kernel_ir::{VerifiedCanonicalKernelIrModuleV12,
+    ///     CanonicalKernelIrVerificationResourceBudgetV1};
+    /// use fe2o3_pliron::{with_canonical_analysis_scope_v1, CanonicalAnalysisScopeErrorV1};
+    /// fn escape_rows(owner: &VerifiedCanonicalKernelIrModuleV12,
+    ///     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>) {
+    ///     let _ = with_canonical_analysis_scope_v1(owner, budget, |scope| {
+    ///         scope.with_inventory_v1(|inventory, _|
+    ///             Ok::<_, CanonicalAnalysisScopeErrorV1>(inventory.functions()))
+    ///     });
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use fe2o3_kernel_ir::{VerifiedCanonicalKernelIrModuleV12,
+    ///     CanonicalKernelIrVerificationResourceBudgetV1};
+    /// use fe2o3_pliron::{with_canonical_analysis_scope_v1, CanonicalAnalysisScopeErrorV1};
+    /// fn escape_budget(owner: &VerifiedCanonicalKernelIrModuleV12,
+    ///     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>) {
+    ///     let _ = with_canonical_analysis_scope_v1(owner, budget, |scope| {
+    ///         scope.with_inventory_v1(|_, budget|
+    ///             Ok::<_, CanonicalAnalysisScopeErrorV1>(budget))
+    ///     });
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use fe2o3_kernel_ir::{VerifiedCanonicalKernelIrModuleV12,
+    ///     CanonicalKernelIrVerificationResourceBudgetV1};
+    /// use fe2o3_pliron::{with_canonical_analysis_scope_v1, CanonicalAnalysisScopeErrorV1};
+    /// fn mutate(owner: &VerifiedCanonicalKernelIrModuleV12,
+    ///     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>) {
+    ///     let _ = with_canonical_analysis_scope_v1(owner, budget, |scope| {
+    ///         scope.with_inventory_v1(|inventory, _| {
+    ///             inventory.owner().module().functions.clear();
+    ///             Ok::<_, CanonicalAnalysisScopeErrorV1>(())
+    ///         })
+    ///     });
+    /// }
+    /// ```
+    pub fn with_inventory_v1<T, E>(
+        &mut self,
+        body: impl for<'borrow> FnOnce(
+            &'borrow CanonicalKirInventoryV1<'graph>,
+            &mut Budget<'work>,
+        ) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<CanonicalAnalysisScopeErrorV1>,
+    {
+        self.begin_request()?;
+        let result = catch_unwind(AssertUnwindSafe(|| body(self.inventory, self.budget)));
+        self.finish_request(result)
+    }
+
     /// Derives sparse facts once, on first demand, with the fixed default limits.
     /// Each request prepays six checks, including the cache lookup and callback
     /// postflight. A first successful derivation also pays two receipt-transfer

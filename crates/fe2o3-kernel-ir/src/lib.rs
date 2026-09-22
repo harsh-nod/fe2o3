@@ -217,3 +217,9 @@ pub(crate) use verification_type_comparison_v1::*;
 pub use verify::*;
 pub use wave_operations::*;
 pub use wire::*;
+
+pub use wire::tensor_layout_payload_v12::{
+    InertTensorLayoutPayloadV12, MAX_TENSOR_LAYOUT_PAYLOAD_BYTES_V12, TensorLayoutPayloadErrorV12,
+    TensorLayoutPayloadStorageV12, decode_tensor_layout_payload_v12,
+    encode_tensor_layout_payload_v12,
+};

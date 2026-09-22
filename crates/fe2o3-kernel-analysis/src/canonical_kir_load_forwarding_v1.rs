@@ -53,7 +53,16 @@ impl fmt::Display for Error {
         write!(f, "load forwarding: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Inventory(error) => Some(error),
+            Self::MemorySsa(error) => Some(error),
+            Self::ForeignSubject | Self::StaleCandidate | Self::Rule(_) => None,
+        }
+    }
+}
 
 /// Live header and actual row capacity; borrowed owners/analyses excluded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

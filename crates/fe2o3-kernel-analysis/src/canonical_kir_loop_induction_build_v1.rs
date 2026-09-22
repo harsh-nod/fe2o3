@@ -270,9 +270,39 @@ fn reachable_without(
     Ok(false)
 }
 
+// Only an exact direct Bool definition can make an external edge infeasible.
+// The executable edge and its arguments are retained by every transformation.
+fn dead_external_edge(i: &Inventory<'_>, e: Edge, budget: &mut Budget<'_>) -> Result<bool> {
+    budget.charge_work(8)?;
+    let source = &i.blocks()[block_index(i, e.source, budget)?];
+    let Terminator::ConditionalBranch { condition, .. } = source.terminator else {
+        return Ok(false);
+    };
+    if e.successor > 1 {
+        return Err(Error::ReplayMismatch);
+    }
+    let Definition::Result {
+        operation: site,
+        result: 0,
+    } = resolve(i, e.source, *condition, budget)?
+    else {
+        return Ok(false);
+    };
+    let op = operation(i, site, budget)?.operation;
+    let OperationKind::Constant(fe2o3_kernel_ir::Constant::Bool(value)) = op.kind else {
+        return Ok(false);
+    };
+    if !matches!(op.results.as_slice(), [result] if result.id == *condition && result.ty == Type::BOOL)
+    {
+        return Err(Error::ReplayMismatch);
+    }
+    Ok(e.successor == u32::from(value))
+}
+
 // Kahn elimination proves acyclicity of the whole loop body with its header
-// removed. All normal successors must stay in the body or be the unique latch
-// edge to the header. Explicit calls/abnormal terminals keep counts unavailable.
+// removed. All possibly taken successors stay in the body or are the unique
+// latch. Only direct-constant dead external edges are exempt; internal edges
+// remain conservative. Calls/abnormal terminals keep counts unavailable.
 fn completion(
     loops: &Loops<'_, '_>,
     index: usize,
@@ -320,6 +350,9 @@ fn completion(
                 }
             } else {
                 if scratch.members[target] == 0 {
+                    if dead_external_edge(i, row.coordinate, budget)? {
+                        continue;
+                    }
                     return Ok(Iterations::Unavailable);
                 }
                 scratch.degrees[target] = scratch.degrees[target]
@@ -342,7 +375,11 @@ fn completion(
         head += 1;
         for ordinal in i.blocks()[position].edges.clone() {
             budget.charge_work(2)?;
-            let target = block_index(i, i.edges()[ordinal].target, budget)?;
+            let row = &i.edges()[ordinal];
+            let target = block_index(i, row.target, budget)?;
+            if scratch.members[target] == 0 && dead_external_edge(i, row.coordinate, budget)? {
+                continue;
+            }
             if target == h {
                 continue;
             }

@@ -47,7 +47,16 @@ impl fmt::Display for Error {
         write!(f, "Policy5 semantic composition: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Policy4(error) => Some(error),
+            Self::Forwarding(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::Header | Self::ExecutionClaim | Self::ExecutionWitness | Self::Panicked => None,
+        }
+    }
+}
 
 /// Claimed endpoint roles and borrowed existing records, not authenticated
 /// execution. Equal-byte independently admitted owners are permitted. Each

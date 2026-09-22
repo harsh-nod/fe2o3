@@ -23,6 +23,7 @@ pub(crate) mod conditional_bound_observation_v1_tests;
 #[cfg(test)]
 pub(crate) mod conditional_output_observation_v1_tests;
 mod gfx942_inline_value_projection_v30;
+mod induction_initialization_v1;
 mod materialized_callable_effect_v1;
 mod multi_entry_induction_v1;
 mod ranked_projection_source_v1;
@@ -12667,6 +12668,27 @@ fn project_uniform_inductions_with_multi_entry_v1(
                 ));
             }
         }
+        let mut separated_initial = None;
+        if initial.is_none()
+            && step.is_some()
+            && !matches!(
+                topology.preheader_control,
+                ProjectedInductionPreheaderControlV1::Multiple(_)
+            )
+            && let Some(context) = multi.as_deref_mut()
+        {
+            let (operand, proof) = induction_initialization_v1::find_single(
+                function,
+                &graph,
+                &topology,
+                header,
+                induction,
+                induction_type,
+                context,
+            )?;
+            initial = Some(operand);
+            separated_initial = Some(proof);
+        }
         let (Some(initial), Some((latch_statement, update, step))) = (initial, step) else {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a uniform induction without exact initial and latch definitions",
@@ -12711,6 +12733,15 @@ fn project_uniform_inductions_with_multi_entry_v1(
                         "multi-entry initialization requires live canonical facts",
                     ))?;
             multi_entry_induction_v1::bind_initial(entries, initial, context)?;
+        }
+        if let Some(proof) = separated_initial {
+            let context =
+                multi
+                    .as_deref_mut()
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "separated initialization requires live canonical facts",
+                    ))?;
+            induction_initialization_v1::bind_single(proof, initial, context)?;
         }
         let Some(bound) = project_pure_uniform_index_operand_v1(
             types,
@@ -12823,10 +12854,15 @@ fn project_uniform_inductions_with_multi_entry_v1(
         }
     }
     if has_multi_entry {
-        let context = multi.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-            "multi-entry role replay requires live canonical facts",
-        ))?;
+        let context = multi
+            .as_deref_mut()
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "multi-entry role replay requires live canonical facts",
+            ))?;
         multi_entry_induction_v1::check_roles(&inductions, context)?;
+    }
+    if let Some(context) = multi {
+        induction_initialization_v1::replay_roster(function, &graph, &inductions, context)?;
     }
     Ok(inductions)
 }
@@ -12856,6 +12892,11 @@ fn reconcile_source_progress_with_multi_entry_v1(
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     let mut reconciled = BTreeMap::new();
     let graph = projected_loop_cfg_graph_v1(function)?;
+    if let Some(context) = multi.as_deref_mut() {
+        induction_initialization_v1::replay_roster(function, &graph, inductions, context)?;
+    } else {
+        induction_initialization_v1::without_context(function, inductions)?;
+    }
     let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
     let assignment_sites = semantic_ranges.assignments.clone();
     let address_escaped = semantic_ranges.address_escaped.clone();
@@ -13288,6 +13329,62 @@ fn project_loop_graph_charge_v1(
     Ok(())
 }
 
+fn for_each_projected_loop_successor_v1(
+    function: &SemanticFunctionDeclV1,
+    kind: &SemanticTerminatorKindV1,
+    mut visit: impl FnMut(usize) -> Result<(), ProductionRankedProjectionErrorV1>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    let mut checked_target = |target: SemanticBlockIdV1| {
+        let target = target.index() as usize;
+        if target >= function.blocks().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a semantic CFG edge outside the function during loop analysis",
+            ));
+        }
+        visit(target)
+    };
+    match kind {
+        SemanticTerminatorKindV1::Goto(edge) => checked_target(edge.target())?,
+        SemanticTerminatorKindV1::SwitchInt { targets, .. } => {
+            for target in targets.values() {
+                checked_target(target.edge().target())?;
+            }
+            let otherwise = targets.otherwise().target().index() as usize;
+            if otherwise >= function.blocks().len() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a semantic CFG edge outside the function during loop analysis",
+                ));
+            }
+            if !(targets.values().len() == 2
+                && targets.values().iter().any(|target| target.value() == 0)
+                && targets.values().iter().any(|target| target.value() == 1)
+                && switch_fallback_is_empty_unreachable_v1(function, otherwise))
+            {
+                checked_target(targets.otherwise().target())?;
+            }
+        }
+        SemanticTerminatorKindV1::Call(call) => {
+            if let Some(destination) = call.destination() {
+                checked_target(destination.edge().target())?;
+            }
+        }
+        SemanticTerminatorKindV1::Assert { target, .. }
+        | SemanticTerminatorKindV1::Drop { target, .. } => checked_target(target.target())?,
+        SemanticTerminatorKindV1::FalseEdge { .. } => {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a false edge before uniform induction CFG normalization",
+            ));
+        }
+        SemanticTerminatorKindV1::Return
+        | SemanticTerminatorKindV1::TailCall(_)
+        | SemanticTerminatorKindV1::UnwindResume
+        | SemanticTerminatorKindV1::UnwindTerminate
+        | SemanticTerminatorKindV1::Abort
+        | SemanticTerminatorKindV1::Unreachable => {}
+    }
+    Ok(())
+}
+
 fn projected_loop_cfg_graph_v1(
     function: &SemanticFunctionDeclV1,
 ) -> Result<ProjectedLoopCfgV1, ProductionRankedProjectionErrorV1> {
@@ -13297,57 +13394,14 @@ fn projected_loop_cfg_graph_v1(
             "semantic CFG exceeds the ranked block limit before loop analysis",
         ));
     }
-    let checked_target = |target: SemanticBlockIdV1| {
-        let target = target.index() as usize;
-        (target < block_count).then_some(target).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "a semantic CFG edge outside the function during loop analysis",
-            ),
-        )
-    };
     let mut successors = Vec::with_capacity(block_count);
     let mut edge_count = 0_usize;
     for block in function.blocks() {
-        let mut block_successors = match block.terminator().kind() {
-            SemanticTerminatorKindV1::Goto(edge) => vec![checked_target(edge.target())?],
-            SemanticTerminatorKindV1::SwitchInt { targets, .. } => {
-                let mut successors = targets
-                    .values()
-                    .iter()
-                    .map(|target| checked_target(target.edge().target()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let otherwise = checked_target(targets.otherwise().target())?;
-                if !(targets.values().len() == 2
-                    && targets.values().iter().any(|target| target.value() == 0)
-                    && targets.values().iter().any(|target| target.value() == 1)
-                    && switch_fallback_is_empty_unreachable_v1(function, otherwise))
-                {
-                    successors.push(otherwise);
-                }
-                successors
-            }
-            SemanticTerminatorKindV1::Call(call) => call
-                .destination()
-                .map(|destination| checked_target(destination.edge().target()))
-                .transpose()?
-                .into_iter()
-                .collect(),
-            SemanticTerminatorKindV1::Assert { target, .. }
-            | SemanticTerminatorKindV1::Drop { target, .. } => {
-                vec![checked_target(target.target())?]
-            }
-            SemanticTerminatorKindV1::FalseEdge { .. } => {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a false edge before uniform induction CFG normalization",
-                ));
-            }
-            SemanticTerminatorKindV1::Return
-            | SemanticTerminatorKindV1::TailCall(_)
-            | SemanticTerminatorKindV1::UnwindResume
-            | SemanticTerminatorKindV1::UnwindTerminate
-            | SemanticTerminatorKindV1::Abort
-            | SemanticTerminatorKindV1::Unreachable => Vec::new(),
-        };
+        let mut block_successors = Vec::new();
+        for_each_projected_loop_successor_v1(function, block.terminator().kind(), |target| {
+            block_successors.push(target);
+            Ok(())
+        })?;
         block_successors.sort_unstable();
         block_successors.dedup();
         edge_count = edge_count.checked_add(block_successors.len()).ok_or(
@@ -13383,6 +13437,119 @@ fn projected_loop_cfg_graph_v1(
         reachable[block] = true;
         pending.extend(successors[block].iter().copied());
     }
+    Ok(ProjectedLoopCfgV1 {
+        successors,
+        predecessors,
+        reachable,
+        entry,
+    })
+}
+
+fn projected_loop_cfg_graph_paid_v1(
+    function: &SemanticFunctionDeclV1,
+    context: &mut induction_initialization_v1::Context<'_, '_>,
+) -> Result<ProjectedLoopCfgV1, ProductionRankedProjectionErrorV1> {
+    use induction_initialization_v1::{Resource, resource, sum};
+    context.charge(4)?;
+    let count = function.blocks().len();
+    if count == 0 || count > MAX_RANKED_BOUNDS_BLOCKS {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "semantic CFG exceeds the ranked block limit before loop analysis",
+        ));
+    }
+    context.reserve(sum(
+        std::mem::size_of::<ProjectedLoopCfgV1>(),
+        std::mem::size_of::<Vec<usize>>()
+            .checked_mul(3)
+            .ok_or_else(|| resource(Resource::Arithmetic))?,
+    )?)?;
+    let mut successors = context.backing::<Vec<usize>>(count)?;
+    let mut predecessors = context.backing::<Vec<usize>>(count)?;
+    let mut degree = context.backing::<usize>(count)?;
+    context.charge(count)?;
+    degree.resize(count, 0);
+    let mut edges = 0usize;
+    for block in function.blocks() {
+        context.charge(2)?;
+        let mut capacity = 0usize;
+        for_each_projected_loop_successor_v1(function, block.terminator().kind(), |_| {
+            context.charge(2)?;
+            capacity = sum(capacity, 1)?;
+            Ok(())
+        })?;
+        let mut row = context.backing::<usize>(capacity)?;
+        for_each_projected_loop_successor_v1(function, block.terminator().kind(), |target| {
+            context.charge(2)?;
+            if row.len() == row.capacity() {
+                return Err(resource(Resource::Accounting));
+            }
+            row.push(target);
+            Ok(())
+        })?;
+        let logarithm = sum(1, usize::BITS as usize - row.len().leading_zeros() as usize)?;
+        context.charge(
+            row.len()
+                .checked_mul(logarithm)
+                .ok_or_else(|| resource(Resource::Arithmetic))?,
+        )?;
+        row.sort_unstable();
+        row.dedup();
+        edges = sum(edges, row.len())?;
+        if edges > MAX_RANKED_BOUNDS_EDGES {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "semantic CFG exceeds the ranked edge limit before loop analysis",
+            ));
+        }
+        for &target in &row {
+            context.charge(2)?;
+            degree[target] = sum(degree[target], 1)?;
+        }
+        successors.push(row);
+    }
+    for &size in &degree {
+        context.charge(1)?;
+        predecessors.push(context.backing::<usize>(size)?);
+    }
+    for (source, targets) in successors.iter().enumerate() {
+        context.charge(1)?;
+        for &target in targets {
+            context.charge(2)?;
+            if predecessors[target].len() == predecessors[target].capacity() {
+                return Err(resource(Resource::Accounting));
+            }
+            predecessors[target].push(source);
+        }
+    }
+    let entry = function.entry().index() as usize;
+    if entry >= count {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "semantic entry block outside the function during loop analysis",
+        ));
+    }
+    let mut reachable = context.backing::<bool>(count)?;
+    let mut pending = context.backing::<usize>(count)?;
+    context.charge(sum(count, 1)?)?;
+    reachable.resize(count, false);
+    reachable[entry] = true;
+    pending.push(entry);
+    while !pending.is_empty() {
+        context.charge(2)?;
+        let block = pending
+            .pop()
+            .ok_or_else(|| resource(Resource::Accounting))?;
+        for &target in &successors[block] {
+            context.charge(3)?;
+            if !reachable[target] {
+                if pending.len() == pending.capacity() {
+                    return Err(resource(Resource::Accounting));
+                }
+                reachable[target] = true;
+                pending.push(target);
+            }
+        }
+    }
+    // Caller owns this graph inside a paid temporary scope. Degree/pending
+    // backing also stays charged until both have been destroyed here.
     Ok(ProjectedLoopCfgV1 {
         successors,
         predecessors,
@@ -20646,7 +20813,7 @@ fn build_ranked_cfg(
     entry_operations: Vec<ProductionRankedOperationV1>,
     mut projected_blocks: Vec<ProjectedSemanticBlockV1>,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
-    induction_scope: Option<&mut multi_entry_induction_v1::Scope>,
+    mut induction_scope: Option<&mut multi_entry_induction_v1::Scope>,
 ) -> Result<
     (
         Vec<ProductionRankedBlockV1>,
@@ -20689,9 +20856,12 @@ fn build_ranked_cfg(
         *proved = true;
     }
     if has_multi_entry {
-        let scope = induction_scope.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-            "multi-entry ranked emission requires live canonical facts",
-        ))?;
+        let scope =
+            induction_scope
+                .as_deref_mut()
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "multi-entry ranked emission requires live canonical facts",
+                ))?;
         multi_entry_induction_v1::before_emission(
             function,
             uniform_inductions,
@@ -20700,6 +20870,18 @@ fn build_ranked_cfg(
                 facts: assertion_facts,
             },
         )?;
+    }
+    if let Some(scope) = induction_scope {
+        induction_initialization_v1::before_emission(
+            function,
+            uniform_inductions,
+            &mut multi_entry_induction_v1::Context {
+                scope,
+                facts: assertion_facts,
+            },
+        )?;
+    } else {
+        induction_initialization_v1::without_scope(function, uniform_inductions, assertion_facts)?;
     }
     let terminators = (0..function.blocks().len())
         .map(|index| {
@@ -25063,6 +25245,20 @@ mod cold_compile_error_tests;
 
 #[cfg(test)]
 mod tests {
+    pub(super) fn separated_initialization_positive_fixtures_v1()
+    -> (Vec<SemanticTypeDeclV1>, Vec<SemanticFunctionDeclV1>) {
+        (
+            assertion_proof_types(),
+            vec![
+                uniform_induction_function(SemanticLocalRoleV1::Argument(0)),
+                widened_u64_induction_function_with_latch(16, WidenedLatchKind::Checked),
+                optional_uniform_induction_function(true),
+                optional_uniform_induction_function(false),
+                nested_optional_uniform_induction_function(true),
+                nested_optional_uniform_induction_function(false),
+            ],
+        )
+    }
     include!("production_ranked_projection_v1/multi_entry_induction_fixture_v1_tests.rs");
     include!("production_ranked_projection_v1/projection_01_tests.rs");
     include!("production_ranked_projection_v1/checked_output_admission_policy3_v1_fixture.rs");

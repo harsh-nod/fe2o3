@@ -529,3 +529,6 @@ fn nested_loop_has_inner_completion_without_promising_outer_body_acyclicity() {
 
 #[path = "canonical_kir_loop_induction_resources_v1_tests.rs"]
 mod resources_tests;
+
+#[path = "canonical_kir_loop_induction_dead_exit_v1_tests.rs"]
+mod dead_exit;

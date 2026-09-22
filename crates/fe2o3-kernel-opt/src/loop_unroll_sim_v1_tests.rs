@@ -426,3 +426,6 @@ fn bounded_unroll_sim_partial_division_and_uninitialized_read_preserve_every_eve
     }
     assert_eq!(runs, 16);
 }
+
+#[path = "loop_unroll_dead_exit_v1_tests.rs"]
+mod dead_exit;

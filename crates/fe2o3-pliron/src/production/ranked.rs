@@ -6914,3 +6914,12 @@ pub fn compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
     compile_ranked_kernel_for_lowering_v1(construction, limits)
         .map_err(ProductionRankedCompileErrorV2::Pipeline)
 }
+
+#[path = "ranked/ranked_recipe_wire_v1.rs"]
+mod ranked_recipe_wire_v1;
+pub use ranked_recipe_wire_v1::{
+    DecodedRankedRecipeV1, InertRankedRecipeBytesV1, MAX_RANKED_RECIPE_BYTES_V1,
+    RANKED_RECIPE_DOMAIN_V1, RANKED_RECIPE_MAGIC_V1, RankedRecipeRefV1, RankedRecipeStorageV1,
+    RankedRecipeWireErrorV1, encode_ranked_recipe_v1, materialize_ranked_recipe_v1,
+    read_ranked_recipe_v1,
+};

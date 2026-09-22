@@ -135,6 +135,48 @@ fn allowed(k: &OperationKind) -> bool {
     }
 }
 
+// This only changes eligibility. Both branch occurrences remain in every copy.
+fn dead_external_edge(i: &Inventory<'_>, e: Edge, m: &mut Meter<'_, '_>) -> Result<bool> {
+    m.work(12)?;
+    let source = &i.blocks()[block_index(i, e.source)?];
+    let Terminator::ConditionalBranch { condition, .. } = source.terminator else {
+        return Ok(false);
+    };
+    if e.successor > 1 {
+        return Err(Error::Recipe("conditional successor"));
+    }
+    let at = m
+        .derive(|b| Ok(i.definition_index_for_value(e.source.function, *condition, b)?))?
+        .ok_or(Error::Recipe("condition definition"))?;
+    let Definition::Result {
+        operation: site,
+        result: 0,
+    } = i.definitions()[at].coordinate
+    else {
+        return Ok(false);
+    };
+    let block = &i.blocks()[block_index(i, site.block)?];
+    let index = block
+        .operations
+        .start
+        .checked_add(site.operation as usize)
+        .ok_or(Resource::Arithmetic)?;
+    let op = i
+        .operations()
+        .get(index)
+        .filter(|row| index < block.operations.end && row.coordinate == site)
+        .ok_or(Error::Recipe("condition operation"))?
+        .operation;
+    let OperationKind::Constant(fe2o3_kernel_ir::Constant::Bool(value)) = op.kind else {
+        return Ok(false);
+    };
+    if !matches!(op.results.as_slice(), [result] if result.id == *condition && result.ty == Type::BOOL)
+    {
+        return Err(Error::Recipe("Bool condition result"));
+    }
+    Ok(e.successor == u32::from(value))
+}
+
 fn candidate(
     i: &Inventory<'_>,
     f: &Facts<'_, '_, '_>,
@@ -214,7 +256,12 @@ fn candidate(
         m.work(4)?;
         let from = p.members[block_index(i, e.coordinate.source)?];
         let to = p.members[block_index(i, e.target)?];
-        if from && !to && e.coordinate != g.exit_edge() || !from && to && e.coordinate != pre {
+        if (from
+            && !to
+            && e.coordinate != g.exit_edge()
+            && !dead_external_edge(i, e.coordinate, m)?)
+            || (!from && to && e.coordinate != pre)
+        {
             return Ok(false);
         }
     }

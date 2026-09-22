@@ -1058,3 +1058,6 @@ fn expanded_source_sim_checks_memory_sites_order_and_complete_cleanup() {
     // Two profiles * (one Direct + two Erased roots) * four shapes * two inputs * two repeats.
     assert_eq!(pairs, 96);
 }
+
+#[path = "production_expanded_decoded_source_v1_tests.rs"]
+mod decoded_source;

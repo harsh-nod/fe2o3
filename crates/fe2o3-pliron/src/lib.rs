@@ -1990,3 +1990,10 @@ pub use neutral_optimization_v1::{
     optimize_native_neutral_kernel_ir_integer_continuation_v1,
     optimize_native_neutral_kernel_ir_policy3_v1, optimize_native_neutral_kernel_ir_v1,
 };
+
+pub use production::{
+    DecodedRankedRecipeV1, InertRankedRecipeBytesV1, MAX_RANKED_RECIPE_BYTES_V1,
+    RANKED_RECIPE_DOMAIN_V1, RANKED_RECIPE_MAGIC_V1, RankedRecipeRefV1, RankedRecipeStorageV1,
+    RankedRecipeWireErrorV1, encode_ranked_recipe_v1, materialize_ranked_recipe_v1,
+    read_ranked_recipe_v1,
+};

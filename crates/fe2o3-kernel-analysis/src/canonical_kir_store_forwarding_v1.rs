@@ -48,7 +48,15 @@ impl fmt::Display for Error {
         write!(f, "store forwarding: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::MemorySsa(error) => Some(error),
+            Self::ForeignSubject | Self::StaleCandidate | Self::Rule(_) => None,
+        }
+    }
+}
 
 /// Actual row capacity plus the live wrapper header. Borrowed inputs excluded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -101,6 +101,58 @@ fn closed_op(k: &OperationKind) -> bool {
     }
 }
 
+// Check direct Bool custody independently; no optimizer eligibility result is used.
+fn excluded_external_successor(
+    i: &Inventory<'_>,
+    coordinate: Edge,
+    meter: &mut Meter<'_, '_>,
+) -> Result<bool> {
+    meter.work(12)?;
+    let source = &i.blocks()[bi(i, coordinate.source)?];
+    let condition = match source.terminator {
+        Terminator::ConditionalBranch { condition, .. } => *condition,
+        _ => return Ok(false),
+    };
+    let at = meter
+        .derive(|b| Ok(i.definition_index_for_value(coordinate.source.function, condition, b)?))?
+        .ok_or(Error::Mismatch("condition definition"))?;
+    let site = match i.definitions()[at].coordinate {
+        Definition::Result {
+            operation,
+            result: 0,
+        } => operation,
+        _ => return Ok(false),
+    };
+    let defining_block = &i.blocks()[bi(i, site.block)?];
+    let ordinal = defining_block
+        .operations
+        .start
+        .checked_add(site.operation as usize)
+        .ok_or(Resource::Arithmetic)?;
+    let actual = i
+        .operations()
+        .get(ordinal)
+        .filter(|row| ordinal < defining_block.operations.end && row.coordinate == site)
+        .ok_or(Error::Mismatch("condition operation"))?
+        .operation;
+    match &actual.kind {
+        OperationKind::Constant(fe2o3_kernel_ir::Constant::Bool(value)) => {
+            if actual.results.len() != 1
+                || actual.results[0].id != condition
+                || actual.results[0].ty != Type::BOOL
+                || coordinate.successor > 1
+            {
+                return Err(Error::Mismatch("Bool condition result"));
+            }
+            Ok(matches!(
+                (*value, coordinate.successor),
+                (false, 0) | (true, 1)
+            ))
+        }
+        _ => Ok(false),
+    }
+}
+
 // This eligibility scan is deliberately independent of the optimizer selector.
 fn select(
     i: &Inventory<'_>,
@@ -201,7 +253,10 @@ fn select(
             meter.work(4)?;
             let from = members[bi(i, edge.coordinate.source)?];
             let to = members[bi(i, edge.target)?];
-            if (from && !to && edge.coordinate != g.exit_edge())
+            if (from
+                && !to
+                && edge.coordinate != g.exit_edge()
+                && !excluded_external_successor(i, edge.coordinate, meter)?)
                 || (!from && to && edge.coordinate != pre)
             {
                 allowed = false;

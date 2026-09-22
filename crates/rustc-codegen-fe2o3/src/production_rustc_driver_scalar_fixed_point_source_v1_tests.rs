@@ -1,4 +1,4 @@
-//! Ordinary B-to-scalar component gate. No U/native/default-pipeline qualification.
+//! Distinct pre-ranked trap and admitted B-to-scalar source component gates.
 use super::*;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, BinaryOp,
@@ -14,10 +14,15 @@ use std::{
     io::{Read, Write},
     rc::Rc,
 };
+#[path = "production_rustc_driver_scalar_fixed_point_component_v1_tests.rs"]
+mod component;
+#[path = "production_rustc_driver_scalar_fixed_point_assertion_v1_tests.rs"]
+mod component_assertion;
 #[path = "production_rustc_driver_scalar_fixed_point_simulation_v1_tests.rs"]
 mod component_sim;
 #[path = "production_rustc_driver_scalar_fixed_point_target_v1_tests.rs"]
 mod component_target;
+use component::observe;
 use component_sim::{SimRow, scenarios, simulate_matrix};
 
 const REQUEST_ENV: &str = "FE2O3_TEST_SCALAR_SOURCE_REQUEST_V1";
@@ -25,19 +30,24 @@ const ARGS_ENV: &str = "FE2O3_TEST_SCALAR_SOURCE_ARGS_V1";
 const RESULT_ENV: &str = "FE2O3_TEST_SCALAR_SOURCE_RESULT_V1";
 const CHILD_NAME: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::integer_identity_source::scalar_fixed_point_source::scalar_fixed_point_source_child";
 const CFG: &str = "fe2o3_scalar_fixed_point_noop";
+const SAFE_CFG: &str = "fe2o3_scalar_fixed_point_safe";
 const INPUT_CAP: usize = 1024 * 1024;
 const REPORT_CAP: usize = 8 * 1024 * 1024;
 const OBSERVATION_CAP: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum ScalarCase {
-    CheckedOpt0,
+    PreRankedCheckedOpt0,
+    AdmittedCheckedOpt0,
     NormalNoop,
 }
 impl ScalarCase {
     fn roots(self) -> &'static [&'static str] {
         match self {
-            Self::CheckedOpt0 => &["scalar_checked_identity", "scalar_effect_then_overflow"],
+            Self::PreRankedCheckedOpt0 => {
+                &["scalar_checked_identity", "scalar_effect_then_overflow"]
+            }
+            Self::AdmittedCheckedOpt0 => &["scalar_checked_identity"],
             Self::NormalNoop => &["scalar_noop_control"],
         }
     }
@@ -111,7 +121,7 @@ fn subject(owner: &Owner) -> Subject {
         bytes: owner.canonical().canonical_bytes().len(),
     }
 }
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RootRow {
     name: String,
@@ -122,6 +132,14 @@ struct RootRow {
     launch: String,
     before: [usize; 5],
     after: [usize; 5],
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SourceRootRow {
+    name: String,
+    function: [u8; 32],
+    body: [u8; 32],
+    entry: String,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -135,14 +153,26 @@ struct RoundRow {
     changed: bool,
 }
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+enum SourceStage {
+    Bound {
+        original: Subject,
+        erased: Option<[u8; 32]>,
+    },
+    PreRanked {
+        assertion: component_assertion::AssertionRow,
+        required_proof_refused: bool,
+    },
+}
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Observation {
     actual_target: Target,
     semantic: Subject,
-    original: Subject,
-    erased: Option<[u8; 32]>,
-    bound: Subject,
+    stage: SourceStage,
+    input: Subject,
     output: Subject,
+    source_roots: Vec<SourceRootRow>,
     roots: Vec<RootRow>,
     rounds: Vec<RoundRow>,
     execution: [u8; 32],
@@ -197,17 +227,24 @@ fn executed(captured: &[String], case: ScalarCase) -> ResultV1<Vec<String>> {
     require_canonical_overflow_checks_v1(captured).map_err(|e| failure(Phase::Request, e))?;
     require(
         !captured.iter().any(|arg| {
-            arg.contains(CFG) || arg.contains("mir-opt-level") || arg.contains("inline-mir")
+            arg.contains("fe2o3_scalar_fixed_point_")
+                || arg.contains("mir-opt-level")
+                || arg.contains("inline-mir")
         }),
         Phase::Request,
         "preexisting test cfg/MIR override",
     )?;
     let mut args = captured.to_vec();
     args.push(format!("--check-cfg=cfg({CFG})"));
-    args.push(match case {
-        ScalarCase::CheckedOpt0 => "-Zmir-opt-level=0".into(),
-        ScalarCase::NormalNoop => format!("--cfg={CFG}"),
-    });
+    args.push(format!("--check-cfg=cfg({SAFE_CFG})"));
+    match case {
+        ScalarCase::PreRankedCheckedOpt0 => args.push("-Zmir-opt-level=0".into()),
+        ScalarCase::AdmittedCheckedOpt0 => {
+            args.push("-Zmir-opt-level=0".into());
+            args.push(format!("--cfg={SAFE_CFG}"));
+        }
+        ScalarCase::NormalNoop => args.push(format!("--cfg={CFG}")),
+    }
     Ok(args)
 }
 fn option_values<'a>(args: &'a [String], prefix: &str) -> Vec<&'a str> {
@@ -224,7 +261,7 @@ fn option_values<'a>(args: &'a [String], prefix: &str) -> Vec<&'a str> {
 }
 fn check_request(request: &ScalarRequestV1, invocation: &ScalarInvocationV1) -> ResultV1<()> {
     require(
-        request.schema == 1
+        request.schema == 3
             && !request.run_id.is_empty()
             && request.run_id.len() <= 256
             && request.source == stamps()?
@@ -390,7 +427,9 @@ fn check_counts(
     require(
         match case {
             ScalarCase::NormalNoop => before == [0; 5] && after == [0; 5],
-            ScalarCase::CheckedOpt0 if name == case.roots()[0] => {
+            ScalarCase::PreRankedCheckedOpt0 | ScalarCase::AdmittedCheckedOpt0
+                if name == case.roots()[0] =>
+            {
                 before[0] > 0
                     && before[1] > 0
                     && before[3] > 0
@@ -399,7 +438,7 @@ fn check_counts(
                     && after[1] == 0
                     && after[3] > 0
             }
-            ScalarCase::CheckedOpt0 => {
+            ScalarCase::PreRankedCheckedOpt0 => {
                 before[2] == 1
                     && after[2] == 1
                     && before[3] == 2
@@ -407,358 +446,41 @@ fn check_counts(
                     && before[4] > 0
                     && after[4] > 0
             }
+            ScalarCase::AdmittedCheckedOpt0 => false,
         },
         Phase::Bound,
         "nonvacuous source occurrences/control",
     )
 }
-fn roots(stage: &Stage, output: &Owner, case: ScalarCase) -> ResultV1<Vec<RootRow>> {
-    let source = census::roots(stage.semantic()).map_err(|e| failure(Phase::Abi, e))?;
-    for root in stage.semantic().roots() {
-        let entry = stage.semantic().functions()[root.index() as usize]
-            .kernel_entry()
-            .ok_or_else(|| failure(Phase::Abi, "source root entry absent"))?;
-        let launch = entry
-            .source_contract()
-            .launch()
-            .ok_or_else(|| failure(Phase::Abi, "source launch absent"))?;
-        require(
-            launch.required().map(|d| d.as_array()) == Some([64, 1, 1])
-                && launch.maximum().map(|d| d.as_array()) == Some([64, 1, 1]),
-            Phase::Abi,
-            "actual source required/max launch",
-        )?;
-    }
+fn check_root_order(source: &[SourceRootRow], rows: &[RootRow], case: ScalarCase) -> ResultV1<()> {
     require(
-        source
-            .iter()
-            .map(|r| r.name.as_str())
-            .collect::<BTreeSet<_>>()
-            == case.roots().iter().copied().collect(),
+        source.len() == case.roots().len()
+            && source
+                .iter()
+                .map(|r| r.name.as_str())
+                .collect::<BTreeSet<_>>()
+                == case.roots().iter().copied().collect()
+            && source.len() == rows.len()
+            && source.iter().zip(rows).all(|(source, row)| {
+                row.name == source.name
+                    && row.source_function == source.function
+                    && row.source_body == source.body
+                    && row.entry == source.entry
+                    && row.source_function != [0; 32]
+                    && row.source_body != [0; 32]
+                    && !row.entry.is_empty()
+                    && !row.abi.is_empty()
+                    && !row.launch.is_empty()
+            }),
         Phase::Abi,
-        "actual selected source roster",
-    )?;
-    let modules = component_target::checked_modules(stage, output, case.roots().len())?;
-    let mut rows = Vec::new();
-    for kernel in &modules[0].kernels {
-        let root = source
-            .iter()
-            .find(|r| r.name == kernel.id.as_str())
-            .ok_or_else(|| failure(Phase::Abi, "foreign root"))?;
-        let entries = modules
-            .iter()
-            .map(|m| {
-                m.function(&kernel.entry)
-                    .ok_or_else(|| failure(Phase::Abi, "entry missing"))
-            })
-            .collect::<ResultV1<Vec<_>>>()?;
-        require(
-            entries.iter().all(|f| {
-                f.role == FunctionRole::KernelEntry
-                    && f.body.is_some()
-                    && f.signature == entries[0].signature
-            }) && entries[0].signature.results.is_empty()
-                && kernel.workgroup_size == Some(WorkgroupSize::new(64, 1, 1))
-                && matches!(
-                    kernel.domain,
-                    LaunchDomain::D1 {
-                        x: LaunchExtent::Dynamic
-                    }
-                ),
-            Phase::Abi,
-            "physical ABI/launch changed",
-        )?;
-        let params = &entries[0].signature.parameters;
-        if case == ScalarCase::NormalNoop {
-            require(params.is_empty(), Phase::Abi, "noop ABI")?;
-        } else {
-            require(
-                params.len() == if root.name == case.roots()[0] { 3 } else { 2 },
-                Phase::Abi,
-                "positive ABI arity",
-            )?;
-            require(
-                matches!(&params[0], Type::Slice(s) if s.address_space == AddressSpace::Global
-                && s.access == AccessMode::ReadWrite && *s.element == Type::Scalar(ScalarType::U32))
-                    && params[1..]
-                        .iter()
-                        .all(|p| *p == Type::Scalar(ScalarType::U32)),
-                Phase::Abi,
-                "exact output/U32 source ABI",
-            )?;
-        }
-        let before = counts(entries[1])?;
-        let after = counts(entries[2])?;
-        check_counts(case, &root.name, before, after)?;
-        match case {
-            ScalarCase::NormalNoop => require(
-                operations(entries[1]).all(|op| {
-                    !matches!(
-                        op.kind,
-                        Kind::Binary { .. } | Kind::Load { .. } | Kind::Call { .. }
-                    )
-                }),
-                Phase::Bound,
-                "normal source is not a genuine no-op",
-            )?,
-            ScalarCase::CheckedOpt0 if root.name == case.roots()[0] => {
-                require(
-                    entries[1]
-                        .body
-                        .as_ref()
-                        .unwrap()
-                        .blocks
-                        .iter()
-                        .filter(|b| {
-                            matches!(
-                                b.terminator,
-                                Some(
-                                    Terminator::ConditionalBranch { .. }
-                                        | Terminator::IntegerSwitch { .. }
-                                )
-                            )
-                        })
-                        .count()
-                        >= 2,
-                    Phase::Bound,
-                    "bounds/choose control missing",
-                )?;
-            }
-            ScalarCase::CheckedOpt0 => {
-                for entry in &entries[1..] {
-                    require(
-                        operations(entry).any(|op| {
-                            matches!(&op.kind,
-                        Kind::Binary { op: BinaryOp::Checked(Checked::Add), lhs, rhs }
-                        if literal(entry, *rhs) == Some(1) && literal(entry, *lhs).is_none())
-                        }),
-                        Phase::Bound,
-                        "nonneutral actual Add(+1) missing",
-                    )?;
-                }
-            }
-        }
-        rows.push(RootRow {
-            name: root.name.clone(),
-            source_function: root.function,
-            source_body: root.body,
-            entry: kernel.entry.as_str().into(),
-            abi: format!("{:?}", entries[0].signature),
-            launch: format!("{kernel:?}"),
-            before,
-            after,
-        });
-    }
-    Ok(rows)
-}
-fn context_stamp(stage: &Stage) -> Vec<[u8; 32]> {
-    let checked = stage.checked_output();
-    vec![
-        digest(stage.semantic().canonical_encoding()),
-        digest(stage.original_canonical_bytes()),
-        stage.erased_digest().copied().unwrap_or([0; 32]),
-        digest(stage.test_bound_owner_v1().canonical().canonical_bytes()),
-        digest(checked.native_input_audit_bytes()),
-        digest(stage.output().canonical().canonical_bytes()),
-        digest(checked.execution().canonical_bytes()),
-        digest(checked.intermediate_policy5().execution().canonical_bytes()),
-        digest(checked.continuation().execution().canonical_bytes()),
-    ]
-}
-
-fn paid<T>(
-    owner: fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1,
-    budget: &mut Budget<'_>,
-    body: impl FnOnce(&fe2o3_kernel_opt::CheckedScalarFixedPointOwnerV1, &mut Budget<'_>) -> ResultV1<T>,
-) -> ResultV1<T> {
-    let receipt = owner.retained_storage();
-    budget
-        .reserve_storage(receipt)
-        .map_err(|e| failure(Phase::Scalar, e))?;
-    let result = body(&owner, budget);
-    drop(owner);
-    budget
-        .release_storage(receipt)
-        .map_err(|e| failure(Phase::Scalar, e))?;
-    result
-}
-fn observe(tcx: TyCtxt<'_>, request: &ScalarRequestV1) -> ResultV1<Observation> {
-    let cpu = tcx
-        .sess
-        .opts
-        .cg
-        .target_cpu
-        .as_deref()
-        .unwrap_or(tcx.sess.target.cpu.as_ref());
-    require(
-        cpu == request.target.cpu(),
-        Phase::Rustc,
-        "actual session target changed",
-    )?;
-    let transaction = transaction_in_active_session_v1(
-        tcx,
-        crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+        "exact ordered source/report root identities",
     )
-    .map_err(|e| failure(Phase::Collect, e))?;
-    let ranked = transaction
-        .verify_general_kernel_checks()
-        .map_err(|e| failure(Phase::Ranked, format!("{e:?}")))?;
-    require(
-        ranked.all_kernel_checks_are_clean() && !ranked.grants_artifact_or_launch_authority(),
-        Phase::Ranked,
-        "source checks/authority",
-    )?;
-    let stage = ranked
-        .lower_fixed_checked_output_policy6_v1()
-        .map_err(|e| failure(Phase::Bound, format!("{e:?}")))?;
-    let stamp = context_stamp(&stage);
-    let floor = stage.retained_storage_floor_v1();
-    let mut work = Work::new(crate::production_canonical_phase_policy_v1::WORK_LIMIT as usize);
-    let mut budget = Budget::new(
-        &mut work,
-        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
-    );
-    budget
-        .reserve_storage(floor)
-        .map_err(|e| failure(Phase::Scalar, e))?;
-    let result = (|| {
-        let input = stage.test_bound_owner_v1();
-        let scalar = prepare(input, &mut budget).map_err(|e| failure(Phase::Scalar, e))?;
-        require(
-            budget.storage() == floor,
-            Phase::Scalar,
-            "factory failed to restore prepaid context floor",
-        )?;
-        paid(scalar, &mut budget, |scalar, budget| {
-            let start = budget.work();
-            scalar
-                .replay_against(input, budget)
-                .map_err(|e| failure(Phase::Replay, e))?;
-            let replay_work = budget.work() - start;
-            let mut previous = input;
-            let mut rounds = Vec::new();
-            for (ordinal, round) in scalar.rounds().iter().enumerate() {
-                require(
-                    round.ordinal() as usize == ordinal,
-                    Phase::Replay,
-                    "round ordinal",
-                )?;
-                rounds.push(RoundRow {
-                    ordinal: round.ordinal(),
-                    input: subject(previous),
-                    integer: subject(round.integer().owner()),
-                    output: subject(round.output()),
-                    integer_execution: digest(round.integer().execution().canonical_bytes()),
-                    scalar_execution: digest(round.scalar().execution().canonical_bytes()),
-                    changed: previous.canonical().canonical_bytes()
-                        != round.output().canonical().canonical_bytes(),
-                });
-                previous = round.output();
-            }
-            require(
-                !rounds.is_empty()
-                    && !rounds.last().unwrap().changed
-                    && rounds[..rounds.len() - 1].iter().all(|r| r.changed)
-                    && !scalar.grants_authority()
-                    && !scalar.authenticates_compiler_origin()
-                    && !scalar.execution().grants_authority(),
-                Phase::Replay,
-                "complete terminal round/no authority",
-            )?;
-            require(
-                match request.case {
-                    ScalarCase::CheckedOpt0 => {
-                        input.canonical().canonical_bytes()
-                            != scalar.output().canonical().canonical_bytes()
-                            && rounds.iter().any(|r| r.changed)
-                    }
-                    ScalarCase::NormalNoop => {
-                        input.canonical().canonical_bytes()
-                            == scalar.output().canonical().canonical_bytes()
-                            && rounds.len() == 1
-                    }
-                },
-                Phase::Scalar,
-                "source positive/no-op contract",
-            )?;
-            component_target::binding(
-                stage.test_prebind_owner_v1(),
-                input,
-                request.target,
-                budget,
-            )?;
-            let rows = roots(&stage, scalar.output(), request.case)?;
-            let second_floor = budget.storage();
-            let second = prepare(scalar.output(), budget).map_err(|e| failure(Phase::Scalar, e))?;
-            require(
-                budget.storage() == second_floor,
-                Phase::Scalar,
-                "second factory floor",
-            )?;
-            let idempotent_storage = second.retained_storage();
-            paid(second, budget, |second, budget| {
-                second
-                    .replay_against(scalar.output(), budget)
-                    .map_err(|e| failure(Phase::Replay, e))?;
-                require(
-                    second.rounds().len() == 1
-                        && second.output().canonical().canonical_bytes()
-                            == scalar.output().canonical().canonical_bytes(),
-                    Phase::Scalar,
-                    "independent second full schedule not fixed",
-                )
-            })?;
-            let simulations = simulate_matrix(input, scalar.output(), request.case)?;
-            require(
-                stamp == context_stamp(&stage),
-                Phase::Replay,
-                "retained source/N/E/B/Policy6 context mutated",
-            )?;
-            Ok(Observation {
-                actual_target: request.target,
-                semantic: Subject {
-                    digest: *stage.semantic().semantic_sha256().as_bytes(),
-                    bytes: stage.semantic().canonical_encoding().len(),
-                },
-                original: subject(stage.test_original_owner_v1()),
-                erased: stage.erased_digest().copied(),
-                bound: subject(input),
-                output: subject(scalar.output()),
-                roots: rows,
-                terminal_round: rounds.len() - 1,
-                rounds,
-                execution: digest(scalar.execution().canonical_bytes()),
-                replay_work,
-                retained_floor: floor,
-                history_storage: scalar.retained_storage(),
-                idempotent_storage,
-                peak_storage: budget.peak_storage(),
-                component_work: budget.work(),
-                final_storage: usize::MAX,
-                simulations,
-            })
-        })
-    })();
-    require(
-        budget.storage() == floor,
-        Phase::Scalar,
-        "component cleanup did not restore stage floor",
-    )?;
-    drop(stage);
-    budget
-        .release_storage(floor)
-        .map_err(|e| failure(Phase::Scalar, e))?;
-    result.map(|mut result| {
-        result.final_storage = budget.storage();
-        result
-    })
 }
-
 fn validate(request: &ScalarRequestV1, row: &Observation) -> ResultV1<()> {
     require(
         row.actual_target == request.target
             && row.semantic.digest != [0; 32]
-            && [&row.semantic, &row.original, &row.bound, &row.output]
+            && [&row.semantic, &row.input, &row.output]
                 .iter()
                 .all(|s| s.bytes > 0 && s.digest != [0; 32])
             && row.execution != [0; 32]
@@ -777,23 +499,27 @@ fn validate(request: &ScalarRequestV1, row: &Observation) -> ResultV1<()> {
         "observation identities/paid resources",
     )?;
     require(
-        row.roots.len() == request.case.roots().len()
-            && row
-                .roots
-                .iter()
-                .map(|r| r.name.as_str())
-                .collect::<BTreeSet<_>>()
-                == request.case.roots().iter().copied().collect()
-            && row.roots.iter().all(|r| {
-                r.source_function != [0; 32]
-                    && r.source_body != [0; 32]
-                    && !r.entry.is_empty()
-                    && !r.abi.is_empty()
-                    && !r.launch.is_empty()
-            }),
-        Phase::Abi,
-        "observation actual source/ABI roster",
+        match (&row.stage, request.case) {
+            (
+                SourceStage::PreRanked {
+                    assertion,
+                    required_proof_refused: true,
+                },
+                ScalarCase::PreRankedCheckedOpt0,
+            ) => assertion.valid() && assertion.input == row.input,
+            (
+                SourceStage::Bound { original, .. },
+                ScalarCase::AdmittedCheckedOpt0 | ScalarCase::NormalNoop,
+            ) => original.bytes > 0 && original.digest != [0; 32],
+            _ => false,
+        },
+        Phase::Ranked,
+        "exact stage tag/source assertion/required-proof outcome",
     )?;
+    if let SourceStage::PreRanked { assertion, .. } = &row.stage {
+        assertion.check_file(&request.source[3])?;
+    }
+    check_root_order(&row.source_roots, &row.roots, request.case)?;
     require(
         !row.rounds.is_empty()
             && row.rounds.len() <= fe2o3_kernel_opt::SCALAR_FIXED_POINT_MAX_ROUNDS_V1
@@ -801,7 +527,7 @@ fn validate(request: &ScalarRequestV1, row: &Observation) -> ResultV1<()> {
         Phase::Replay,
         "observation terminal extent",
     )?;
-    let mut input = &row.bound;
+    let mut input = &row.input;
     for (ordinal, round) in row.rounds.iter().enumerate() {
         require(
             round.ordinal as usize == ordinal
@@ -822,8 +548,10 @@ fn validate(request: &ScalarRequestV1, row: &Observation) -> ResultV1<()> {
     require(
         input == &row.output
             && match request.case {
-                ScalarCase::CheckedOpt0 => row.bound != row.output && row.rounds.len() >= 2,
-                ScalarCase::NormalNoop => row.bound == row.output && row.rounds.len() == 1,
+                ScalarCase::PreRankedCheckedOpt0 | ScalarCase::AdmittedCheckedOpt0 => {
+                    row.input != row.output && row.rounds.len() >= 2
+                }
+                ScalarCase::NormalNoop => row.input == row.output && row.rounds.len() == 1,
             },
         Phase::Scalar,
         "vacuous positive/changing no-op/wrong final subject",
@@ -838,6 +566,9 @@ fn validate(request: &ScalarRequestV1, row: &Observation) -> ResultV1<()> {
     )?;
     for (actual, expected) in row.simulations.iter().zip(scenarios(request.case)) {
         component_sim::validate_row(actual, &expected)?;
+        if let SourceStage::PreRanked { assertion, .. } = &row.stage {
+            component_sim::validate_assertion_row(actual, assertion, &row.input, &row.output)?;
+        }
     }
     Ok(())
 }
@@ -968,7 +699,7 @@ fn qualify(case: ScalarCase) {
             captured_args: captured.args,
         };
         let request = ScalarRequestV1 {
-            schema: 1,
+            schema: 3,
             run_id: format!("{}-{case:?}-{}", directory.display(), std::process::id()),
             case,
             target,
@@ -1024,7 +755,7 @@ fn qualify(case: ScalarCase) {
             });
         assert_eq!(request.source, stamps().unwrap());
         println!(
-            "SCALAR_B_COMPONENT {} {case:?} callbacks=1 roots={} scenarios={} sim_executions={}",
+            "SCALAR_SOURCE_COMPONENT {} {case:?} callbacks=1 roots={} scenarios={} sim_executions={}",
             target.cpu(),
             observed.roots.len(),
             observed.simulations.len(),
@@ -1033,9 +764,14 @@ fn qualify(case: ScalarCase) {
     }
 }
 #[test]
-#[ignore = "actual Cargo/rustc B-to-scalar component qualification on both profiles"]
-fn ordinary_rust_scalar_fixed_point_b_component_checked_opt0_both_profiles() {
-    qualify(ScalarCase::CheckedOpt0);
+#[ignore = "actual pre-ranked trap SIM then same-stage required-proof refusal"]
+fn ordinary_rust_scalar_pre_ranked_trap_and_required_proof_refusal_both_profiles() {
+    qualify(ScalarCase::PreRankedCheckedOpt0);
+}
+#[test]
+#[ignore = "actual safely admitted opt0 B-to-scalar source on both profiles"]
+fn ordinary_rust_scalar_fixed_point_b_component_admitted_opt0_both_profiles() {
+    qualify(ScalarCase::AdmittedCheckedOpt0);
 }
 #[test]
 #[ignore = "actual normal-MIR source B-to-scalar no-op qualification on both profiles"]
@@ -1056,7 +792,7 @@ fn protocol_sample() -> (ScalarRequestV1, ScalarInvocationV1, Observation) {
         captured_args,
     };
     let request = ScalarRequestV1 {
-        schema: 1,
+        schema: 3,
         run_id: "synthetic-protocol-negative-test-only".into(),
         case: ScalarCase::NormalNoop,
         target: Target::Gfx942,
@@ -1071,8 +807,11 @@ fn protocol_sample() -> (ScalarRequestV1, ScalarInvocationV1, Observation) {
     };
     // A diagnostic wire sample, not a manufactured compiler owner or source proof.
     let observation = serde_json::from_value(serde_json::json!({
-        "actual_target": request.target, "semantic": subject, "original": subject,
-        "erased": null, "bound": subject, "output": subject,
+        "actual_target": request.target, "semantic": subject,
+        "stage": {"kind":"Bound", "original": subject, "erased": null},
+        "input": subject, "output": subject,
+        "source_roots": [{ "name": request.case.roots()[0], "function": ([1_u8; 32]),
+            "body": ([2_u8; 32]), "entry": "synthetic" }],
         "roots": [{ "name": request.case.roots()[0], "source_function": ([1_u8; 32]),
             "source_body": ([2_u8; 32]), "entry": "synthetic", "abi": "()",
             "launch": "synthetic", "before": ([0; 5]), "after": ([0; 5]) }],
@@ -1087,21 +826,38 @@ fn protocol_sample() -> (ScalarRequestV1, ScalarInvocationV1, Observation) {
 }
 #[test]
 fn scalar_source_matrix_is_exact_two_profiles_positive_and_noop() {
-    assert_eq!(scenarios(ScalarCase::CheckedOpt0).len(), 60);
+    assert_eq!(scenarios(ScalarCase::PreRankedCheckedOpt0).len(), 60);
+    assert_eq!(scenarios(ScalarCase::AdmittedCheckedOpt0).len(), 40);
     assert_eq!(scenarios(ScalarCase::NormalNoop).len(), 1);
     assert_eq!((60 + 1) * 2 * 4, 488);
-    for case in [ScalarCase::CheckedOpt0, ScalarCase::NormalNoop] {
+    assert_eq!((60 + 40 + 1) * 2 * 4, 808);
+    for case in [
+        ScalarCase::PreRankedCheckedOpt0,
+        ScalarCase::AdmittedCheckedOpt0,
+        ScalarCase::NormalNoop,
+    ] {
         let args = executed(&["rustc".into(), "-Coverflow-checks=on".into()], case).unwrap();
-        assert_eq!(args.len(), 4);
-        assert_eq!(args[2], format!("--check-cfg=cfg({CFG})"));
         assert_eq!(
-            args[3],
-            if case == ScalarCase::CheckedOpt0 {
-                "-Zmir-opt-level=0".into()
+            args.len(),
+            if case == ScalarCase::AdmittedCheckedOpt0 {
+                6
             } else {
-                format!("--cfg={CFG}")
+                5
             }
         );
+        assert_eq!(args[2], format!("--check-cfg=cfg({CFG})"));
+        assert_eq!(args[3], format!("--check-cfg=cfg({SAFE_CFG})"));
+        assert_eq!(
+            args[4],
+            if case == ScalarCase::NormalNoop {
+                format!("--cfg={CFG}")
+            } else {
+                "-Zmir-opt-level=0".into()
+            }
+        );
+        if case == ScalarCase::AdmittedCheckedOpt0 {
+            assert_eq!(args[5], format!("--cfg={SAFE_CFG}"));
+        }
     }
 }
 #[test]
@@ -1122,6 +878,8 @@ fn scalar_source_request_rejects_changed_duplicate_foreign_source_argv_and_cfg()
     }
     for flag in [
         format!("--cfg={CFG}"),
+        format!("--cfg={SAFE_CFG}"),
+        "--cfg=fe2o3_scalar_fixed_point_unknown".into(),
         "-Zmir-opt-level=2".into(),
         "-Zinline-mir=no".into(),
     ] {
@@ -1184,7 +942,7 @@ fn scalar_source_observation_rejects_vacuous_positive_wrong_subject_and_changing
     for mutation in 0..8 {
         let (mut request, _, mut row) = protocol_sample();
         match mutation {
-            0 => request.case = ScalarCase::CheckedOpt0,
+            0 => request.case = ScalarCase::PreRankedCheckedOpt0,
             1 => row.output.digest[0] ^= 1,
             2 => row.rounds[0].changed = true,
             3 => row.rounds[0].input.digest[0] ^= 1,
@@ -1194,5 +952,76 @@ fn scalar_source_observation_rejects_vacuous_positive_wrong_subject_and_changing
             _ => row.peak_storage = 5,
         }
         assert!(validate(&request, &row).is_err());
+    }
+}
+
+#[test]
+fn scalar_source_protocol_keeps_pre_ranked_refusal_distinct_from_bound_success() {
+    let (mut request, invocation, row) = protocol_sample();
+    for schema in [1, 2] {
+        request.schema = schema;
+        assert!(check_request(&request, &invocation).is_err());
+    }
+    request.schema = 3;
+    request.case = ScalarCase::PreRankedCheckedOpt0;
+    let error = validate(&request, &row).unwrap_err();
+    assert!(matches!(error.phase, Phase::Ranked));
+    assert_eq!(
+        error.detail,
+        "exact stage tag/source assertion/required-proof outcome"
+    );
+    let mut value = serde_json::to_value(&row).unwrap();
+    value["stage"]["kind"] = "PreRanked".into();
+    assert!(serde_json::from_value::<Observation>(value.clone()).is_err());
+    value["stage"]["kind"] = "Bound".into();
+    value["stage"]["required_proof_refused"] = true.into();
+    assert!(serde_json::from_value::<Observation>(value).is_err());
+}
+
+#[test]
+fn scalar_source_root_order_is_positional_not_declaration_or_set_order() {
+    let (_, _, row) = protocol_sample();
+    let case = ScalarCase::PreRankedCheckedOpt0;
+    let source = case
+        .roots()
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(i, name)| SourceRootRow {
+            name: (*name).into(),
+            function: [i as u8 + 1; 32],
+            body: [i as u8 + 3; 32],
+            entry: format!("entry_{i}"),
+        })
+        .collect::<Vec<_>>();
+    let rows = source
+        .iter()
+        .map(|source| RootRow {
+            name: source.name.clone(),
+            source_function: source.function,
+            source_body: source.body,
+            entry: source.entry.clone(),
+            ..row.roots[0].clone()
+        })
+        .collect::<Vec<_>>();
+    check_root_order(&source, &rows, case).unwrap();
+    let mut extra = serde_json::to_value(&source[0]).unwrap();
+    extra["extra"] = true.into();
+    assert!(serde_json::from_value::<SourceRootRow>(extra).is_err());
+    for mutation in 0..8 {
+        let mut changed = rows.clone();
+        match mutation {
+            0 => changed.swap(0, 1),
+            1 => {
+                changed.pop();
+            }
+            2 => changed[1] = changed[0].clone(),
+            3 => changed.push(changed[0].clone()),
+            4 => changed[0].source_function[0] ^= 1,
+            5 => changed[0].source_body[0] ^= 1,
+            6 => changed[0].name = "foreign".into(),
+            _ => changed[0].entry = "foreign".into(),
+        }
+        assert!(check_root_order(&source, &changed, case).is_err());
     }
 }

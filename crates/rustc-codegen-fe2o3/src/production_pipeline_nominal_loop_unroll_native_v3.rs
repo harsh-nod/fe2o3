@@ -27,12 +27,16 @@ impl NominalLoopUnrollNativeStorageV3 {
 /// The sole actual U owner retains original nominal Rust source, target, ranked
 /// and transaction custody. F claims remain F; the separate U descriptor binds
 /// final U bytes and its freshly checked geometry. Nothing is a V1 wire token.
-pub(crate) struct NominalLoopUnrollNativeProductionCompilationV3 {
+struct NominalFinalNativeCustodyV3 {
     native: PreparedLoopUnrollNativeOutputV1,
     history: PreparedRefinedForwardingHistoryClaimsV1,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
+}
+
+pub(crate) struct NominalLoopUnrollNativeProductionCompilationV3 {
+    custody: NominalFinalNativeCustodyV3,
     wire: Vec<u8>,
     retained_floor: usize,
 }
@@ -87,10 +91,12 @@ impl RankedVerifiedProductionCompilation {
             // active owner. Encoding's scratch reservation has been retired.
             budget.reserve_storage(wire.capacity())?;
             let value = NominalLoopUnrollNativeProductionCompilationV3 {
-                native,
-                history,
-                ranked_verification,
-                bindings,
+                custody: NominalFinalNativeCustodyV3 {
+                    native,
+                    history,
+                    ranked_verification,
+                    bindings,
+                },
                 wire,
                 retained_floor: budget.storage(),
             };
@@ -106,6 +112,21 @@ impl RankedVerifiedProductionCompilation {
 }
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    /// The single actual nominal source import used by native continuations.
+    /// Original transaction, source roster and protected bindings move through.
+    pub(super) fn prepare_nominal_ranked_v3(self) -> R<RankedVerifiedProductionCompilation> {
+        self.import_semantic_mir_with_nominal_v35(true)
+            .map_err(E::Pipeline)?
+            .construct_semantic_middle_end()
+            .map_err(E::Pipeline)?
+            .construct_semantic_ssa()
+            .map_err(E::Pipeline)?
+            .materialize_target_neutral()
+            .map_err(|e| E::Pipeline(*e))?
+            .verify_general_kernel_checks()
+            .map_err(E::Pipeline)
+    }
+
     /// Actual nominal rustc import and general SSA/ranked checks, then consume
     /// those owners directly. No reconstruction from a source-only ABI receipt.
     pub(crate) fn prepare_nominal_loop_unroll_native_v3(
@@ -120,16 +141,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     )> {
         nominal_scope(budget, move |budget| {
             budget.charge_work(3)?;
-            self.import_semantic_mir_with_nominal_v35(true)
-                .map_err(E::Pipeline)?
-                .construct_semantic_middle_end()
-                .map_err(E::Pipeline)?
-                .construct_semantic_ssa()
-                .map_err(E::Pipeline)?
-                .materialize_target_neutral()
-                .map_err(|e| E::Pipeline(*e))?
-                .verify_general_kernel_checks()
-                .map_err(E::Pipeline)?
+            self.prepare_nominal_ranked_v3()?
                 .lower_nominal_bounded_loop_unroll_native_with_budget_v3(
                     refinement, forwarding, unroll, budget,
                 )
@@ -139,16 +151,16 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
 
 impl NominalLoopUnrollNativeProductionCompilationV3 {
     pub(crate) fn output(&self) -> &Graph {
-        self.native.output()
+        self.custody.native.output()
     }
     pub(crate) fn forwarding_output(&self) -> &Graph {
-        self.native.forwarding_output()
+        self.custody.native.forwarding_output()
     }
     pub(crate) fn original(&self) -> R<&Graph> {
-        self.native.original().map_err(E::Pipeline)
+        self.custody.native.original().map_err(E::Pipeline)
     }
     pub(crate) fn llvm_ir(&self) -> &str {
-        self.native.llvm_ir()
+        self.custody.native.llvm_ir()
     }
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
         &self.wire
@@ -174,7 +186,77 @@ impl NominalLoopUnrollNativeProductionCompilationV3 {
         budget: &mut Budget<'_>,
         use_table: impl for<'a, 'w> FnOnce(&'a DeviceDescriptorTableV3<'w>, &mut Budget<'_>) -> R<T>,
     ) -> R<T> {
-        if budget.storage() < self.retained_floor {
+        self.custody
+            .with_checked_table(&self.wire, self.retained_floor, budget, use_table)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_test_wire_capacity_v3(&self) -> usize {
+        self.wire.capacity()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_test_selection_v3(&self) -> (bool, Option<u8>) {
+        match &self.custody.native.owner {
+            Unrolled::Direct(v) => (
+                false,
+                v.continuation().origins().selection.map(|v| v.iterations),
+            ),
+            Unrolled::Erased(v) => (
+                true,
+                v.continuation().origins().selection.map(|v| v.iterations),
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_test_mutations_v3(&mut self, budget: &mut Budget<'_>) -> R<()> {
+        let floor = budget.storage();
+        let last = self
+            .wire
+            .len()
+            .checked_sub(1)
+            .ok_or(E::Mismatch("nonempty V3 wire"))?;
+        self.wire[last] ^= 1;
+        let wire_result = self.verify_equivalence(budget);
+        self.wire[last] ^= 1;
+        if !matches!(wire_result, Err(E::Mismatch("actual U-derived V3 bytes"))) {
+            return Err(E::Mismatch("mutated actual U wire refusal"));
+        }
+        let original = self.custody.native.llvm.as_bytes()[0];
+        // One same-size ASCII byte mutation preserves backing and pays no new
+        // capacity. No unsafe String access or duplicate native owner is used.
+        self.custody.native.llvm.replace_range(..1, "!");
+        let llvm_result = self.verify_equivalence(budget);
+        let restored = [original];
+        self.custody
+            .native
+            .llvm
+            .replace_range(..1, std::str::from_utf8(&restored).unwrap());
+        if !matches!(llvm_result, Err(E::Pipeline(_))) {
+            return Err(E::Mismatch("mutated actual U LLVM refusal"));
+        }
+        if budget.storage() != floor {
+            return Err(Resource::Accounting.into());
+        }
+        self.verify_equivalence(budget)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_wrapper_header_v3() -> usize {
+    wrapper_header().unwrap()
+}
+
+impl NominalFinalNativeCustodyV3 {
+    fn with_checked_table<T>(
+        &self,
+        wire: &[u8],
+        retained_floor: usize,
+        budget: &mut Budget<'_>,
+        use_table: impl for<'a, 'w> FnOnce(&'a DeviceDescriptorTableV3<'w>, &mut Budget<'_>) -> R<T>,
+    ) -> R<T> {
+        if budget.storage() < retained_floor {
             return Err(Resource::Accounting.into());
         }
         nominal_scope(budget, |budget| {
@@ -187,7 +269,8 @@ impl NominalLoopUnrollNativeProductionCompilationV3 {
                 return Err(E::Pipeline(ProductionPipelineError::RustcLineageMismatch));
             }
             if self.native.profile != self.bindings.rustc_target.profile()
-                || self.ranked_verification.root_count() != self.output().module().kernels.len()
+                || self.ranked_verification.root_count()
+                    != self.native.output().module().kernels.len()
                 || !self
                     .ranked_verification
                     .every_functional_verification_is_coherent()
@@ -218,73 +301,44 @@ impl NominalLoopUnrollNativeProductionCompilationV3 {
             budget.charge_work(
                 reproduced
                     .len()
-                    .checked_add(self.wire.len())
+                    .checked_add(wire.len())
                     .ok_or(Resource::Arithmetic)?,
             )?;
-            if reproduced != self.wire {
+            if reproduced.as_slice() != wire {
                 return Err(E::Mismatch("actual U-derived V3 bytes"));
             }
             drop(reproduced);
             budget.release_storage(reproduced_storage)?;
-            let result = descriptor::check_table(
-                self.native.owner.descriptor(),
-                &self.wire,
-                budget,
-                use_table,
-            )?;
+            let result =
+                descriptor::check_table(self.native.owner.descriptor(), wire, budget, use_table)?;
             budget.charge_work(1)?;
             Ok(result)
         })
     }
-
-    #[cfg(test)]
-    pub(crate) fn source_test_selection_v3(&self) -> (bool, Option<u8>) {
-        match &self.native.owner {
-            Unrolled::Direct(v) => (
-                false,
-                v.continuation().origins().selection.map(|v| v.iterations),
-            ),
-            Unrolled::Erased(v) => (
-                true,
-                v.continuation().origins().selection.map(|v| v.iterations),
-            ),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn source_test_mutations_v3(&mut self, budget: &mut Budget<'_>) -> R<()> {
-        let floor = budget.storage();
-        let last = self
-            .wire
-            .len()
-            .checked_sub(1)
-            .ok_or(E::Mismatch("nonempty V3 wire"))?;
-        self.wire[last] ^= 1;
-        let wire_result = self.verify_equivalence(budget);
-        self.wire[last] ^= 1;
-        if !matches!(wire_result, Err(E::Mismatch("actual U-derived V3 bytes"))) {
-            return Err(E::Mismatch("mutated actual U wire refusal"));
-        }
-        let original = self.native.llvm.as_bytes()[0];
-        // One same-size ASCII byte mutation preserves backing and pays no new
-        // capacity. No unsafe String access or duplicate native owner is used.
-        self.native.llvm.replace_range(..1, "!");
-        let llvm_result = self.verify_equivalence(budget);
-        let restored = [original];
-        self.native
-            .llvm
-            .replace_range(..1, std::str::from_utf8(&restored).unwrap());
-        if !matches!(llvm_result, Err(E::Pipeline(_))) {
-            return Err(E::Mismatch("mutated actual U LLVM refusal"));
-        }
-        if budget.storage() != floor {
-            return Err(Resource::Accounting.into());
-        }
-        self.verify_equivalence(budget)
-    }
 }
 
+#[path = "production_nominal_native_transport_v3.rs"]
+pub(crate) mod descriptor_transport;
+
 #[cfg(test)]
-pub(crate) fn test_wrapper_header_v3() -> usize {
-    wrapper_header().unwrap()
+pub(crate) fn test_custody_layout_matches_original_v3() {
+    // Layout-only historical shape. No value or evidence constructor exists.
+    #[allow(dead_code)]
+    struct OriginalFlatOwner {
+        native: PreparedLoopUnrollNativeOutputV1,
+        history: PreparedRefinedForwardingHistoryClaimsV1,
+        ranked_verification:
+            crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
+        bindings: AuthenticatedProductionBindings,
+        wire: Vec<u8>,
+        retained_floor: usize,
+    }
+    assert_eq!(
+        size_of::<OriginalFlatOwner>(),
+        size_of::<NominalLoopUnrollNativeProductionCompilationV3>()
+    );
+    assert_eq!(
+        std::mem::align_of::<OriginalFlatOwner>(),
+        std::mem::align_of::<NominalLoopUnrollNativeProductionCompilationV3>()
+    );
 }

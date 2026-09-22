@@ -1,4 +1,6 @@
 //! Constructed Direct/Erased components; only the rustc child claims source capture.
+#[path = "production_nominal_native_transport_v3_tests.rs"]
+mod transport_tests;
 use super::super::nominal_v3 as native;
 use super::*;
 use crate::compiler_descriptor::checked_output_policy3_v1::refined_forwarding_v1::{

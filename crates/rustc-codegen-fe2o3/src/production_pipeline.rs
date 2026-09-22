@@ -3615,6 +3615,9 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
 #[path = "production_context_handoff_v29.rs"]
 mod context_handoff_v29;
 #[cfg(test)]
+#[path = "production_pipeline_scalar_source_observer_v1_tests.rs"]
+pub(crate) mod scalar_source_observer_v1;
+#[cfg(test)]
 pub(crate) use context_handoff_v29::{
     check_context_handoff_v29, with_projected_execution_source_v29,
 };

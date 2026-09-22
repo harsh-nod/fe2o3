@@ -144,7 +144,19 @@ impl fmt::Display for Error {
         }
     }
 }
-impl StdError for Error {}
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::InputLimit { .. }
+            | Self::InconsistentInventory
+            | Self::InvalidBlock(_)
+            | Self::InvalidOperation(_)
+            | Self::InvalidNode(_)
+            | Self::NotPhi(_) => None,
+        }
+    }
+}
 
 /// Actual vector capacities plus the report header, excluding the borrowed
 /// owner/inventory, allocator metadata, stack scratch headers and diagnostics.

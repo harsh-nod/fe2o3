@@ -73,7 +73,16 @@ impl fmt::Display for Error {
         write!(f, "redundant private store: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Inventory(error) => Some(error),
+            Self::MemorySsa(error) => Some(error),
+            Self::ForeignSubject | Self::StaleCandidate | Self::Rule(_) | Self::Panicked => None,
+        }
+    }
+}
 
 /// Actual owned capacities and wrapper header, excluding borrowed owners.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

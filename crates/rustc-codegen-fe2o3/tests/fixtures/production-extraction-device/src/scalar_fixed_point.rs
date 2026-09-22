@@ -1,4 +1,6 @@
 use fe2o3_device::kernel;
+#[cfg(all(fe2o3_scalar_fixed_point_noop, fe2o3_scalar_fixed_point_safe))]
+compile_error!("scalar source cases must be mutually exclusive");
 #[cfg(not(fe2o3_scalar_fixed_point_noop))]
 use fe2o3_device::{DisjointSlice, thread};
 
@@ -16,7 +18,7 @@ pub fn scalar_checked_identity(mut output: DisjointSlice<u32>, value: u32, choos
     }
 }
 
-#[cfg(not(fe2o3_scalar_fixed_point_noop))]
+#[cfg(all(not(fe2o3_scalar_fixed_point_noop), not(fe2o3_scalar_fixed_point_safe)))]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn scalar_effect_then_overflow(mut output: DisjointSlice<u32>, value: u32) {
     if let Some(element) = output.get_mut(thread::index_1d()) {

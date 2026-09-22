@@ -579,3 +579,143 @@ fn history_wire_encoder_refuses_conflicting_p7_rows_and_tail_identities() {
         assert_eq!(b.storage(), floor);
     });
 }
+
+fn wire_source_resource_cases() -> [Resource; 5] {
+    let mut work = Work::new(3);
+    let mut budget = Budget::new(&mut work, 5);
+    [
+        budget.charge_work(4).unwrap_err(),
+        budget.reserve_storage(6).unwrap_err(),
+        budget.release_storage(1).unwrap_err(),
+        // Typed leaf fixtures, not attempts to exhaust the host allocator.
+        Resource::Allocation,
+        Resource::Arithmetic,
+    ]
+}
+
+fn assert_wire_borrowed_source<T: std::error::Error + 'static>(
+    error: &dyn std::error::Error,
+    child: &T,
+) {
+    let actual = error.source().unwrap().downcast_ref::<T>().unwrap();
+    assert!(std::ptr::eq(actual, child));
+}
+
+fn assert_wire_resource_source_chain(
+    error: &(dyn std::error::Error + 'static),
+    expected: Resource,
+    depth: usize,
+) {
+    let mut cause = error;
+    for _ in 0..depth {
+        cause = cause.source().expect("complete typed resource cause chain");
+    }
+    assert_eq!(cause.downcast_ref::<Resource>(), Some(&expected));
+    match expected {
+        Resource::Work(expected) => {
+            let leaf = cause.source().unwrap();
+            assert_eq!(
+                leaf.downcast_ref::<fe2o3_kernel_ir::CanonicalKernelIrWorkLimitV1>(),
+                Some(&expected)
+            );
+            assert!(leaf.source().is_none());
+        }
+        Resource::Storage(expected) => {
+            let leaf = cause.source().unwrap();
+            assert_eq!(
+                leaf.downcast_ref::<fe2o3_kernel_ir::CanonicalKernelIrVerificationStorageLimitV1>(),
+                Some(&expected)
+            );
+            assert!(leaf.source().is_none());
+        }
+        Resource::Accounting | Resource::Allocation | Resource::Arithmetic => {
+            assert!(cause.source().is_none());
+        }
+    }
+}
+
+#[test]
+fn wire_error_sources_preserve_direct_and_tail_resources() {
+    for resource in wire_source_resource_cases() {
+        let direct = Error::Resource(resource);
+        let Error::Resource(child) = &direct else {
+            unreachable!()
+        };
+        assert_wire_borrowed_source(&direct, child);
+        assert_wire_resource_source_chain(&direct, resource, 1);
+
+        let nested = Error::Tail(TailError::Resource(resource));
+        let Error::Tail(child) = &nested else {
+            unreachable!()
+        };
+        assert_wire_borrowed_source(&nested, child);
+        assert_wire_resource_source_chain(&nested, resource, 2);
+    }
+}
+
+#[test]
+fn wire_error_sources_preserve_policy_and_admission_wrappers() {
+    for resource in wire_source_resource_cases() {
+        let policy = Error::Policy7(CanonicalPolicy7SemanticErrorV1::Resource(resource));
+        let Error::Policy7(child) = &policy else {
+            unreachable!()
+        };
+        assert_wire_borrowed_source(&policy, child);
+        assert!(matches!(
+            child,
+            CanonicalPolicy7SemanticErrorV1::Resource(actual) if *actual == resource
+        ));
+
+        let admission = Error::Admission {
+            role: RefinedForwardingHistoryRoleV1::F,
+            error: AdmissionError::Resource(resource),
+        };
+        let Error::Admission { role, error } = &admission else {
+            unreachable!()
+        };
+        assert_eq!(*role, RefinedForwardingHistoryRoleV1::F);
+        assert_wire_borrowed_source(&admission, error);
+        assert!(matches!(error, AdmissionError::Resource(actual) if *actual == resource));
+    }
+}
+
+#[test]
+fn wire_error_sources_distinguish_markers_from_nonresource_children() {
+    use std::error::Error as _;
+    for error in [
+        Error::Length,
+        Error::Header,
+        Error::Reserved,
+        Error::Limit,
+        Error::Field(7),
+        Error::Rows,
+        Error::Tag,
+        Error::Limits,
+        Error::TailIdentity,
+        Error::Policy7Rows,
+        Error::Panicked,
+    ] {
+        assert!(error.source().is_none());
+    }
+    let policy = Error::Policy7(CanonicalPolicy7SemanticErrorV1::Record);
+    let Error::Policy7(child) = &policy else {
+        unreachable!()
+    };
+    assert_wire_borrowed_source(&policy, child);
+    assert!(policy.source().unwrap().source().is_none());
+    let tail = Error::Tail(TailError::Malformed("typed nonresource child"));
+    let Error::Tail(child) = &tail else {
+        unreachable!()
+    };
+    assert_wire_borrowed_source(&tail, child);
+    assert!(tail.source().unwrap().source().is_none());
+    let admission = Error::Admission {
+        role: RefinedForwardingHistoryRoleV1::B,
+        error: AdmissionError::CanonicalMismatch,
+    };
+    let Error::Admission { error, .. } = &admission else {
+        unreachable!()
+    };
+    assert_wire_borrowed_source(&admission, error);
+    assert!(admission.source().unwrap().source().is_none());
+}

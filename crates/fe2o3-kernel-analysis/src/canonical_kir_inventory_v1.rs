@@ -36,7 +36,14 @@ impl fmt::Display for CanonicalKirInventoryErrorV1 {
         }
     }
 }
-impl Error for CanonicalKirInventoryErrorV1 {}
+impl Error for CanonicalKirInventoryErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::InconsistentOwner => None,
+        }
+    }
+}
 type Result<T> = std::result::Result<T, CanonicalKirInventoryErrorV1>;
 
 // The census admits all vector payloads. A counting defect must reject before

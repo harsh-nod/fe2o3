@@ -492,11 +492,40 @@ impl FunctionalRefinementImportExpectationV2 {
     }
 }
 
-/// Domain-separated identity of the signed statement, independent of signature representation.
+/// Claimed domain-separated identity of a signed statement, independent of signature representation.
+///
+/// An identity alone is inert. A caller-created value does not establish that the digest was
+/// recomputed from a receipt, that a signature was checked, or that compiler authority was granted.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FunctionalRefinementReceiptIdentityV2(DigestV1);
 
 impl FunctionalRefinementReceiptIdentityV2 {
+    /// Wraps a caller-supplied digest as an untrusted identity claim without checking it.
+    ///
+    /// This does not import a receipt, authenticate a signature, or grant compiler authority.
+    /// Arbitrary digests, including zero, remain inert claims.
+    ///
+    /// An identity cannot be converted into an imported proof:
+    ///
+    /// ```compile_fail
+    /// use fe2o3_functional_proof::{FunctionalRefinementReceiptIdentityV2, ImportedFunctionalRefinementProofV2};
+    /// fn forge(identity: FunctionalRefinementReceiptIdentityV2) -> ImportedFunctionalRefinementProofV2 {
+    ///     identity.into()
+    /// }
+    /// ```
+    ///
+    /// Imported proof construction remains private:
+    ///
+    /// ```compile_fail
+    /// use fe2o3_functional_proof::{FunctionalRefinementReceiptIdentityV2, ImportedFunctionalRefinementProofV2};
+    /// fn forge(receipt_identity: FunctionalRefinementReceiptIdentityV2) -> ImportedFunctionalRefinementProofV2 {
+    ///     ImportedFunctionalRefinementProofV2 { receipt_identity }
+    /// }
+    /// ```
+    pub const fn from_untrusted_digest(digest: DigestV1) -> Self {
+        Self(digest)
+    }
+
     pub const fn digest(self) -> DigestV1 {
         self.0
     }
@@ -941,5 +970,24 @@ impl<'a> WireReaderV2<'a> {
     }
     fn digest(&mut self) -> DigestV1 {
         DigestV1::from_untrusted_bytes(self.bytes::<32>())
+    }
+}
+
+#[cfg(test)]
+mod inert_receipt_identity_tests {
+    use super::*;
+
+    #[test]
+    fn arbitrary_and_zero_receipt_identity_claims_roundtrip_without_import() {
+        for bytes in [
+            [0; 32],
+            [0x5a; 32],
+            std::array::from_fn(|index| index as u8),
+        ] {
+            let digest = DigestV1::from_untrusted_bytes(bytes);
+            let identity = FunctionalRefinementReceiptIdentityV2::from_untrusted_digest(digest);
+            assert_eq!(identity.digest(), digest);
+            assert_eq!(identity.digest().as_bytes(), &bytes);
+        }
     }
 }

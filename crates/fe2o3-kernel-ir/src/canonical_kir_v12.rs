@@ -543,7 +543,18 @@ impl fmt::Display for CanonicalKernelIrReplayAdmissionErrorV12 {
         }
     }
 }
-impl Error for CanonicalKernelIrReplayAdmissionErrorV12 {}
+impl Error for CanonicalKernelIrReplayAdmissionErrorV12 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Decode(error) => Some(error),
+            Self::Encode(error) => Some(error),
+            Self::Verification(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::Canonical(error) => Some(error),
+            Self::CanonicalMismatch => None,
+        }
+    }
+}
 impl From<CanonicalKernelIrVerificationResourceErrorV1>
     for CanonicalKernelIrReplayAdmissionErrorV12
 {

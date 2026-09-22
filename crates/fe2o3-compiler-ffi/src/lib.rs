@@ -1722,3 +1722,12 @@ mod tests {
         );
     }
 }
+
+mod inert_semantic_module_handoff_v4;
+mod inert_semantic_module_handoff_v4_decode;
+pub use inert_semantic_module_handoff_v4::*;
+pub use inert_semantic_module_handoff_v4_decode::*;
+#[cfg(test)]
+mod inert_semantic_module_handoff_v4_resource_tests;
+#[cfg(test)]
+mod inert_semantic_module_handoff_v4_tests;

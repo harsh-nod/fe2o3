@@ -44,8 +44,9 @@ impl fmt::Display for PrivateCellNativeStageErrorV1 {
 impl std::error::Error for PrivateCellNativeStageErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Resource(error) => Some(error),
             Self::Admission(error) => Some(error.as_ref()),
-            _ => None,
+            Self::Mismatch(_) => None,
         }
     }
 }

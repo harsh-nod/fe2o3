@@ -1,5 +1,11 @@
 //! One staged, source-owned production continuation. No LLVM is produced here.
 use super::*;
+#[path = "production_expanded_decoded_source_v1.rs"]
+pub(super) mod decoded_source;
+pub use decoded_source::{
+    CheckedDecodedExpandedSourceV1, DecodedExpandedSourceErrorV1,
+    with_checked_decoded_expanded_source_v1,
+};
 use fe2o3_kernel_opt::{
     CheckedScalarFixedPointOwnerV1 as Scalar, prepare_checked_scalar_fixed_point_v1,
 };
@@ -215,6 +221,17 @@ pub struct ProductionOwnedExpandedContinuationV1 {
 }
 
 impl ProductionOwnedExpandedContinuationV1 {
+    /// Returns this closed policy's immutable prefix limits, not a selection or
+    /// permission to admit a prefix. Construction independently checks the
+    /// actual source-owned history against these same literal limits.
+    pub const fn prefix_limits_v1() -> (
+        fe2o3_kernel_analysis::CanonicalKirLoopLimitsV1,
+        fe2o3_kernel_analysis::CanonicalKirCrossBlockForwardingLimitsV1,
+        fe2o3_kernel_analysis::CanonicalKirLoopUnrollLimitsV1,
+    ) {
+        (LOOPS, FORWARDING, UNROLL)
+    }
+
     // Consumer-side shared source join, not a constructor or executable grant.
     // The caller prepays original source, complete decoded backing/receipts,
     // every scalar owner, final-origin capacity and report extent. `required`
