@@ -15,17 +15,42 @@ use super::{
 /// Fixed magic at the start of every inert semantic compiler module handoff V3.
 pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3: [u8; 8] = *b"F2O3IHV3";
 
-/// The only inert semantic compiler module handoff version implemented by this crate.
+/// Version tag of the V3 inert semantic compiler module handoff.
 pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3: u16 = 3;
 
 /// Fixed magic at the start of the embedded inert pair-binding segment V3.
 pub const INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3: [u8; 8] = *b"F2O3PBV3";
 
-/// The only inert compiler module pair-binding version implemented by this crate.
+/// Version tag of the V3 inert compiler module pair binding.
 pub const INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3: u16 = 3;
 
 const PAIR_BINDING_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-COMPILER-MODULE-PAIR-BINDING/V3\0";
 const OUTER_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-SEMANTIC-COMPILER-MODULE-HANDOFF/V3\0";
+
+#[path = "inert_semantic_module_handoff_v4.rs"]
+pub(crate) mod native_v4;
+
+#[cfg(test)]
+#[path = "inert_semantic_module_handoff_v4_tests.rs"]
+mod native_v4_tests;
+
+// Layout and limits are shared; schema choice is explicit, never a decode retry.
+struct WireSchema {
+    magic: [u8; 8],
+    version: u16,
+    pair_magic: [u8; 8],
+    pair_version: u16,
+    pair_domain: &'static [u8],
+    outer_domain: &'static [u8],
+}
+const WIRE_V3: WireSchema = WireSchema {
+    magic: INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3,
+    version: INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3,
+    pair_magic: INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3,
+    pair_version: INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3,
+    pair_domain: PAIR_BINDING_IDENTITY_DOMAIN_V3,
+    outer_domain: OUTER_IDENTITY_DOMAIN_V3,
+};
 const SHA256_BYTES: usize = 32;
 const INNER_IDENTITY_BYTES: usize = SHA256_BYTES + 8;
 const HEADER_BYTES_V3: usize = 8 + 2 + 2 + 8 + 4 + 8 + 8;
@@ -104,51 +129,13 @@ impl InertCompilerModulePairBindingV3 {
         capsule_identity: InertProductionSemanticCapsuleIdentityV3,
         module_handoff_identity: CompilerModuleHandoffIdentityV2,
     ) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
-        let mut canonical_bytes = [0_u8; INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3];
-        let mut offset = 0;
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3,
-        );
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3.to_le_bytes(),
-        );
-        put_slice(&mut canonical_bytes, &mut offset, &0_u16.to_le_bytes());
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &(INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3 as u32).to_le_bytes(),
-        );
-        put_slice(&mut canonical_bytes, &mut offset, &0_u32.to_le_bytes());
-        put_slice(&mut canonical_bytes, &mut offset, capsule_identity.sha256());
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &capsule_identity.byte_len().to_le_bytes(),
-        );
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
+        let (canonical_bytes, sha256) = encode_pair_binding(
+            &WIRE_V3,
+            capsule_identity.sha256(),
+            capsule_identity.byte_len(),
             module_handoff_identity.sha256(),
-        );
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &module_handoff_identity.byte_len().to_le_bytes(),
-        );
-        debug_assert_eq!(offset, PAIR_BINDING_PREIMAGE_BYTES_V3);
-        let sha256 = derive_identity_sha256(
-            PAIR_BINDING_IDENTITY_DOMAIN_V3,
-            &canonical_bytes[..PAIR_BINDING_PREIMAGE_BYTES_V3],
-        )
-        .ok_or(InertSemanticCompilerModuleHandoffErrorV3::ZeroIdentity {
-            field: "inert compiler module pair binding",
-        })?;
-        put_slice(&mut canonical_bytes, &mut offset, &sha256);
-        debug_assert_eq!(offset, INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3);
+            module_handoff_identity.byte_len(),
+        )?;
         let identity = InertCompilerModulePairBindingIdentityV3 {
             sha256,
             byte_len: INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3 as u64,
@@ -817,14 +804,17 @@ struct ParsedPairBindingV3 {
 }
 
 impl ParsedPairBindingV3 {
-    fn decode(bytes: &[u8]) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
+    fn decode(
+        bytes: &[u8],
+        schema: &WireSchema,
+    ) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
         debug_assert_eq!(bytes.len(), INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3);
         let mut reader = Reader::new(bytes);
-        if reader.fixed::<8>()? != INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3 {
+        if reader.fixed::<8>()? != schema.pair_magic {
             return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidPairBindingMagic);
         }
         let version = reader.u16()?;
-        if version != INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3 {
+        if version != schema.pair_version {
             return Err(
                 InertSemanticCompilerModuleHandoffErrorV3::UnsupportedPairBindingVersion(version),
             );
@@ -869,7 +859,7 @@ impl ParsedPairBindingV3 {
                 field: "inert compiler module pair binding",
             });
         }
-        if derive_identity_sha256(PAIR_BINDING_IDENTITY_DOMAIN_V3, &bytes[..preimage_len])
+        if derive_identity_sha256(schema.pair_domain, &bytes[..preimage_len])
             != Some(binding_sha256)
         {
             return Err(InertSemanticCompilerModuleHandoffErrorV3::PairBindingIdentityMismatch);
@@ -896,15 +886,22 @@ struct ValidatedOuterWireV3 {
 
 impl ValidatedOuterWireV3 {
     fn decode(bytes: &[u8]) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
+        Self::decode_for_schema(bytes, &WIRE_V3)
+    }
+
+    fn decode_for_schema(
+        bytes: &[u8],
+        schema: &WireSchema,
+    ) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
         if bytes.len() > MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3 {
             return Err(InertSemanticCompilerModuleHandoffErrorV3::OuterByteBoundExceeded);
         }
         let mut reader = Reader::new(bytes);
-        if reader.fixed::<8>()? != INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3 {
+        if reader.fixed::<8>()? != schema.magic {
             return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidMagic);
         }
         let version = reader.u16()?;
-        if version != INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3 {
+        if version != schema.version {
             return Err(InertSemanticCompilerModuleHandoffErrorV3::UnsupportedVersion(version));
         }
         let flags = reader.u16()?;
@@ -972,13 +969,13 @@ impl ValidatedOuterWireV3 {
                 field: "inert semantic compiler module handoff",
             });
         }
-        if derive_identity_sha256(OUTER_IDENTITY_DOMAIN_V3, &bytes[..outer_preimage_len])
+        if derive_identity_sha256(schema.outer_domain, &bytes[..outer_preimage_len])
             != Some(declared_outer_sha256)
         {
             return Err(InertSemanticCompilerModuleHandoffErrorV3::OuterIdentityMismatch);
         }
 
-        let parsed_pair_binding = ParsedPairBindingV3::decode(pair_binding_bytes)?;
+        let parsed_pair_binding = ParsedPairBindingV3::decode(pair_binding_bytes, schema)?;
         if parsed_pair_binding.capsule_len != capsule_len_u64
             || parsed_pair_binding.module_handoff_len != module_handoff_len_u64
         {
@@ -1064,6 +1061,41 @@ fn derive_identity_sha256(domain: &[u8], preimage: &[u8]) -> Option<[u8; SHA256_
     digest.update(preimage);
     let sha256: [u8; SHA256_BYTES] = digest.finalize().into();
     (sha256 != [0; SHA256_BYTES]).then_some(sha256)
+}
+
+fn encode_pair_binding(
+    schema: &WireSchema,
+    capsule_sha256: &[u8; 32],
+    capsule_len: u64,
+    module_sha256: &[u8; 32],
+    module_len: u64,
+) -> Result<
+    ([u8; INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3], [u8; 32]),
+    InertSemanticCompilerModuleHandoffErrorV3,
+> {
+    let mut bytes = [0; INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3];
+    let mut offset = 0;
+    for field in [
+        schema.pair_magic.as_slice(),
+        &schema.pair_version.to_le_bytes(),
+        &0_u16.to_le_bytes(),
+        &(INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3 as u32).to_le_bytes(),
+        &0_u32.to_le_bytes(),
+        capsule_sha256,
+        &capsule_len.to_le_bytes(),
+        module_sha256,
+        &module_len.to_le_bytes(),
+    ] {
+        put_slice(&mut bytes, &mut offset, field);
+    }
+    debug_assert_eq!(offset, PAIR_BINDING_PREIMAGE_BYTES_V3);
+    let sha256 = derive_identity_sha256(schema.pair_domain, &bytes[..offset]).ok_or(
+        InertSemanticCompilerModuleHandoffErrorV3::ZeroIdentity {
+            field: "inert compiler module pair binding",
+        },
+    )?;
+    put_slice(&mut bytes, &mut offset, &sha256);
+    Ok((bytes, sha256))
 }
 
 fn put_slice<const N: usize>(target: &mut [u8; N], offset: &mut usize, bytes: &[u8]) {
@@ -1275,14 +1307,14 @@ mod tests_wire_adversarial {
         )
     }
 
-    fn llvm_module(seed: u8) -> Vec<u8> {
+    pub(super) fn llvm_module(seed: u8) -> Vec<u8> {
         format!(
             "; ModuleID = 'outer-v3-{seed:02x}'\ndefine amdgpu_kernel void @kernel() {{ ret void }}\n"
         )
         .into_bytes()
     }
 
-    fn capsule(
+    pub(super) fn capsule(
         seed: u8,
         target_text: &str,
         llvm_module: &[u8],
@@ -1311,7 +1343,7 @@ mod tests_wire_adversarial {
         .expect("valid module symbol manifest")
     }
 
-    fn module_handoff(seed: u8, target_text: &str) -> CompilerModuleHandoffV2 {
+    pub(super) fn module_handoff(seed: u8, target_text: &str) -> CompilerModuleHandoffV2 {
         let module = llvm_module(seed);
         module_handoff_from_module(&module, target_text)
     }
@@ -1328,7 +1360,7 @@ mod tests_wire_adversarial {
         .expect("valid V2 module handoff fixture")
     }
 
-    fn outer(seed: u8) -> InertSemanticCompilerModuleHandoffV3 {
+    pub(super) fn outer(seed: u8) -> InertSemanticCompilerModuleHandoffV3 {
         let module = llvm_module(seed);
         InertSemanticCompilerModuleHandoffV3::new(
             capsule(seed, TARGET, &module),

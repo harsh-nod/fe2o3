@@ -198,6 +198,22 @@ fn native_carrier_denials_precede_mutation_and_preserve_typed_errors() {
     }));
     assert!(panicked.is_err());
     assert_eq!(destination, before);
+    struct DropBomb;
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            panic!("callback destructor")
+        }
+    }
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let bomb = DropBomb;
+        let _ =
+            seal_native_refined_forwarding_carrier_v1(layout, &mut destination, LIMIT, move |_| {
+                std::hint::black_box(&bomb);
+                Ok::<_, ()>(())
+            });
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(destination, before);
     let mut count = 0;
     assert_eq!(
         seal_native_refined_forwarding_carrier_v1(layout, &mut destination, LIMIT + 1, |_| {

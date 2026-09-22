@@ -458,6 +458,7 @@ fn assert_hostile_declared_length_rejected_without_allocation(
 #[test]
 fn v3_owned_decode_allocation_qualification() {
     assert_native_carrier_has_no_payload_copies();
+    assert_native_v4_has_no_payload_copies();
     assert_maximum_bound_formulas();
 
     let representative =
@@ -521,6 +522,184 @@ fn v3_owned_decode_allocation_qualification() {
         (MAX_COMPILER_MODULE_HANDOFF_BYTES_V2 as u64) + 1,
         InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffByteBoundExceeded,
     );
+}
+
+fn native_v4_wire(
+    module_bytes: usize,
+    receipt_bytes: usize,
+    output_bytes: usize,
+    source_bytes: usize,
+) -> Vec<u8> {
+    use fe2o3_compiler_ffi::{
+        InertSemanticCompilerModuleHandoffLayoutV4 as HandoffLayout,
+        seal_inert_semantic_compiler_module_handoff_v4,
+    };
+    use fe2o3_compiler_lineage::{
+        InertProductionSemanticCapsuleLayoutV4 as CapsuleLayout,
+        MAX_NATIVE_REFINED_FORWARDING_CARRIER_STORAGE_V1 as LIMIT,
+        NativeRefinedForwardingCarrierLayoutV1 as CarrierLayout,
+        seal_inert_production_semantic_capsule_v4, seal_native_refined_forwarding_carrier_v1,
+    };
+    let old = InertSemanticCompilerModuleHandoffV3::decode_owned(owned_outer_wire(
+        module_bytes,
+        receipt_bytes,
+    ))
+    .unwrap();
+    let pair = CarrierLayout::new::<()>(output_bytes, source_bytes).unwrap();
+    let cap = CapsuleLayout::new::<()>(old.capsule().canonical_bytes().len(), pair.encoded_len())
+        .unwrap();
+    let outer = HandoffLayout::new(
+        cap.encoded_len(),
+        old.module_handoff().canonical_bytes().len(),
+    )
+    .unwrap();
+    // All three encoders seal directly in the same final allocation.
+    let mut bytes = vec![0x17; outer.encoded_len()];
+    let capsule = &mut bytes[outer.capsule_range()];
+    capsule[cap.base_range()].copy_from_slice(old.capsule().canonical_bytes());
+    let (_, trace) = measure_allocations(|| {
+        seal_native_refined_forwarding_carrier_v1(
+            pair,
+            &mut capsule[cap.carrier_range()],
+            LIMIT,
+            |_| Ok::<_, ()>(()),
+        )
+        .unwrap();
+    });
+    assert_eq!(trace.sizes, []);
+    assert_eq!(trace.unrecorded_events, 0);
+    let (cap_identity, trace) = measure_allocations(|| {
+        let identity =
+            seal_inert_production_semantic_capsule_v4(cap, capsule, LIMIT, |_| Ok::<_, ()>(()))
+                .unwrap();
+        let view = fe2o3_compiler_lineage::read_inert_production_semantic_capsule_v4(
+            capsule,
+            LIMIT,
+            |_| Ok::<_, ()>(()),
+        )
+        .unwrap();
+        assert_eq!(view.identity(), identity);
+        identity
+    });
+    assert_eq!(trace.sizes, []);
+    assert_eq!(trace.unrecorded_events, 0);
+    bytes[outer.module_handoff_range()].copy_from_slice(old.module_handoff().canonical_bytes());
+    let (_, trace) = measure_allocations(|| {
+        seal_inert_semantic_compiler_module_handoff_v4(
+            outer,
+            &mut bytes,
+            cap_identity,
+            old.module_handoff().identity(),
+            |_| Ok::<_, ()>(()),
+        )
+        .unwrap();
+    });
+    assert_eq!(trace.sizes, []);
+    assert_eq!(trace.unrecorded_events, 0);
+    bytes
+}
+
+fn assert_native_v4_has_no_payload_copies() {
+    use fe2o3_compiler_ffi::{
+        InertSemanticCompilerModuleHandoffErrorV4, InertSemanticCompilerModuleHandoffV4,
+        MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V4,
+    };
+    let mut prior = None;
+    for (module, receipt, output, source) in [
+        (
+            REPRESENTATIVE_MODULE_BYTES,
+            REPRESENTATIVE_RECEIPT_BYTES,
+            1024 * 1024,
+            512 * 1024,
+        ),
+        (
+            MAX_COMPILER_MODULE_BYTES_V1,
+            MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3,
+            64 * 1024 * 1024,
+            4 * 1024 * 1024,
+        ),
+    ] {
+        let bytes = native_v4_wire(module, receipt, output, source);
+        let pointer = bytes.as_ptr();
+        let (owner, trace) = measure_allocations(|| {
+            InertSemanticCompilerModuleHandoffV4::decode_owned(bytes).unwrap()
+        });
+        assert_eq!(owner.canonical_bytes().as_ptr(), pointer);
+        let outer = owner.canonical_bytes();
+        for part in [
+            owner.capsule().canonical_bytes(),
+            owner.capsule().base().canonical_bytes(),
+            owner.capsule().carrier_bytes(),
+            owner.module_handoff().canonical_bytes(),
+            owner.module_handoff().module_bytes(),
+            owner.pair_binding_bytes(),
+        ] {
+            assert_retained_range(outer, part, "native V4 payload");
+        }
+        for preimage in receipt_preimages(owner.capsule().base()) {
+            assert_retained_range(outer, preimage, "native V4 base receipt");
+        }
+        assert_eq!(trace.unrecorded_events, 0);
+        assert!(
+            trace
+                .sizes
+                .iter()
+                .all(|size| *size < REPRESENTATIVE_RECEIPT_BYTES),
+            "{trace:?}"
+        );
+        if let Some(prior) = prior {
+            assert_eq!(
+                trace, prior,
+                "native decode topology must not scale with payload length"
+            );
+        }
+        prior = Some(trace);
+    }
+    let mut bad = native_v4_wire(1024, 512, 128, 64);
+    bad[0] ^= 1;
+    let (rejected, trace) =
+        measure_allocations(|| InertSemanticCompilerModuleHandoffV4::decode_owned(bad));
+    assert!(rejected.is_err());
+    assert_eq!(trace.sizes, []);
+    assert_eq!(trace.unrecorded_events, 0);
+    let good = native_v4_wire(1024, 512, 128, 64);
+    for (offset, declared, expected) in [
+        (
+            12,
+            MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V4 + 1,
+            InertSemanticCompilerModuleHandoffErrorV3::OuterByteBoundExceeded,
+        ),
+        (
+            24,
+            MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3 + 1,
+            InertSemanticCompilerModuleHandoffErrorV3::CapsuleByteBoundExceeded,
+        ),
+        (
+            32,
+            MAX_COMPILER_MODULE_HANDOFF_BYTES_V2 + 1,
+            InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffByteBoundExceeded,
+        ),
+        (
+            24,
+            0,
+            InertSemanticCompilerModuleHandoffErrorV3::CapsuleByteBoundExceeded,
+        ),
+        (
+            32,
+            0,
+            InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffByteBoundExceeded,
+        ),
+    ] {
+        let mut bytes = good.clone();
+        bytes[offset..offset + 8].copy_from_slice(&(declared as u64).to_le_bytes());
+        let (result, trace) =
+            measure_allocations(|| InertSemanticCompilerModuleHandoffV4::decode_owned(bytes));
+        assert!(
+            matches!(result, Err(InertSemanticCompilerModuleHandoffErrorV4::Framing(error)) if error == expected)
+        );
+        assert_eq!(trace.sizes, []);
+        assert_eq!(trace.unrecorded_events, 0);
+    }
 }
 
 fn assert_native_carrier_has_no_payload_copies() {

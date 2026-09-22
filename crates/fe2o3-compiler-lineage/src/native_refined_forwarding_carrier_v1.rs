@@ -1,5 +1,6 @@
 //! Bounded paired transport only. Nested source/output admission remains mandatory.
-use sha2::{Digest, Sha256};
+use crate::bounded_pair::{self, HEADER};
+use sha2::Sha256;
 use std::{mem::size_of, ops::Range};
 
 /// Discriminator of the paired native refined-forwarding carrier.
@@ -15,8 +16,15 @@ pub const MAX_NATIVE_REFINED_FORWARDING_CARRIER_BYTES_V1: usize = HEADER
     + 32;
 /// Maximum configured shared verification storage, including caller siblings.
 pub const MAX_NATIVE_REFINED_FORWARDING_CARRIER_STORAGE_V1: usize = 256 * 1024 * 1024;
-const HEADER: usize = 48;
-const DOMAIN: &[u8] = b"FE2O3/NATIVE-REFINED-FORWARDING-CARRIER/V1\0";
+const POLICY: bounded_pair::Policy = bounded_pair::Policy {
+    magic: NATIVE_REFINED_FORWARDING_CARRIER_MAGIC_V1,
+    version: 1,
+    domain: b"FE2O3/NATIVE-REFINED-FORWARDING-CARRIER/V1\0",
+    first_max: MAX_NATIVE_REFINED_FORWARDING_OUTPUT_BYTES_V1,
+    second_max: MAX_NATIVE_REFINED_FORWARDING_SOURCE_BYTES_V1,
+    total_max: MAX_NATIVE_REFINED_FORWARDING_CARRIER_BYTES_V1,
+    storage_max: MAX_NATIVE_REFINED_FORWARDING_CARRIER_STORAGE_V1,
+};
 
 /// Typed framing or caller work refusal. No failure is retried as a legacy format.
 #[derive(Debug, Eq, PartialEq)]
@@ -42,43 +50,45 @@ pub enum NativeRefinedForwardingCarrierErrorV1<E> {
 }
 type Error<E> = NativeRefinedForwardingCarrierErrorV1<E>;
 
+impl<E> From<bounded_pair::Error<E>> for Error<E> {
+    fn from(error: bounded_pair::Error<E>) -> Self {
+        use bounded_pair::Error as Pair;
+        match error {
+            Pair::Charge(e) => Self::Charge(e),
+            Pair::FirstLength => Self::OutputLength,
+            Pair::SecondLength => Self::SourceLength,
+            Pair::Length => Self::Length,
+            Pair::Arithmetic => Self::Arithmetic,
+            Pair::Header => Self::Header,
+            Pair::Reserved => Self::Reserved,
+            Pair::Identity => Self::Identity,
+            Pair::StorageLimit => Self::StorageLimit,
+        }
+    }
+}
+
 /// Checked disjoint ranges for encoding directly into one caller-owned allocation.
 /// This describes byte extents, not validity of either nested constituent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NativeRefinedForwardingCarrierLayoutV1 {
-    output_end: usize,
-    payload_end: usize,
-}
+pub struct NativeRefinedForwardingCarrierLayoutV1(bounded_pair::Layout);
 impl NativeRefinedForwardingCarrierLayoutV1 {
     /// Checks both mandatory field limits before any payload access or allocation.
     pub fn new<E>(output_len: usize, source_len: usize) -> Result<Self, Error<E>> {
-        if output_len == 0 || output_len > MAX_NATIVE_REFINED_FORWARDING_OUTPUT_BYTES_V1 {
-            return Err(Error::OutputLength);
-        }
-        if source_len == 0 || source_len > MAX_NATIVE_REFINED_FORWARDING_SOURCE_BYTES_V1 {
-            return Err(Error::SourceLength);
-        }
-        let output_end = HEADER.checked_add(output_len).ok_or(Error::Arithmetic)?;
-        let payload_end = output_end
-            .checked_add(source_len)
-            .ok_or(Error::Arithmetic)?;
-        payload_end.checked_add(32).ok_or(Error::Arithmetic)?;
-        Ok(Self {
-            output_end,
-            payload_end,
-        })
+        Ok(Self(bounded_pair::Layout::new(
+            &POLICY, output_len, source_len,
+        )?))
     }
     /// Exact complete allocation length, including header and terminal digest.
     pub const fn encoded_len(self) -> usize {
-        self.payload_end + 32
+        self.0.encoded_len()
     }
     /// Region into which the existing F2RFO1 encoder writes unchanged output.
     pub fn output_range(self) -> Range<usize> {
-        HEADER..self.output_end
+        self.0.first_range()
     }
     /// Region retaining the exact complete F2NSRC1 packet.
     pub fn source_range(self) -> Range<usize> {
-        self.output_end..self.payload_end
+        self.0.second_range()
     }
 }
 
@@ -145,25 +155,6 @@ pub const NATIVE_REFINED_FORWARDING_CARRIER_WORKING_STORAGE_V1: usize =
         + HEADER
         + 128;
 
-fn ceiling<E>(storage_limit: usize) -> Result<(), Error<E>> {
-    if storage_limit > MAX_NATIVE_REFINED_FORWARDING_CARRIER_STORAGE_V1 {
-        return Err(Error::StorageLimit);
-    }
-    Ok(())
-}
-fn hash(bytes: &[u8]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(DOMAIN);
-    hash.update((bytes.len() as u64).to_le_bytes());
-    hash.update(bytes);
-    hash.finalize().into()
-}
-fn hash_work<E>(length: usize) -> Result<usize, Error<E>> {
-    length
-        .checked_add(DOMAIN.len() + 8 + 128)
-        .ok_or(Error::Arithmetic)
-}
-
 /// Writes the fixed header and terminal digest around already encoded payloads.
 /// It does not copy or interpret either payload, so the existing output encoder
 /// can write directly into `layout.output_range()` without a second allocation.
@@ -173,28 +164,12 @@ pub fn seal_native_refined_forwarding_carrier_v1<E>(
     layout: NativeRefinedForwardingCarrierLayoutV1,
     bytes: &mut [u8],
     storage_limit: usize,
-    mut charge_work: impl FnMut(usize) -> Result<(), E>,
+    charge_work: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<NativeRefinedForwardingCarrierIdentityV1, Error<E>> {
-    ceiling(storage_limit)?;
-    if bytes.len() != layout.encoded_len() {
-        return Err(Error::Length);
-    }
-    let work = hash_work::<E>(layout.payload_end)?
-        .checked_add(2 * HEADER + 32)
-        .ok_or(Error::Arithmetic)?;
-    charge_work(work).map_err(Error::Charge)?;
-    bytes[..HEADER].fill(0);
-    bytes[..8].copy_from_slice(&NATIVE_REFINED_FORWARDING_CARRIER_MAGIC_V1);
-    bytes[8..12].copy_from_slice(&[1, 0, 1, 0]);
-    bytes[12..16].copy_from_slice(&(HEADER as u32).to_le_bytes());
-    bytes[16..24].copy_from_slice(&(layout.encoded_len() as u64).to_le_bytes());
-    bytes[24..32].copy_from_slice(&((layout.output_end - HEADER) as u64).to_le_bytes());
-    bytes[32..40].copy_from_slice(&((layout.payload_end - layout.output_end) as u64).to_le_bytes());
-    let sha256 = hash(&bytes[..layout.payload_end]);
-    bytes[layout.payload_end..].copy_from_slice(&sha256);
+    let identity = bounded_pair::seal(&POLICY, layout.0, bytes, storage_limit, charge_work)?;
     Ok(NativeRefinedForwardingCarrierIdentityV1 {
-        sha256,
-        byte_len: layout.encoded_len() as u64,
+        sha256: identity.sha256,
+        byte_len: identity.byte_len,
     })
 }
 
@@ -204,44 +179,15 @@ pub fn seal_native_refined_forwarding_carrier_v1<E>(
 pub fn read_native_refined_forwarding_carrier_v1<'a, E>(
     bytes: &'a [u8],
     storage_limit: usize,
-    mut charge_work: impl FnMut(usize) -> Result<(), E>,
+    charge_work: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<NativeRefinedForwardingCarrierRefV1<'a>, Error<E>> {
-    ceiling(storage_limit)?;
-    if bytes.len() < HEADER + 32 + 2 || bytes.len() > MAX_NATIVE_REFINED_FORWARDING_CARRIER_BYTES_V1
-    {
-        return Err(Error::Length);
-    }
-    charge_work(HEADER).map_err(Error::Charge)?;
-    if bytes[..8] != NATIVE_REFINED_FORWARDING_CARRIER_MAGIC_V1
-        || bytes[8..12] != [1, 0, 1, 0]
-        || bytes[12..16] != (HEADER as u32).to_le_bytes()
-    {
-        return Err(Error::Header);
-    }
-    if bytes[40..HEADER] != [0; 8] {
-        return Err(Error::Reserved);
-    }
-    let word = |offset: usize| -> Result<usize, Error<E>> {
-        let array = bytes[offset..offset + 8]
-            .try_into()
-            .map_err(|_| Error::Length)?;
-        usize::try_from(u64::from_le_bytes(array)).map_err(|_| Error::Arithmetic)
-    };
-    let layout = NativeRefinedForwardingCarrierLayoutV1::new(word(24)?, word(32)?)?;
-    if word(16)? != bytes.len() || layout.encoded_len() != bytes.len() {
-        return Err(Error::Length);
-    }
-    charge_work(hash_work::<E>(layout.payload_end)? + 32).map_err(Error::Charge)?;
-    let sha256 = hash(&bytes[..layout.payload_end]);
-    if bytes[layout.payload_end..] != sha256 {
-        return Err(Error::Identity);
-    }
+    let (layout, identity) = bounded_pair::read(&POLICY, bytes, storage_limit, charge_work)?;
     Ok(NativeRefinedForwardingCarrierRefV1 {
         bytes,
-        layout,
+        layout: NativeRefinedForwardingCarrierLayoutV1(layout),
         identity: NativeRefinedForwardingCarrierIdentityV1 {
-            sha256,
-            byte_len: bytes.len() as u64,
+            sha256: identity.sha256,
+            byte_len: identity.byte_len,
         },
     })
 }

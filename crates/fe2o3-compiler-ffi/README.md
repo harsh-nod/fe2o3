@@ -118,3 +118,28 @@ mutated, or kept independently of its envelope. It exposes no complete contract 
 artifact, linker input kind, bitcode claim, or Worker V1 conversion. Both envelope and projection
 remain inert compiler observations: neither authenticates compiler origin, proves that a compiler
 module exists, nor grants compiler, link, load, or launch authority.
+
+## Native Capsule Handoff V4
+
+`InertSemanticCompilerModuleHandoffV4` carries the mandatory native V4 capsule
+and an unchanged V2 module. It reuses V3's bounded outer/pair layout and parser,
+but requires `F2O3IHV4`/version4 and `F2O3PBV4`/version4 with distinct `/V4\0`
+identity domains. The pair binds the **complete V4 capsule**, not just its V3
+base. Neither decoder falls back to the other schema. All size ceilings remain
+unchanged, including the complete 160 MiB capsule ceiling.
+
+Layout and seal APIs permit direct encoding in one final allocation. The
+immutable decoder transfers a vector or retains a checked range in a shared
+vector; capsule, base receipts, native carrier, V2 module and pair segment all
+share that allocation. It validates complete identities, exact target agreement
+and the base's final-module commitment against V2. A separate preflight performs
+the member joins before callers allocate an outer buffer. Sealing only writes
+framing, so payload identities and member joins still require decoding.
+
+These are inert content APIs, not typed compiler execution or Worker authority.
+Decoding is unmetered like V3: production callers must prepay work, decoded
+records and the full actual backing capacity, including enclosing bytes outside
+the selected range. Sealing has a prepaid work callback and exported fixed
+scratch extent. Source/F recovery, base/carrier/native equality joins, currentness,
+machine refinement, artifact publication and safe-launch consumers are still
+required; this addition does not activate a V4 production route.

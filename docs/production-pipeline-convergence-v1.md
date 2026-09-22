@@ -138,9 +138,36 @@ output limit (64 MiB, including its complete B/C/S/O/I/J/K/P/H/L/R/F history).
 The legacy ProofBinding receipt's 4 MiB cap cannot carry every admitted pair.
 The paired `F2NRF1` carrier preserves both constituent formats and limits, with
 an additional fixed 80 bytes of framing and terminal content identity. This is
-not a legacy ProofBinding receipt. Capsule/receipt dispatch still needs explicit
-versioning; that integration is not landed. It may neither narrow advanced
-output to 4 MiB nor select the older single-transition route.
+not a legacy ProofBinding receipt. Distinct V4 capsule/handoff content codecs now
+retain this complete carrier, but typed production dispatch is not integrated.
+It may neither narrow advanced output to 4 MiB nor select the older
+single-transition route.
+
+The V4 capsule contains the unchanged V3 base plus mandatory F2NRF1, all within
+the unchanged complete 160 MiB capsule ceiling. Its distinct frame/hash uses the
+same private bounded-pair engine as F2NRF1. Shared decoding retains base receipts
+and carrier in one allocation and rejects a base MIR too large to fit in the
+complete source packet before hashing that MIR. This is not a semantic equality
+check: unrelated well-framed members remain inert content.
+
+The V4 handoff shares V3's bounded wire parser and identity-neutral pair encoder,
+with explicit V4 outer/pair discriminators and hash domains. It binds complete
+V4 capsule and V2 identities, validates target/final-commitment agreement, and
+retains every nested payload in the same backing, including at nonzero enclosing
+offsets. Direct seal APIs allow all three frames to be written in one final
+allocation. Refused debits and callback/destructor panics precede mutation.
+Maximum-size tests verify no framing allocations and payload-size-independent
+decode allocation traces; old V3 bytes, limits and rejection behavior remain.
+
+V4 content decoding is unmetered like the existing V3 codecs. Production must
+prepay its work/working set and full actual backing capacity on the same ledger;
+wire maxima do not imply that every replay fits the 256 MiB policy. The typed
+producer must derive all base receipts from its actual live owner and supply a
+native lowering association binding actual F/catalog, descriptor, target,
+carrier, pre-descriptor/final LLVM and V2. Independent native admission must
+recover source/F and join all base/carrier/outer fields before retaining evidence
+in Worker custody. Those producer, verifier, artifact, Worker and host consumers
+are not implemented by these inert codecs; default production remains unchanged.
 
 `recover_compiler_refined_forwarding_output_v1` independently recovers the signed
 Direct or UnitLocal source from its complete packet, freshly admits every graph
@@ -199,8 +226,8 @@ binding order `[1, 0]`, with distinct stores of 7 and 11. They compare complete
 N/E, catalog and signed rosters, unchanged retained-storage receipts, cross-root
 substitution failures, and second-root truncation cleanup. Exact/one-short work
 and storage tests retain the caller's floor and failure history. These test-key
-fixtures are not protected proofs. Native capsule
-embedding, compiler/Worker custody, generated safe launch, protected proof
+fixtures are not protected proofs. Typed native capsule
+production/admission, compiler/Worker custody, generated safe launch, protected proof
 execution and tutorial/GPU qualification remain outstanding. M0-M7 remain open.
 
 The tensor leaf dependency now reuses the existing kernel-IR V8 grammar through
