@@ -1,0 +1,36 @@
+{
+  "command": [
+    "taskset",
+    "-c",
+    "31",
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "fe2o3-runtime-model",
+    "--release",
+    "sort_enrollment_performance",
+    "--",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "CARGO_TARGET_DIR": "/home/harsh/.codex-tmp/fe2o3-enrollment-production-20260921.vns4nGhP/target",
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790039126328346290,
+  "group_absent": true,
+  "pid": 755380,
+  "started_ns": 1790039091085260042,
+  "stderr_sha256": "90cde54436fe4a6ccdb4a521317ce87be9dfd39fe4b4e2d6372b90800e80d3f3",
+  "stdin_sha256": null,
+  "stdout_sha256": "b1fe849076532414802597e0c4698295c272aca9f7e0efd13db774599f309b33",
+  "timeout_seconds": 300
+}
