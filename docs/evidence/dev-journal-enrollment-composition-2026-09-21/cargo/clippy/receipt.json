@@ -1,0 +1,31 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--locked",
+    "-p",
+    "fe2o3-runtime-model",
+    "--all-targets",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "CARGO_TARGET_DIR": "/run/user/1000/fe2o3-enrollment-composition-20260921.D3oPWDC9/target",
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790041013435701060,
+  "group_absent": true,
+  "pid": 1152334,
+  "started_ns": 1790040985984622926,
+  "stderr_sha256": "f586fb204bf44176613869b9b8522c6f7a8695087f03c681ae3f1996536d6fba",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 300
+}

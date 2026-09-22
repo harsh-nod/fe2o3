@@ -1,0 +1,401 @@
+{
+  "func-details": {
+    "vstd::slice::axiom_slice_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_retained_permutation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::axiom_multiset_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_keys_sorted_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_replay_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_slots_distinct_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_ensures": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_replay_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_permutation_distinct_slots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_retained_clear_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::issuable_id_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::OptionAdditionalFns::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_index_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_journal_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_header_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::spec_vec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_commit_journal_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_value_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_header_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%3::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%14::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_fill_plan_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::to_multiset": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%26::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%18::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_selected_vacant_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal_deep": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_untouched_journal_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_some": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_key_less_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::no_duplicates": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_clear_output_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_entry_error_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%6::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%1::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_keys_strict_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_selected_vacant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_all_some_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%30::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::spec_unwrap": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_subrange_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_subrange_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_journal_output_bound_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::new": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::impl&%0::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_header_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::len%returns_clause_autospec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_none": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_same": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_sort_frontier_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_retained_clear_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_duplicate_slots_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%4::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::View::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_different": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_header_success_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%16::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_plan_unique_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_plan_output_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_two_subranges_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::axiom_multiset_ext_equal_deep": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::SliceAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::slice::impl&%0::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_subrange_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_decreases_to_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_journal_enrollment_execution_v1::enrollment_roster_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%8::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::subrange": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::multiset::impl&%0::count": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_requires": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    }
+  },
+  "verification-results": {
+    "encountered-error": true,
+    "encountered-vir-error": false,
+    "verified": 0,
+    "errors": 1,
+    "is-verifying-entire-crate": false
+  },
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  }
+}

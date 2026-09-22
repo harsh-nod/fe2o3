@@ -1,0 +1,24 @@
+{
+  "command": [
+    "uname",
+    "-a"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "CARGO_TARGET_DIR": "/run/user/1000/fe2o3-enrollment-composition-20260921.D3oPWDC9/target",
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790040925911799531,
+  "group_absent": true,
+  "pid": 1139040,
+  "started_ns": 1790040925907592058,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "9dc0245d4b6784c653357808df79c064f458cc683aa17e280c8b68f11a60d69b",
+  "timeout_seconds": 300
+}
