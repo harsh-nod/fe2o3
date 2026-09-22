@@ -40,7 +40,7 @@ use fe2o3_verifier::{
     NativeCompilerRankedRecipeRootV1, NativeCompilerRankedRecipeSourceProofInputsV1,
     NativeCompilerRootStagingV1, NativeCompilerSourceProofInputsV1,
     NativeCompilerStagingCommitmentV1, ValidatedNativeCompilerRankedSourceProofV1,
-    validate_native_compiler_ranked_recipe_source_proof_v1,
+    encode_native_compiler_source_packet_v1, validate_native_compiler_ranked_source_packet_v1,
 };
 
 #[derive(Debug)]
@@ -125,6 +125,9 @@ impl PreparedNativeSourceLineageV1 {
     }
     pub(crate) fn native_module(&self) -> &[u8] {
         self.packet.original_native_module()
+    }
+    pub(crate) fn source_packet(&self) -> &[u8] {
+        self.packet.source_packet()
     }
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
         false

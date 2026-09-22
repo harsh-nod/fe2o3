@@ -194,6 +194,7 @@ pub(super) fn with_native_lineage_transfer_v1<T>(
 pub(super) struct NativeSourcePacketPartsV1<T> {
     pub(super) proof: T,
     pub(super) native_module: Vec<u8>,
+    pub(super) source_packet: Vec<u8>,
     pub(super) retained: usize,
 }
 
@@ -202,11 +203,10 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
     ranked: &AuthenticatedRankedVerificationRosterV1,
     wrapper_header: fn() -> Result<usize, E>,
     budget: &mut Budget<'w>,
-    replay: impl for<'p> FnOnce(
-        NativeCompilerRankedRecipeSourceProofInputsV1<'p>,
-        &mut Budget<'w>,
-    ) -> Result<(T, usize), E>,
+    replay: impl for<'p> FnOnce(&'p [u8], &mut Budget<'w>) -> Result<(T, usize), E>,
 ) -> Result<NativeSourcePacketPartsV1<T>, E> {
+    let header = wrapper_header()?;
+    budget.reserve_storage(header)?;
     source.verify(budget)?;
     let native = source.native()?;
     let launch = source.launch()?;
@@ -425,7 +425,11 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
             effect_receipts: root.verification().effect_receipts(),
         });
     }
-    let (proof, proof_storage) = replay(
+    let erased = match source {
+        NativeSourceRefV1::Direct(_) => None,
+        NativeSourceRefV1::Erased(source) => Some(source.erased().canonical().canonical_bytes()),
+    };
+    let (source_packet, packet_storage) = encode_native_compiler_source_packet_v1(
         NativeCompilerRankedRecipeSourceProofInputsV1 {
             source: NativeCompilerSourceProofInputsV1 {
                 semantic_mir: semantic.canonical_encoding(),
@@ -438,13 +442,16 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
             },
             ranked_roots: &ranked_roots,
         },
+        erased,
         budget,
-    )?;
+    )
+    .map_err(E::Replay)?;
+    budget.reserve_storage(packet_storage.retained_storage())?;
+    let (proof, proof_storage) = replay(&source_packet, budget)?;
     budget.reserve_storage(proof_storage)?;
-    let header = wrapper_header()?;
-    budget.reserve_storage(header)?;
     let retained = header
         .checked_add(native_module.capacity())
+        .and_then(|n| n.checked_add(source_packet.capacity()))
         .and_then(|n| n.checked_add(proof_storage))
         .ok_or(Resource::Arithmetic)?;
     drop(rows);
@@ -457,6 +464,7 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
     Ok(NativeSourcePacketPartsV1 {
         proof,
         native_module,
+        source_packet,
         retained,
     })
 }

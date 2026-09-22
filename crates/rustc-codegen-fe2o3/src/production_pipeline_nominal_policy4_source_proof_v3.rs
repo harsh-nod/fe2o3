@@ -40,6 +40,12 @@ impl SourcePacket {
             Self::Erased(packet) => packet.original_native_module(),
         }
     }
+    fn source_packet(&self) -> &[u8] {
+        match self {
+            Self::Direct(packet) => packet.source_packet(),
+            Self::Erased(packet) => packet.source_packet(),
+        }
+    }
 }
 
 /// A typed source proof is not protected compiler, artifact, or launch authority.
@@ -133,6 +139,9 @@ impl Output {
     }
     pub(crate) fn original_native_module(&self) -> &[u8] {
         self.packet.native_module()
+    }
+    pub(crate) fn source_packet(&self) -> &[u8] {
+        self.packet.source_packet()
     }
     pub(crate) const fn retained_storage_floor_v3(&self) -> usize {
         self.retained_floor

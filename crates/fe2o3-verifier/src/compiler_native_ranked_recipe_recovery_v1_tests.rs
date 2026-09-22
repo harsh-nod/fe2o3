@@ -4,6 +4,9 @@ use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
 use fe2o3_lower_mir_kernel::encode_production_ranked_source_rows_v1;
 use fe2o3_pliron::encode_production_ranked_recipe_v1;
 
+#[path = "compiler_native_source_packet_recovery_v1_tests.rs"]
+mod complete_packet;
+
 struct DurableFixture {
     semantic: Vec<u8>,
     native: Vec<u8>,
@@ -18,6 +21,23 @@ struct DurableFixture {
 }
 
 impl DurableFixture {
+    fn packet(
+        &self,
+        erased: Option<&[u8]>,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Vec<u8>, NativeCompilerSourcePacketStorageV1), E> {
+        self.replay(&[self.signature], budget, |source, ranked_roots, budget| {
+            encode_native_compiler_source_packet_v1(
+                NativeCompilerRankedRecipeSourceProofInputsV1 {
+                    source,
+                    ranked_roots,
+                },
+                erased,
+                budget,
+            )
+        })
+    }
+
     fn capture(fixture: Fixture) -> Self {
         let Fixture {
             semantic,

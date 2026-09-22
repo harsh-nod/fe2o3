@@ -317,10 +317,10 @@ fn typed_unit_replay_retains_original_n_and_exact_e_with_signed_global_effect() 
     assert!(!checked.proves_whole_operational_or_indexed_address_equivalence());
 }
 
-#[test]
-fn typed_unit_replay_rejects_n_as_e_and_freshly_verified_changed_e() {
-    let (fixture, owner) = unit_fixture();
-    let mut changed = owner.erased().module().clone();
+pub(super) fn changed_erased_module(
+    erased: &VerifiedCanonicalKernelIrModuleV12,
+) -> fe2o3_kernel_ir::Module {
+    let mut changed = erased.module().clone();
     let operation = changed
         .functions
         .iter_mut()
@@ -330,6 +330,13 @@ fn typed_unit_replay_rejects_n_as_e_and_freshly_verified_changed_e() {
         .find(|operation| operation.kind == OperationKind::Constant(Constant::U32(7)))
         .unwrap();
     operation.kind = OperationKind::Constant(Constant::U32(8));
+    changed
+}
+
+#[test]
+fn typed_unit_replay_rejects_n_as_e_and_freshly_verified_changed_e() {
+    let (fixture, owner) = unit_fixture();
+    let changed = changed_erased_module(owner.erased());
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget

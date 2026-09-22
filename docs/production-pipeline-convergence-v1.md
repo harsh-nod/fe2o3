@@ -119,10 +119,22 @@ continuations, which independently re-import signatures, recompile, rebuild V5
 and aggregate subjects, and replay source correspondence. UnitLocal recovery
 preserves original N and independently admitted E; it does not rerun the erasure
 producer. Embedded test keys establish consistency, not protected origin.
-Native backend packet preparation now encodes recipes and source rows and uses
-these reconstructive entrypoints for both Direct and UnitLocal source owners.
-Its retained result is still a source-proof owner, not a complete serialized
-capsule or protected publication continuation.
+`encode_native_compiler_source_packet_v1` now transports the five original source
+frames, detached launch inputs, all nine staging digests, full individual
+receipt wires and keys, recipes, source rows and diagnostic text in one inert
+byte buffer. It preserves independent launch/staging/ranked counts and order,
+both launch ranks, exact logical names, full bindings, workgroup options and
+raw grid values. UnitLocal additionally carries actual E bytes, which receive
+fresh V12 admission rather than a serialized verified flag. Neither grid fields
+nor embedded verifying keys authenticate their origin.
+
+Native backend packet preparation serializes this complete packet, replays it
+through the existing recipe validators, and retains its bytes alongside the
+source-proof owner and original N envelope. This is not yet a serialized capsule
+or protected publication continuation. The packet has a dedicated versioned
+schema and an explicit aggregate 4 MiB limit, including duplicate nested bytes.
+A future enclosing ProofBinding carrier must also fit its own overhead within
+the unchanged receipt limit; larger leaf limits are not additive allowances.
 
 Work and live logical payload use the shared verification ledger. Resolver
 callbacks can charge work but cannot replace or release the storage ledger;
@@ -134,11 +146,14 @@ prepaid and remain live throughout replay. Existing checked constructors and pro
 retain their separate bounded scratch/work domains: this is not an RSS or
 whole-process accounting claim.
 
-Complete launch/signature/staging packet transport remains outstanding:
-the new entrypoints still borrow those auxiliary typed inputs. This component
-does not complete native artifact recovery, compiler/Worker custody, generated
-safe launch, protected proof execution or tutorial/GPU qualification. M0-M7
-remain open.
+The complete packet decoder borrows wire payloads and reserves its typed launch,
+staging and signature metadata through replay. Returned proof receipts exclude
+these discarded adapters. Tests recover Direct and UnitLocal after dropping
+producer owners, preserve distinct inert root records, reject malformed framing
+and wire-valid semantic mutations, and exercise exact/one-short work and storage
+limits. These test-key fixtures are not protected proofs. Native capsule
+embedding, compiler/Worker custody, generated safe launch, protected proof
+execution and tutorial/GPU qualification remain outstanding. M0-M7 remain open.
 
 The tensor leaf dependency now reuses the existing kernel-IR V8 grammar through
 `encode_tensor_layout_leaf_v1` and `decode_tensor_layout_leaf_v1`. Both require

@@ -16,8 +16,9 @@ use fe2o3_pliron::{
 };
 use std::mem::size_of;
 
-/// Inert recipe and source-row frames with ordered replay metadata. Signatures
-/// and enclosing source inputs are not yet a complete native artifact wire format.
+/// Borrowed inert recipe and source-row frames with ordered replay metadata.
+/// The complete source packet codec transports these inputs and signatures;
+/// neither this view nor its wire framing grants native artifact authority.
 #[derive(Clone, Copy)]
 pub struct NativeCompilerRankedRecipeRootV1<'a> {
     pub semantic_root: u32,
@@ -223,7 +224,7 @@ impl DecodedRecipes {
     }
 }
 
-fn recipe_scope<T>(
+pub(super) fn recipe_scope<T>(
     budget: &mut Budget<'_>,
     run: impl FnOnce(&mut Budget<'_>) -> Result<T, E>,
 ) -> Result<T, E> {

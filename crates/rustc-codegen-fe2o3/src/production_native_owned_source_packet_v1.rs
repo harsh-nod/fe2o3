@@ -2,9 +2,8 @@
 use super::*;
 use fe2o3_lower_mir_kernel::ProductionUnitLocalErasedSourceOwnerV1 as ErasedSource;
 use fe2o3_verifier::{
-    NativeCompilerUnitLocalErasedRecipeSourceProofInputsV1,
     ValidatedNativeCompilerUnitLocalErasedSourceProofV1 as ErasedProof,
-    validate_native_compiler_unit_local_erased_recipe_source_proof_v1,
+    validate_native_compiler_unit_local_erased_source_packet_v1,
 };
 use std::mem::size_of;
 
@@ -17,6 +16,7 @@ mod tests;
 pub(crate) struct PreparedNativeSourceProofPacketV1<P> {
     proof: P,
     original_native_module: Vec<u8>,
+    source_packet: Vec<u8>,
     proof_storage: usize,
 }
 impl<P> PreparedNativeSourceProofPacketV1<P> {
@@ -26,6 +26,9 @@ impl<P> PreparedNativeSourceProofPacketV1<P> {
     pub(crate) fn original_native_module(&self) -> &[u8] {
         &self.original_native_module
     }
+    pub(crate) fn source_packet(&self) -> &[u8] {
+        &self.source_packet
+    }
     pub(crate) fn retained_storage(&self) -> Result<usize, E> {
         if self.proof_storage < size_of::<P>() {
             return Err(Resource::Accounting.into());
@@ -33,6 +36,7 @@ impl<P> PreparedNativeSourceProofPacketV1<P> {
         packet_header::<P>()?
             .checked_add(self.proof_storage)
             .and_then(|n| n.checked_add(self.original_native_module.capacity()))
+            .and_then(|n| n.checked_add(self.source_packet.capacity()))
             .ok_or(Resource::Arithmetic.into())
     }
     fn from_parts(parts: packet::NativeSourcePacketPartsV1<P>) -> Result<Self, E> {
@@ -40,10 +44,12 @@ impl<P> PreparedNativeSourceProofPacketV1<P> {
             .retained
             .checked_sub(packet_header::<P>()?)
             .and_then(|n| n.checked_sub(parts.native_module.capacity()))
+            .and_then(|n| n.checked_sub(parts.source_packet.capacity()))
             .ok_or(Resource::Accounting)?;
         let value = Self {
             proof: parts.proof,
             original_native_module: parts.native_module,
+            source_packet: parts.source_packet,
             proof_storage,
         };
         if value.retained_storage()? != parts.retained {
@@ -82,7 +88,7 @@ pub(crate) fn prepare_borrowed_native_source_packet_v1(
             budget,
             |inputs, budget| {
                 let (proof, receipt) =
-                    validate_native_compiler_ranked_recipe_source_proof_v1(inputs, budget)
+                    validate_native_compiler_ranked_source_packet_v1(inputs, budget)
                         .map_err(E::Replay)?;
                 Ok((proof, receipt.retained_storage()))
             },
@@ -110,15 +116,8 @@ pub(crate) fn prepare_borrowed_erased_native_source_packet_v1(
             budget,
             |inputs, budget| {
                 let (proof, receipt) =
-                    validate_native_compiler_unit_local_erased_recipe_source_proof_v1(
-                        NativeCompilerUnitLocalErasedRecipeSourceProofInputsV1 {
-                            original: inputs.source,
-                            ranked_roots: inputs.ranked_roots,
-                            erased: source.erased(),
-                        },
-                        budget,
-                    )
-                    .map_err(E::Replay)?;
+                    validate_native_compiler_unit_local_erased_source_packet_v1(inputs, budget)
+                        .map_err(E::Replay)?;
                 Ok((proof, receipt.retained_storage()))
             },
         )?;

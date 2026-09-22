@@ -83,6 +83,8 @@ pub struct NativeCompilerSourceProofInputsV1<'a> {
 #[derive(Debug)]
 pub enum NativeCompilerSourceProofErrorV1 {
     Resource(Resource),
+    PacketWire(&'static str),
+    ErasedAdmission(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12),
     Native(fe2o3_compiler_lineage::NativeNeutralModuleErrorV1),
     Roster(fe2o3_compiler_lineage::MultiRootProofRosterErrorV3),
     Source(fe2o3_lower_mir_kernel::NativeSourceReplayErrorV1),
@@ -661,3 +663,7 @@ pub use unit_local_erased::*;
 #[path = "compiler_native_ranked_recipe_source_proof_v1.rs"]
 mod recipe_source;
 pub use recipe_source::*;
+
+#[path = "compiler_native_source_packet_v1.rs"]
+mod source_packet;
+pub use source_packet::*;

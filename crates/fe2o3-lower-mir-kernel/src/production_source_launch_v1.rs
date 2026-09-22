@@ -73,6 +73,21 @@ impl<'name> ProductionSourceLaunchRootInputV1<'name> {
             launch,
         }
     }
+
+    /// Exact supplied logical name, not an authenticated export identity.
+    pub const fn logical_name(self) -> &'name str {
+        self.logical_name
+    }
+
+    /// Complete supplied binding, not the truncated diagnostic grid identity.
+    pub const fn kernel_binding(self) -> [u8; 32] {
+        self.kernel_binding
+    }
+
+    /// Detached fields; transport does not authenticate their source origin.
+    pub const fn launch(self) -> ProductionSourceLaunchInputV1 {
+        self.launch
+    }
 }
 
 /// Existing source-projection diagnostic categories, without backend types.

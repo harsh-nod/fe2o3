@@ -28,6 +28,9 @@ impl PreparedErasedNativeSourceLineageV1 {
     pub(crate) fn original_native_module(&self) -> &[u8] {
         self.packet.original_native_module()
     }
+    pub(crate) fn source_packet(&self) -> &[u8] {
+        self.packet.source_packet()
+    }
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
     }
