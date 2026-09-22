@@ -396,7 +396,20 @@ Before enabling runtime admission, the remaining work is:
    an existing live lease, late rejection and raw alias writes. They are synthetic
    pre-states, not fallible actual-constructor reachability. Instrumented CPU baseline
    comparisons do not establish native performance parity.
-   Remaining bodies include construction, stable release and producer admission/release;
+   The [actual stable release packet](evidence/dev-stable-release-2026-09-22/README.md)
+   shares full-reference lookup, ordered preflight and actual take/decrement/free-stack
+   append. Its raw contract derives selected uniqueness from successful admission and
+   preserves whole-owner identity on rejection without assuming a valid reader invariant.
+   Paired actual/historical executions preserve represented custody; live witnesses
+   release a subset, retain an overlapping lease, reject stale/replayed references and
+   reacquire with a new incarnation. The public adapter conditionally observes actual
+   free-stack capacity; proof execution uses an explicit observation of that value.
+   CPU fixtures qualify observation placement and physical-capacity boundaries, but
+   physical storage, push nonallocation, allocator/unwind and quiescence authenticity
+   are not formally refined. Raw safety requires matching reader/allocation storage
+   lengths. Malformed-prefix and undercount witnesses do not claim valid custody.
+   Instrumented frozen-baseline comparisons are not native performance evidence.
+   Remaining bodies include construction and producer admission/release;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

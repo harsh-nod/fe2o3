@@ -5,6 +5,7 @@ type Journal = ContextReadLeasedJournalV1;
 type Error = ContextVersionJournalErrorV1;
 
 mod acquire_shared;
+mod release_shared;
 
 mod begin_guards {
     use super::*;

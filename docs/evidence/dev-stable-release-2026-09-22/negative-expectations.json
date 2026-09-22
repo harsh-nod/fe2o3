@@ -1,0 +1,2614 @@
+{
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  },
+  "reference_incarnation": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+            "byte_start": 168,
+            "byte_end": 283,
+            "line_start": 4,
+            "line_end": 5,
+            "column_start": 9,
+            "column_end": 82,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $left.slot == $right.slot && true",
+                "highlight_start": 9,
+                "highlight_end": 42
+              },
+              {
+                "text": "            && stable_read_consumer_same_exec_v1($left.consumer, $right.consumer)",
+                "highlight_start": 1,
+                "highlight_end": 82
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+                "byte_start": 416,
+                "byte_end": 461,
+                "line_start": 12,
+                "line_end": 12,
+                "column_start": 5,
+                "column_end": 50,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_read_reference_same_body!(left, right)",
+                    "highlight_start": 5,
+                    "highlight_end": 50
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_read_reference_same_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+                "byte_start": 76,
+                "byte_end": 120,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 45,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_read_reference_same_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 45
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 356,
+            "byte_end": 408,
+            "line_start": 10,
+            "line_end": 10,
+            "column_start": 13,
+            "column_end": 65,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_read_reference_same_v1(left, right),",
+                "highlight_start": 13,
+                "highlight_end": 65
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:10:13\n   |\n10 |       ensures result == stable_read_reference_same_v1(left, right),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs:4:9\n   |\n 4 | /         $left.slot == $right.slot && true\n 5 | |             && stable_read_consumer_same_exec_v1($left.consumer, $right.consumer)\n   | |_________________________________________________________________________________- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reference_consumer": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+            "byte_start": 168,
+            "byte_end": 256,
+            "line_start": 4,
+            "line_end": 5,
+            "column_start": 9,
+            "column_end": 20,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $left.slot == $right.slot && $left.incarnation == $right.incarnation",
+                "highlight_start": 9,
+                "highlight_end": 77
+              },
+              {
+                "text": "            && true",
+                "highlight_start": 1,
+                "highlight_end": 20
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+                "byte_start": 416,
+                "byte_end": 461,
+                "line_start": 12,
+                "line_end": 12,
+                "column_start": 5,
+                "column_end": 50,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_read_reference_same_body!(left, right)",
+                    "highlight_start": 5,
+                    "highlight_end": 50
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_read_reference_same_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+                "byte_start": 76,
+                "byte_end": 120,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 45,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_read_reference_same_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 45
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 356,
+            "byte_end": 408,
+            "line_start": 10,
+            "line_end": 10,
+            "column_start": 13,
+            "column_end": 65,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_read_reference_same_v1(left, right),",
+                "highlight_start": 13,
+                "highlight_end": 65
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:10:13\n   |\n10 |       ensures result == stable_read_reference_same_v1(left, right),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs:4:9\n   |\n 4 | /         $left.slot == $right.slot && $left.incarnation == $right.incarnation\n 5 | |             && true\n   | |___________________- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "lookup_validation_error": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+            "byte_start": 425,
+            "byte_end": 1039,
+            "line_start": 10,
+            "line_end": 25,
+            "column_start": 57,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $reference:ident, $same:path) => {{",
+                "highlight_start": 57,
+                "highlight_end": 58
+              },
+              {
+                "text": "        if $reference.slot >= $contents.leases.len() {",
+                "highlight_start": 1,
+                "highlight_end": 55
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidReference);",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let entry = match $contents.leases[$reference.slot] {",
+                "highlight_start": 1,
+                "highlight_end": 62
+              },
+              {
+                "text": "            Some(entry) => entry,",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "            None => return Err(ContextVersionJournalErrorV1::InvalidReference),",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        if !$same(entry.reference, $reference) {",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidReference);",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        match $contents.validate_read(&entry.request) {",
+                "highlight_start": 1,
+                "highlight_end": 56
+              },
+              {
+                "text": "            Ok(_) => Ok(entry.request),",
+                "highlight_start": 1,
+                "highlight_end": 40
+              },
+              {
+                "text": "            Err(_error) => Ok(entry.request),",
+                "highlight_start": 1,
+                "highlight_end": 46
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+                "byte_start": 707,
+                "byte_end": 785,
+                "line_start": 19,
+                "line_end": 19,
+                "column_start": 9,
+                "column_end": 87,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        stable_lease_lookup_body!(self, reference, stable_read_reference_same_exec_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 87
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_lease_lookup_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+                "byte_start": 329,
+                "byte_end": 366,
+                "line_start": 9,
+                "line_end": 9,
+                "column_start": 1,
+                "column_end": 38,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_lease_lookup_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 38
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 639,
+            "byte_end": 691,
+            "line_start": 17,
+            "line_end": 17,
+            "column_start": 17,
+            "column_end": 69,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == stable_lease_decision_v1(*self, reference),",
+                "highlight_start": 17,
+                "highlight_end": 69
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:17:17\n   |\n17 |           ensures result == stable_lease_decision_v1(*self, reference),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs:10:57\n   |\n10 |       ($contents:ident, $reference:ident, $same:path) => {{\n   |  _________________________________________________________-\n11 | |         if $reference.slot >= $contents.leases.len() {\n12 | |             return Err(ContextVersionJournalErrorV1::InvalidReference);\n...  |\n25 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "evidence_before_empty": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+            "byte_start": 1686,
+            "byte_end": 1742,
+            "line_start": 42,
+            "line_end": 42,
+            "column_start": 13,
+            "column_end": 69,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::RosterCapacity);",
+                "highlight_start": 13,
+                "highlight_end": 69
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+                "byte_start": 2333,
+                "byte_end": 2421,
+                "line_start": 47,
+                "line_end": 47,
+                "column_start": 5,
+                "column_end": 93,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_release_header_body!(contents, consumer, evidence, count, observed_free_capacity)",
+                    "highlight_start": 5,
+                    "highlight_end": 93
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_release_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+                "byte_start": 1330,
+                "byte_end": 1369,
+                "line_start": 36,
+                "line_end": 36,
+                "column_start": 1,
+                "column_end": 40,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_release_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 40
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 2229,
+            "byte_end": 2325,
+            "line_start": 45,
+            "line_end": 45,
+            "column_start": 13,
+            "column_end": 109,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_release_header_v1(*contents, consumer, evidence, count, observed_free_capacity),",
+                "highlight_start": 13,
+                "highlight_end": 109
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:45:13\n   |\n45 |     ensures result == stable_release_header_v1(*contents, consumer, evidence, count, observed_free_capacity),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs:42:13\n   |\n42 |             return Err(ContextVersionJournalErrorV1::RosterCapacity);\n   |             -------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "capacity_equality": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+            "byte_start": 2109,
+            "byte_end": 2163,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 13,
+            "column_end": 67,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 13,
+                "highlight_end": 67
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+                "byte_start": 2333,
+                "byte_end": 2421,
+                "line_start": 47,
+                "line_end": 47,
+                "column_start": 5,
+                "column_end": 93,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_release_header_body!(contents, consumer, evidence, count, observed_free_capacity)",
+                    "highlight_start": 5,
+                    "highlight_end": 93
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_release_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+                "byte_start": 1330,
+                "byte_end": 1369,
+                "line_start": 36,
+                "line_end": 36,
+                "column_start": 1,
+                "column_end": 40,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_release_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 40
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 2229,
+            "byte_end": 2325,
+            "line_start": 45,
+            "line_end": 45,
+            "column_start": 13,
+            "column_end": 109,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_release_header_v1(*contents, consumer, evidence, count, observed_free_capacity),",
+                "highlight_start": 13,
+                "highlight_end": 109
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:45:13\n   |\n45 |     ensures result == stable_release_header_v1(*contents, consumer, evidence, count, observed_free_capacity),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs:52:13\n   |\n52 |             return Err(ContextVersionJournalErrorV1::InvalidState);\n   |             ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "arena_headroom": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+            "byte_start": 1470,
+            "byte_end": 2169,
+            "line_start": 37,
+            "line_end": 55,
+            "column_start": 99,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $consumer:ident, $evidence:ident, $count:ident, $observe_capacity:expr) => {{",
+                "highlight_start": 99,
+                "highlight_end": 100
+              },
+              {
+                "text": "        if !stable_read_consumer_same_exec_v1($evidence, $consumer) {",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $count == 0 {",
+                "highlight_start": 1,
+                "highlight_end": 25
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::RosterCapacity);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let count = match $contents.free_reads.len().checked_add($count) {",
+                "highlight_start": 1,
+                "highlight_end": 75
+              },
+              {
+                "text": "            Some(count) => count,",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "            None => return Err(ContextVersionJournalErrorV1::InvalidState),",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        if false {",
+                "highlight_start": 1,
+                "highlight_end": 19
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if count > $observe_capacity {",
+                "highlight_start": 1,
+                "highlight_end": 39
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        Ok(())",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+                "byte_start": 2333,
+                "byte_end": 2421,
+                "line_start": 47,
+                "line_end": 47,
+                "column_start": 5,
+                "column_end": 93,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_release_header_body!(contents, consumer, evidence, count, observed_free_capacity)",
+                    "highlight_start": 5,
+                    "highlight_end": 93
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_release_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+                "byte_start": 1330,
+                "byte_end": 1369,
+                "line_start": 36,
+                "line_end": 36,
+                "column_start": 1,
+                "column_end": 40,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_release_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 40
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 2229,
+            "byte_end": 2325,
+            "line_start": 45,
+            "line_end": 45,
+            "column_start": 13,
+            "column_end": 109,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_release_header_v1(*contents, consumer, evidence, count, observed_free_capacity),",
+                "highlight_start": 13,
+                "highlight_end": 109
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:45:13\n   |\n45 |       ensures result == stable_release_header_v1(*contents, consumer, evidence, count, observed_free_capacity),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs:37:99\n   |\n37 |       ($contents:ident, $consumer:ident, $evidence:ident, $count:ident, $observe_capacity:expr) => {{\n   |  ___________________________________________________________________________________________________-\n38 | |         if !stable_read_consumer_same_exec_v1($evidence, $consumer) {\n39 | |             return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);\n...  |\n54 | |         Ok(())\n55 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "incarnation_order": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+            "byte_start": 1128,
+            "byte_end": 1320,
+            "line_start": 30,
+            "line_end": 32,
+            "column_start": 9,
+            "column_end": 88,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $left.0 < $right.0 || ($left.0 == $right.0 &&",
+                "highlight_start": 9,
+                "highlight_end": 54
+              },
+              {
+                "text": "            ($left.1 < $right.1 || ($left.1 == $right.1 &&",
+                "highlight_start": 1,
+                "highlight_end": 59
+              },
+              {
+                "text": "                ($left.2 < $right.2 || ($left.2 == $right.2 && $left.3 <= $right.3)))))",
+                "highlight_start": 1,
+                "highlight_end": 88
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+                "byte_start": 1965,
+                "byte_end": 2009,
+                "line_start": 40,
+                "line_end": 40,
+                "column_start": 5,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_release_order_less_body!(left, right)",
+                    "highlight_start": 5,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_release_order_less_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+                "byte_start": 1037,
+                "byte_end": 1080,
+                "line_start": 28,
+                "line_end": 28,
+                "column_start": 1,
+                "column_end": 44,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_release_order_less_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 44
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 1908,
+            "byte_end": 1957,
+            "line_start": 38,
+            "line_end": 38,
+            "column_start": 13,
+            "column_end": 62,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_release_order_lt_v1(left, right),",
+                "highlight_start": 13,
+                "highlight_end": 62
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:38:13\n   |\n38 |       ensures result == stable_release_order_lt_v1(left, right),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs:30:9\n   |\n30 | /         $left.0 < $right.0 || ($left.0 == $right.0 &&\n31 | |             ($left.1 < $right.1 || ($left.1 == $right.1 &&\n32 | |                 ($left.2 < $right.2 || ($left.2 == $right.2 && $left.3 <= $right.3)))))\n   | |_______________________________________________________________________________________- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "group_count": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+            "byte_start": 2315,
+            "byte_end": 3311,
+            "line_start": 59,
+            "line_end": 81,
+            "column_start": 76,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $consumer:ident, $reference:ident, $state:ident) => {{",
+                "highlight_start": 76,
+                "highlight_end": 77
+              },
+              {
+                "text": "        if !stable_read_consumer_same_exec_v1($reference.consumer, $consumer) {",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidReference);",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let request = match $contents.lookup_read($reference) {",
+                "highlight_start": 1,
+                "highlight_end": 64
+              },
+              {
+                "text": "            Ok(request) => request,",
+                "highlight_start": 1,
+                "highlight_end": 36
+              },
+              {
+                "text": "            Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 45
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        let key = (request.allocation.key.local, request.byte_offset, request.byte_len, $reference.incarnation);",
+                "highlight_start": 1,
+                "highlight_end": 113
+              },
+              {
+                "text": "        if let Some(prior) = $state.previous {",
+                "highlight_start": 1,
+                "highlight_end": 47
+              },
+              {
+                "text": "            if !stable_release_order_less_exec_v1(prior, key) {",
+                "highlight_start": 1,
+                "highlight_end": 64
+              },
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::NonCanonicalRoster);",
+                "highlight_start": 1,
+                "highlight_end": 78
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let mut group = 1usize;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "        if let Some(prior) = $state.previous {",
+                "highlight_start": 1,
+                "highlight_end": 47
+              },
+              {
+                "text": "            if prior.0 == key.0 { group = 1; }",
+                "highlight_start": 1,
+                "highlight_end": 47
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $contents.readers[request.allocation.slot] < group {",
+                "highlight_start": 1,
+                "highlight_end": 64
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        Ok(StableReadReleaseScanV1 { previous: Some(key), group })",
+                "highlight_start": 1,
+                "highlight_end": 67
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+                "byte_start": 2902,
+                "byte_end": 2965,
+                "line_start": 56,
+                "line_end": 56,
+                "column_start": 5,
+                "column_end": 68,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_release_item_body!(contents, consumer, reference, state)",
+                    "highlight_start": 5,
+                    "highlight_end": 68
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_release_item_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+                "byte_start": 2200,
+                "byte_end": 2237,
+                "line_start": 58,
+                "line_end": 58,
+                "column_start": 1,
+                "column_end": 38,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_release_item_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 38
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 2739,
+            "byte_end": 2810,
+            "line_start": 53,
+            "line_end": 53,
+            "column_start": 13,
+            "column_end": 84,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_release_item_v1(*contents, consumer, reference, state),",
+                "highlight_start": 13,
+                "highlight_end": 84
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:53:13\n   |\n53 |       ensures result == stable_release_item_v1(*contents, consumer, reference, state),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs:59:76\n   |\n59 |       ($contents:ident, $consumer:ident, $reference:ident, $state:ident) => {{\n   |  ____________________________________________________________________________-\n60 | |         if !stable_read_consumer_same_exec_v1($reference.consumer, $consumer) {\n61 | |             return Err(ContextVersionJournalErrorV1::InvalidReference);\n...  |\n80 | |         Ok(StableReadReleaseScanV1 { previous: Some(key), group })\n81 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "take_clear": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "invariant not satisfied at end of loop body",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 5022,
+            "byte_end": 5099,
+            "line_start": 90,
+            "line_end": 90,
+            "column_start": 13,
+            "column_end": 90,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            stable_release_commit_prefix_v1(before, *contents, references@, index as nat),",
+                "highlight_start": 13,
+                "highlight_end": 90
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: invariant not satisfied at end of loop body\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:90:13\n   |\n90 |             stable_release_commit_prefix_v1(before, *contents, references@, index as nat),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reader_decrement": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 6042,
+            "byte_end": 6148,
+            "line_start": 106,
+            "line_end": 106,
+            "column_start": 24,
+            "column_end": 130,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                assert(contents.readers@[a] == if a == allocation { previous_readers[a] - 1 } else { previous_readers[a] as int });",
+                "highlight_start": 24,
+                "highlight_end": 130
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:106:24\n    |\n106 |                 assert(contents.readers@[a] == if a == allocation { previous_readers[a] - 1 } else { previous_readers[a] as int });\n    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "free_push": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 6297,
+            "byte_end": 6401,
+            "line_start": 109,
+            "line_end": 109,
+            "column_start": 20,
+            "column_end": 124,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            assert(contents.free_reads@ =~= before.free_reads@ + Seq::new((index + 1) as nat, |i: int| references@[i].slot));",
+                "highlight_start": 20,
+                "highlight_end": 124
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:109:20\n    |\n109 |             assert(contents.free_reads@ =~= before.free_reads@ + Seq::new((index + 1) as nat, |i: int| references@[i].slot));\n    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reject_mutates_owner": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+            "byte_start": 5784,
+            "byte_end": 5801,
+            "line_start": 141,
+            "line_end": 141,
+            "column_start": 65,
+            "column_end": 82,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                Err(error) => { $contents.next_incarnation = 0; return Err(error); },",
+                "highlight_start": 65,
+                "highlight_end": 82
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+                "byte_start": 1354,
+                "byte_end": 1766,
+                "line_start": 29,
+                "line_end": 33,
+                "column_start": 9,
+                "column_end": 64,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        stable_release_execution_body!(verus_exec_expr, self, consumer, references, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 94
+                  },
+                  {
+                    "text": "            stable_release_preflight_exec_v1, stable_release_commit_exec_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 77
+                  },
+                  {
+                    "text": "            [, observed_free_capacity], value, [], [proof { assert(value =~= ()); }],",
+                    "highlight_start": 1,
+                    "highlight_end": 86
+                  },
+                  {
+                    "text": "            [proof { stable_release_preflight_implies_commit_ready_v1(*self, consumer, references@,",
+                    "highlight_start": 1,
+                    "highlight_end": 100
+                  },
+                  {
+                    "text": "                evidence.consumer, observed_free_capacity); }])",
+                    "highlight_start": 1,
+                    "highlight_end": 64
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_release_execution_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs",
+                "byte_start": 5212,
+                "byte_end": 5254,
+                "line_start": 132,
+                "line_end": 132,
+                "column_start": 1,
+                "column_end": 43,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_release_execution_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 43
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs",
+            "byte_start": 1190,
+            "byte_end": 1338,
+            "line_start": 26,
+            "line_end": 27,
+            "column_start": 17,
+            "column_end": 63,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures stable_release_execution_relation_v1(*old(self), *final(self), consumer, references@,",
+                "highlight_start": 17,
+                "highlight_end": 102
+              },
+              {
+                "text": "            evidence.consumer, observed_free_capacity, result),",
+                "highlight_start": 1,
+                "highlight_end": 63
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_bodies_v1.rs:26:17\n    |\n 26 |           ensures stable_release_execution_relation_v1(*old(self), *final(self), consumer, references@,\n    |  _________________^\n 27 | |             evidence.consumer, observed_free_capacity, result),\n    | |______________________________________________________________^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/release_bodies.rs:141:65\n    |\n141 |                   Err(error) => { $contents.next_incarnation = 0; return Err(error); },\n    |                                                                   ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reject_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 7881,
+            "byte_end": 9137,
+            "line_start": 127,
+            "line_end": 142,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if result == Ok(()) {",
+                "highlight_start": 5,
+                "highlight_end": 26
+              },
+              {
+                "text": "        stable_release_preflight_implies_commit_ready_v1(before, consumer, references, evidence, observed_free_capacity);",
+                "highlight_start": 1,
+                "highlight_end": 122
+              },
+              {
+                "text": "        stable_released_requests_correspondence(before, model_before, references);",
+                "highlight_start": 1,
+                "highlight_end": 83
+              },
+              {
+                "text": "        stable_released_leases_correspondence(before, model_before, references, references.len());",
+                "highlight_start": 1,
+                "highlight_end": 99
+              },
+              {
+                "text": "        assert(Seq::new(references.len(), |i: int| references[i].slot)",
+                "highlight_start": 1,
+                "highlight_end": 71
+              },
+              {
+                "text": "            =~= Seq::new(stable_references_view(references).len(), |i: int| stable_references_view(references)[i].slot));",
+                "highlight_start": 1,
+                "highlight_end": 122
+              },
+              {
+                "text": "        assert(after.readers@ =~= model_after.readers@) by {",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "            assert forall|a: int| 0 <= a < after.readers@.len() implies after.readers@[a] == model_after.readers@[a] by {",
+                "highlight_start": 1,
+                "highlight_end": 122
+              },
+              {
+                "text": "                assert(stable_released_requests_v1(before, references).take(references.len() as int)",
+                "highlight_start": 1,
+                "highlight_end": 101
+              },
+              {
+                "text": "                    =~= stable_released_requests_v1(before, references));",
+                "highlight_start": 1,
+                "highlight_end": 74
+              },
+              {
+                "text": "                assert(logical::released_requests_v1(model_before, stable_references_view(references)).take(references.len() as int)",
+                "highlight_start": 1,
+                "highlight_end": 133
+              },
+              {
+                "text": "                    =~= logical::released_requests_v1(model_before, stable_references_view(references)));",
+                "highlight_start": 1,
+                "highlight_end": 106
+              },
+              {
+                "text": "                stable_slot_count_correspondence(stable_released_requests_v1(before, references), a as usize);",
+                "highlight_start": 1,
+                "highlight_end": 111
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 7714,
+            "byte_end": 7751,
+            "line_start": 124,
+            "line_end": 124,
+            "column_start": 56,
+            "column_end": 93,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == begin_result_from(model_result), stable_represents(after, model_after),",
+                "highlight_start": 56,
+                "highlight_end": 93
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs:124:56\n    |\n124 |       ensures result == begin_result_from(model_result), stable_represents(after, model_after),\n    |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n127 | /     if result == Ok(()) {\n128 | |         stable_release_preflight_implies_commit_ready_v1(before, consumer, references, evidence, observed_free_capacity);\n129 | |         stable_released_requests_correspondence(before, model_before, references);\n130 | |         stable_released_leases_correspondence(before, model_before, references, references.len());\n...   |\n142 | |     }\n    | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 9095,
+            "byte_end": 9096,
+            "line_start": 139,
+            "line_end": 139,
+            "column_start": 99,
+            "column_end": 100,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                stable_slot_count_correspondence(stable_released_requests_v1(before, references), a as usize);",
+                "highlight_start": 99,
+                "highlight_end": 100
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs:139:99\n    |\n139 |                 stable_slot_count_correspondence(stable_released_requests_v1(before, references), a as usize);\n    |                                                                                                   ^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 7327,
+            "byte_end": 7442,
+            "line_start": 121,
+            "line_end": 121,
+            "column_start": 9,
+            "column_end": 124,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        stable_release_execution_relation_v1(before, after, consumer, references, evidence, observed_free_capacity, result),",
+                "highlight_start": 9,
+                "highlight_end": 124
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 10783,
+            "byte_end": 10950,
+            "line_start": 166,
+            "line_end": 167,
+            "column_start": 13,
+            "column_end": 73,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    proof { stable_release_paired_transition(before, *actual, model_before, *model, consumer, references@,",
+                "highlight_start": 13,
+                "highlight_end": 107
+              },
+              {
+                "text": "        evidence.consumer, observed_free_capacity, result, model_result); }",
+                "highlight_start": 1,
+                "highlight_end": 73
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs:166:13\n    |\n121 |           stable_release_execution_relation_v1(before, after, consumer, references, evidence, observed_free_capacity, result),\n    |           ------------------------------------------------------------------------------------------------------------------- failed precondition\n...\n166 |       proof { stable_release_paired_transition(before, *actual, model_before, *model, consumer, references@,\n    |  _____________^\n167 | |         evidence.consumer, observed_free_capacity, result, model_result); }\n    | |________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 7452,
+            "byte_end": 7657,
+            "line_start": 122,
+            "line_end": 123,
+            "column_start": 9,
+            "column_end": 113,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::release_execution_relation_v1(model_before, model_after, writer_key_view(consumer),",
+                "highlight_start": 9,
+                "highlight_end": 101
+              },
+              {
+                "text": "            stable_references_view(references), writer_key_view(evidence), observed_free_capacity, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 113
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 10771,
+            "byte_end": 10938,
+            "line_start": 166,
+            "line_end": 167,
+            "column_start": 13,
+            "column_end": 73,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    proof { stable_release_paired_transition(before, *actual, model_before, *model, consumer, references@,",
+                "highlight_start": 13,
+                "highlight_end": 107
+              },
+              {
+                "text": "        evidence.consumer, observed_free_capacity, result, model_result); }",
+                "highlight_start": 1,
+                "highlight_end": 73
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs:166:13\n    |\n122 | /         logical::release_execution_relation_v1(model_before, model_after, writer_key_view(consumer),\n123 | |             stable_references_view(references), writer_key_view(evidence), observed_free_capacity, model_result),\n    | |________________________________________________________________________________________________________________- failed precondition\n...\n166 |       proof { stable_release_paired_transition(before, *actual, model_before, *model, consumer, references@,\n    |  _____________^\n167 | |         evidence.consumer, observed_free_capacity, result, model_result); }\n    | |________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "roster_projection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 4370,
+            "byte_end": 4606,
+            "line_start": 80,
+            "line_end": 81,
+            "column_start": 7,
+            "column_end": 127,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn stable_release_decision_correspondence(actual: ContextReadLeasedJournalV1, model: logical::ReadContentsV1,",
+                "highlight_start": 7,
+                "highlight_end": 116
+              },
+              {
+                "text": "    consumer: WriterKeyV1, references: Seq<ContextReadLeaseReferenceV1>, evidence: WriterKeyV1, observed_free_capacity: usize)",
+                "highlight_start": 1,
+                "highlight_end": 127
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 4666,
+            "byte_end": 4948,
+            "line_start": 83,
+            "line_end": 85,
+            "column_start": 13,
+            "column_end": 64,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures stable_release_decision_v1(actual, consumer, references, evidence, observed_free_capacity)",
+                "highlight_start": 13,
+                "highlight_end": 103
+              },
+              {
+                "text": "        == begin_result_from(logical::release_decision_v1(model, writer_key_view(consumer), stable_references_view(references),",
+                "highlight_start": 1,
+                "highlight_end": 128
+              },
+              {
+                "text": "            writer_key_view(evidence), observed_free_capacity)),",
+                "highlight_start": 1,
+                "highlight_end": 64
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs:83:13\n   |\n80 |   proof fn stable_release_decision_correspondence(actual: ContextReadLeasedJournalV1, model: logical::ReadContentsV1,\n   |  _______-\n81 | |     consumer: WriterKeyV1, references: Seq<ContextReadLeaseReferenceV1>, evidence: WriterKeyV1, observed_free_capacity: usize)\n   | |______________________________________________________________________________________________________________________________- at the end of the function body\n82 |       requires stable_represents(actual, model),\n83 |       ensures stable_release_decision_v1(actual, consumer, references, evidence, observed_free_capacity)\n   |  _____________^\n84 | |         == begin_result_from(logical::release_decision_v1(model, writer_key_view(consumer), stable_references_view(references),\n85 | |             writer_key_view(evidence), observed_free_capacity)),\n   | |_______________________________________________________________^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 5028,
+            "byte_end": 5044,
+            "line_start": 87,
+            "line_end": 87,
+            "column_start": 77,
+            "column_end": 93,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    stable_release_header_correspondence(actual, model, consumer, evidence, references.len() as usize, observed_free_capacity);",
+                "highlight_start": 77,
+                "highlight_end": 93
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs:87:77\n   |\n87 |     stable_release_header_correspondence(actual, model, consumer, evidence, references.len() as usize, observed_free_capacity);\n   |                                                                             ^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "scan_projection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 2656,
+            "byte_end": 2860,
+            "line_start": 52,
+            "line_end": 53,
+            "column_start": 7,
+            "column_end": 99,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn stable_release_item_correspondence(actual: ContextReadLeasedJournalV1, model: logical::ReadContentsV1,",
+                "highlight_start": 7,
+                "highlight_end": 112
+              },
+              {
+                "text": "    consumer: WriterKeyV1, reference: ContextReadLeaseReferenceV1, state: StableReadReleaseScanV1)",
+                "highlight_start": 1,
+                "highlight_end": 99
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 2920,
+            "byte_end": 3376,
+            "line_start": 55,
+            "line_end": 59,
+            "column_start": 13,
+            "column_end": 6,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures match logical::release_item_v1(model, writer_key_view(consumer), read_reference_view(reference), stable_release_scan_view(state)) {",
+                "highlight_start": 13,
+                "highlight_end": 144
+              },
+              {
+                "text": "        Err(error) => stable_release_item_v1(actual, consumer, reference, state) == Err(read_error_embed(error)),",
+                "highlight_start": 1,
+                "highlight_end": 114
+              },
+              {
+                "text": "        Ok(next) => stable_release_item_v1(actual, consumer, reference, state).is_ok()",
+                "highlight_start": 1,
+                "highlight_end": 87
+              },
+              {
+                "text": "            && stable_release_scan_view(stable_release_item_v1(actual, consumer, reference, state).unwrap()) == next,",
+                "highlight_start": 1,
+                "highlight_end": 118
+              },
+              {
+                "text": "    },",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs:55:13\n   |\n52 |   proof fn stable_release_item_correspondence(actual: ContextReadLeasedJournalV1, model: logical::ReadContentsV1,\n   |  _______-\n53 | |     consumer: WriterKeyV1, reference: ContextReadLeaseReferenceV1, state: StableReadReleaseScanV1)\n   | |__________________________________________________________________________________________________- at the end of the function body\n54 |       requires stable_represents(actual, model),\n55 |       ensures match logical::release_item_v1(model, writer_key_view(consumer), read_reference_view(reference), stable_release_scan_v...\n   |  _____________^\n56 | |         Err(error) => stable_release_item_v1(actual, consumer, reference, state) == Err(read_error_embed(error)),\n57 | |         Ok(next) => stable_release_item_v1(actual, consumer, reference, state).is_ok()\n58 | |             && stable_release_scan_view(stable_release_item_v1(actual, consumer, reference, state).unwrap()) == next,\n59 | |     },\n   | |_____^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "short_capacity_witness": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_witnesses_v1.rs",
+            "byte_start": 4869,
+            "byte_end": 4964,
+            "line_start": 86,
+            "line_end": 86,
+            "column_start": 12,
+            "column_end": 107,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    assert(short.0 == Err(ReadErrorV1::InvalidState) && short.1 == Err(logical::ReadErrorV1::InvalidState));",
+                "highlight_start": 12,
+                "highlight_end": 107
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_witnesses_v1.rs:86:12\n   |\n86 |     assert(short.0 == Err(ReadErrorV1::InvalidState) && short.1 == Err(logical::ReadErrorV1::InvalidState));\n   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_stable_release_historical_v1::production::stable_release_live_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_stable_release_historical_v1::production::stable_release_live_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "late_undercount_witness": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_witnesses_v1.rs",
+            "byte_start": 8473,
+            "byte_end": 8515,
+            "line_start": 149,
+            "line_end": 149,
+            "column_start": 12,
+            "column_end": 54,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    assert(rejected == Err(ReadErrorV1::InvalidState));",
+                "highlight_start": 12,
+                "highlight_end": 54
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_witnesses_v1.rs:149:12\n    |\n149 |     assert(rejected == Err(ReadErrorV1::InvalidState));\n    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_stable_release_historical_v1::production::stable_release_late_undercount_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_stable_release_historical_v1::production::stable_release_late_undercount_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "raw_prefix_witness": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_witnesses_v1.rs",
+            "byte_start": 9811,
+            "byte_end": 9851,
+            "line_start": 179,
+            "line_end": 179,
+            "column_start": 12,
+            "column_end": 52,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    assert(actual.free_reads@ == seq![0usize, 0, 0]);",
+                "highlight_start": 12,
+                "highlight_end": 52
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_witnesses_v1.rs:179:12\n    |\n179 |     assert(actual.free_reads@ == seq![0usize, 0, 0]);\n    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_stable_release_historical_v1::production::stable_release_raw_prefix_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_stable_release_historical_v1::production::stable_release_raw_prefix_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}

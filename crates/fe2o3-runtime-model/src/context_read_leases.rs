@@ -25,6 +25,9 @@ macro_rules! reader_rust_expr {
 #[macro_use]
 mod acquire;
 
+#[macro_use]
+mod release;
+
 impl Deref for ContextReadLeasedJournalV1 {
     type Target = ContextVersionJournalV1;
 
@@ -41,6 +44,7 @@ fn storage<T>(capacity: usize) -> Result<Vec<T>, ContextVersionJournalErrorV1> {
     Ok(result)
 }
 
+#[cfg(test)]
 fn read_key(request: &ContextAllocationReadV1) -> (u64, u64, u64) {
     (
         request.allocation.key.local,
@@ -128,73 +132,37 @@ impl ContextReadLeasedJournalV1 {
         )
     }
 
+    #[allow(clippy::question_mark)]
     pub fn lookup_read(
         &self,
         reference: ContextReadLeaseReferenceV1,
     ) -> Result<ContextAllocationReadV1, ContextVersionJournalErrorV1> {
-        let entry = self
-            .leases
-            .get(reference.slot)
-            .copied()
-            .flatten()
-            .filter(|entry| entry.reference == reference)
-            .ok_or(ContextVersionJournalErrorV1::InvalidReference)?;
-        self.validate_read(&entry.request)?;
-        Ok(entry.request)
+        stable_lease_lookup_body!(self, reference, release::stable_read_reference_same_exec_v1)
     }
 
     /// Release order is canonical by request key, then incarnation. The caller
     /// authenticates the inert quiescence premise; failure never implies release.
+    #[allow(clippy::question_mark)]
     pub fn release_reads(
         &mut self,
         consumer: ContextWriterKeyV1,
         references: &[ContextReadLeaseReferenceV1],
         evidence: &ContextReadQuiescenceEvidenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        if evidence.consumer != consumer {
-            return Err(E::SettlementEvidenceMismatch);
-        }
-        if references.is_empty() {
-            return Err(E::RosterCapacity);
-        }
-        if self
-            .free_reads
-            .len()
-            .checked_add(references.len())
-            .is_none_or(|count| count > self.leases.len() || count > self.free_reads.capacity())
-        {
-            return Err(E::InvalidState);
-        }
-        let mut previous = None;
-        let mut group = 0;
-        for reference in references {
-            if reference.consumer != consumer {
-                return Err(E::InvalidReference);
-            }
-            let request = self.lookup_read(*reference)?;
-            let key = (read_key(&request), reference.incarnation);
-            if previous.is_some_and(|prior| prior >= key) {
-                return Err(E::NonCanonicalRoster);
-            }
-            group = if previous.is_some_and(|prior: ((u64, u64, u64), u64)| prior.0.0 == key.0.0) {
-                group + 1
-            } else {
-                1
-            };
-            if self.readers[request.allocation.slot] < group {
-                return Err(E::InvalidState);
-            }
-            previous = Some(key);
-        }
-        for reference in references {
-            let entry = self.leases[reference.slot]
-                .take()
-                .expect("preflighted lease");
-            self.readers[entry.request.allocation.slot] -= 1;
-            self.free_reads.push(reference.slot);
-        }
-        Ok(())
+        stable_release_execution_body!(
+            reader_rust_expr,
+            self,
+            consumer,
+            references,
+            evidence,
+            release::stable_release_preflight_exec_v1,
+            release::stable_release_commit_exec_v1,
+            [],
+            _value,
+            [],
+            [],
+            []
+        )
     }
 
     fn require_unread(
@@ -320,3 +288,6 @@ mod guard_test_support;
 
 #[cfg(test)]
 mod acquire_baseline;
+
+#[cfg(test)]
+mod release_baseline;
