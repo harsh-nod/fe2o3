@@ -40,8 +40,10 @@ fn fixture(
 }
 
 #[test]
-fn adaptive_full_enrollment_matches_current_standard_sort() {
-    for batch in [8, 16, 17, 64, 255, 256, 257, 512, 4096] {
+fn adaptive_full_enrollment_matches_frozen_standard_sort() {
+    for batch in [
+        8, 16, 17, 19, 20, 21, 64, 127, 128, 129, 255, 256, 257, 512, 4096,
+    ] {
         for pattern in [
             "ascending",
             "descending",
@@ -87,11 +89,13 @@ fn adaptive_full_enrollment_matches_current_standard_sort() {
 }
 
 #[test]
-#[ignore = "manual release-mode sorting-only enrollment comparison"]
+#[ignore = "manual release-mode production enrollment comparison"]
 fn sort_enrollment_performance() {
     use std::hint::black_box;
     use std::time::Instant;
-    for batch in [8usize, 16, 17, 64, 255, 256, 257, 512, 4096] {
+    for batch in [
+        8usize, 16, 17, 19, 20, 21, 64, 127, 128, 129, 255, 256, 257, 512, 4096,
+    ] {
         for pattern in [
             "ascending",
             "descending",
@@ -103,18 +107,22 @@ fn sort_enrollment_performance() {
             let allocations = journal.allocations.clone();
             let free = journal.allocation_free.clone();
             let mut output = std::vec![None; batch];
-            let iterations = (16_384 / batch).clamp(8, 256);
+            let iterations = (262_144 / batch).clamp(128, 4096);
             let mut expected = None;
             for candidate in [false, true] {
                 journal.allocations.copy_from_slice(&allocations);
                 journal.allocation_free.clone_from(&free);
                 output.fill(None);
-                let result = benchmark_baseline::enroll_allocations(
-                    &mut journal,
-                    candidate,
-                    &entries,
-                    &mut output,
-                );
+                let result = if candidate {
+                    journal.enroll_allocations(&entries, &mut output)
+                } else {
+                    benchmark_baseline::enroll_allocations(
+                        &mut journal,
+                        false,
+                        &entries,
+                        &mut output,
+                    )
+                };
                 let actual = (
                     result,
                     journal.allocations.clone(),
@@ -139,12 +147,17 @@ fn sort_enrollment_performance() {
                         journal.allocation_free.clone_from(&free);
                         output.fill(None);
                         let start = Instant::now();
-                        let result = benchmark_baseline::enroll_allocations(
-                            black_box(&mut journal),
-                            candidate,
-                            black_box(&entries),
-                            black_box(&mut output),
-                        );
+                        let result = if candidate {
+                            black_box(&mut journal)
+                                .enroll_allocations(black_box(&entries), black_box(&mut output))
+                        } else {
+                            benchmark_baseline::enroll_allocations(
+                                black_box(&mut journal),
+                                false,
+                                black_box(&entries),
+                                black_box(&mut output),
+                            )
+                        };
                         let _ = black_box(result);
                         elapsed += start.elapsed().as_nanos();
                         black_box(&output);

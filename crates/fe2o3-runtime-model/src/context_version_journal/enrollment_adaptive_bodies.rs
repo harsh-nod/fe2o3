@@ -1,4 +1,4 @@
-// Shared depth-limited sorting candidate. Annotation hooks erase from Rust.
+// Shared production depth-limited sort. Annotation hooks erase from Rust.
 macro_rules! enrollment_ordered_body {
     ($syntax:ident, $values:ident, $reverse:ident, $index:ident, $previous:ident, [$($invariants:tt)*]) => {
         $syntax!({
@@ -22,17 +22,32 @@ macro_rules! enrollment_ordered_body {
     };
 }
 
-macro_rules! enrollment_reverse_body {
-    ($syntax:ident, $values:ident, $index:ident, $len:ident, [$($invariants:tt)*]) => {
+macro_rules! enrollment_reverse_halves_body {
+    ($syntax:ident, $left:ident, $right:ident, $index:ident, $len:ident, [$($invariants:tt)*]) => {
         $syntax!({
-            let $len = $values.len();
+            let $len = if $left.len() < $right.len() { $left.len() } else { $right.len() };
             let mut $index = 0usize;
-            while $index < $len / 2
+            while $index < $len
                 $($invariants)*
             {
-                enrollment_swap($values, $index, $len - 1 - $index);
+                core::mem::swap(&mut $left[$index], &mut $right[$len - 1 - $index]);
                 $index += 1;
             }
+        })
+    };
+}
+
+macro_rules! enrollment_reverse_body {
+    ($syntax:ident, $values:ident, $half:ident, $left:ident, $tail:ident, $middle:ident, $right:ident,
+     [$($split:tt)*], [$($reversed:tt)*]) => {
+        $syntax!({
+            let $half = $values.len() / 2;
+            let ($left, $tail) = $values.split_at_mut($half);
+            let skip = $tail.len() - $half;
+            let ($middle, $right) = $tail.split_at_mut(skip);
+            $($split)*
+            enrollment_reverse_halves($left, $right);
+            $($reversed)*
         })
     };
 }
@@ -68,25 +83,42 @@ macro_rules! enrollment_insertion_body {
     };
 }
 
+macro_rules! enrollment_median_body {
+    ($first:ident, $middle:ident, $last:ident) => {{
+        if $first < $middle {
+            if $middle < $last {
+                $middle
+            } else if $first < $last {
+                $last
+            } else {
+                $first
+            }
+        } else if $first < $last {
+            $first
+        } else if $middle < $last {
+            $last
+        } else {
+            $middle
+        }
+    }};
+}
+
 macro_rules! enrollment_pivot_body {
     ($values:ident) => {{
-        let first = $values[0].unwrap().slot;
-        let middle = $values[$values.len() / 2].unwrap().slot;
-        let last = $values[$values.len() - 1].unwrap().slot;
-        if first < middle {
-            if middle < last {
-                middle
-            } else if first < last {
-                last
-            } else {
-                first
-            }
-        } else if first < last {
-            first
-        } else if middle < last {
-            last
+        let len = $values.len();
+        let middle = len / 2;
+        if len < 128 {
+            enrollment_median_of_three($values[0].unwrap().slot, $values[middle].unwrap().slot,
+                $values[len - 1].unwrap().slot)
         } else {
-            middle
+            let step = len / 8;
+            let first = enrollment_median_of_three($values[0].unwrap().slot,
+                $values[step].unwrap().slot, $values[step * 2].unwrap().slot);
+            let center = enrollment_median_of_three($values[middle - step].unwrap().slot,
+                $values[middle].unwrap().slot, $values[middle + step].unwrap().slot);
+            let last = enrollment_median_of_three($values[len - 1 - step * 2].unwrap().slot,
+                $values[len - 1 - step].unwrap().slot, $values[len - 1].unwrap().slot);
+            enrollment_median_of_three(first, center, last)
         }
     }};
 }
@@ -166,18 +198,37 @@ macro_rules! enrollment_binary_partition_body {
 }
 
 macro_rules! enrollment_lomuto_body {
-    ($syntax:ident, $values:ident, $pivot:ident, $less:ident, $scan:ident, [$($invariants:tt)*]) => {
+    ($syntax:ident, $values:ident, $pivot:ident, $less:ident, $scan:ident, $gap:ident,
+     $held:ident, $below:ident, [$($initial:tt)*], [$($invariants:tt)*],
+     [$($before_shift:tt)*], [$($after_shift:tt)*], [$($before_close:tt)*], [$($after_close:tt)*]) => {
         $syntax!({
+            if $values.len() == 0 {
+                return (0, 0);
+            }
+            let $held = $values[0];
             let mut $less = 0usize;
-            let mut $scan = 0usize;
+            let mut $gap = 0usize;
+            let mut $scan = 1usize;
+            $($initial)*
+            // The held first value closes the moving gap after the cyclic pass.
             while $scan < $values.len()
                 $($invariants)*
             {
-                let below = if $values[$scan].unwrap().slot < $pivot { 1usize } else { 0usize };
-                enrollment_swap($values, $less, $scan);
-                $less += below;
+                let $below = if $values[$scan].unwrap().slot < $pivot { 1usize } else { 0usize };
+                $($before_shift)*
+                $values[$gap] = $values[$less];
+                $values[$less] = $values[$scan];
+                $gap = $scan;
+                $less += $below;
                 $scan += 1;
+                $($after_shift)*
             }
+            let $below = if $held.unwrap().slot < $pivot { 1usize } else { 0usize };
+            $($before_close)*
+            $values[$gap] = $values[$less];
+            $values[$less] = $held;
+            $less += $below;
+            $($after_close)*
             ($less, $less)
         })
     };
@@ -188,7 +239,8 @@ macro_rules! enrollment_partition_adaptive_body {
         let first = $values[0].unwrap().slot;
         let middle = $values[$values.len() / 2].unwrap().slot;
         let last = $values[$values.len() - 1].unwrap().slot;
-        if first == middle || first == last || middle == last {
+        if (first == $pivot && (middle == $pivot || last == $pivot))
+            || (middle == $pivot && last == $pivot) {
             enrollment_partition($values, $pivot)
         } else if $values.len() >= 256 {
             enrollment_lomuto($values, $pivot)
@@ -203,7 +255,7 @@ macro_rules! enrollment_introsort_body {
      $left:ident, $tail:ident, $middle:ident, $right:ident,
      [$($partitioned:tt)*], [$($split:tt)*], [$($sorted:tt)*]) => {
         $syntax!({
-            if $values.len() <= 16 {
+            if $values.len() <= 20 {
                 enrollment_insertion($values);
                 return;
             }
@@ -237,6 +289,10 @@ macro_rules! enrollment_adaptive_body {
             if enrollment_ordered($values, true) {
                 enrollment_reverse($values);
                 $($reversed)*
+                return;
+            }
+            if $values.len() <= 20 {
+                enrollment_insertion($values);
                 return;
             }
             let depth = enrollment_depth($values.len());

@@ -90,7 +90,7 @@ impl ContextVersionJournalV1 {
                 key: entry.key,
             });
         }
-        output.sort_unstable_by_key(|reference| reference.unwrap().slot);
+        ordering::sort_enrollment_slots(output);
         if output
             .windows(2)
             .any(|pair| pair[0].unwrap().slot == pair[1].unwrap().slot)

@@ -283,12 +283,18 @@ fn search_performance() {
 }
 
 #[test]
-fn production_keeps_standard_sort_and_shared_searches() {
+fn production_uses_shared_sort_and_searches() {
     let source = include_str!("../../allocation_lifecycle.rs");
-    assert!(source.contains("output.sort_unstable_by_key(|reference| reference.unwrap().slot)"));
+    assert!(source.contains("ordering::sort_enrollment_slots(output)"));
     assert!(source.contains("ordering::contains_key(canonical, entry.key)"));
     assert!(source.contains("ordering::contains_slot(output, slot)"));
     assert!(!source.contains("ordering::sort_slots"));
+    assert!(!source.contains("sort_unstable"));
+    let adapter = include_str!("../ordering.rs");
+    assert!(
+        adapter.contains("pub(super) use adaptive::adaptive_sort_slots as sort_enrollment_slots;")
+    );
+    assert!(!adapter.contains("#[cfg(test)]\nmod adaptive;"));
 }
 
 #[test]

@@ -1,6 +1,7 @@
 use super::*;
 
 mod benchmark_baseline;
+mod diagnostics;
 mod enrollment;
 
 fn input(slots: &[usize]) -> Vec<Option<ContextAllocationReferenceV1>> {
@@ -57,6 +58,9 @@ fn check(slots: &[usize]) {
                 .all(|p| p[0].unwrap().slot <= p[1].unwrap().slot)
         );
     }
+    values.copy_from_slice(&before);
+    enrollment_reverse(&mut values);
+    assert_eq!(values, before.into_iter().rev().collect::<Vec<_>>());
 }
 
 #[test]
@@ -102,7 +106,7 @@ fn adaptive_exhaustive_small_sort_and_partition() {
 #[test]
 fn adaptive_patterns_thresholds_and_forced_fallback() {
     for len in [
-        0, 1, 2, 8, 15, 16, 17, 20, 31, 32, 33, 64, 255, 256, 257, 4096,
+        0, 1, 2, 8, 15, 16, 17, 19, 20, 21, 31, 32, 33, 64, 127, 128, 129, 255, 256, 257, 4096,
     ] {
         check(&(0..len).collect::<Vec<_>>());
         check(&(0..len).rev().collect::<Vec<_>>());
@@ -142,7 +146,9 @@ fn adaptive_depth_budget_matches_bit_length() {
 fn adaptive_performance() {
     use std::hint::black_box;
     use std::time::Instant;
-    for len in [8usize, 16, 17, 64, 255, 256, 257, 512, 4096] {
+    for len in [
+        8usize, 16, 17, 19, 20, 21, 64, 127, 128, 129, 255, 256, 257, 512, 4096,
+    ] {
         for pattern in ["ascending", "descending", "shuffled", "duplicates"] {
             let mut slots: Vec<_> = (0..len).collect();
             match pattern {

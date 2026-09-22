@@ -19,6 +19,27 @@ pub fn enrollment_ordered(values: &[Option<AllocationReferenceV1>], reverse: boo
     ])
 }
 
+pub fn enrollment_reverse_halves(left: &mut [Option<AllocationReferenceV1>], right: &mut [Option<AllocationReferenceV1>])
+    requires old(left)@.len() == old(right)@.len(),
+        enrollment_all_some_v1(old(left)@), enrollment_all_some_v1(old(right)@),
+    ensures final(left)@ == old(right)@.reverse(), final(right)@ == old(left)@.reverse(),
+{
+    let ghost before_left = left@;
+    let ghost before_right = right@;
+    enrollment_reverse_halves_body!(verus_exec_expr, left, right, index, len, [
+        invariant before_left == old(left)@, before_right == old(right)@,
+            index <= len, left.len() == len, right.len() == len,
+            before_left.len() == len, before_right.len() == len,
+            forall|i: int| 0 <= i < len ==> (#[trigger] left@[i]) ==
+                if i < index { before_right[len - 1 - i] } else { before_left[i] },
+            forall|i: int| 0 <= i < len ==> (#[trigger] right@[i]) ==
+                if len - index <= i { before_left[len - 1 - i] } else { before_right[i] },
+        decreases len - index,
+    ]);
+    assert(left@ =~= before_right.reverse());
+    assert(right@ =~= before_left.reverse());
+}
+
 pub fn enrollment_reverse(values: &mut [Option<AllocationReferenceV1>])
     requires enrollment_all_some_v1(old(values)@),
     ensures final(values)@.len() == old(values)@.len(),
@@ -28,15 +49,20 @@ pub fn enrollment_reverse(values: &mut [Option<AllocationReferenceV1>])
             ==> (#[trigger] final(values)@[i]) == old(values)@[old(values)@.len() - 1 - i],
 {
     let ghost before = values@;
-    enrollment_reverse_body!(verus_exec_expr, values, index, len, [
-        invariant index <= len / 2, values.len() == len, before == old(values)@,
-            before.len() == len, enrollment_all_some_v1(values@),
-            values@.to_multiset() == before.to_multiset(),
-            forall|i: int| 0 <= i < len && (i < index || len - index <= i)
-                ==> (#[trigger] values@[i]) == before[len - 1 - i],
-            forall|i: int| index <= i < len - index ==> (#[trigger] values@[i]) == before[i],
-        decreases len / 2 - index,
-    ])
+    enrollment_reverse_body!(verus_exec_expr, values, half, left, tail, middle, right,
+        [let ghost left_before = left@; let ghost right_before = right@;],
+        [proof {
+            let after = left@ + (middle@ + right@);
+            assert forall|i: int| 0 <= i < before.len() implies
+                (#[trigger] after[i]) == before[before.len() - 1 - i] by {
+                if i < half { assert(left@[i] == right_before[half - 1 - i]); }
+                else if i < half + middle.len() { assert(i == before.len() - 1 - i); }
+                else { assert(right@[i - half - middle.len()] == left_before[before.len() - 1 - i]); }
+            }
+            assert(after =~= before.reverse());
+            before.lemma_reverse_to_multiset();
+        }]
+    )
 }
 
 pub open spec fn enrollment_prefix_sorted(values: Seq<Option<AllocationReferenceV1>>, end: int) -> bool {
@@ -115,10 +141,42 @@ pub open spec fn enrollment_median(a: usize, b: usize, c: usize, value: usize) -
     &&& (value <= a && value <= b) || (value <= a && value <= c) || (value <= b && value <= c)
 }
 
+pub open spec fn enrollment_median_value(a: usize, b: usize, c: usize) -> usize {
+    if a < b {
+        if b < c { b } else if a < c { c } else { a }
+    } else if a < c { a } else if b < c { c } else { b }
+}
+
+pub fn enrollment_median_of_three(first: usize, middle: usize, last: usize) -> (result: usize)
+    ensures enrollment_median(first, middle, last, result),
+        result == enrollment_median_value(first, middle, last),
+{
+    enrollment_median_body!(first, middle, last)
+}
+
+pub open spec fn enrollment_pivot_decision(values: Seq<Option<AllocationReferenceV1>>) -> usize {
+    let len = values.len();
+    let middle = len / 2;
+    let step = len / 8;
+    if len == 0 { 0 }
+    else if len < 128 {
+        enrollment_median_value(values[0].unwrap().slot, values[middle as int].unwrap().slot,
+            values[len - 1].unwrap().slot)
+    } else {
+        enrollment_median_value(
+            enrollment_median_value(values[0].unwrap().slot, values[step as int].unwrap().slot,
+                values[(step * 2) as int].unwrap().slot),
+            enrollment_median_value(values[(middle - step) as int].unwrap().slot,
+                values[middle as int].unwrap().slot, values[(middle + step) as int].unwrap().slot),
+            enrollment_median_value(values[(len - 1 - step * 2) as int].unwrap().slot,
+                values[(len - 1 - step) as int].unwrap().slot, values[len - 1].unwrap().slot))
+    }
+}
+
 pub fn enrollment_pivot(values: &[Option<AllocationReferenceV1>]) -> (pivot: usize)
     requires values.len() > 0, enrollment_all_some_v1(values@),
-    ensures enrollment_median(values@[0].unwrap().slot, values@[(values.len() / 2) as int].unwrap().slot,
-                             values@[values.len() - 1].unwrap().slot, pivot),
+    ensures pivot == enrollment_pivot_decision(values@),
+        exists|i: int| 0 <= i < values.len() && (#[trigger] values@[i]).unwrap().slot == pivot,
 {
     enrollment_pivot_body!(values)
 }
@@ -218,13 +276,34 @@ pub fn enrollment_lomuto(values: &mut [Option<AllocationReferenceV1>], pivot: us
         enrollment_weak_bands(final(values)@, pivot, result.0 as int, result.1 as int),
 {
     let ghost before = values@;
-    enrollment_lomuto_body!(verus_exec_expr, values, pivot, less, scan, [
-        invariant before == old(values)@, values@.len() == before.len(), less <= scan <= values.len(),
-            enrollment_all_some_v1(values@), values@.to_multiset() == before.to_multiset(),
+    enrollment_lomuto_body!(verus_exec_expr, values, pivot, less, scan, gap, held, below,
+        [proof { assert(values@.update(gap as int, held) =~= values@); }], [
+        invariant before == old(values)@, values@.len() == before.len(),
+            less <= gap < scan <= values.len(), gap + 1 == scan,
+            held.is_some(), enrollment_all_some_v1(values@),
+            values@.update(gap as int, held).to_multiset() == before.to_multiset(),
             forall|i: int| 0 <= i < less ==> (#[trigger] values@[i]).unwrap().slot < pivot,
-            forall|i: int| less <= i < scan ==> (#[trigger] values@[i]).unwrap().slot >= pivot,
+            forall|i: int| less <= i < gap ==> (#[trigger] values@[i]).unwrap().slot >= pivot,
         decreases values.len() - scan,
-    ])
+    ], [
+        let ghost prior = values@;
+        let ghost prior_gap = gap;
+        let ghost prior_less = less;
+        let ghost prior_scan = scan;
+    ], [proof {
+        let repaired = prior.update(prior_gap as int, held);
+        let swapped = repaired.update(prior_gap as int, repaired[prior_less as int])
+                              .update(prior_less as int, held);
+        enrollment_swap_multiset(repaired, prior_gap as int, prior_less as int);
+        enrollment_swap_multiset(swapped, prior_less as int, prior_scan as int);
+        assert(values@.update(gap as int, held) =~=
+            swapped.update(prior_less as int, swapped[prior_scan as int]).update(prior_scan as int, held));
+    }], [let ghost prior = values@; let ghost prior_less = less;], [proof {
+        let repaired = prior.update(gap as int, held);
+        enrollment_swap_multiset(repaired, gap as int, prior_less as int);
+        assert(values@ =~= repaired.update(gap as int, repaired[prior_less as int])
+                                  .update(prior_less as int, held));
+    }])
 }
 
 pub fn enrollment_partition_adaptive(values: &mut [Option<AllocationReferenceV1>], pivot: usize) -> (result: (usize, usize))

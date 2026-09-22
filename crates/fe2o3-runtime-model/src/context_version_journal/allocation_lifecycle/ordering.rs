@@ -13,8 +13,7 @@ fn enrollment_less(left: ContextAllocationKeyV1, right: ContextAllocationKeyV1) 
     enrollment_less_body!(left, right)
 }
 
-// The verified heap candidate stays test-only until it passes the performance gate.
-#[cfg(test)]
+// Shared swaps and heap fallback also serve the depth-limited production sort.
 #[inline]
 fn enrollment_swap(values: &mut [Option<ContextAllocationReferenceV1>], left: usize, right: usize) {
     enrollment_swap_body!(values, left, right)
@@ -25,7 +24,6 @@ fn enrollment_sorted(values: &[Option<ContextAllocationReferenceV1>]) -> bool {
     enrollment_sorted_body!(enrollment_rust_expr, values, index, [])
 }
 
-#[cfg(test)]
 fn enrollment_sift(values: &mut [Option<ContextAllocationReferenceV1>], start: usize, end: usize) {
     enrollment_sift_body!(
         enrollment_rust_expr,
@@ -44,7 +42,6 @@ fn enrollment_sift(values: &mut [Option<ContextAllocationReferenceV1>], start: u
     )
 }
 
-#[cfg(test)]
 fn enrollment_heapsort(values: &mut [Option<ContextAllocationReferenceV1>]) {
     enrollment_heapsort_body!(
         enrollment_rust_expr,
@@ -106,5 +103,6 @@ pub(super) fn contains_slot(values: &[Option<ContextAllocationReferenceV1>], slo
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
 mod adaptive;
+
+pub(super) use adaptive::adaptive_sort_slots as sort_enrollment_slots;
