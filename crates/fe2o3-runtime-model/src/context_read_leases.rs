@@ -9,6 +9,10 @@ macro_rules! context_read_declarations_v1 {
 }
 
 include!("context_read_leases/declarations.rs");
+include!("context_read_leases/count_bodies.rs");
+
+#[cfg(test)]
+mod acquire_count_baseline;
 
 #[allow(unused_macros)]
 #[macro_use]
@@ -84,7 +88,7 @@ impl ContextReadLeasedJournalV1 {
     }
 
     pub fn retained_read_count(&self) -> usize {
-        self.leases.len() - self.free_reads.len()
+        stable_retained_read_count_body!(self)
     }
 
     pub fn validate_read_capacity(&self, count: usize) -> Result<(), ContextVersionJournalErrorV1> {

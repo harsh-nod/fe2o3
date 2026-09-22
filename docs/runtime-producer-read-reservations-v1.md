@@ -421,7 +421,17 @@ Before enabling runtime admission, the remaining work is:
    source-authenticated, not newly proved as a trait implementation. This read-only
    refinement does not establish construction or acquisition/settlement reachability,
    physical storage guarantees, native pending-consumer authority or performance parity.
-   Remaining bodies include construction and producer admission/release;
+   The [actual producer acquisition packet](evidence/dev-producer-acquire-2026-09-22/README.md)
+   shares retained counts, combined budget, capacity validation and producer
+   admission/commit into the public mutable slice. Paired actual and historical
+   execution preserves represented producer custody, exact results and complete
+   output/owner state. Raw safety is path-sensitive: prefix errors need no budget
+   or count-storage validity; passed headers require explicit arithmetic/storage
+   bounds. Raw duplicate destinations preserve sequential overwrite, and a matching
+   Pending producer ID zero is not silently excluded. Synthetic witnesses do not
+   establish actual constructor/Begin reachability; instrumented frozen-baseline
+   CPU comparisons do not establish native performance parity.
+   Remaining bodies include construction and producer release;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

@@ -26,6 +26,9 @@ macro_rules! reader_rust_expr {
     };
 }
 
+#[macro_use]
+mod acquire;
+
 impl Deref for ContextProducerReadJournalV1 {
     type Target = ContextReadLeasedJournalV1;
 
@@ -74,15 +77,15 @@ impl ContextProducerReadJournalV1 {
     }
 
     pub fn retained_producer_read_count(&self) -> usize {
-        self.reservations.len() - self.free.len()
+        producer_retained_count_body!(self)
     }
 
     pub fn retained_read_count(&self) -> usize {
-        self.stable.retained_read_count() + self.retained_producer_read_count()
+        producer_total_read_count_body!(self)
     }
 
     pub fn remaining_read_slots(&self) -> usize {
-        self.reservations.len() - self.retained_read_count()
+        producer_remaining_read_slots_body!(self)
     }
 
     #[allow(clippy::question_mark)] // Share explicit early exits with Verus.
@@ -94,23 +97,14 @@ impl ContextProducerReadJournalV1 {
     }
 
     pub fn validate_read_capacity(&self, count: usize) -> Result<(), ContextVersionJournalErrorV1> {
-        if count > self.remaining_read_slots() {
-            return Err(ContextVersionJournalErrorV1::MemberCapacity);
-        }
-        self.stable.validate_read_capacity(count)
+        producer_stable_capacity_body!(self, count)
     }
 
     pub fn validate_producer_read_capacity(
         &self,
         count: usize,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        if count > self.remaining_read_slots() {
-            return Err(ContextVersionJournalErrorV1::MemberCapacity);
-        }
-        if self.next_incarnation == 0 || self.next_incarnation.checked_add(count as u64).is_none() {
-            return Err(ContextVersionJournalErrorV1::EpochExhausted);
-        }
-        Ok(())
+        producer_capacity_body!(self, count)
     }
 
     #[allow(clippy::question_mark)]
@@ -130,73 +124,26 @@ impl ContextProducerReadJournalV1 {
 
     /// Atomic canonical-roster acquisition. The caller authenticates each exact
     /// producer/event relationship and success-gated backend execution separately.
+    #[allow(clippy::question_mark)]
     pub fn acquire_producer_reads(
         &mut self,
         consumer: ContextWriterKeyV1,
         requests: &[ContextProducerReadV1],
         output: &mut [Option<ContextProducerReadReferenceV1>],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        if consumer.context_generation != self.context_generation() {
-            return Err(E::ForeignContext);
-        }
-        if consumer.local == 0
-            || consumer.local == u64::MAX
-            || consumer.kind != ContextWriterKindV1::Submission
-        {
-            return Err(E::InvalidWriterId);
-        }
-        if requests.is_empty() || requests.len() != output.len() {
-            return Err(E::RosterCapacity);
-        }
-        if output.iter().any(Option::is_some) {
-            return Err(E::InvalidState);
-        }
-        self.validate_producer_read_capacity(requests.len())?;
-        let mut previous = None;
-        let mut group = 0;
-        for (index, request) in requests.iter().enumerate() {
-            self.validate_producer_read(request)?;
-            if request.producer.key.local >= consumer.local {
-                return Err(E::InvalidWriterId);
-            }
-            let key = read_key(request);
-            if previous.is_some_and(|prior| prior >= key) {
-                return Err(E::NonCanonicalRoster);
-            }
-            group = if previous.is_some_and(|prior: (u64, u64, u64)| prior.0 == key.0) {
-                group + 1
-            } else {
-                1
-            };
-            if self.counts[request.read.allocation.slot]
-                .checked_add(group)
-                .is_none_or(|count| count > self.reservations.len())
-            {
-                return Err(E::InvalidState);
-            }
-            let slot = self.free[self.free.len() - index - 1];
-            if self.reservations.get(slot) != Some(&None) {
-                return Err(E::InvalidState);
-            }
-            previous = Some(key);
-        }
-        for (index, request) in requests.iter().enumerate() {
-            let slot = self.free.pop().expect("preflighted free reservation");
-            let reference = ContextProducerReadReferenceV1 {
-                slot,
-                incarnation: self.next_incarnation + index as u64,
-                consumer,
-            };
-            self.reservations[slot] = Some(ReservationV1 {
-                reference,
-                request: *request,
-            });
-            self.counts[request.read.allocation.slot] += 1;
-            output[index] = Some(reference);
-        }
-        self.next_incarnation += requests.len() as u64;
-        Ok(())
+        producer_acquire_execution_body!(
+            reader_rust_expr,
+            self,
+            consumer,
+            requests,
+            output,
+            acquire::producer_acquire_preflight_exec_v1,
+            acquire::producer_acquire_commit_exec_v1,
+            _value,
+            [],
+            [],
+            []
+        )
     }
 
     #[allow(clippy::question_mark)]
@@ -438,3 +385,6 @@ mod guard_test_support;
 
 #[cfg(test)]
 mod query_baseline;
+
+#[cfg(test)]
+mod acquire_baseline;

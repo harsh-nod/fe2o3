@@ -4,6 +4,7 @@ use alloc::string::String;
 type Error = ContextVersionJournalErrorV1;
 type Status = ContextProducerReadStatusV1;
 
+mod acquire_shared;
 mod query_shared;
 
 mod begin_guards {
