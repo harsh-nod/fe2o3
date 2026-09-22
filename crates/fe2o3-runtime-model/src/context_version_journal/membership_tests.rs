@@ -3,6 +3,9 @@ use super::*;
 #[path = "begin_tests.rs"]
 mod begin_shared;
 
+#[path = "lookup_tests.rs"]
+mod lookup_shared;
+
 type AllocationKey = ContextAllocationKeyV1;
 type AllocationReference = ContextAllocationReferenceV1;
 type DeviceKey = ContextJournalDeviceKeyV1;

@@ -379,8 +379,15 @@ Before enabling runtime admission, the remaining work is:
    custody without claiming actual reader-guard execution correspondence.
    A synthetic live reservation checks protected Pending status, raw rejection
    after passing guards, and guard-first rejection that skips actual Begin.
-   Remaining bodies include construction, stable/producer reader admission/release
-   and unread guards; actual wrapper and reachability refinement remain separate.
+   The [actual Begin guard packet](evidence/dev-journal-begin-guards-2026-09-22/README.md)
+   shares private stable/producer owner declarations and executes actual allocation
+   lookup, stable/combined counts, caller-ordered Begin guards and both Begin wrappers.
+   Its paired harness executes actual and historical guards independently, deriving
+   count/index safety from represented issued pre-state and preserving complete owner
+   custody. The synthetic live fixture and instrumented CPU baseline comparison do
+   not establish constructor/acquisition reachability or native performance parity.
+   Remaining bodies include construction and stable/producer reader admission/release;
+   other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement
    return/scratch/commit bodies now have actual-typed operation correspondence.

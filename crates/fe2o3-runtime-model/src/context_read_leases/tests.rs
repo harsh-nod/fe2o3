@@ -4,6 +4,50 @@ use alloc::{format, string::String};
 type Journal = ContextReadLeasedJournalV1;
 type Error = ContextVersionJournalErrorV1;
 
+mod begin_guards {
+    use super::*;
+    type Owner = ContextReadLeasedJournalV1;
+    const OWNER: &str = "stable";
+
+    fn protect(owner: &mut Owner, destination: ContextAllocationWriteV1) {
+        let request = read_view(owner, destination);
+        owner
+            .acquire_reads(guard_key(20), &[request], &mut [None])
+            .unwrap();
+    }
+
+    include!("guards_tests_shared.rs");
+}
+
+#[test]
+fn invalid_lookup_precedes_missing_stable_count_storage() {
+    let (mut owner, requests) = fixture(4);
+    owner.readers.clear();
+    let mut invalid = requests[0].allocation;
+    invalid.key.context_generation += 1;
+    let before = snapshot(&owner);
+    assert_eq!(
+        owner.reader_count(invalid),
+        Err(Error::InvalidAllocationReference)
+    );
+    assert_eq!(snapshot(&owner), before);
+}
+
+#[test]
+fn invalid_backlink_precedes_missing_stable_count_storage() {
+    let (mut owner, requests) = fixture(4);
+    let allocation = requests[0].allocation;
+    owner.guard_break_backlink_for_test_v1(allocation);
+    owner.readers.clear();
+    let before = snapshot(&owner);
+    assert_eq!(owner.reader_count(allocation), Err(Error::InvalidState));
+    assert_eq!(
+        owner.baseline_reader_count_v1(allocation),
+        Err(Error::InvalidState)
+    );
+    assert_eq!(snapshot(&owner), before);
+}
+
 fn consumer(local: u64) -> ContextWriterKeyV1 {
     ContextWriterKeyV1 {
         context_generation: 7,

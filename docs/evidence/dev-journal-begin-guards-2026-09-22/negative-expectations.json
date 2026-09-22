@@ -1,0 +1,3900 @@
+{
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  },
+  "backlink_local": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs",
+            "byte_start": 192,
+            "byte_end": 1463,
+            "line_start": 3,
+            "line_end": 35,
+            "column_start": 71,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($journal:ident, $reference:ident, $exact:path, $access:path) => {{",
+                "highlight_start": 71,
+                "highlight_end": 72
+              },
+              {
+                "text": "        let entry = match $exact($journal, $reference) {",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "            Ok(entry) => entry,",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "            Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 45
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        let pending_writer = match entry.pending_member {",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            None => None,",
+                "highlight_start": 1,
+                "highlight_end": 26
+              },
+              {
+                "text": "            Some(slot) => {",
+                "highlight_start": 1,
+                "highlight_end": 28
+              },
+              {
+                "text": "                $access($journal);",
+                "highlight_start": 1,
+                "highlight_end": 35
+              },
+              {
+                "text": "                if slot >= $journal.members.len() {",
+                "highlight_start": 1,
+                "highlight_end": 52
+              },
+              {
+                "text": "                    return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "                }",
+                "highlight_start": 1,
+                "highlight_end": 18
+              },
+              {
+                "text": "                let member = match $journal.members[slot] {",
+                "highlight_start": 1,
+                "highlight_end": 60
+              },
+              {
+                "text": "                    Some(member) => member,",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "                    None => return Err(ContextVersionJournalErrorV1::InvalidState),",
+                "highlight_start": 1,
+                "highlight_end": 84
+              },
+              {
+                "text": "                };",
+                "highlight_start": 1,
+                "highlight_end": 19
+              },
+              {
+                "text": "                if member.allocation.slot != $reference.slot",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "                    || member.allocation.key.context_generation != $reference.key.context_generation",
+                "highlight_start": 1,
+                "highlight_end": 101
+              },
+              {
+                "text": "                    || false",
+                "highlight_start": 1,
+                "highlight_end": 29
+              },
+              {
+                "text": "                {",
+                "highlight_start": 1,
+                "highlight_end": 18
+              },
+              {
+                "text": "                    return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "                }",
+                "highlight_start": 1,
+                "highlight_end": 18
+              },
+              {
+                "text": "                Some(member.writer)",
+                "highlight_start": 1,
+                "highlight_end": 36
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        Ok(ContextAllocationStateV1 {",
+                "highlight_start": 1,
+                "highlight_end": 38
+              },
+              {
+                "text": "            device: entry.device,",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "            byte_extent: entry.byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "            attempt_epoch: entry.attempt_epoch,",
+                "highlight_start": 1,
+                "highlight_end": 48
+              },
+              {
+                "text": "            content_lineage: entry.content_lineage,",
+                "highlight_start": 1,
+                "highlight_end": 52
+              },
+              {
+                "text": "            pending_writer,",
+                "highlight_start": 1,
+                "highlight_end": 28
+              },
+              {
+                "text": "        })",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 255,
+                "byte_end": 351,
+                "line_start": 7,
+                "line_end": 7,
+                "column_start": 9,
+                "column_end": 105,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        allocation_lookup_body!(self, reference, shared_retained_allocation_v1, begin_indexed_access_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 105
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "allocation_lookup_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs",
+                "byte_start": 84,
+                "byte_end": 119,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! allocation_lookup_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 182,
+            "byte_end": 239,
+            "line_start": 5,
+            "line_end": 5,
+            "column_start": 17,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == allocation_lookup_decision_v1(*self, reference),",
+                "highlight_start": 17,
+                "highlight_end": 74
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:5:17\n   |\n 5 |           ensures result == allocation_lookup_decision_v1(*self, reference),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs:3:71\n   |\n 3 |       ($journal:ident, $reference:ident, $exact:path, $access:path) => {{\n   |  _______________________________________________________________________-\n 4 | |         let entry = match $exact($journal, $reference) {\n 5 | |             Ok(entry) => entry,\n 6 | |             Err(error) => return Err(error),\n...  |\n34 | |         })\n35 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "pending_writer_payload": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs",
+            "byte_start": 192,
+            "byte_end": 1494,
+            "line_start": 3,
+            "line_end": 35,
+            "column_start": 71,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($journal:ident, $reference:ident, $exact:path, $access:path) => {{",
+                "highlight_start": 71,
+                "highlight_end": 72
+              },
+              {
+                "text": "        let entry = match $exact($journal, $reference) {",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "            Ok(entry) => entry,",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "            Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 45
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        let pending_writer = match entry.pending_member {",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            None => None,",
+                "highlight_start": 1,
+                "highlight_end": 26
+              },
+              {
+                "text": "            Some(slot) => {",
+                "highlight_start": 1,
+                "highlight_end": 28
+              },
+              {
+                "text": "                $access($journal);",
+                "highlight_start": 1,
+                "highlight_end": 35
+              },
+              {
+                "text": "                if slot >= $journal.members.len() {",
+                "highlight_start": 1,
+                "highlight_end": 52
+              },
+              {
+                "text": "                    return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "                }",
+                "highlight_start": 1,
+                "highlight_end": 18
+              },
+              {
+                "text": "                let member = match $journal.members[slot] {",
+                "highlight_start": 1,
+                "highlight_end": 60
+              },
+              {
+                "text": "                    Some(member) => member,",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "                    None => return Err(ContextVersionJournalErrorV1::InvalidState),",
+                "highlight_start": 1,
+                "highlight_end": 84
+              },
+              {
+                "text": "                };",
+                "highlight_start": 1,
+                "highlight_end": 19
+              },
+              {
+                "text": "                if member.allocation.slot != $reference.slot",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "                    || member.allocation.key.context_generation != $reference.key.context_generation",
+                "highlight_start": 1,
+                "highlight_end": 101
+              },
+              {
+                "text": "                    || member.allocation.key.local != $reference.key.local",
+                "highlight_start": 1,
+                "highlight_end": 75
+              },
+              {
+                "text": "                {",
+                "highlight_start": 1,
+                "highlight_end": 18
+              },
+              {
+                "text": "                    return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "                }",
+                "highlight_start": 1,
+                "highlight_end": 18
+              },
+              {
+                "text": "                None",
+                "highlight_start": 1,
+                "highlight_end": 21
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        Ok(ContextAllocationStateV1 {",
+                "highlight_start": 1,
+                "highlight_end": 38
+              },
+              {
+                "text": "            device: entry.device,",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "            byte_extent: entry.byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "            attempt_epoch: entry.attempt_epoch,",
+                "highlight_start": 1,
+                "highlight_end": 48
+              },
+              {
+                "text": "            content_lineage: entry.content_lineage,",
+                "highlight_start": 1,
+                "highlight_end": 52
+              },
+              {
+                "text": "            pending_writer,",
+                "highlight_start": 1,
+                "highlight_end": 28
+              },
+              {
+                "text": "        })",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 255,
+                "byte_end": 351,
+                "line_start": 7,
+                "line_end": 7,
+                "column_start": 9,
+                "column_end": 105,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        allocation_lookup_body!(self, reference, shared_retained_allocation_v1, begin_indexed_access_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 105
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "allocation_lookup_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs",
+                "byte_start": 84,
+                "byte_end": 119,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! allocation_lookup_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 182,
+            "byte_end": 239,
+            "line_start": 5,
+            "line_end": 5,
+            "column_start": 17,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == allocation_lookup_decision_v1(*self, reference),",
+                "highlight_start": 17,
+                "highlight_end": 74
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:5:17\n   |\n 5 |           ensures result == allocation_lookup_decision_v1(*self, reference),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs:3:71\n   |\n 3 |       ($journal:ident, $reference:ident, $exact:path, $access:path) => {{\n   |  _______________________________________________________________________-\n 4 | |         let entry = match $exact($journal, $reference) {\n 5 | |             Ok(entry) => entry,\n 6 | |             Err(error) => return Err(error),\n...  |\n34 | |         })\n35 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "pending_member_bound": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs",
+            "byte_start": 192,
+            "byte_end": 1508,
+            "line_start": 3,
+            "line_end": 35,
+            "column_start": 71,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($journal:ident, $reference:ident, $exact:path, $access:path) => {{",
+                "highlight_start": 71,
+                "highlight_end": 72
+              },
+              {
+                "text": "        let entry = match $exact($journal, $reference) {",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "            Ok(entry) => entry,",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "            Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 45
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        let pending_writer = match entry.pending_member {",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            None => None,",
+                "highlight_start": 1,
+                "highlight_end": 26
+              },
+              {
+                "text": "            Some(slot) => {",
+                "highlight_start": 1,
+                "highlight_end": 28
+              },
+              {
+                "text": "                $access($journal);",
+                "highlight_start": 1,
+                "highlight_end": 35
+              },
+              {
+                "text": "                if slot > $journal.members.len() {",
+                "highlight_start": 1,
+                "highlight_end": 51
+              },
+              {
+                "text": "                    return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "                }",
+                "highlight_start": 1,
+                "highlight_end": 18
+              },
+              {
+                "text": "                let member = match $journal.members[slot] {",
+                "highlight_start": 1,
+                "highlight_end": 60
+              },
+              {
+                "text": "                    Some(member) => member,",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "                    None => return Err(ContextVersionJournalErrorV1::InvalidState),",
+                "highlight_start": 1,
+                "highlight_end": 84
+              },
+              {
+                "text": "                };",
+                "highlight_start": 1,
+                "highlight_end": 19
+              },
+              {
+                "text": "                if member.allocation.slot != $reference.slot",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "                    || member.allocation.key.context_generation != $reference.key.context_generation",
+                "highlight_start": 1,
+                "highlight_end": 101
+              },
+              {
+                "text": "                    || member.allocation.key.local != $reference.key.local",
+                "highlight_start": 1,
+                "highlight_end": 75
+              },
+              {
+                "text": "                {",
+                "highlight_start": 1,
+                "highlight_end": 18
+              },
+              {
+                "text": "                    return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "                }",
+                "highlight_start": 1,
+                "highlight_end": 18
+              },
+              {
+                "text": "                Some(member.writer)",
+                "highlight_start": 1,
+                "highlight_end": 36
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        Ok(ContextAllocationStateV1 {",
+                "highlight_start": 1,
+                "highlight_end": 38
+              },
+              {
+                "text": "            device: entry.device,",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "            byte_extent: entry.byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "            attempt_epoch: entry.attempt_epoch,",
+                "highlight_start": 1,
+                "highlight_end": 48
+              },
+              {
+                "text": "            content_lineage: entry.content_lineage,",
+                "highlight_start": 1,
+                "highlight_end": 52
+              },
+              {
+                "text": "            pending_writer,",
+                "highlight_start": 1,
+                "highlight_end": 28
+              },
+              {
+                "text": "        })",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 255,
+                "byte_end": 351,
+                "line_start": 7,
+                "line_end": 7,
+                "column_start": 9,
+                "column_end": 105,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        allocation_lookup_body!(self, reference, shared_retained_allocation_v1, begin_indexed_access_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 105
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "allocation_lookup_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs",
+                "byte_start": 84,
+                "byte_end": 119,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! allocation_lookup_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 182,
+            "byte_end": 239,
+            "line_start": 5,
+            "line_end": 5,
+            "column_start": 17,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == allocation_lookup_decision_v1(*self, reference),",
+                "highlight_start": 17,
+                "highlight_end": 74
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:5:17\n   |\n 5 |           ensures result == allocation_lookup_decision_v1(*self, reference),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs:3:71\n   |\n 3 |       ($journal:ident, $reference:ident, $exact:path, $access:path) => {{\n   |  _______________________________________________________________________-\n 4 | |         let entry = match $exact($journal, $reference) {\n 5 | |             Ok(entry) => entry,\n 6 | |             Err(error) => return Err(error),\n...  |\n34 | |         })\n35 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "vstd/std_specs/vec.rs",
+            "byte_start": 1751,
+            "byte_end": 1771,
+            "line_start": 55,
+            "line_end": 55,
+            "column_start": 9,
+            "column_end": 29,
+            "is_primary": false,
+            "text": [],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs",
+            "byte_start": 666,
+            "byte_end": 688,
+            "line_start": 15,
+            "line_end": 15,
+            "column_start": 36,
+            "column_end": 58,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                let member = match $journal.members[slot] {",
+                "highlight_start": 36,
+                "highlight_end": 58
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 255,
+                "byte_end": 351,
+                "line_start": 7,
+                "line_end": 7,
+                "column_start": 9,
+                "column_end": 105,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        allocation_lookup_body!(self, reference, shared_retained_allocation_v1, begin_indexed_access_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 105
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "allocation_lookup_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs",
+                "byte_start": 84,
+                "byte_end": 119,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! allocation_lookup_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> vstd/std_specs/vec.rs:55:8\n   |\n   = note: failed precondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:7:9\n   |\n 7 |         allocation_lookup_body!(self, reference, shared_retained_allocation_v1, begin_indexed_access_v1)\n   |         ------------------------------------------------------------------------------------------------ in this macro invocation\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/lookup_bodies.rs:15:36\n   |\n15 |                 let member = match $journal.members[slot] {\n   |                                    ^^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: this error originates in the macro `allocation_lookup_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 45,
+            "byte_end": 164,
+            "line_start": 4,
+            "line_end": 4,
+            "column_start": 5,
+            "column_end": 124,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn lookup_allocation(&self, reference: AllocationReferenceV1) -> (result: Result<ContextAllocationStateV1, ReadErrorV1>)",
+                "highlight_start": 5,
+                "highlight_end": 124
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:4:5\n  |\n4 |     fn lookup_allocation(&self, reference: AllocationReferenceV1) -> (result: Result<ContextAllocationStateV1, ReadErrorV1>)\n  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable_count_payload": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 168,
+            "byte_end": 339,
+            "line_start": 3,
+            "line_end": 9,
+            "column_start": 46,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $allocation:ident) => {{",
+                "highlight_start": 46,
+                "highlight_end": 47
+              },
+              {
+                "text": "        match $contents.journal.lookup_allocation($allocation) {",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "            Ok(_) => {},",
+                "highlight_start": 1,
+                "highlight_end": 25
+              },
+              {
+                "text": "            Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 45
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        Ok(0usize)",
+                "highlight_start": 1,
+                "highlight_end": 19
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 998,
+                "byte_end": 1041,
+                "line_start": 23,
+                "line_end": 23,
+                "column_start": 9,
+                "column_end": 52,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        stable_reader_count_body!(self, allocation)",
+                    "highlight_start": 9,
+                    "highlight_end": 52
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_reader_count_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 83,
+                "byte_end": 120,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 38,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_reader_count_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 38
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 929,
+            "byte_end": 982,
+            "line_start": 21,
+            "line_end": 21,
+            "column_start": 17,
+            "column_end": 70,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == stable_count_decision_v1(*self, allocation),",
+                "highlight_start": 17,
+                "highlight_end": 70
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:21:17\n   |\n21 |           ensures result == stable_count_decision_v1(*self, allocation),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:3:46\n   |\n 3 |       ($contents:ident, $allocation:ident) => {{\n   |  ______________________________________________-\n 4 | |         match $contents.journal.lookup_allocation($allocation) {\n 5 | |             Ok(_) => {},\n 6 | |             Err(error) => return Err(error),\n 7 | |         }\n 8 | |         Ok(0usize)\n 9 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "omit_stable_count": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 461,
+            "byte_end": 675,
+            "line_start": 13,
+            "line_end": 19,
+            "column_start": 46,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $allocation:ident) => {{",
+                "highlight_start": 46,
+                "highlight_end": 47
+              },
+              {
+                "text": "        let stable = match $contents.stable.reader_count($allocation) {",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "            Ok(count) => count,",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "            Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 45
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        Ok($contents.counts[$allocation.slot])",
+                "highlight_start": 1,
+                "highlight_end": 47
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 2221,
+                "byte_end": 2266,
+                "line_start": 50,
+                "line_end": 50,
+                "column_start": 9,
+                "column_end": 54,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        producer_reader_count_body!(self, allocation)",
+                    "highlight_start": 9,
+                    "highlight_end": 54
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_reader_count_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 374,
+                "byte_end": 413,
+                "line_start": 12,
+                "line_end": 12,
+                "column_start": 1,
+                "column_end": 40,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_reader_count_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 40
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 2150,
+            "byte_end": 2205,
+            "line_start": 48,
+            "line_end": 48,
+            "column_start": 17,
+            "column_end": 72,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == producer_count_decision_v1(*self, allocation),",
+                "highlight_start": 17,
+                "highlight_end": 72
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:48:17\n   |\n48 |           ensures result == producer_count_decision_v1(*self, allocation),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:13:46\n   |\n13 |       ($contents:ident, $allocation:ident) => {{\n   |  ______________________________________________-\n14 | |         let stable = match $contents.stable.reader_count($allocation) {\n15 | |             Ok(count) => count,\n16 | |             Err(error) => return Err(error),\n17 | |         };\n18 | |         Ok($contents.counts[$allocation.slot])\n19 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "omit_producer_count": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 461,
+            "byte_end": 647,
+            "line_start": 13,
+            "line_end": 19,
+            "column_start": 46,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $allocation:ident) => {{",
+                "highlight_start": 46,
+                "highlight_end": 47
+              },
+              {
+                "text": "        let stable = match $contents.stable.reader_count($allocation) {",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "            Ok(count) => count,",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "            Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 45
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        Ok(stable)",
+                "highlight_start": 1,
+                "highlight_end": 19
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 2221,
+                "byte_end": 2266,
+                "line_start": 50,
+                "line_end": 50,
+                "column_start": 9,
+                "column_end": 54,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        producer_reader_count_body!(self, allocation)",
+                    "highlight_start": 9,
+                    "highlight_end": 54
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_reader_count_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 374,
+                "byte_end": 413,
+                "line_start": 12,
+                "line_end": 12,
+                "column_start": 1,
+                "column_end": 40,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_reader_count_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 40
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 2150,
+            "byte_end": 2205,
+            "line_start": 48,
+            "line_end": 48,
+            "column_start": 17,
+            "column_end": 72,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == producer_count_decision_v1(*self, allocation),",
+                "highlight_start": 17,
+                "highlight_end": 72
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:48:17\n   |\n48 |           ensures result == producer_count_decision_v1(*self, allocation),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:13:46\n   |\n13 |       ($contents:ident, $allocation:ident) => {{\n   |  ______________________________________________-\n14 | |         let stable = match $contents.stable.reader_count($allocation) {\n15 | |             Ok(count) => count,\n16 | |             Err(error) => return Err(error),\n17 | |         };\n18 | |         Ok(stable)\n19 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_busy_rejection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "invariant not satisfied at end of loop body",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 1438,
+            "byte_end": 1537,
+            "line_start": 32,
+            "line_end": 32,
+            "column_start": 17,
+            "column_end": 116,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                stable_unread_writes_v1(*self, roster@, 0) == stable_unread_writes_v1(*self, roster@, index as nat),",
+                "highlight_start": 17,
+                "highlight_end": 116
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: invariant not satisfied at end of loop body\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:32:17\n   |\n32 |                 stable_unread_writes_v1(*self, roster@, 0) == stable_unread_writes_v1(*self, roster@, index as nat),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reverse_roster": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 3 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 3 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "invariant not satisfied at end of loop body",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 2669,
+            "byte_end": 2772,
+            "line_start": 59,
+            "line_end": 59,
+            "column_start": 17,
+            "column_end": 120,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                producer_unread_writes_v1(*self, roster@, 0) == producer_unread_writes_v1(*self, roster@, index as nat),",
+                "highlight_start": 17,
+                "highlight_end": 120
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: invariant not satisfied at end of loop body\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:59:17\n   |\n59 |                 producer_unread_writes_v1(*self, roster@, 0) == producer_unread_writes_v1(*self, roster@, index as nat),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 1143,
+            "byte_end": 1160,
+            "line_start": 31,
+            "line_end": 31,
+            "column_start": 35,
+            "column_end": 52,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                    Err(error) => return Err(error),",
+                "highlight_start": 35,
+                "highlight_end": 52
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 2514,
+                "byte_end": 2828,
+                "line_start": 57,
+                "line_end": 61,
+                "column_start": 9,
+                "column_end": 11,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        unread_writes_body!(verus_exec_expr, self, roster, index, [",
+                    "highlight_start": 9,
+                    "highlight_end": 68
+                  },
+                  {
+                    "text": "            invariant index <= roster.len(), producer_guard_storage_v1(*self),",
+                    "highlight_start": 1,
+                    "highlight_end": 79
+                  },
+                  {
+                    "text": "                producer_unread_writes_v1(*self, roster@, 0) == producer_unread_writes_v1(*self, roster@, index as nat),",
+                    "highlight_start": 1,
+                    "highlight_end": 121
+                  },
+                  {
+                    "text": "            decreases roster.len() - index,",
+                    "highlight_start": 1,
+                    "highlight_end": 44
+                  },
+                  {
+                    "text": "        ])",
+                    "highlight_start": 1,
+                    "highlight_end": 11
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "unread_writes_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 690,
+                "byte_end": 721,
+                "line_start": 22,
+                "line_end": 22,
+                "column_start": 1,
+                "column_end": 32,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! unread_writes_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 32
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 2444,
+            "byte_end": 2498,
+            "line_start": 55,
+            "line_end": 55,
+            "column_start": 17,
+            "column_end": 71,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == producer_unread_writes_v1(*self, roster@, 0),",
+                "highlight_start": 17,
+                "highlight_end": 71
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:55:17\n   |\n55 |         ensures result == producer_unread_writes_v1(*self, roster@, 0),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:31:35\n   |\n31 |                     Err(error) => return Err(error),\n   |                                   ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 1233,
+            "byte_end": 1289,
+            "line_start": 34,
+            "line_end": 34,
+            "column_start": 21,
+            "column_end": 77,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                    return Err(ContextVersionJournalErrorV1::AllocationBusy);",
+                "highlight_start": 21,
+                "highlight_end": 77
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 2514,
+                "byte_end": 2828,
+                "line_start": 57,
+                "line_end": 61,
+                "column_start": 9,
+                "column_end": 11,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        unread_writes_body!(verus_exec_expr, self, roster, index, [",
+                    "highlight_start": 9,
+                    "highlight_end": 68
+                  },
+                  {
+                    "text": "            invariant index <= roster.len(), producer_guard_storage_v1(*self),",
+                    "highlight_start": 1,
+                    "highlight_end": 79
+                  },
+                  {
+                    "text": "                producer_unread_writes_v1(*self, roster@, 0) == producer_unread_writes_v1(*self, roster@, index as nat),",
+                    "highlight_start": 1,
+                    "highlight_end": 121
+                  },
+                  {
+                    "text": "            decreases roster.len() - index,",
+                    "highlight_start": 1,
+                    "highlight_end": 44
+                  },
+                  {
+                    "text": "        ])",
+                    "highlight_start": 1,
+                    "highlight_end": 11
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "unread_writes_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 690,
+                "byte_end": 721,
+                "line_start": 22,
+                "line_end": 22,
+                "column_start": 1,
+                "column_end": 32,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! unread_writes_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 32
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 2444,
+            "byte_end": 2498,
+            "line_start": 55,
+            "line_end": 55,
+            "column_start": 17,
+            "column_end": 71,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == producer_unread_writes_v1(*self, roster@, 0),",
+                "highlight_start": 17,
+                "highlight_end": 71
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:55:17\n   |\n55 |         ensures result == producer_unread_writes_v1(*self, roster@, 0),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:34:21\n   |\n34 |                     return Err(ContextVersionJournalErrorV1::AllocationBusy);\n   |                     -------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 886,
+            "byte_end": 914,
+            "line_start": 26,
+            "line_end": 26,
+            "column_start": 13,
+            "column_end": 41,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            while $index < $roster.len()",
+                "highlight_start": 13,
+                "highlight_end": 41
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 886,
+                "byte_end": 1351,
+                "line_start": 26,
+                "line_end": 37,
+                "column_start": 13,
+                "column_end": 14,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "            while $index < $roster.len()",
+                    "highlight_start": 13,
+                    "highlight_end": 41
+                  },
+                  {
+                    "text": "                $($annotations)*",
+                    "highlight_start": 1,
+                    "highlight_end": 33
+                  },
+                  {
+                    "text": "            {",
+                    "highlight_start": 1,
+                    "highlight_end": 14
+                  },
+                  {
+                    "text": "                let count = match $contents.reader_count($roster[$roster.len() - 1 - $index].allocation) {",
+                    "highlight_start": 1,
+                    "highlight_end": 107
+                  },
+                  {
+                    "text": "                    Ok(count) => count,",
+                    "highlight_start": 1,
+                    "highlight_end": 40
+                  },
+                  {
+                    "text": "                    Err(error) => return Err(error),",
+                    "highlight_start": 1,
+                    "highlight_end": 53
+                  },
+                  {
+                    "text": "                };",
+                    "highlight_start": 1,
+                    "highlight_end": 19
+                  },
+                  {
+                    "text": "                if count != 0 {",
+                    "highlight_start": 1,
+                    "highlight_end": 32
+                  },
+                  {
+                    "text": "                    return Err(ContextVersionJournalErrorV1::AllocationBusy);",
+                    "highlight_start": 1,
+                    "highlight_end": 78
+                  },
+                  {
+                    "text": "                }",
+                    "highlight_start": 1,
+                    "highlight_end": 18
+                  },
+                  {
+                    "text": "                $index += 1;",
+                    "highlight_start": 1,
+                    "highlight_end": 29
+                  },
+                  {
+                    "text": "            }",
+                    "highlight_start": 1,
+                    "highlight_end": 14
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": {
+                  "span": {
+                    "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                    "byte_start": 2514,
+                    "byte_end": 2828,
+                    "line_start": 57,
+                    "line_end": 61,
+                    "column_start": 9,
+                    "column_end": 11,
+                    "is_primary": false,
+                    "text": [
+                      {
+                        "text": "        unread_writes_body!(verus_exec_expr, self, roster, index, [",
+                        "highlight_start": 9,
+                        "highlight_end": 68
+                      },
+                      {
+                        "text": "            invariant index <= roster.len(), producer_guard_storage_v1(*self),",
+                        "highlight_start": 1,
+                        "highlight_end": 79
+                      },
+                      {
+                        "text": "                producer_unread_writes_v1(*self, roster@, 0) == producer_unread_writes_v1(*self, roster@, index as nat),",
+                        "highlight_start": 1,
+                        "highlight_end": 121
+                      },
+                      {
+                        "text": "            decreases roster.len() - index,",
+                        "highlight_start": 1,
+                        "highlight_end": 44
+                      },
+                      {
+                        "text": "        ])",
+                        "highlight_start": 1,
+                        "highlight_end": 11
+                      }
+                    ],
+                    "label": null,
+                    "suggested_replacement": null,
+                    "suggestion_applicability": null,
+                    "expansion": null
+                  },
+                  "macro_decl_name": "unread_writes_body!",
+                  "def_site_span": {
+                    "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                    "byte_start": 690,
+                    "byte_end": 721,
+                    "line_start": 22,
+                    "line_end": 22,
+                    "column_start": 1,
+                    "column_end": 32,
+                    "is_primary": false,
+                    "text": [
+                      {
+                        "text": "macro_rules! unread_writes_body {",
+                        "highlight_start": 1,
+                        "highlight_end": 32
+                      }
+                    ],
+                    "label": null,
+                    "suggested_replacement": null,
+                    "suggestion_applicability": null,
+                    "expansion": null
+                  }
+                }
+              },
+              "macro_decl_name": "desugaring of `while` loop",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_historical_v1.rs",
+                "byte_start": 0,
+                "byte_end": 0,
+                "line_start": 1,
+                "line_end": 1,
+                "column_start": 1,
+                "column_end": 1,
+                "is_primary": false,
+                "text": [],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          }
+        ],
+        "children": [],
+        "rendered": "note: while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:26:13\n   |\n26 |               while $index < $roster.len()\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:57:9\n   |\n57 | /         unread_writes_body!(verus_exec_expr, self, roster, index, [\n58 | |             invariant index <= roster.len(), producer_guard_storage_v1(*self),\n59 | |                 producer_unread_writes_v1(*self, roster@, 0) == producer_unread_writes_v1(*self, roster@, index as nat),\n60 | |             decreases roster.len() - index,\n61 | |         ])\n   | |__________- in this macro invocation\n   |\n   = note: this note originates in the macro `unread_writes_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_stable_guard": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 1461,
+            "byte_end": 1533,
+            "line_start": 44,
+            "line_end": 47,
+            "column_start": 57,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $writer:ident, $roster:ident) => {{",
+                "highlight_start": 57,
+                "highlight_end": 58
+              },
+              {
+                "text": "        ",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        $contents.journal.begin_write($writer, $roster)",
+                "highlight_start": 1,
+                "highlight_end": 56
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 1886,
+                "byte_end": 1926,
+                "line_start": 41,
+                "line_end": 41,
+                "column_start": 9,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        stable_begin_body!(self, writer, roster)",
+                    "highlight_start": 9,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_begin_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 1372,
+                "byte_end": 1402,
+                "line_start": 43,
+                "line_end": 43,
+                "column_start": 1,
+                "column_end": 31,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_begin_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 31
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 1795,
+            "byte_end": 1870,
+            "line_start": 39,
+            "line_end": 39,
+            "column_start": 17,
+            "column_end": 92,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures stable_begin_relation_v1(*old(self), *final(self), writer, roster@, result),",
+                "highlight_start": 17,
+                "highlight_end": 92
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:39:17\n   |\n39 |           ensures stable_begin_relation_v1(*old(self), *final(self), writer, roster@, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:44:57\n   |\n44 |       ($contents:ident, $writer:ident, $roster:ident) => {{\n   |  _________________________________________________________-\n45 | |         \n46 | |         $contents.journal.begin_write($writer, $roster)\n47 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_combined_guard": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 1758,
+            "byte_end": 1829,
+            "line_start": 54,
+            "line_end": 57,
+            "column_start": 57,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $writer:ident, $roster:ident) => {{",
+                "highlight_start": 57,
+                "highlight_end": 58
+              },
+              {
+                "text": "        ",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        $contents.stable.begin_write($writer, $roster)",
+                "highlight_start": 1,
+                "highlight_end": 55
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 3125,
+                "byte_end": 3167,
+                "line_start": 68,
+                "line_end": 68,
+                "column_start": 9,
+                "column_end": 51,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        producer_begin_body!(self, writer, roster)",
+                    "highlight_start": 9,
+                    "highlight_end": 51
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_begin_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 1667,
+                "byte_end": 1699,
+                "line_start": 53,
+                "line_end": 53,
+                "column_start": 1,
+                "column_end": 33,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_begin_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 33
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 3032,
+            "byte_end": 3109,
+            "line_start": 66,
+            "line_end": 66,
+            "column_start": 17,
+            "column_end": 94,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures producer_begin_relation_v1(*old(self), *final(self), writer, roster@, result),",
+                "highlight_start": 17,
+                "highlight_end": 94
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:66:17\n   |\n66 |           ensures producer_begin_relation_v1(*old(self), *final(self), writer, roster@, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:54:57\n   |\n54 |       ($contents:ident, $writer:ident, $roster:ident) => {{\n   |  _________________________________________________________-\n55 | |         \n56 | |         $contents.stable.begin_write($writer, $roster)\n57 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reject_mutates_owner": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 1902,
+            "byte_end": 1919,
+            "line_start": 57,
+            "line_end": 57,
+            "column_start": 61,
+            "column_end": 78,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            Err(error) => { $contents.next_incarnation = 0; return Err(error); },",
+                "highlight_start": 61,
+                "highlight_end": 78
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 3125,
+                "byte_end": 3167,
+                "line_start": 68,
+                "line_end": 68,
+                "column_start": 9,
+                "column_end": 51,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        producer_begin_body!(self, writer, roster)",
+                    "highlight_start": 9,
+                    "highlight_end": 51
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_begin_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 1667,
+                "byte_end": 1699,
+                "line_start": 53,
+                "line_end": 53,
+                "column_start": 1,
+                "column_end": 33,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_begin_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 33
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+            "byte_start": 3032,
+            "byte_end": 3109,
+            "line_start": 66,
+            "line_end": 66,
+            "column_start": 17,
+            "column_end": 94,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures producer_begin_relation_v1(*old(self), *final(self), writer, roster@, result),",
+                "highlight_start": 17,
+                "highlight_end": 94
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:66:17\n   |\n66 |         ensures producer_begin_relation_v1(*old(self), *final(self), writer, roster@, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:57:61\n   |\n57 |             Err(error) => { $contents.next_incarnation = 0; return Err(error); },\n   |                                                             ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual_wrapper": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 3810,
+            "byte_end": 3875,
+            "line_start": 72,
+            "line_end": 72,
+            "column_start": 9,
+            "column_end": 74,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        producer_begin_relation_v1(before, after, writer, roster, result),",
+                "highlight_start": 9,
+                "highlight_end": 74
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 6244,
+            "byte_end": 6372,
+            "line_start": 104,
+            "line_end": 104,
+            "column_start": 13,
+            "column_end": 141,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    proof { producer_begin_paired_transition(before, *actual, model_before, *model, writer, roster@, result, model_result, storage, history); }",
+                "highlight_start": 13,
+                "highlight_end": 141
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:104:13\n    |\n 72 | ...   producer_begin_relation_v1(before, after, writer, roster, result),\n    |       ----------------------------------------------------------------- failed precondition\n...\n104 | ...roof { producer_begin_paired_transition(before, *actual, model_before, *model, writer, roster@, result, model_result, storage, history); }\n    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical_wrapper": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 3885,
+            "byte_end": 4047,
+            "line_start": 73,
+            "line_end": 74,
+            "column_start": 9,
+            "column_end": 44,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::begin_issued_relation_v1(model_before, model_after, writer_reference_view(writer), begin_roster_view(roster),",
+                "highlight_start": 9,
+                "highlight_end": 127
+              },
+              {
+                "text": "            model_result, storage, history),",
+                "highlight_start": 1,
+                "highlight_end": 44
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 6191,
+            "byte_end": 6319,
+            "line_start": 104,
+            "line_end": 104,
+            "column_start": 13,
+            "column_end": 141,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    proof { producer_begin_paired_transition(before, *actual, model_before, *model, writer, roster@, result, model_result, storage, history); }",
+                "highlight_start": 13,
+                "highlight_end": 141
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:104:13\n    |\n 73 | / ...   logical::begin_issued_relation_v1(model_before, model_after, writer_reference_view(writer), begin_roster_view(roster),\n 74 | | ...       model_result, storage, history),\n    | |_________________________________________- failed precondition\n...\n104 |   ...roof { producer_begin_paired_transition(before, *actual, model_before, *model, writer, roster@, result, model_result, storage, history); }\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reservation_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 4301,
+            "byte_end": 4809,
+            "line_start": 79,
+            "line_end": 84,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if producer_unread_writes_v1(before, roster, 0) == Ok(()) && stable_unread_writes_v1(before.stable, roster, 0) == Ok(()) {",
+                "highlight_start": 5,
+                "highlight_end": 127
+              },
+              {
+                "text": "        assert(logical::begin_execution_relation_v1(model_before.stable.journal, model_after.stable.journal,",
+                "highlight_start": 1,
+                "highlight_end": 109
+              },
+              {
+                "text": "            writer_reference_view(writer), begin_roster_view(roster), model_result));",
+                "highlight_start": 1,
+                "highlight_end": 86
+              },
+              {
+                "text": "        begin_paired_transition(before.stable.journal, after.stable.journal, model_before.stable.journal, model_after.stable.journal,",
+                "highlight_start": 1,
+                "highlight_end": 134
+              },
+              {
+                "text": "            writer, roster, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 51
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 4104,
+            "byte_end": 4143,
+            "line_start": 75,
+            "line_end": 75,
+            "column_start": 56,
+            "column_end": 95,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == begin_result_from(model_result), producer_represents(after, model_after),",
+                "highlight_start": 56,
+                "highlight_end": 95
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:75:56\n   |\n75 |       ensures result == begin_result_from(model_result), producer_represents(after, model_after),\n   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n79 | /     if producer_unread_writes_v1(before, roster, 0) == Ok(()) && stable_unread_writes_v1(before.stable, roster, 0) == Ok(()) {\n80 | |         assert(logical::begin_execution_relation_v1(model_before.stable.journal, model_after.stable.journal,\n81 | |             writer_reference_view(writer), begin_roster_view(roster), model_result));\n82 | |         begin_paired_transition(before.stable.journal, after.stable.journal, model_before.stable.journal, model_after.stable.journal,\n83 | |             writer, roster, result, model_result);\n84 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable_lease_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 4301,
+            "byte_end": 4809,
+            "line_start": 79,
+            "line_end": 84,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if producer_unread_writes_v1(before, roster, 0) == Ok(()) && stable_unread_writes_v1(before.stable, roster, 0) == Ok(()) {",
+                "highlight_start": 5,
+                "highlight_end": 127
+              },
+              {
+                "text": "        assert(logical::begin_execution_relation_v1(model_before.stable.journal, model_after.stable.journal,",
+                "highlight_start": 1,
+                "highlight_end": 109
+              },
+              {
+                "text": "            writer_reference_view(writer), begin_roster_view(roster), model_result));",
+                "highlight_start": 1,
+                "highlight_end": 86
+              },
+              {
+                "text": "        begin_paired_transition(before.stable.journal, after.stable.journal, model_before.stable.journal, model_after.stable.journal,",
+                "highlight_start": 1,
+                "highlight_end": 134
+              },
+              {
+                "text": "            writer, roster, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 51
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 4104,
+            "byte_end": 4143,
+            "line_start": 75,
+            "line_end": 75,
+            "column_start": 56,
+            "column_end": 95,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == begin_result_from(model_result), producer_represents(after, model_after),",
+                "highlight_start": 56,
+                "highlight_end": 95
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:75:56\n   |\n75 |       ensures result == begin_result_from(model_result), producer_represents(after, model_after),\n   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n79 | /     if producer_unread_writes_v1(before, roster, 0) == Ok(()) && stable_unread_writes_v1(before.stable, roster, 0) == Ok(()) {\n80 | |         assert(logical::begin_execution_relation_v1(model_before.stable.journal, model_after.stable.journal,\n81 | |             writer_reference_view(writer), begin_roster_view(roster), model_result));\n82 | |         begin_paired_transition(before.stable.journal, after.stable.journal, model_before.stable.journal, model_after.stable.journal,\n83 | |             writer, roster, result, model_result);\n84 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "lookup_extent_projection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 438,
+            "byte_end": 1025,
+            "line_start": 10,
+            "line_end": 19,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if reference.slot < actual.allocations@.len() && actual.allocations@[reference.slot as int].is_some() {",
+                "highlight_start": 5,
+                "highlight_end": 108
+              },
+              {
+                "text": "        let entry = actual.allocations@[reference.slot as int].unwrap();",
+                "highlight_start": 1,
+                "highlight_end": 73
+              },
+              {
+                "text": "        device_key_round_trip(entry.device, device_key_view(entry.device));",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "        if let Some(slot) = entry.pending_member {",
+                "highlight_start": 1,
+                "highlight_end": 51
+              },
+              {
+                "text": "            if slot < actual.members@.len() && actual.members@[slot as int].is_some() {",
+                "highlight_start": 1,
+                "highlight_end": 88
+              },
+              {
+                "text": "                let member = actual.members@[slot as int].unwrap();",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "                writer_reference_round_trip(member.writer, writer_reference_view(member.writer));",
+                "highlight_start": 1,
+                "highlight_end": 98
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 204,
+            "byte_end": 367,
+            "line_start": 6,
+            "line_end": 7,
+            "column_start": 13,
+            "column_end": 115,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures allocation_lookup_decision_v1(actual, reference)",
+                "highlight_start": 13,
+                "highlight_end": 61
+              },
+              {
+                "text": "        == lookup_result_from(model, logical::allocation_decision_v1(model, allocation_reference_view(reference))),",
+                "highlight_start": 1,
+                "highlight_end": 115
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:6:13\n   |\n 6 |       ensures allocation_lookup_decision_v1(actual, reference)\n   |  _____________^\n 7 | |         == lookup_result_from(model, logical::allocation_decision_v1(model, allocation_reference_view(reference))),\n   | |__________________________________________________________________________________________________________________^ failed this postcondition\n...\n10 | /     if reference.slot < actual.allocations@.len() && actual.allocations@[reference.slot as int].is_some() {\n11 | |         let entry = actual.allocations@[reference.slot as int].unwrap();\n12 | |         device_key_round_trip(entry.device, device_key_view(entry.device));\n13 | |         if let Some(slot) = entry.pending_member {\n...  |\n19 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_consumer_projection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 5173,
+            "byte_end": 5285,
+            "line_start": 101,
+            "line_end": 101,
+            "column_start": 7,
+            "column_end": 119,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn producer_reference_round_trip(value: ContextProducerReadReferenceV1, model: logical::ProducerReadReferenceV1)",
+                "highlight_start": 7,
+                "highlight_end": 119
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 5298,
+            "byte_end": 5362,
+            "line_start": 102,
+            "line_end": 102,
+            "column_start": 13,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures producer_reference_from(producer_reference_view(value)) == value, producer_reference_view(producer_reference_from(model)) == model,",
+                "highlight_start": 13,
+                "highlight_end": 77
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs:102:13\n    |\n101 | proof fn producer_reference_round_trip(value: ContextProducerReadReferenceV1, model: logical::ProducerReadReferenceV1)\n    |       ---------------------------------------------------------------------------------------------------------------- at the end of the function body\n102 |     ensures producer_reference_from(producer_reference_view(value)) == value, producer_reference_view(producer_reference_from(model...\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 5173,
+            "byte_end": 5285,
+            "line_start": 101,
+            "line_end": 101,
+            "column_start": 7,
+            "column_end": 119,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn producer_reference_round_trip(value: ContextProducerReadReferenceV1, model: logical::ProducerReadReferenceV1)",
+                "highlight_start": 7,
+                "highlight_end": 119
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 5364,
+            "byte_end": 5428,
+            "line_start": 102,
+            "line_end": 102,
+            "column_start": 79,
+            "column_end": 143,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures producer_reference_from(producer_reference_view(value)) == value, producer_reference_view(producer_reference_from(model)) == model,",
+                "highlight_start": 79,
+                "highlight_end": 143
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs:102:79\n    |\n101 | proof fn producer_reference_round_trip(value: ContextProducerReadReferenceV1, model: logical::ProducerReadReferenceV1)\n    |       ---------------------------------------------------------------------------------------------------------------- at the end of the function body\n102 |     ensures producer_reference_from(producer_reference_view(value)) == value, producer_reference_view(producer_reference_from(model)) == model,\n    |                                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 5173,
+            "byte_end": 5285,
+            "line_start": 101,
+            "line_end": 101,
+            "column_start": 7,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "proof fn producer_reference_round_trip(value: ContextProducerReadReferenceV1, model: logical::ProducerReadReferenceV1)",
+                "highlight_start": 7,
+                "highlight_end": 119
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs:101:7\n    |\n101 | proof fn producer_reference_round_trip(value: ContextProducerReadReferenceV1, model: logical::ProducerReadReferenceV1)\n    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "live_actual_reservation": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_witness_v1.rs",
+            "byte_start": 15687,
+            "byte_end": 15786,
+            "line_start": 239,
+            "line_end": 239,
+            "column_start": 16,
+            "column_end": 115,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        assert(actual.reservations@.map(|_i, entry| producer_reservation_slot_view(entry)) =~= model.reservations@);",
+                "highlight_start": 16,
+                "highlight_end": 115
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_witness_v1.rs:239:16\n    |\n239 |         assert(actual.reservations@.map(|_i, entry| producer_reservation_slot_view(entry)) =~= model.reservations@);\n    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_reader_guards_historical_v1::production::reader_guards_live_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_reader_guards_historical_v1::production::reader_guards_live_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "read_offset_projection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 3439,
+            "byte_end": 3534,
+            "line_start": 68,
+            "line_end": 68,
+            "column_start": 7,
+            "column_end": 102,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn allocation_read_round_trip(value: ContextAllocationReadV1, model: logical::AllocationReadV1)",
+                "highlight_start": 7,
+                "highlight_end": 102
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 3547,
+            "byte_end": 3605,
+            "line_start": 69,
+            "line_end": 69,
+            "column_start": 13,
+            "column_end": 71,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures allocation_read_from(allocation_read_view(value)) == value, allocation_read_view(allocation_read_from(model)) == model,",
+                "highlight_start": 13,
+                "highlight_end": 71
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs:69:13\n   |\n68 | proof fn allocation_read_round_trip(value: ContextAllocationReadV1, model: logical::AllocationReadV1)\n   |       ----------------------------------------------------------------------------------------------- at the end of the function body\n69 |     ensures allocation_read_from(allocation_read_view(value)) == value, allocation_read_view(allocation_read_from(model)) == model,\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 3439,
+            "byte_end": 3534,
+            "line_start": 68,
+            "line_end": 68,
+            "column_start": 7,
+            "column_end": 102,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn allocation_read_round_trip(value: ContextAllocationReadV1, model: logical::AllocationReadV1)",
+                "highlight_start": 7,
+                "highlight_end": 102
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 3607,
+            "byte_end": 3665,
+            "line_start": 69,
+            "line_end": 69,
+            "column_start": 73,
+            "column_end": 131,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures allocation_read_from(allocation_read_view(value)) == value, allocation_read_view(allocation_read_from(model)) == model,",
+                "highlight_start": 73,
+                "highlight_end": 131
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs:69:73\n   |\n68 | proof fn allocation_read_round_trip(value: ContextAllocationReadV1, model: logical::AllocationReadV1)\n   |       ----------------------------------------------------------------------------------------------- at the end of the function body\n69 |     ensures allocation_read_from(allocation_read_view(value)) == value, allocation_read_view(allocation_read_from(model)) == model,\n   |                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs",
+            "byte_start": 3439,
+            "byte_end": 3534,
+            "line_start": 68,
+            "line_end": 68,
+            "column_start": 7,
+            "column_end": 102,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "proof fn allocation_read_round_trip(value: ContextAllocationReadV1, model: logical::AllocationReadV1)",
+                "highlight_start": 7,
+                "highlight_end": 102
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_owner_views_v1.rs:68:7\n   |\n68 | proof fn allocation_read_round_trip(value: ContextAllocationReadV1, model: logical::AllocationReadV1)\n   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "live_model_count": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_witness_v1.rs",
+            "byte_start": 11813,
+            "byte_end": 11849,
+            "line_start": 190,
+            "line_end": 190,
+            "column_start": 16,
+            "column_end": 52,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        assert(model.counts@ =~= seq![1usize, 0, 0]);",
+                "highlight_start": 16,
+                "highlight_end": 52
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_witness_v1.rs:190:16\n    |\n190 |         assert(model.counts@ =~= seq![1usize, 0, 0]);\n    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_reader_guards_historical_v1::production::reader_guards_live_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_reader_guards_historical_v1::production::reader_guards_live_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "count_projection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 3143,
+            "byte_end": 3215,
+            "line_start": 62,
+            "line_end": 62,
+            "column_start": 9,
+            "column_end": 81,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        actual.stable.readers@[a] + (#[trigger] actual.counts@[a]) <= usize::MAX by {",
+                "highlight_start": 9,
+                "highlight_end": 81
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:62:9\n   |\n62 |         actual.stable.readers@[a] + (#[trigger] actual.counts@[a]) <= usize::MAX by {\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_begin_reader_guards_v1.rs",
+            "byte_start": 350,
+            "byte_end": 385,
+            "line_start": 8,
+            "line_end": 8,
+            "column_start": 47,
+            "column_end": 82,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    requires producer_invariant_v1(contents), allocation < contents.counts@.len(),",
+                "highlight_start": 47,
+                "highlight_end": 82
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 3229,
+            "byte_end": 3292,
+            "line_start": 63,
+            "line_end": 63,
+            "column_start": 9,
+            "column_end": 72,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        logical::reader_count_addition_fits_usize_v1(model, a as usize);",
+                "highlight_start": 9,
+                "highlight_end": 72
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:63:9\n   |\n63 |         logical::reader_count_addition_fits_usize_v1(model, a as usize);\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_begin_reader_guards_v1.rs:8:47\n   |\n 8 |     requires producer_invariant_v1(contents), allocation < contents.counts@.len(),\n   |                                               ----------------------------------- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 2819,
+            "byte_end": 2933,
+            "line_start": 57,
+            "line_end": 57,
+            "column_start": 7,
+            "column_end": 121,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "proof fn producer_guard_storage_from_model(actual: ContextProducerReadJournalV1, model: logical::ProducerReadContentsV1)",
+                "highlight_start": 7,
+                "highlight_end": 121
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:57:7\n   |\n57 | proof fn producer_guard_storage_from_model(actual: ContextProducerReadJournalV1, model: logical::ProducerReadContentsV1)\n   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "recommendation not met",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "vstd/seq.rs",
+            "byte_start": 30547,
+            "byte_end": 30566,
+            "line_start": 972,
+            "line_end": 972,
+            "column_start": 13,
+            "column_end": 32,
+            "is_primary": false,
+            "text": [],
+            "label": "recommendation not met",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 3143,
+            "byte_end": 3168,
+            "line_start": 62,
+            "line_end": 62,
+            "column_start": 9,
+            "column_end": 34,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        actual.stable.readers@[a] + (#[trigger] actual.counts@[a]) <= usize::MAX by {",
+                "highlight_start": 9,
+                "highlight_end": 34
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: recommendation not met\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:62:9\n   |\n62 |         actual.stable.readers@[a] + (#[trigger] actual.counts@[a]) <= usize::MAX by {\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n  --> vstd/seq.rs:972:12\n   |\n   = note: recommendation not met\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs",
+            "byte_start": 3281,
+            "byte_end": 3282,
+            "line_start": 63,
+            "line_end": 63,
+            "column_start": 61,
+            "column_end": 62,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        logical::reader_count_addition_fits_usize_v1(model, a as usize);",
+                "highlight_start": 61,
+                "highlight_end": 62
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_correspondence_v1.rs:63:61\n   |\n63 |         logical::reader_count_addition_fits_usize_v1(model, a as usize);\n   |                                                             ^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_sum_bound": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "possible arithmetic underflow/overflow",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+            "byte_start": 634,
+            "byte_end": 677,
+            "line_start": 18,
+            "line_end": 18,
+            "column_start": 12,
+            "column_end": 55,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        Ok(stable + $contents.counts[$allocation.slot])",
+                "highlight_start": 12,
+                "highlight_end": 55
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs",
+                "byte_start": 2221,
+                "byte_end": 2266,
+                "line_start": 50,
+                "line_end": 50,
+                "column_start": 9,
+                "column_end": 54,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        producer_reader_count_body!(self, allocation)",
+                    "highlight_start": 9,
+                    "highlight_end": 54
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_reader_count_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs",
+                "byte_start": 374,
+                "byte_end": 413,
+                "line_start": 12,
+                "line_end": 12,
+                "column_start": 1,
+                "column_end": 40,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_reader_count_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 40
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          }
+        ],
+        "children": [],
+        "rendered": "error: possible arithmetic underflow/overflow\n  --> <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/guard_bodies.rs:18:12\n   |\n18 |         Ok(stable + $contents.counts[$allocation.slot])\n   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_reader_guards_bodies_v1.rs:50:9\n   |\n50 |         producer_reader_count_body!(self, allocation)\n   |         --------------------------------------------- in this macro invocation\n   |\n   = note: this error originates in the macro `producer_reader_count_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}

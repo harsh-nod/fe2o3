@@ -4,6 +4,62 @@ use alloc::string::String;
 type Error = ContextVersionJournalErrorV1;
 type Status = ContextProducerReadStatusV1;
 
+mod begin_guards {
+    use super::*;
+    type Owner = ContextProducerReadJournalV1;
+    const OWNER: &str = "producer";
+
+    fn protect(owner: &mut Owner, destination: ContextAllocationWriteV1) {
+        let producer = owner
+            .register_writer(guard_key(owner.registration_watermark() + 1))
+            .unwrap();
+        owner.begin_write(producer, &[destination]).unwrap();
+        let request = ContextProducerReadV1 {
+            producer,
+            read: read_view(owner, destination),
+        };
+        owner
+            .acquire_producer_reads(guard_key(producer.key.local + 1), &[request], &mut [None])
+            .unwrap();
+        owner
+            .settle_success(
+                producer,
+                &ContextWriterSuccessEvidenceV1 { writer: producer },
+            )
+            .unwrap();
+    }
+
+    include!("../context_read_leases/guards_tests_shared.rs");
+}
+
+#[test]
+fn invalid_lookup_precedes_missing_producer_count_storage() {
+    let mut f = Fixture::new(4);
+    f.journal.counts.clear();
+    let mut invalid = f.source;
+    invalid.key.context_generation += 1;
+    let before = snapshot(&f.journal);
+    assert_eq!(
+        f.journal.reader_count(invalid),
+        Err(Error::InvalidAllocationReference)
+    );
+    assert_eq!(snapshot(&f.journal), before);
+}
+
+#[test]
+fn invalid_backlink_precedes_missing_producer_count_storage() {
+    let mut f = Fixture::new(4);
+    f.journal.stable.guard_break_backlink_for_test_v1(f.source);
+    f.journal.counts.clear();
+    let before = snapshot(&f.journal);
+    assert_eq!(f.journal.reader_count(f.source), Err(Error::InvalidState));
+    assert_eq!(
+        f.journal.baseline_reader_count_v1(f.source),
+        Err(Error::InvalidState)
+    );
+    assert_eq!(snapshot(&f.journal), before);
+}
+
 fn key(local: u64) -> ContextWriterKeyV1 {
     ContextWriterKeyV1 {
         context_generation: 7,

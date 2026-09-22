@@ -4,56 +4,22 @@ use crate::context_version_journal::*;
 use alloc::vec::Vec;
 use core::ops::Deref;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContextAllocationReadV1 {
-    pub allocation: ContextAllocationReferenceV1,
-    pub device: ContextJournalDeviceKeyV1,
-    pub byte_extent: u64,
-    pub byte_offset: u64,
-    pub byte_len: u64,
-    pub attempt_epoch: u64,
-    pub content_lineage: u64,
+macro_rules! context_read_declarations_v1 {
+    ($($items:tt)*) => { $($items)* };
 }
 
-/// Descriptive identity only. Dropping it never releases a retained reader.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContextReadLeaseReferenceV1 {
-    pub slot: usize,
-    pub incarnation: u64,
-    pub consumer: ContextWriterKeyV1,
+include!("context_read_leases/declarations.rs");
+
+#[allow(unused_macros)]
+#[macro_use]
+mod guard_templates {
+    include!("context_read_leases/guard_bodies.rs");
 }
 
-/// An inert model premise; the caller must authenticate exact consumer quiescence.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContextReadQuiescenceEvidenceV1 {
-    pub consumer: ContextWriterKeyV1,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ReadLeaseV1 {
-    reference: ContextReadLeaseReferenceV1,
-    request: ContextAllocationReadV1,
-}
-
-/// Owns the writer journal so its mutation/retirement operations cannot bypass
-/// reader exclusion. Immutable inspection is available through `Deref`, but no
-/// mutable journal access or extraction is exposed. Reader composition is not
-/// covered by the original journal's issuance-only verification receipt.
-/// Transitions preserve a unique free/occupied slot partition and exact
-/// per-allocation reader counts from the constructor's valid initial state.
-///
-/// ```compile_fail
-/// use fe2o3_runtime_model::{ContextReadLeasedJournalV1, ContextVersionJournalV1};
-/// let mut leased = ContextReadLeasedJournalV1::new(1, 4, 4, 4).unwrap();
-/// let bypass: &mut ContextVersionJournalV1 = &mut *leased;
-/// ```
-#[derive(Debug)]
-pub struct ContextReadLeasedJournalV1 {
-    journal: ContextVersionJournalV1,
-    leases: Vec<Option<ReadLeaseV1>>,
-    free_reads: Vec<usize>,
-    readers: Vec<usize>,
-    next_incarnation: u64,
+macro_rules! reader_rust_expr {
+    ($body:expr) => {
+        $body
+    };
 }
 
 impl Deref for ContextReadLeasedJournalV1 {
@@ -124,12 +90,12 @@ impl ContextReadLeasedJournalV1 {
         Ok(())
     }
 
+    #[allow(clippy::question_mark)] // Share explicit early exits with Verus.
     pub fn reader_count(
         &self,
         allocation: ContextAllocationReferenceV1,
     ) -> Result<usize, ContextVersionJournalErrorV1> {
-        self.journal.lookup_allocation(allocation)?;
-        Ok(self.readers[allocation.slot])
+        stable_reader_count_body!(self, allocation)
     }
 
     pub fn validate_read(
@@ -317,13 +283,21 @@ impl ContextReadLeasedJournalV1 {
         Ok(())
     }
 
+    #[allow(clippy::question_mark)]
+    fn require_unread_writes(
+        &self,
+        members: &[ContextAllocationWriteV1],
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        unread_writes_body!(reader_rust_expr, self, members, index, [])
+    }
+
+    #[allow(clippy::question_mark)]
     pub fn begin_write(
         &mut self,
         writer: ContextWriterReferenceV1,
         members: &[ContextAllocationWriteV1],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.require_unread(members.iter().map(|member| member.allocation))?;
-        self.journal.begin_write(writer, members)
+        stable_begin_body!(self, writer, members)
     }
 
     pub fn validate_allocation_retirement(
@@ -411,3 +385,9 @@ impl ContextReadLeasedJournalV1 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod guard_baseline;
+
+#[cfg(test)]
+mod guard_test_support;

@@ -26,6 +26,7 @@ macro_rules! context_journal_declarations_v1 {
 }
 
 include!("context_version_journal/declarations.rs");
+include!("context_version_journal/lookup_bodies.rs");
 
 fn issuable_context_id(value: u64) -> bool {
     value != 0 && value != u64::MAX
@@ -233,31 +234,17 @@ impl ContextVersionJournalV1 {
         Ok(ContextAllocationReferenceV1 { slot, key })
     }
 
+    #[allow(clippy::question_mark)] // Share explicit early exits with Verus.
     pub fn lookup_allocation(
         &self,
         reference: ContextAllocationReferenceV1,
     ) -> Result<ContextAllocationStateV1, ContextVersionJournalErrorV1> {
-        let entry = self.exact_allocation(reference)?;
-        let pending_writer = match entry.pending_member {
-            None => None,
-            Some(slot) => {
-                self.count_indexed_access();
-                let member = self
-                    .members
-                    .get(slot)
-                    .and_then(Option::as_ref)
-                    .filter(|member| member.allocation == reference)
-                    .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
-                Some(member.writer)
-            }
-        };
-        Ok(ContextAllocationStateV1 {
-            device: entry.device,
-            byte_extent: entry.byte_extent,
-            attempt_epoch: entry.attempt_epoch,
-            content_lineage: entry.content_lineage,
-            pending_writer,
-        })
+        allocation_lookup_body!(
+            self,
+            reference,
+            retained::shared_retained_allocation_v1,
+            ContextVersionJournalV1::count_indexed_access
+        )
     }
 
     pub fn lookup_writer(
@@ -366,6 +353,12 @@ impl ContextVersionJournalV1 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod guard_baseline;
+
+#[cfg(test)]
+mod guard_test_support;
 
 #[cfg(test)]
 mod declaration_tests;

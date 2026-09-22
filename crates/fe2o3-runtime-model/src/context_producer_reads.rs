@@ -5,53 +5,22 @@ use crate::context_version_journal::*;
 use alloc::vec::Vec;
 use core::ops::Deref;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContextProducerReadV1 {
-    pub read: ContextAllocationReadV1,
-    pub producer: ContextWriterReferenceV1,
+macro_rules! context_producer_read_declarations_v1 {
+    ($($items:tt)*) => { $($items)* };
 }
 
-/// Descriptive identity; discarding it does not release consumer custody.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContextProducerReadReferenceV1 {
-    pub slot: usize,
-    pub incarnation: u64,
-    pub consumer: ContextWriterKeyV1,
+include!("context_producer_reads/declarations.rs");
+
+#[allow(unused_macros)]
+#[macro_use]
+mod guard_templates {
+    include!("context_read_leases/guard_bodies.rs");
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ContextProducerReadStatusV1 {
-    Pending,
-    Success,
-    NoEffect,
-    Unknown,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ReservationV1 {
-    reference: ContextProducerReadReferenceV1,
-    request: ContextProducerReadV1,
-}
-
-/// Owns the stable-reader journal without mutable extraction. The two arenas
-/// each have `reads` slots, but share one total limit of `reads` live records.
-/// Construction allocates O(allocations + writers + reads) metadata. Producer
-/// acquisition/release is O(k), lookup O(1), and settlement needs no arena scan.
-/// Existing stable-reader rules remain unchanged. This composition requires
-/// separate verification from the stable-reader journal's original artifact.
-///
-/// ```compile_fail
-/// use fe2o3_runtime_model::{ContextProducerReadJournalV1, ContextReadLeasedJournalV1};
-/// let mut journal = ContextProducerReadJournalV1::new(1, 4, 4, 4).unwrap();
-/// let bypass: &mut ContextReadLeasedJournalV1 = &mut *journal;
-/// ```
-#[derive(Debug)]
-pub struct ContextProducerReadJournalV1 {
-    stable: ContextReadLeasedJournalV1,
-    reservations: Vec<Option<ReservationV1>>,
-    free: Vec<usize>,
-    counts: Vec<usize>,
-    next_incarnation: u64,
+macro_rules! reader_rust_expr {
+    ($body:expr) => {
+        $body
+    };
 }
 
 impl Deref for ContextProducerReadJournalV1 {
@@ -113,11 +82,12 @@ impl ContextProducerReadJournalV1 {
         self.reservations.len() - self.retained_read_count()
     }
 
+    #[allow(clippy::question_mark)] // Share explicit early exits with Verus.
     pub fn reader_count(
         &self,
         allocation: ContextAllocationReferenceV1,
     ) -> Result<usize, ContextVersionJournalErrorV1> {
-        Ok(self.stable.reader_count(allocation)? + self.counts[allocation.slot])
+        producer_reader_count_body!(self, allocation)
     }
 
     pub fn validate_read_capacity(&self, count: usize) -> Result<(), ContextVersionJournalErrorV1> {
@@ -389,13 +359,21 @@ impl ContextProducerReadJournalV1 {
         Ok(())
     }
 
+    #[allow(clippy::question_mark)]
+    fn require_unread_writes(
+        &self,
+        members: &[ContextAllocationWriteV1],
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        unread_writes_body!(reader_rust_expr, self, members, index, [])
+    }
+
+    #[allow(clippy::question_mark)]
     pub fn begin_write(
         &mut self,
         writer: ContextWriterReferenceV1,
         members: &[ContextAllocationWriteV1],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.require_unread(members.iter().map(|member| member.allocation))?;
-        self.stable.begin_write(writer, members)
+        producer_begin_body!(self, writer, members)
     }
 
     pub fn validate_allocation_retirement(
@@ -489,3 +467,9 @@ impl ContextProducerReadJournalV1 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod guard_baseline;
+
+#[cfg(test)]
+mod guard_test_support;
