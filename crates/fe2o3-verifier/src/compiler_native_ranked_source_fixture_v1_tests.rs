@@ -901,3 +901,6 @@ fn original_full_signature_rejects_changed_typed_graph_and_source_maps() {
 
 #[path = "compiler_native_unit_local_erased_source_proof_v1_tests.rs"]
 mod unit_local_erased_fixture;
+
+#[path = "compiler_native_ranked_recipe_recovery_v1_tests.rs"]
+mod recipe_recovery;

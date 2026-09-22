@@ -15,6 +15,67 @@ use fe2o3_pliron::{
 const STORAGE: usize = 64 * 1024 * 1024;
 const WORK: usize = 10_000_000;
 
+#[test]
+fn recipe_wire_resolves_two_distinct_claims_in_order_and_exhausts_entire_roster() {
+    use super::super::recipe_source::decode_signed_recipe_v1;
+    let (kernel, signatures, commitments, toolchain) = signed_two_request_fixture();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    let (bytes, _) =
+        fe2o3_pliron::encode_production_ranked_recipe_v1(&kernel, &mut budget).unwrap();
+    drop(kernel);
+    budget.reserve_storage(37).unwrap();
+    let (recovered, receipt) =
+        decode_signed_recipe_v1(&bytes, &signatures, &commitments, toolchain, &mut budget).unwrap();
+    assert_eq!(budget.storage(), 37);
+    budget.reserve_storage(receipt.retained_storage()).unwrap();
+    run(
+        &recovered,
+        &signatures,
+        &commitments,
+        toolchain,
+        &mut budget,
+    )
+    .unwrap();
+    drop(recovered);
+    budget.release_storage(receipt.retained_storage()).unwrap();
+    for (signatures, commitments) in [
+        (vec![signatures[1], signatures[0]], commitments.to_vec()),
+        (signatures.to_vec(), vec![commitments[1], commitments[0]]),
+        (
+            vec![signatures[1], signatures[0]],
+            vec![commitments[1], commitments[0]],
+        ),
+        (vec![signatures[0]], vec![commitments[0]]),
+        (
+            vec![signatures[0], signatures[1], signatures[0]],
+            vec![commitments[0], commitments[1], commitments[0]],
+        ),
+    ] {
+        assert!(
+            decode_signed_recipe_v1(&bytes, &signatures, &commitments, toolchain, &mut budget)
+                .is_err()
+        );
+        assert_eq!(budget.storage(), 37);
+    }
+    for axis in 0..9 {
+        let mut changed = commitments;
+        let row = &mut changed[1];
+        match axis {
+            0 => row.receipt[0] ^= 1,
+            1 => row.effect[0] ^= 1,
+            2 => row.signer[0] ^= 1,
+            3 => row.execution[0] ^= 1,
+            axis => row.toolchain[axis - 4][0] ^= 1,
+        }
+        assert!(matches!(
+            decode_signed_recipe_v1(&bytes, &signatures, &changed, toolchain, &mut budget),
+            Err(E::Mismatch("exact signed effect identity and staging row"))
+        ));
+        assert_eq!(budget.storage(), 37);
+    }
+}
+
 fn digest(value: u8) -> DigestV1 {
     DigestV1::from_untrusted_bytes([value; 32])
 }

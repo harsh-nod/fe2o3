@@ -90,7 +90,7 @@ impl NativeCompilerRankedSourceProofStorageV1 {
     }
 }
 
-fn reserve_vec<T>(count: usize, budget: &mut Budget<'_>) -> Result<(Vec<T>, usize), E> {
+pub(super) fn reserve_vec<T>(count: usize, budget: &mut Budget<'_>) -> Result<(Vec<T>, usize), E> {
     budget.charge_work(3)?;
     let requested = count
         .checked_mul(std::mem::size_of::<T>())
@@ -126,6 +126,40 @@ fn commitment(proof: &ImportedFunctionalRefinementProofV2) -> NativeCompilerStag
             *toolchain.runtime_closure().as_bytes(),
         ],
     }
+}
+
+pub(super) fn import_ordered_effect_v1(
+    receipt: DigestV1,
+    binding: fe2o3_functional_proof::FunctionalRefinementBindingV2,
+    wire: &InertFunctionalRefinementReceiptSignatureV2,
+    expected: &NativeCompilerStagingCommitmentV1,
+    toolchain: VerusToolchainIdentityV2,
+    mut charge: impl FnMut(usize) -> Result<(), Resource>,
+) -> Result<ImportedFunctionalRefinementProofV2, E> {
+    charge(
+        wire.wire()
+            .len()
+            .checked_add(32 + 289)
+            .ok_or(Resource::Arithmetic)?,
+    )?;
+    let policy = FunctionalRefinementImportPolicyV2::new(
+        *wire.verifying_key(),
+        toolchain,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    )
+    .map_err(E::EffectReceipt)?;
+    let mut importer =
+        FunctionalRefinementReceiptImporterV2::new(policy, 1).map_err(E::EffectReceipt)?;
+    let proof = importer
+        .import(
+            FunctionalRefinementImportExpectationV2::new(binding),
+            wire.wire(),
+        )
+        .map_err(E::EffectReceipt)?;
+    if proof.receipt_identity().digest() != receipt || commitment(&proof) != *expected {
+        return Err(E::Mismatch("exact signed effect identity and staging row"));
+    }
+    Ok(proof)
 }
 
 fn recompile_root(
@@ -168,31 +202,14 @@ fn recompile_root(
             let expected = expected
                 .get(ordinal)
                 .ok_or(E::Mismatch("missing ordered staging commitment"))?;
-            budget.charge_work(
-                wire.wire()
-                    .len()
-                    .checked_add(32 + 289)
-                    .ok_or(Resource::Arithmetic)?,
-            )?;
-            let policy = FunctionalRefinementImportPolicyV2::new(
-                *wire.verifying_key(),
+            let proof = import_ordered_effect_v1(
+                request.receipt_identity().digest(),
+                request.binding(),
+                wire,
+                expected,
                 toolchain,
-                FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
-            )
-            .map_err(E::EffectReceipt)?;
-            let mut importer =
-                FunctionalRefinementReceiptImporterV2::new(policy, 1).map_err(E::EffectReceipt)?;
-            let proof = importer
-                .import(
-                    FunctionalRefinementImportExpectationV2::new(request.binding()),
-                    wire.wire(),
-                )
-                .map_err(E::EffectReceipt)?;
-            if proof.receipt_identity() != request.receipt_identity()
-                || commitment(&proof) != *expected
-            {
-                return Err(E::Mismatch("exact signed effect identity and staging row"));
-            }
+                |amount| budget.charge_work(amount),
+            )?;
             signers.push(proof.signer_identity());
             imported.push(proof);
             ordinal = ordinal.checked_add(1).ok_or(Resource::Arithmetic)?;
@@ -368,57 +385,7 @@ pub fn validate_native_compiler_ranked_source_proof_v1(
         let (checked, old_storage) =
             validate_native_compiler_source_proof_v1(inputs.source, budget)?;
         budget.reserve_storage(old_storage.retained_storage())?;
-        budget.charge_work(1)?;
-        if inputs.ranked_roots.len() != checked.roots.len() {
-            return Err(E::Mismatch("complete typed ranked root roster"));
-        }
-        let wrapper = std::mem::size_of::<ValidatedNativeCompilerRankedSourceProofV1>();
-        budget.reserve_storage(wrapper)?;
-        let RecompiledNativeRankedRootsV1 {
-            candidates,
-            lowerings,
-            candidate_storage,
-            lowering_vector_storage,
-            lowering_storage,
-        } = recompile_native_ranked_roots_v1(
-            checked.source.source(),
-            &checked.middle,
-            &checked.roots,
-            inputs.ranked_roots,
-            budget,
-        )?;
-        let ValidatedNativeCompilerSourceProofV1 {
-            source,
-            middle,
-            correspondence,
-            verus,
-            roots,
-        } = checked;
-        let (source, attachment_storage) =
-            attach_replayed_native_source_ranked_v1(source, &candidates, lowerings, budget)
-                .map_err(E::Source)?;
-        drop(candidates);
-        budget.release_storage(
-            candidate_storage
-                .checked_add(lowering_vector_storage)
-                .ok_or(Resource::Arithmetic)?,
-        )?;
-        let retained = old_storage
-            .retained_storage()
-            .checked_add(wrapper)
-            .and_then(|n| n.checked_add(lowering_storage))
-            .and_then(|n| n.checked_add(attachment_storage.retained_storage()))
-            .ok_or(Resource::Arithmetic)?;
-        Ok((
-            ValidatedNativeCompilerRankedSourceProofV1 {
-                source,
-                middle,
-                correspondence,
-                verus,
-                roots,
-            },
-            NativeCompilerRankedSourceProofStorageV1(retained),
-        ))
+        complete_ranked_source_proof_v1(checked, old_storage, inputs.ranked_roots, budget)
     }));
     if token != budget.work_ledger_identity_v1() || slot != budget as *const Budget<'_> as usize {
         drop(result);
@@ -436,6 +403,72 @@ pub fn validate_native_compiler_ranked_source_proof_v1(
         Ok(result) => result,
         Err(payload) => std::panic::resume_unwind(payload),
     }
+}
+
+/// Caller retains the packet reservation and supplies the outer cleanup scope.
+pub(super) fn complete_ranked_source_proof_v1(
+    checked: ValidatedNativeCompilerSourceProofV1,
+    old_storage: NativeCompilerSourceProofStorageV1,
+    ranked_roots: &[NativeCompilerRankedRootV1<'_>],
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        ValidatedNativeCompilerRankedSourceProofV1,
+        NativeCompilerRankedSourceProofStorageV1,
+    ),
+    E,
+> {
+    budget.charge_work(1)?;
+    if ranked_roots.len() != checked.roots.len() {
+        return Err(E::Mismatch("complete typed ranked root roster"));
+    }
+    let wrapper = std::mem::size_of::<ValidatedNativeCompilerRankedSourceProofV1>();
+    budget.reserve_storage(wrapper)?;
+    let RecompiledNativeRankedRootsV1 {
+        candidates,
+        lowerings,
+        candidate_storage,
+        lowering_vector_storage,
+        lowering_storage,
+    } = recompile_native_ranked_roots_v1(
+        checked.source.source(),
+        &checked.middle,
+        &checked.roots,
+        ranked_roots,
+        budget,
+    )?;
+    let ValidatedNativeCompilerSourceProofV1 {
+        source,
+        middle,
+        correspondence,
+        verus,
+        roots,
+    } = checked;
+    let (source, attachment_storage) =
+        attach_replayed_native_source_ranked_v1(source, &candidates, lowerings, budget)
+            .map_err(E::Source)?;
+    drop(candidates);
+    budget.release_storage(
+        candidate_storage
+            .checked_add(lowering_vector_storage)
+            .ok_or(Resource::Arithmetic)?,
+    )?;
+    let retained = old_storage
+        .retained_storage()
+        .checked_add(wrapper)
+        .and_then(|n| n.checked_add(lowering_storage))
+        .and_then(|n| n.checked_add(attachment_storage.retained_storage()))
+        .ok_or(Resource::Arithmetic)?;
+    Ok((
+        ValidatedNativeCompilerRankedSourceProofV1 {
+            source,
+            middle,
+            correspondence,
+            verus,
+            roots,
+        },
+        NativeCompilerRankedSourceProofStorageV1(retained),
+    ))
 }
 
 #[cfg(test)]

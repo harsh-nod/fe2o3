@@ -180,6 +180,9 @@ mod ranked_cfg_ssa_canonicalize_v1;
 mod ranked_index_constant_fold_v1;
 mod ranked_memory_type_legalize_v1;
 mod ranked_preverification_transform_v1;
+mod ranked_recipe_wire_v1;
+
+pub use ranked_recipe_wire_v1::*;
 
 pub use ranked_index_constant_fold_v1::ProductionRankedTranslationErrorV1;
 
@@ -2051,31 +2054,14 @@ impl ProductionRankedKernelV1 {
                 .operations
                 .iter()
                 .try_fold(0_usize, |count, operation| {
-                    count.checked_add(match operation {
-                        ProductionRankedOperationV1::SemanticExpression { expression, .. } => {
-                            expression.validate().ok()?.nodes.checked_add(1)?
-                        }
-                        _ if matches!(
-                            operation,
-                            ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
-                                | ProductionRankedOperationV1::RequireEffectRefinement { .. }
-                                | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
-                                | ProductionRankedOperationV1::RequestEffectRefinement { .. }
-                                | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
-                                | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
-                                | ProductionRankedOperationV1::RequireTensorRefinement { .. }
-                                | ProductionRankedOperationV1::RequestTensorRefinement { .. }
-                        ) => 3,
-                        _ => 1,
-                    })
+                    count.checked_add(ranked_operation_materialization_v1(
+                        operation,
+                        |expression| Some(expression.validate().ok()?.nodes),
+                    )?)
                 })?;
             total
-                .checked_add(materialized.checked_add(1)?)?
-                .checked_add(usize::from(matches!(
-                    block.terminator,
-                    ProductionRankedTerminatorV1::BranchArgsAdd { .. }
-                        | ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
-                )))
+                .checked_add(materialized)?
+                .checked_add(ranked_terminator_materialization_v1(&block.terminator))
         });
         let Some(operation_count) = operation_count else {
             return Err(ProductionRankedKernelErrorV1::ResourceLimit {
@@ -2541,6 +2527,33 @@ fn validate_live_semantic_loads(
             validate_live_semantic_loads(kernel, when_false)
         }
     }
+}
+
+fn ranked_operation_materialization_v1(
+    operation: &ProductionRankedOperationV1,
+    expression_nodes: impl FnOnce(&ProductionSemanticExpressionV2) -> Option<usize>,
+) -> Option<usize> {
+    use ProductionRankedOperationV1::*;
+    match operation {
+        SemanticExpression { expression, .. } => expression_nodes(expression)?.checked_add(1),
+        RequireAuthenticatedReferenceEquivalent { .. }
+        | RequestAuthenticatedReferenceEquivalent { .. }
+        | RequireEffectRefinement { .. }
+        | RequestEffectRefinement { .. }
+        | RequireNumericalRefinement { .. }
+        | RequestNumericalRefinement { .. }
+        | RequireTensorRefinement { .. }
+        | RequestTensorRefinement { .. } => Some(3),
+        _ => Some(1),
+    }
+}
+
+fn ranked_terminator_materialization_v1(terminator: &ProductionRankedTerminatorV1) -> usize {
+    1 + usize::from(matches!(
+        terminator,
+        ProductionRankedTerminatorV1::BranchArgsAdd { .. }
+            | ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
+    ))
 }
 
 fn ranked_tree_work(block_count: usize, operation_count: usize) -> Option<usize> {

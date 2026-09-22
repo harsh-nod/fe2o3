@@ -90,6 +90,7 @@ pub enum NativeCompilerSourceProofErrorV1 {
     Signed(crate::ProductionMirPlironVerusExecutionEvidenceErrorV1),
     EffectReceipt(fe2o3_functional_proof::FunctionalRefinementImportErrorV2),
     RankedRecipe(fe2o3_pliron::ProductionRankedKernelErrorV1),
+    RankedRecipeWire(fe2o3_pliron::ProductionRankedRecipeWireErrorV1),
     RankedCompile(Box<fe2o3_pliron::ProductionRankedCompileErrorV2>),
     Aggregate(Box<crate::ProductionMirPlironPerCompilationVerusErrorV1>),
     Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
@@ -655,3 +656,7 @@ pub use ranked_source::*;
 #[path = "compiler_native_unit_local_erased_source_proof_v1.rs"]
 mod unit_local_erased;
 pub use unit_local_erased::*;
+
+#[path = "compiler_native_ranked_recipe_source_proof_v1.rs"]
+mod recipe_source;
+pub use recipe_source::*;

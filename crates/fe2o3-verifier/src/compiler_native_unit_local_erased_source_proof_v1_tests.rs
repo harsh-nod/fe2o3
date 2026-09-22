@@ -177,7 +177,7 @@ fn unit_source_with_value(private_value: u32) -> ProductionPreRankedKirOwnerV1 {
     source
 }
 
-fn unit_fixture() -> (Fixture, ProductionUnitLocalErasedSourceOwnerV1) {
+pub(super) fn unit_fixture() -> (Fixture, ProductionUnitLocalErasedSourceOwnerV1) {
     let source = unit_source();
     let fixture = fixture_from_source(&source);
     let toolchain = VerusToolchainIdentityV2::new(d(72), d(73), d(74), d(75), d(76)).unwrap();

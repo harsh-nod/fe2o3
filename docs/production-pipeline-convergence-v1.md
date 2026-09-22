@@ -96,11 +96,35 @@ M0-M7 remain open.
 
 ## Durable source replay
 
-Native source replay still needs a reconstructive typed ranked recipe, ordered
-proof requests and complete correspondence/launch/signature transport. Diagnostic
-ranked text or graph hashes cannot stand in for those inputs. A decoded request
-must be reconciled with actual imported signatures; full source verification
-must independently re-import and recompile rather than trust decoding.
+Native source replay has reconstructive typed ranked recipe transport through
+`encode_production_ranked_recipe_v1` and `decode_production_ranked_recipe_v1`.
+The versioned, little-endian schema preserves all 41 operation forms, 12
+terminators, eight expression forms, numerical tolerance bits and ordered proof
+claims. It enforces structural bounds before construction and rejects any
+normalization that changes the encoded recipe. Diagnostic ranked text and graph
+hashes are not parsed as substitute recipes.
+
+The Direct and UnitLocal recipe-source verifier entrypoints first validate the
+source packet, then resolve claims against its complete ordered signed effect
+roster and checked aggregate commitments. They share the existing typed replay
+continuations, which independently re-import signatures, recompile, rebuild V5
+and aggregate subjects, and replay source correspondence. UnitLocal recovery
+preserves original N and independently admitted E; it does not rerun the erasure
+producer. Embedded test keys establish consistency, not protected origin.
+
+Work and live logical payload use the shared verification ledger. Resolver
+callbacks can charge work but cannot replace or release the storage ledger;
+ignored callback denials still fail. Parsed owner reservations remain live
+through normalized capacity reconciliation, and returned receipts exclude
+discarded temporary recipes. Existing checked constructors and proof engines
+retain their separate bounded scratch/work domains: this is not an RSS or
+whole-process accounting claim.
+
+Complete correspondence/launch/signature packet transport remains outstanding:
+the new entrypoints still borrow those auxiliary typed inputs. This component
+does not complete native artifact recovery, compiler/Worker custody, generated
+safe launch, protected proof execution or tutorial/GPU qualification. M0-M7
+remain open.
 
 The tensor leaf dependency now reuses the existing kernel-IR V8 grammar through
 `encode_tensor_layout_leaf_v1` and `decode_tensor_layout_leaf_v1`. Both require
@@ -112,8 +136,8 @@ authenticated zero-fill evidence. No module header or authority owner is created
 
 Tests cover literal bytes for BF16/FP8/FP4/mixed layouts, independent operand
 swizzles, the full schema bound, malformed input, exact work quotas and historical
-V7/V8 gates. This leaf is not yet a full durable recipe codec, a protected proof,
-or a production/GPU qualification result.
+V7/V8 gates. Recipe transport reuses this leaf with prepaid fixed-size scratch;
+neither codec supplies a protected proof or production/GPU qualification result.
 
 ## One transaction
 
