@@ -372,8 +372,15 @@ Before enabling runtime admission, the remaining work is:
    mutation controls and complete frozen-baseline CPU comparisons qualify this
    normal-content scope, not historical issued-custody or storage/unwind refinement.
    Mixed non-exclusive CPU measurements make no parity or speedup claim.
+   The [Begin correspondence packet](evidence/dev-journal-begin-correspondence-2026-09-21/README.md)
+   connects raw actual/historical decisions and alias-preserving transitions.
+   Its issued harness is explicitly hybrid: historical unread guards run first,
+   and only passing guards execute actual Begin. It preserves represented issued
+   custody without claiming actual reader-guard execution correspondence.
+   A synthetic live reservation checks protected Pending status, raw rejection
+   after passing guards, and guard-first rejection that skips actual Begin.
    Remaining bodies include construction, stable/producer reader admission/release
-   and unread guards; Begin's historical custody correspondence remains separate.
+   and unread guards; actual wrapper and reachability refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement
    return/scratch/commit bodies now have actual-typed operation correspondence.

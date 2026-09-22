@@ -1,0 +1,2887 @@
+{
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  },
+  "roster_extent": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 3707,
+            "byte_end": 3896,
+            "line_start": 78,
+            "line_end": 81,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if index < roster.len() {",
+                "highlight_start": 5,
+                "highlight_end": 30
+              },
+              {
+                "text": "        begin_destination_correspondence(journal, model, roster[index as int]);",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "        begin_destinations_correspondence(journal, model, roster, index + 1);",
+                "highlight_start": 1,
+                "highlight_end": 78
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 3508,
+            "byte_end": 3663,
+            "line_start": 74,
+            "line_end": 75,
+            "column_start": 13,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures begin_destination_scan_v1(journal, roster, index)",
+                "highlight_start": 13,
+                "highlight_end": 62
+              },
+              {
+                "text": "        == begin_result_from(logical::begin_destination_scan_v1(model, begin_roster_view(roster), index)),",
+                "highlight_start": 1,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs:74:13\n   |\n74 |       ensures begin_destination_scan_v1(journal, roster, index)\n   |  _____________^\n75 | |         == begin_result_from(logical::begin_destination_scan_v1(model, begin_roster_view(roster), index)),\n   | |_________________________________________________________________________________________________________^ failed this postcondition\n...\n78 | /     if index < roster.len() {\n79 | |         begin_destination_correspondence(journal, model, roster[index as int]);\n80 | |         begin_destinations_correspondence(journal, model, roster, index + 1);\n81 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "error_embedding": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 2295,
+            "byte_end": 2429,
+            "line_start": 53,
+            "line_end": 54,
+            "column_start": 7,
+            "column_end": 36,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn begin_destination_correspondence(journal: JournalContentsV1, model: logical::JournalContentsV1,",
+                "highlight_start": 7,
+                "highlight_end": 105
+              },
+              {
+                "text": "    destination: AllocationWriteV1)",
+                "highlight_start": 1,
+                "highlight_end": 36
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 2483,
+            "byte_end": 2646,
+            "line_start": 56,
+            "line_end": 57,
+            "column_start": 13,
+            "column_end": 112,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures begin_destination_decision_v1(journal, destination)",
+                "highlight_start": 13,
+                "highlight_end": 64
+              },
+              {
+                "text": "        == begin_result_from(logical::begin_destination_decision_v1(model, allocation_write_view(destination))),",
+                "highlight_start": 1,
+                "highlight_end": 112
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs:56:13\n   |\n53 |   proof fn begin_destination_correspondence(journal: JournalContentsV1, model: logical::JournalContentsV1,\n   |  _______-\n54 | |     destination: AllocationWriteV1)\n   | |___________________________________- at the end of the function body\n55 |       requires represents(journal, model),\n56 |       ensures begin_destination_decision_v1(journal, destination)\n   |  _____________^\n57 | |         == begin_result_from(logical::begin_destination_decision_v1(model, allocation_write_view(destination))),\n   | |_______________________________________________________________________________________________________________^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "success_embedding": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 3107,
+            "byte_end": 3185,
+            "line_start": 68,
+            "line_end": 68,
+            "column_start": 5,
+            "column_end": 83,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if index < roster.len() { begin_canonical_correspondence(roster, index + 1); }",
+                "highlight_start": 5,
+                "highlight_end": 83
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 2928,
+            "byte_end": 3063,
+            "line_start": 64,
+            "line_end": 65,
+            "column_start": 13,
+            "column_end": 97,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures begin_canonical_scan_v1(roster, index)",
+                "highlight_start": 13,
+                "highlight_end": 51
+              },
+              {
+                "text": "        == begin_result_from(logical::begin_canonical_scan_v1(begin_roster_view(roster), index)),",
+                "highlight_start": 1,
+                "highlight_end": 97
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs:64:13\n   |\n64 |       ensures begin_canonical_scan_v1(roster, index)\n   |  _____________^\n65 | |         == begin_result_from(logical::begin_canonical_scan_v1(begin_roster_view(roster), index)),\n   | |________________________________________________________________________________________________^ failed this postcondition\n...\n68 |       if index < roster.len() { begin_canonical_correspondence(roster, index + 1); }\n   |       ------------------------------------------------------------------------------ at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "allocation_presence": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 1996,
+            "byte_end": 2295,
+            "line_start": 45,
+            "line_end": 50,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if reference.slot < journal.allocations@.len() {",
+                "highlight_start": 5,
+                "highlight_end": 53
+              },
+              {
+                "text": "        if let Some(entry) = journal.allocations@[reference.slot as int] {",
+                "highlight_start": 1,
+                "highlight_end": 75
+              },
+              {
+                "text": "            allocation_entry_round_trip(entry, allocation_entry_view(entry));",
+                "highlight_start": 1,
+                "highlight_end": 78
+              },
+              {
+                "text": "            allocation_key_round_trip(entry.key, allocation_key_view(entry.key));",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 1740,
+            "byte_end": 1906,
+            "line_start": 41,
+            "line_end": 42,
+            "column_start": 13,
+            "column_end": 121,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures begin_exact_allocation_v1(journal, reference)",
+                "highlight_start": 13,
+                "highlight_end": 58
+              },
+              {
+                "text": "        == begin_allocation_result_from(logical::begin_exact_allocation_v1(model, allocation_reference_view(reference))),",
+                "highlight_start": 1,
+                "highlight_end": 121
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs:41:13\n   |\n41 |       ensures begin_exact_allocation_v1(journal, reference)\n   |  _____________^\n42 | |         == begin_allocation_result_from(logical::begin_exact_allocation_v1(model, allocation_reference_view(reference))),\n   | |________________________________________________________________________________________________________________________^ failed this postcondition\n...\n45 | /     if reference.slot < journal.allocations@.len() {\n46 | |         if let Some(entry) = journal.allocations@[reference.slot as int] {\n47 | |             allocation_entry_round_trip(entry, allocation_entry_view(entry));\n48 | |             allocation_key_round_trip(entry.key, allocation_key_view(entry.key));\n49 | |         }\n50 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reserved_presence": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 1329,
+            "byte_end": 1539,
+            "line_start": 31,
+            "line_end": 35,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if writer.slot < journal.writers@.len() {",
+                "highlight_start": 5,
+                "highlight_end": 46
+              },
+              {
+                "text": "        if let Some(WriterEntryV1::Reserved(key)) = journal.writers@[writer.slot as int] {",
+                "highlight_start": 1,
+                "highlight_end": 91
+              },
+              {
+                "text": "            writer_key_round_trip(key, writer_key_view(key));",
+                "highlight_start": 1,
+                "highlight_end": 62
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs",
+            "byte_start": 1058,
+            "byte_end": 1253,
+            "line_start": 26,
+            "line_end": 28,
+            "column_start": 13,
+            "column_end": 44,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures begin_reserved_decision_v1(journal, writer)",
+                "highlight_start": 13,
+                "highlight_end": 56
+              },
+              {
+                "text": "        == begin_reserved_result_from(logical::lookup_decision_v1(model.context_generation, model.writers@,",
+                "highlight_start": 1,
+                "highlight_end": 108
+              },
+              {
+                "text": "            writer_reference_view(writer))),",
+                "highlight_start": 1,
+                "highlight_end": 44
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_value_views_v1.rs:26:13\n   |\n26 |       ensures begin_reserved_decision_v1(journal, writer)\n   |  _____________^\n27 | |         == begin_reserved_result_from(logical::lookup_decision_v1(model.context_generation, model.writers@,\n28 | |             writer_reference_view(writer))),\n   | |___________________________________________^ failed this postcondition\n...\n31 | /     if writer.slot < journal.writers@.len() {\n32 | |         if let Some(WriterEntryV1::Reserved(key)) = journal.writers@[writer.slot as int] {\n33 | |             writer_key_round_trip(key, writer_key_view(key));\n34 | |         }\n35 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "raw_actual_skip": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 2643,
+            "byte_end": 2709,
+            "line_start": 40,
+            "line_end": 40,
+            "column_start": 9,
+            "column_end": 75,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        begin_execution_relation_v1(before, after, writer, roster, result),",
+                "highlight_start": 9,
+                "highlight_end": 75
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 4421,
+            "byte_end": 4522,
+            "line_start": 69,
+            "line_end": 69,
+            "column_start": 13,
+            "column_end": 114,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    proof { begin_paired_transition(before, *actual, model_before, *model, writer, roster@, result, model_result); }",
+                "highlight_start": 13,
+                "highlight_end": 114
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs:69:13\n   |\n40 |         begin_execution_relation_v1(before, after, writer, roster, result),\n   |         ------------------------------------------------------------------ failed precondition\n...\n69 |     proof { begin_paired_transition(before, *actual, model_before, *model, writer, roster@, result, model_result); }\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "raw_model_skip": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 2719,
+            "byte_end": 2866,
+            "line_start": 41,
+            "line_end": 42,
+            "column_start": 9,
+            "column_end": 53,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::begin_execution_relation_v1(model_before, model_after, writer_reference_view(writer),",
+                "highlight_start": 9,
+                "highlight_end": 103
+              },
+              {
+                "text": "            begin_roster_view(roster), model_result),",
+                "highlight_start": 1,
+                "highlight_end": 53
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 4401,
+            "byte_end": 4502,
+            "line_start": 69,
+            "line_end": 69,
+            "column_start": 13,
+            "column_end": 114,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    proof { begin_paired_transition(before, *actual, model_before, *model, writer, roster@, result, model_result); }",
+                "highlight_start": 13,
+                "highlight_end": 114
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs:69:13\n   |\n41 | /         logical::begin_execution_relation_v1(model_before, model_after, writer_reference_view(writer),\n42 | |             begin_roster_view(roster), model_result),\n   | |____________________________________________________- failed precondition\n...\n69 |       proof { begin_paired_transition(before, *actual, model_before, *model, writer, roster@, result, model_result); }\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "guarded_actual_skip": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 2643,
+            "byte_end": 2709,
+            "line_start": 40,
+            "line_end": 40,
+            "column_start": 9,
+            "column_end": 75,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        begin_execution_relation_v1(before, after, writer, roster, result),",
+                "highlight_start": 9,
+                "highlight_end": 75
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 3245,
+            "byte_end": 3387,
+            "line_start": 54,
+            "line_end": 55,
+            "column_start": 9,
+            "column_end": 51,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        begin_paired_transition(before, *actual, model_before.stable.journal, model.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 100
+              },
+              {
+                "text": "            writer, roster@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 51
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:54:9\n   |\n54 | /         begin_paired_transition(before, *actual, model_before.stable.journal, model.stable.journal,\n55 | |             writer, roster@, result, model_result);\n   | |__________________________________________________^\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs:40:9\n   |\n40 |           begin_execution_relation_v1(before, after, writer, roster, result),\n   |           ------------------------------------------------------------------ failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "guarded_model_skip": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 3033,
+            "byte_end": 3175,
+            "line_start": 52,
+            "line_end": 53,
+            "column_start": 16,
+            "column_end": 55,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        assert(logical::begin_execution_relation_v1(model_before.stable.journal, model.stable.journal,",
+                "highlight_start": 16,
+                "highlight_end": 103
+              },
+              {
+                "text": "            model_writer, model_roster@, model_result));",
+                "highlight_start": 1,
+                "highlight_end": 55
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:52:16\n   |\n52 |           assert(logical::begin_execution_relation_v1(model_before.stable.journal, model.stable.journal,\n   |  ________________^\n53 | |             model_writer, model_roster@, model_result));\n   | |______________________________________________________^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "combined_guard_skip": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 3104,
+            "byte_end": 3246,
+            "line_start": 52,
+            "line_end": 53,
+            "column_start": 16,
+            "column_end": 55,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        assert(logical::begin_execution_relation_v1(model_before.stable.journal, model.stable.journal,",
+                "highlight_start": 16,
+                "highlight_end": 103
+              },
+              {
+                "text": "            model_writer, model_roster@, model_result));",
+                "highlight_start": 1,
+                "highlight_end": 55
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:52:16\n   |\n52 |           assert(logical::begin_execution_relation_v1(model_before.stable.journal, model.stable.journal,\n   |  ________________^\n53 | |             model_writer, model_roster@, model_result));\n   | |______________________________________________________^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 3411,
+            "byte_end": 3439,
+            "line_start": 57,
+            "line_end": 57,
+            "column_start": 5,
+            "column_end": 33,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    (Some(result), model_result)",
+                "highlight_start": 5,
+                "highlight_end": 33
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 1451,
+            "byte_end": 1533,
+            "line_start": 21,
+            "line_end": 21,
+            "column_start": 9,
+            "column_end": 91,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        results.0.is_some() == begin_historical_guards_pass_v1(*old(model), model_roster@),",
+                "highlight_start": 9,
+                "highlight_end": 91
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:21:9\n   |\n21 |         results.0.is_some() == begin_historical_guards_pass_v1(*old(model), model_roster@),\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n57 |     (Some(result), model_result)\n   |     ---------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 548,
+            "byte_end": 1017,
+            "line_start": 12,
+            "line_end": 16,
+            "column_start": 1,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn begin_guarded_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 120
+              },
+              {
+                "text": "    writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,",
+                "highlight_start": 1,
+                "highlight_end": 73
+              },
+              {
+                "text": "    roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],",
+                "highlight_start": 1,
+                "highlight_end": 79
+              },
+              {
+                "text": "    Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 113
+              },
+              {
+                "text": "    -> (results: (Option<Result<(), ReadErrorV1>>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 85
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:12:1\n   |\n12 | / fn begin_guarded_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,\n13 | |     writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,\n14 | |     roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],\n15 | |     Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n16 | |     -> (results: (Option<Result<(), ReadErrorV1>>, Result<(), logical::ReadErrorV1>))\n   | |____________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "executed_result_presence": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 3430,
+            "byte_end": 3450,
+            "line_start": 57,
+            "line_end": 57,
+            "column_start": 5,
+            "column_end": 25,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    (None, model_result)",
+                "highlight_start": 5,
+                "highlight_end": 25
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 1451,
+            "byte_end": 1533,
+            "line_start": 21,
+            "line_end": 21,
+            "column_start": 9,
+            "column_end": 91,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        results.0.is_some() == begin_historical_guards_pass_v1(*old(model), model_roster@),",
+                "highlight_start": 9,
+                "highlight_end": 91
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:21:9\n   |\n21 |         results.0.is_some() == begin_historical_guards_pass_v1(*old(model), model_roster@),\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n57 |     (None, model_result)\n   |     -------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 3430,
+            "byte_end": 3450,
+            "line_start": 57,
+            "line_end": 57,
+            "column_start": 5,
+            "column_end": 25,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    (None, model_result)",
+                "highlight_start": 5,
+                "highlight_end": 25
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 1901,
+            "byte_end": 2009,
+            "line_start": 26,
+            "line_end": 26,
+            "column_start": 9,
+            "column_end": 117,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        results.0.is_none() ==> *final(actual) == *old(actual) && results.1.is_err() && *final(model) == *old(model),",
+                "highlight_start": 9,
+                "highlight_end": 117
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:26:9\n   |\n26 |         results.0.is_none() ==> *final(actual) == *old(actual) && results.1.is_err() && *final(model) == *old(model),\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n57 |     (None, model_result)\n   |     -------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 548,
+            "byte_end": 1017,
+            "line_start": 12,
+            "line_end": 16,
+            "column_start": 1,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn begin_guarded_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 120
+              },
+              {
+                "text": "    writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,",
+                "highlight_start": 1,
+                "highlight_end": 73
+              },
+              {
+                "text": "    roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],",
+                "highlight_start": 1,
+                "highlight_end": 79
+              },
+              {
+                "text": "    Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 113
+              },
+              {
+                "text": "    -> (results: (Option<Result<(), ReadErrorV1>>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 85
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:12:1\n   |\n12 | / fn begin_guarded_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,\n13 | |     writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,\n14 | |     roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],\n15 | |     Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n16 | |     -> (results: (Option<Result<(), ReadErrorV1>>, Result<(), logical::ReadErrorV1>))\n   | |____________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "guard_rejection_mutation": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 3 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 3 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 2446,
+            "byte_end": 2473,
+            "line_start": 36,
+            "line_end": 36,
+            "column_start": 13,
+            "column_end": 40,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return (None, model_result);",
+                "highlight_start": 13,
+                "highlight_end": 40
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 1257,
+            "byte_end": 1312,
+            "line_start": 19,
+            "line_end": 19,
+            "column_start": 13,
+            "column_end": 68,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures represents(*final(actual), final(model).stable.journal),",
+                "highlight_start": 13,
+                "highlight_end": 68
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:19:13\n   |\n19 |     ensures represents(*final(actual), final(model).stable.journal),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n36 |             return (None, model_result);\n   |             --------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 2835,
+            "byte_end": 2862,
+            "line_start": 45,
+            "line_end": 45,
+            "column_start": 13,
+            "column_end": 40,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return (None, model_result);",
+                "highlight_start": 13,
+                "highlight_end": 40
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 1257,
+            "byte_end": 1312,
+            "line_start": 19,
+            "line_end": 19,
+            "column_start": 13,
+            "column_end": 68,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures represents(*final(actual), final(model).stable.journal),",
+                "highlight_start": 13,
+                "highlight_end": 68
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:19:13\n   |\n19 |     ensures represents(*final(actual), final(model).stable.journal),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n45 |             return (None, model_result);\n   |             --------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 2643,
+            "byte_end": 2709,
+            "line_start": 40,
+            "line_end": 40,
+            "column_start": 9,
+            "column_end": 75,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        begin_execution_relation_v1(before, after, writer, roster, result),",
+                "highlight_start": 9,
+                "highlight_end": 75
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 3315,
+            "byte_end": 3457,
+            "line_start": 55,
+            "line_end": 56,
+            "column_start": 9,
+            "column_end": 51,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        begin_paired_transition(before, *actual, model_before.stable.journal, model.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 100
+              },
+              {
+                "text": "            writer, roster@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 51
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:55:9\n   |\n55 | /         begin_paired_transition(before, *actual, model_before.stable.journal, model.stable.journal,\n56 | |             writer, roster@, result, model_result);\n   | |__________________________________________________^\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs:40:9\n   |\n40 |           begin_execution_relation_v1(before, after, writer, roster, result),\n   |           ------------------------------------------------------------------ failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 548,
+            "byte_end": 1017,
+            "line_start": 12,
+            "line_end": 16,
+            "column_start": 1,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn begin_guarded_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 120
+              },
+              {
+                "text": "    writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,",
+                "highlight_start": 1,
+                "highlight_end": 73
+              },
+              {
+                "text": "    roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],",
+                "highlight_start": 1,
+                "highlight_end": 79
+              },
+              {
+                "text": "    Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 113
+              },
+              {
+                "text": "    -> (results: (Option<Result<(), ReadErrorV1>>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 85
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:12:1\n   |\n12 | / fn begin_guarded_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,\n13 | |     writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,\n14 | |     roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],\n15 | |     Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n16 | |     -> (results: (Option<Result<(), ReadErrorV1>>, Result<(), logical::ReadErrorV1>))\n   | |____________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "rejected_actual_run": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 2472,
+            "byte_end": 2499,
+            "line_start": 36,
+            "line_end": 36,
+            "column_start": 13,
+            "column_end": 40,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return (None, model_result);",
+                "highlight_start": 13,
+                "highlight_end": 40
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 1257,
+            "byte_end": 1312,
+            "line_start": 19,
+            "line_end": 19,
+            "column_start": 13,
+            "column_end": 68,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures represents(*final(actual), final(model).stable.journal),",
+                "highlight_start": 13,
+                "highlight_end": 68
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:19:13\n   |\n19 |     ensures represents(*final(actual), final(model).stable.journal),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n36 |             return (None, model_result);\n   |             --------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 2472,
+            "byte_end": 2499,
+            "line_start": 36,
+            "line_end": 36,
+            "column_start": 13,
+            "column_end": 40,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return (None, model_result);",
+                "highlight_start": 13,
+                "highlight_end": 40
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 1901,
+            "byte_end": 2009,
+            "line_start": 26,
+            "line_end": 26,
+            "column_start": 9,
+            "column_end": 117,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        results.0.is_none() ==> *final(actual) == *old(actual) && results.1.is_err() && *final(model) == *old(model),",
+                "highlight_start": 9,
+                "highlight_end": 117
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:26:9\n   |\n26 |         results.0.is_none() ==> *final(actual) == *old(actual) && results.1.is_err() && *final(model) == *old(model),\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n36 |             return (None, model_result);\n   |             --------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs",
+            "byte_start": 548,
+            "byte_end": 1017,
+            "line_start": 12,
+            "line_end": 16,
+            "column_start": 1,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn begin_guarded_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 120
+              },
+              {
+                "text": "    writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,",
+                "highlight_start": 1,
+                "highlight_end": 73
+              },
+              {
+                "text": "    roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],",
+                "highlight_start": 1,
+                "highlight_end": 79
+              },
+              {
+                "text": "    Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 113
+              },
+              {
+                "text": "    -> (results: (Option<Result<(), ReadErrorV1>>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 85
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_guarded_historical_v1.rs:12:1\n   |\n12 | / fn begin_guarded_issued_historical_exec_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,\n13 | |     writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,\n14 | |     roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],\n15 | |     Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n16 | |     -> (results: (Option<Result<(), ReadErrorV1>>, Result<(), logical::ReadErrorV1>))\n   | |____________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "actual_error_identity": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 3035,
+            "byte_end": 3369,
+            "line_start": 46,
+            "line_end": 51,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if result.is_ok() {",
+                "highlight_start": 5,
+                "highlight_end": 24
+              },
+              {
+                "text": "        begin_preflight_ready_v1(before, writer, roster);",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "        begin_prefix_correspondence(before, model_before, writer, roster, roster.len());",
+                "highlight_start": 1,
+                "highlight_end": 89
+              },
+              {
+                "text": "        if roster.len() > 0 { begin_plan_correspondence(before, model_before, roster, 0); }",
+                "highlight_start": 1,
+                "highlight_end": 92
+              },
+              {
+                "text": "        assert(journal_view(after).writers =~= model_after.writers@);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 2923,
+            "byte_end": 2953,
+            "line_start": 43,
+            "line_end": 43,
+            "column_start": 56,
+            "column_end": 86,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == begin_result_from(model_result), represents(after, model_after),",
+                "highlight_start": 56,
+                "highlight_end": 86
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs:43:56\n   |\n43 |       ensures result == begin_result_from(model_result), represents(after, model_after),\n   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n46 | /     if result.is_ok() {\n47 | |         begin_preflight_ready_v1(before, writer, roster);\n48 | |         begin_prefix_correspondence(before, model_before, writer, roster, roster.len());\n49 | |         if roster.len() > 0 { begin_plan_correspondence(before, model_before, roster, 0); }\n50 | |         assert(journal_view(after).writers =~= model_after.writers@);\n51 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "model_error_identity": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 3035,
+            "byte_end": 3369,
+            "line_start": 46,
+            "line_end": 51,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if result.is_ok() {",
+                "highlight_start": 5,
+                "highlight_end": 24
+              },
+              {
+                "text": "        begin_preflight_ready_v1(before, writer, roster);",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "        begin_prefix_correspondence(before, model_before, writer, roster, roster.len());",
+                "highlight_start": 1,
+                "highlight_end": 89
+              },
+              {
+                "text": "        if roster.len() > 0 { begin_plan_correspondence(before, model_before, roster, 0); }",
+                "highlight_start": 1,
+                "highlight_end": 92
+              },
+              {
+                "text": "        assert(journal_view(after).writers =~= model_after.writers@);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 2923,
+            "byte_end": 2953,
+            "line_start": 43,
+            "line_end": 43,
+            "column_start": 56,
+            "column_end": 86,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == begin_result_from(model_result), represents(after, model_after),",
+                "highlight_start": 56,
+                "highlight_end": 86
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs:43:56\n   |\n43 |       ensures result == begin_result_from(model_result), represents(after, model_after),\n   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n46 | /     if result.is_ok() {\n47 | |         begin_preflight_ready_v1(before, writer, roster);\n48 | |         begin_prefix_correspondence(before, model_before, writer, roster, roster.len());\n49 | |         if roster.len() > 0 { begin_plan_correspondence(before, model_before, roster, 0); }\n50 | |         assert(journal_view(after).writers =~= model_after.writers@);\n51 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "scratch_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 3035,
+            "byte_end": 3369,
+            "line_start": 46,
+            "line_end": 51,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if result.is_ok() {",
+                "highlight_start": 5,
+                "highlight_end": 24
+              },
+              {
+                "text": "        begin_preflight_ready_v1(before, writer, roster);",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "        begin_prefix_correspondence(before, model_before, writer, roster, roster.len());",
+                "highlight_start": 1,
+                "highlight_end": 89
+              },
+              {
+                "text": "        if roster.len() > 0 { begin_plan_correspondence(before, model_before, roster, 0); }",
+                "highlight_start": 1,
+                "highlight_end": 92
+              },
+              {
+                "text": "        assert(journal_view(after).writers =~= model_after.writers@);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 2923,
+            "byte_end": 2953,
+            "line_start": 43,
+            "line_end": 43,
+            "column_start": 56,
+            "column_end": 86,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == begin_result_from(model_result), represents(after, model_after),",
+                "highlight_start": 56,
+                "highlight_end": 86
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs:43:56\n   |\n43 |       ensures result == begin_result_from(model_result), represents(after, model_after),\n   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n46 | /     if result.is_ok() {\n47 | |         begin_preflight_ready_v1(before, writer, roster);\n48 | |         begin_prefix_correspondence(before, model_before, writer, roster, roster.len());\n49 | |         if roster.len() > 0 { begin_plan_correspondence(before, model_before, roster, 0); }\n50 | |         assert(journal_view(after).writers =~= model_after.writers@);\n51 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "free_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 3035,
+            "byte_end": 3369,
+            "line_start": 46,
+            "line_end": 51,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if result.is_ok() {",
+                "highlight_start": 5,
+                "highlight_end": 24
+              },
+              {
+                "text": "        begin_preflight_ready_v1(before, writer, roster);",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "        begin_prefix_correspondence(before, model_before, writer, roster, roster.len());",
+                "highlight_start": 1,
+                "highlight_end": 89
+              },
+              {
+                "text": "        if roster.len() > 0 { begin_plan_correspondence(before, model_before, roster, 0); }",
+                "highlight_start": 1,
+                "highlight_end": 92
+              },
+              {
+                "text": "        assert(journal_view(after).writers =~= model_after.writers@);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 2923,
+            "byte_end": 2953,
+            "line_start": 43,
+            "line_end": 43,
+            "column_start": 56,
+            "column_end": 86,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == begin_result_from(model_result), represents(after, model_after),",
+                "highlight_start": 56,
+                "highlight_end": 86
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs:43:56\n   |\n43 |       ensures result == begin_result_from(model_result), represents(after, model_after),\n   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n46 | /     if result.is_ok() {\n47 | |         begin_preflight_ready_v1(before, writer, roster);\n48 | |         begin_prefix_correspondence(before, model_before, writer, roster, roster.len());\n49 | |         if roster.len() > 0 { begin_plan_correspondence(before, model_before, roster, 0); }\n50 | |         assert(journal_view(after).writers =~= model_after.writers@);\n51 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "member_prefix": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs",
+            "byte_start": 1818,
+            "byte_end": 2041,
+            "line_start": 28,
+            "line_end": 29,
+            "column_start": 16,
+            "column_end": 121,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        assert(begin_members_prefix_v1(journal, writer, roster, count).map(|_i, value| member_entry_slot_view(value))",
+                "highlight_start": 16,
+                "highlight_end": 118
+              },
+              {
+                "text": "            =~= logical::begin_members_prefix_v1(model, writer_reference_view(writer), begin_roster_view(roster), count));",
+                "highlight_start": 1,
+                "highlight_end": 121
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_historical_bodies_v1.rs:28:16\n   |\n28 |           assert(begin_members_prefix_v1(journal, writer, roster, count).map(|_i, value| member_entry_slot_view(value))\n   |  ________________^\n29 | |             =~= logical::begin_members_prefix_v1(model, writer_reference_view(writer), begin_roster_view(roster), count));\n   | |________________________________________________________________________________________________________________________^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stage_epoch": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_bodies_v1.rs",
+            "byte_start": 3810,
+            "byte_end": 3881,
+            "line_start": 85,
+            "line_end": 85,
+            "column_start": 24,
+            "column_end": 95,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ], [proof { assert(journal.scratch@ =~= begin_scratch_v1(before, roster@, index as nat, 0)); }]);",
+                "highlight_start": 24,
+                "highlight_end": 95
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_bodies_v1.rs:85:24\n   |\n85 |     ], [proof { assert(journal.scratch@ =~= begin_scratch_v1(before, roster@, index as nat, 0)); }]);\n   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "commit_backlink": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "invariant not satisfied at end of loop body",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_bodies_v1.rs",
+            "byte_start": 5630,
+            "byte_end": 5712,
+            "line_start": 111,
+            "line_end": 111,
+            "column_start": 13,
+            "column_end": 95,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            journal.allocations@ == begin_allocations_prefix_v1(before, roster@, index as nat),",
+                "highlight_start": 13,
+                "highlight_end": 95
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: invariant not satisfied at end of loop body\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_bodies_v1.rs:111:13\n    |\n111 |             journal.allocations@ == begin_allocations_prefix_v1(before, roster@, index as nat),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "live_reservation": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs",
+            "byte_start": 10615,
+            "byte_end": 10668,
+            "line_start": 175,
+            "line_end": 175,
+            "column_start": 16,
+            "column_end": 69,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        assert(model.reservations@ =~= seq![Some(reservation), None]);",
+                "highlight_start": 16,
+                "highlight_end": 69
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs:175:16\n    |\n175 |         assert(model.reservations@ =~= seq![Some(reservation), None]);\n    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_journal_begin_historical_v1::production::begin_historical_live_custody_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_journal_begin_historical_v1::production::begin_historical_live_custody_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "live_count": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs",
+            "byte_start": 10745,
+            "byte_end": 10781,
+            "line_start": 177,
+            "line_end": 177,
+            "column_start": 16,
+            "column_end": 52,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        assert(model.counts@ =~= seq![1usize, 0, 0]);",
+                "highlight_start": 16,
+                "highlight_end": 52
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs:177:16\n    |\n177 |         assert(model.counts@ =~= seq![1usize, 0, 0]);\n    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_journal_begin_historical_v1::production::begin_historical_live_custody_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_journal_begin_historical_v1::production::begin_historical_live_custody_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "plan_lineage": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_value_views_v1.rs",
+            "byte_start": 7532,
+            "byte_end": 7617,
+            "line_start": 212,
+            "line_end": 212,
+            "column_start": 7,
+            "column_end": 92,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn begin_plan_round_trip(value: BeginMemberPlanV1, model: logical::BeginMemberPlanV1)",
+                "highlight_start": 7,
+                "highlight_end": 92
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_value_views_v1.rs",
+            "byte_start": 7630,
+            "byte_end": 7678,
+            "line_start": 213,
+            "line_end": 213,
+            "column_start": 13,
+            "column_end": 61,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures begin_plan_from(begin_plan_view(value)) == value,",
+                "highlight_start": 13,
+                "highlight_end": 61
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_value_views_v1.rs:213:13\n    |\n212 | proof fn begin_plan_round_trip(value: BeginMemberPlanV1, model: logical::BeginMemberPlanV1)\n    |       ------------------------------------------------------------------------------------- at the end of the function body\n213 |     ensures begin_plan_from(begin_plan_view(value)) == value,\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_value_views_v1.rs",
+            "byte_start": 7532,
+            "byte_end": 7617,
+            "line_start": 212,
+            "line_end": 212,
+            "column_start": 7,
+            "column_end": 92,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn begin_plan_round_trip(value: BeginMemberPlanV1, model: logical::BeginMemberPlanV1)",
+                "highlight_start": 7,
+                "highlight_end": 92
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_value_views_v1.rs",
+            "byte_start": 7688,
+            "byte_end": 7736,
+            "line_start": 214,
+            "line_end": 214,
+            "column_start": 9,
+            "column_end": 57,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        begin_plan_view(begin_plan_from(model)) == model,",
+                "highlight_start": 9,
+                "highlight_end": 57
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_value_views_v1.rs:214:9\n    |\n212 | proof fn begin_plan_round_trip(value: BeginMemberPlanV1, model: logical::BeginMemberPlanV1)\n    |       ------------------------------------------------------------------------------------- at the end of the function body\n213 |     ensures begin_plan_from(begin_plan_view(value)) == value,\n214 |         begin_plan_view(begin_plan_from(model)) == model,\n    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_value_views_v1.rs",
+            "byte_start": 7532,
+            "byte_end": 7617,
+            "line_start": 212,
+            "line_end": 212,
+            "column_start": 7,
+            "column_end": 92,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "proof fn begin_plan_round_trip(value: BeginMemberPlanV1, model: logical::BeginMemberPlanV1)",
+                "highlight_start": 7,
+                "highlight_end": 92
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_value_views_v1.rs:212:7\n    |\n212 | proof fn begin_plan_round_trip(value: BeginMemberPlanV1, model: logical::BeginMemberPlanV1)\n    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "issued_storage_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs",
+            "byte_start": 4051,
+            "byte_end": 4139,
+            "line_start": 76,
+            "line_end": 76,
+            "column_start": 12,
+            "column_end": 100,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    assert(model.reservations@ == model_before.reservations@ && model.counts@ == seq![1usize, 0, 0]);",
+                "highlight_start": 12,
+                "highlight_end": 100
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs:76:12\n   |\n76 |     assert(model.reservations@ == model_before.reservations@ && model.counts@ == seq![1usize, 0, 0]);\n   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs",
+            "byte_start": 4210,
+            "byte_end": 4302,
+            "line_start": 78,
+            "line_end": 78,
+            "column_start": 12,
+            "column_end": 104,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    assert(model.free@ == model_before.free@ && model.next_incarnation == model_before.next_incarnation);",
+                "highlight_start": 12,
+                "highlight_end": 104
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs:78:12\n   |\n78 |     assert(model.free@ == model_before.free@ && model.next_incarnation == model_before.next_incarnation);\n   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs",
+            "byte_start": 1351,
+            "byte_end": 1799,
+            "line_start": 35,
+            "line_end": 40,
+            "column_start": 1,
+            "column_end": 21,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn begin_historical_live_exercise_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 114
+              },
+              {
+                "text": "    writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,",
+                "highlight_start": 1,
+                "highlight_end": 73
+              },
+              {
+                "text": "    roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],",
+                "highlight_start": 1,
+                "highlight_end": 79
+              },
+              {
+                "text": "    reservation: logical::ProducerReservationV1,",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "    Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 113
+              },
+              {
+                "text": "    -> (result: bool)",
+                "highlight_start": 1,
+                "highlight_end": 21
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_begin_custody_witness_v1.rs:35:1\n   |\n35 | / fn begin_historical_live_exercise_v1(actual: &mut JournalContentsV1, model: &mut logical::ProducerReadContentsV1,\n36 | |     writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,\n37 | |     roster: &[AllocationWriteV1], model_roster: &[logical::AllocationWriteV1],\n38 | |     reservation: logical::ProducerReservationV1,\n39 | |     Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n40 | |     -> (result: bool)\n   | |____________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_journal_begin_historical_v1::production::begin_historical_live_exercise_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_journal_begin_historical_v1::production::begin_historical_live_exercise_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}
