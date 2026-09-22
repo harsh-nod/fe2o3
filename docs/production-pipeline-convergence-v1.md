@@ -161,15 +161,41 @@ Tests at representative and maximum raw payload sizes verify no framing
 allocations and unchanged decode allocation traces for a fixed metadata shape;
 old V3 bytes, limits and rejection behavior remain.
 
-V4 content decoding is unmetered like the existing V3 codecs. Production must
-prepay its work/working set and full actual backing capacity on the same ledger;
-wire maxima do not imply that every replay fits the 256 MiB policy. The typed
-producer must derive all base receipts from its actual live owner and supply a
-native lowering association binding actual F/catalog, descriptor, target,
-carrier, pre-descriptor/final LLVM and V2. Independent native admission must
-recover source/F and join all base/carrier/outer fields before retaining evidence
-in Worker custody. Those producer, verifier, artifact, Worker and host consumers
-are not implemented by these inert codecs; default production remains unchanged.
+V4 content decoding remains an unmetered codec like V3. The compiler-FFI layer
+now defines a conservative versioned logical work-prepayment schedule, audited
+against the pinned toolchain and parser limits, alongside shared metadata-storage
+allowances. This is not instruction-exact accounting, RSS measurement or engine
+replay. Production prepays those amounts and the full actual backing capacity on
+the same ledger. Wire maxima do not imply that every replay fits the unchanged
+256 MiB policy.
+
+A private nondefault continuation now consumes the actual live final-F wire
+owner into a V4 handoff. It requires retained protected invocation custody; an
+extraction-only transaction cannot supply a substitute invocation. It derives
+all fifteen base receipts from retained compiler fields and checked carrier
+members. Original-N proof receipts remain unchanged. Target binding associates
+N/catalog with actual B through the checked Direct or N-to-E erasure route;
+the compact native lowering association separately binds actual F/catalog,
+profile, carrier, descriptor, pre-descriptor LLVM, final LLVM and complete V2.
+It is constructed after native text/descriptor replay, not by substituting a
+legacy lowering receipt. Raw LLVM, V2 and domain-separated receipt identities
+are separate coordinates, including their exact lengths.
+
+The continuation reuses the carrier vector, prepays/reconciles its capacity
+growth, moves the carrier inside the outer buffer, and writes base/V2/framing
+before shared decoding. It retains the actual live compiler owner beside that
+immutable transport. Revalidation rebuilds expected base receipts from the live
+owner and compares every canonical byte. Public construction or decoding of the
+compact association still grants no authority.
+
+Independent V4 semantic admission must still recover source/F and join every
+base/carrier/outer field before retaining evidence in Worker custody. Artifact
+transaction, compiler-execution, Cargo, Worker, runtime and generated-host V4
+consumers are not connected by this producer continuation. It has no publication
+conversion; default production remains unchanged. The signed ordinary-Rust
+fixture also exercises base construction with an explicitly synthetic inert
+invocation, but requires the protected proof runtime. Transport/resource unit
+tests are not a substitute for that fixture or protected production execution.
 
 `recover_compiler_refined_forwarding_output_v1` independently recovers the signed
 Direct or UnitLocal source from its complete packet, freshly admits every graph

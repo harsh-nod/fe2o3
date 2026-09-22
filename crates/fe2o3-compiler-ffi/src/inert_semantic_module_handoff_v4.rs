@@ -52,6 +52,65 @@ pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_SEAL_STORAGE_V4: usize =
         + HEADER_BYTES_V3
         + 256;
 
+/// Inherited shared-decoder metadata policy plus native framing/owner scratch.
+/// Reserve separately from the entire backing's actual capacity, and retain
+/// this reservation while decoded metadata lives. Valid wire size alone does
+/// not imply that a caller's replay budget can admit it.
+pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V4: usize =
+    INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3
+        + fe2o3_compiler_lineage::INERT_PRODUCTION_SEMANTIC_CAPSULE_WORKING_STORAGE_V4
+        + INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_SEAL_STORAGE_V4
+        + std::mem::size_of::<InertSemanticCompilerModuleHandoffV4>();
+
+/// Conservative versioned logical byte-work prepayment for one V4 content
+/// decode. Charge the returned amount *before* entering either decoder, without
+/// refunding work on failure. Storage and semantic/engine replay are separate.
+///
+/// Eight full-image traversals cover nested hashes, receipt visits and LLVM
+/// UTF-8 checks. Bounded invocation/envelope reconstruction receives 128 visits;
+/// manifest reconstruction receives 320 visits and 4096 units per potential
+/// row for its two BTreeMap searches. The comparison bound was audited against
+/// the pinned nightly-2026-04-03 implementation (at most 16384 rows), not an
+/// abstract guarantee about future standard-library implementations. Duplicate
+/// envelope checks are quadratic but capped at 128 contracts. Fixed metadata
+/// and error paths receive a further 4 MiB allowance. Reaudit this schedule if
+/// any parser, toolchain, nesting or limit changes; this is not an instruction
+/// count, a measured runtime bound, or a substitute for semantic replay.
+pub fn inert_semantic_compiler_module_handoff_decode_work_v4(n: usize) -> Result<usize, Failure> {
+    use crate::{
+        MAX_COMPILER_FFI_ENVELOPE_BYTES_V1 as ENVELOPE,
+        MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1 as MANIFEST,
+    };
+    use fe2o3_rustc_invocation::MAX_DESCRIPTOR_BYTES_V3 as INVOCATION;
+    if !(MIN_OUTER_BYTES_V3..=MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V4).contains(&n) {
+        return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidLength(n as u64).into());
+    }
+    let mut work: usize = 4 * 1024 * 1024 + 128 * 127 * (128 + 3 * 32 + 4);
+    for (bytes, factor) in [
+        (n, 8),
+        (n.min(INVOCATION), 128),
+        (n.min(ENVELOPE), 128),
+        (n.min(MANIFEST), 320),
+        ((n / 5).min(16384), 4096),
+    ] {
+        work = bytes
+            .checked_mul(factor)
+            .and_then(|w| work.checked_add(w))
+            .ok_or(InertSemanticCompilerModuleHandoffErrorV3::LengthOverflow)?;
+    }
+    Ok(work)
+}
+const _: () = {
+    assert!(fe2o3_rustc_invocation::MAX_DESCRIPTOR_BYTES_V3 == 262338);
+    assert!(crate::MAX_COMPILER_FFI_ENVELOPE_BYTES_V1 == 524288);
+    assert!(crate::MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1 == 16777216);
+    assert!(crate::MAX_COMPILER_MODULE_SYMBOLS_V1 == 16384);
+    assert!(crate::MAX_COMPILER_MODULE_SYMBOL_BYTES_V1 == 1024);
+    assert!(crate::MAX_COMPILER_FFI_CONTRACTS_V1 == 128);
+    assert!(crate::MAX_COMPILER_FFI_CRATE_LABEL_BYTES_V1 == 128);
+    assert!(crate::MAX_DEVICE_FFI_SYMBOL_BYTES_V1 == 128);
+};
+
 /// V4-specific failure. Shared framing errors retain their existing diagnostics;
 /// carrying that error type never invokes the legacy capsule decoder.
 #[derive(Debug, Eq, PartialEq)]

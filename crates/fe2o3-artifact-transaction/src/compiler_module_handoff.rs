@@ -3299,9 +3299,8 @@ pub(crate) mod semantic_v3 {
     // invocation, collection metadata, and fixed decoded owners. Large module and receipt payloads
     // are ranges in the canonical backing rather than additional complete buffers.
     const V3_DECODE_WORKING_SET_MULTIPLIER: usize = 1;
-    const V3_DECODE_FIXED_BYTES: usize = 3 * fe2o3_compiler_ffi::MAX_COMPILER_FFI_ENVELOPE_BYTES_V1
-        + 3 * fe2o3_compiler_ffi::MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1
-        + 8 * 1024 * 1024;
+    const V3_DECODE_FIXED_BYTES: usize =
+        fe2o3_compiler_ffi::INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3;
     const MAX_V3_DECODE_WORKING_SET_BYTES: usize =
         MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 + V3_DECODE_FIXED_BYTES;
     const STREAM_BUFFER_BYTES_V3: usize = 16 * 1024;

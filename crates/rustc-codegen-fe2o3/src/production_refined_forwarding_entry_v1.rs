@@ -54,6 +54,39 @@ fn transfer(
 }
 
 impl RankedVerifiedProductionCompilation {
+    pub(crate) fn prepare_inert_refined_forwarding_capsule_with_budget_v4(
+        self,
+        budget: &mut Budget<'_>,
+    ) -> R<(
+        super::capsule::PreparedRefinedForwardingCapsuleV4,
+        RankedRefinedForwardingWireStorageV1,
+    )> {
+        let floor = budget.storage();
+        scoped(budget, move |budget| {
+            super::capsule::invocation(&self.bindings.transaction.compiler_custody)?;
+            let (wire, storage) =
+                self.prepare_inert_refined_forwarding_wire_with_budget_v1(budget)?;
+            let mut retained = 0;
+            transfer(
+                storage.retained_storage(),
+                wire.retained_storage_floor_v1(),
+                floor,
+                &mut retained,
+                budget,
+            )?;
+            let (capsule, storage) = wire.into_inert_semantic_handoff_v4(budget)?;
+            transfer(
+                storage.retained_storage(),
+                capsule.retained_storage_floor_v1(),
+                floor,
+                &mut retained,
+                budget,
+            )?;
+            capsule.verify_equivalence(budget)?;
+            Ok((capsule, RankedRefinedForwardingWireStorageV1(retained)))
+        })
+    }
+
     pub(crate) fn prepare_inert_refined_forwarding_wire_with_budget_v1(
         self,
         budget: &mut Budget<'_>,

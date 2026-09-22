@@ -37,6 +37,7 @@ impl PreparedRefinedForwardingWireV1 {
     ) -> R<T> {
         scoped(budget, |budget| {
             self.verify_equivalence(budget)?;
+            self.check_native_capsule_content_for_test_v4(budget)?;
             let inputs = self.live.source.replay_inputs(budget).map_err(E::Live)?;
             budget.reserve_storage(
                 READ_STORAGE + CARRIER_STORAGE + std::mem::size_of::<EntryObservation<'_>>(),

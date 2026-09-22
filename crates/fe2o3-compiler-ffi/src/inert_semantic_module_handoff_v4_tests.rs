@@ -6,6 +6,83 @@ const LIMIT: usize = MAX_NATIVE_REFINED_FORWARDING_CARRIER_STORAGE_V1;
 type Failure = InertSemanticCompilerModuleHandoffErrorV4;
 type Common = InertSemanticCompilerModuleHandoffErrorV3;
 
+#[test]
+fn native_v4_decode_schedule_pins_metadata_and_checked_extents() {
+    for (n, work) in [
+        (206, 8_188_912),
+        (81_920, 122_850_816),
+        (262_338, 228_214_928),
+    ] {
+        assert_eq!(
+            inert_semantic_compiler_module_handoff_decode_work_v4(n).unwrap(),
+            work
+        );
+    }
+    assert_eq!(
+        INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3,
+        60_293_120
+    );
+    assert!(
+        INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V4
+            > INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3
+    );
+    for n in [
+        206,
+        1024,
+        262338,
+        524288,
+        16777216,
+        MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V4,
+    ] {
+        let expected = 8 * n
+            + 128 * n.min(262338)
+            + 128 * n.min(524288)
+            + 320 * n.min(16777216)
+            + 4096 * (n / 5).min(16384)
+            + 7900672;
+        assert_eq!(
+            inert_semantic_compiler_module_handoff_decode_work_v4(n).unwrap(),
+            expected
+        );
+    }
+    for n in [
+        0,
+        205,
+        MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V4 + 1,
+        usize::MAX,
+    ] {
+        assert!(inert_semantic_compiler_module_handoff_decode_work_v4(n).is_err());
+    }
+}
+
+#[test]
+fn native_v4_decode_manifest_common_prefix_maximum_count_stays_bounded() {
+    let prefix = "n".repeat(1000);
+    let manifest = crate::CompilerModuleSymbolManifestV1::new(
+        (0..crate::MAX_COMPILER_MODULE_SYMBOLS_V1).map(|i| {
+            (
+                crate::CompilerModuleSymbolRoleV1::InternalHelper,
+                format!("{prefix}{i:04x}"),
+            )
+        }),
+    )
+    .unwrap();
+    let decoded =
+        crate::CompilerModuleSymbolManifestV1::decode(manifest.canonical_bytes()).unwrap();
+    assert_eq!(decoded, manifest);
+    assert_eq!(
+        decoded.entries().count(),
+        crate::MAX_COMPILER_MODULE_SYMBOLS_V1
+    );
+    // This pins the parser's maximum-count/common-prefix case, not a measured
+    // instruction bound for the versioned logical prepayment schedule.
+    assert!(
+        inert_semantic_compiler_module_handoff_decode_work_v4(manifest.canonical_bytes().len())
+            .unwrap()
+            >= 320 * manifest.canonical_bytes().len()
+    );
+}
+
 fn capsule(seed: u8, payload_seed: u8) -> InertProductionSemanticCapsuleV4 {
     let base = fixture::capsule(seed, TARGET, &fixture::llvm_module(seed));
     let pair = NativeRefinedForwardingCarrierLayoutV1::new::<()>(19, 64).unwrap();

@@ -1,4 +1,6 @@
 //! Inert encoding consumes and retains the actual live signed final-F owner.
+#[path = "production_refined_forwarding_capsule_v4.rs"]
+mod capsule;
 #[path = "production_refined_forwarding_entry_v1.rs"]
 mod entry;
 use super::{PreparedRefinedForwardingWorkerHandoffV1 as Live, SourceLineage};
@@ -69,6 +71,14 @@ pub(crate) enum RefinedForwardingWireErrorV1 {
     Association(InertProofBindingAssociationErrorV4),
     Identity(InertProofBindingAssociationErrorV3),
     Lineage(LineageErrorV3),
+    Target(fe2o3_compiler_lineage::ProductionTargetLineageErrorV3),
+    Invocation(fe2o3_rustc_invocation::ValidationError),
+    InvocationDigest(fe2o3_rustc_invocation::DigestError),
+    Text(dialect_amdgcn::NativeV12TextDescriptorReplayErrorV1),
+    Commitment(fe2o3_compiler_ffi::FinalCompilerModuleCommitmentErrorV3),
+    Capsule(fe2o3_compiler_lineage::InertProductionSemanticCapsuleErrorV4<Resource>),
+    Handoff(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV4),
+    Seal(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV4<Resource>),
     Verification(CompilerRefinedForwardingOutputErrorV1),
     Mismatch(&'static str),
     Panicked,
@@ -123,35 +133,37 @@ impl PreparedRefinedForwardingWireV1 {
         if budget.storage() < self.retained_floor {
             return Err(Resource::Accounting.into());
         }
-        scoped(budget, |budget| {
-            self.live.verify_equivalence(budget).map_err(E::Live)?;
-            scoped(budget, |budget| {
-                let parts = prepare(&self.live, budget)?;
-                let fields = fields(&self.live, &parts);
-                budget.reserve_storage(READ_STORAGE + CARRIER_STORAGE)?;
-                let limit = budget.storage_limit();
-                let carrier =
-                    read_native_refined_forwarding_carrier_v1(&self.carrier, limit, |w| {
-                        budget.charge_work(w)
-                    })
-                    .map_err(E::Carrier)?;
-                same(carrier.source_packet(), source_packet(&self.live), budget)?;
-                let frame = read_inert_refined_forwarding_output_v1(carrier.output(), limit, |w| {
-                    budget.charge_work(w)
-                })
-                .map_err(E::Framing)?;
-                for (field, expected) in FIELDS.into_iter().zip(fields) {
-                    same(frame.field(field), expected, budget)?;
-                }
-                drop(frame);
-                drop(parts);
-                Ok(())
-            })?;
-            verify(&self.carrier, budget)?;
-            budget.charge_work(1)?;
-            Ok(())
-        })
+        verify_live_carrier(&self.live, &self.carrier, budget)
     }
+}
+
+fn verify_live_carrier(live: &Live, bytes: &[u8], budget: &mut Budget<'_>) -> R<()> {
+    scoped(budget, |budget| {
+        live.verify_equivalence(budget).map_err(E::Live)?;
+        scoped(budget, |budget| {
+            let parts = prepare(live, budget)?;
+            let fields = fields(live, &parts);
+            budget.reserve_storage(READ_STORAGE + CARRIER_STORAGE)?;
+            let limit = budget.storage_limit();
+            let carrier =
+                read_native_refined_forwarding_carrier_v1(bytes, limit, |w| budget.charge_work(w))
+                    .map_err(E::Carrier)?;
+            same(carrier.source_packet(), source_packet(live), budget)?;
+            let frame = read_inert_refined_forwarding_output_v1(carrier.output(), limit, |w| {
+                budget.charge_work(w)
+            })
+            .map_err(E::Framing)?;
+            for (field, expected) in FIELDS.into_iter().zip(fields) {
+                same(frame.field(field), expected, budget)?;
+            }
+            drop(frame);
+            drop(parts);
+            Ok(())
+        })?;
+        verify(bytes, budget)?;
+        budget.charge_work(1)?;
+        Ok(())
+    })
 }
 
 impl Live {

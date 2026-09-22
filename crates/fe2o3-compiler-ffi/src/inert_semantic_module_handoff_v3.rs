@@ -68,6 +68,15 @@ pub const MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3: usize = OUTER_FIX
     + MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3
     + MAX_COMPILER_MODULE_HANDOFF_BYTES_V2;
 
+/// Logical metadata working set beside one shared payload allocation: three
+/// bounded envelope/manifest representations plus invocation, indexes and fixed
+/// owners. This preserves the artifact transaction's historical V3 allowance;
+/// it is neither actual allocator/RSS measurement nor a codec-work debit.
+pub const INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3: usize = 3
+    * crate::MAX_COMPILER_FFI_ENVELOPE_BYTES_V1
+    + 3 * crate::MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1
+    + 8 * 1024 * 1024;
+
 /// Domain-separated identity of the fixed pair-binding segment.
 ///
 /// The segment commits only to the already-complete native identities of the
