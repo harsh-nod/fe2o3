@@ -6,6 +6,8 @@ use fe2o3_kernel_ir::Gfx942OrderedProgramRegistersV1;
 mod debug_join;
 #[path = "source_bitselect_candidate_machine_fixture_v1_tests.rs"]
 mod fixture_cases;
+#[path = "source_bitselect_headless_machine_v1_tests.rs"]
+mod headless_machine;
 #[path = "source_bitselect_candidate_machine_ladder_v1_tests.rs"]
 mod ladder;
 

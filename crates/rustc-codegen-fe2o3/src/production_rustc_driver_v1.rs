@@ -16,6 +16,12 @@ use rustc_middle::ty::TyCtxt;
 const EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1: &str =
     "FE2O3_EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX";
 
+#[cfg(target_os = "linux")]
+#[path = "production_rustc_driver_v1/source_bitselect_promotion_driver_v1.rs"]
+mod source_bitselect_promotion_driver_v1;
+#[cfg(target_os = "linux")]
+pub use source_bitselect_promotion_driver_v1::run_bitselect_source_promotion_driver_v1;
+
 #[cfg(test)]
 #[path = "production_rustc_driver_checked_output_source_v1_tests.rs"]
 mod checked_output_source_v1_tests;

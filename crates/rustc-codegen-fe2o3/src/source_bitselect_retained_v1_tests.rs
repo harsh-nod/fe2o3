@@ -1,4 +1,5 @@
-//! Private test-only source descriptor / live-HIR association. No report input.
+//! Compiler-private retained-source/live-HIR association shared by bounded promotion.
+//! Fresh-source and local-order diagnostic observers remain test-only. No report input.
 
 use std::path::Path;
 
@@ -9,6 +10,7 @@ use fe2o3_source_isa_observation::source_edit_v1::{
 
 use super::*;
 
+#[cfg(test)]
 #[path = "source_local_order_capture_v1_tests.rs"]
 pub(crate) mod local_order;
 
@@ -189,6 +191,7 @@ pub(crate) fn require_baseline_profile(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) struct FreshHeader {
     pub(crate) identities: CanonicalFunctionIdentitiesV1,
     pub(crate) ordinals: [u32; 3],
@@ -197,6 +200,7 @@ pub(crate) struct FreshHeader {
 
 /// Independently binds fresh candidate source and parameters to its sealed root.
 /// No baseline report, expected source name, SSA label or old identity is read.
+#[cfg(test)]
 pub(crate) fn fresh_header<'tcx>(
     tcx: TyCtxt<'tcx>,
     closure: &AuthenticatedCollectedKernelClosureV1<'tcx>,

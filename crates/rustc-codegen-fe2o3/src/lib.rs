@@ -45,6 +45,15 @@ mod production_reference_effect_join_v2;
 #[cfg(test)]
 mod production_rustc_driver_checked_output_source_helpers_v1_tests;
 mod production_rustc_driver_v1;
+#[cfg(target_os = "linux")]
+mod source_bitselect_promotion_v1;
+#[cfg(target_os = "linux")]
+pub use production_rustc_driver_v1::run_bitselect_source_promotion_driver_v1;
+#[cfg(target_os = "linux")]
+pub use source_bitselect_promotion_v1::{
+    BitselectPromotionAttemptV1, BitselectPromotionFailureV1, BitselectPromotionRequestV1,
+    CandidatePublicationStateV1, FailurePhaseV1, PublishedBitselectCandidateV1,
+};
 mod production_rustc_drop_v1;
 mod production_rustc_intrinsic_v1;
 mod production_rustc_slice_metadata_v1;

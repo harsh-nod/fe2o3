@@ -5,6 +5,8 @@ use super::*;
 use crate::collector::source_census_v1::bitselect_feasibility::retained::RetainedInput;
 use std::io::Write as _;
 
+#[path = "source_bitselect_headless_driver_v1_tests.rs"]
+mod headless;
 #[path = "source_local_order_driver_v1_tests.rs"]
 mod local_order;
 #[path = "source_bitselect_candidate_machine_driver_v1_tests.rs"]
