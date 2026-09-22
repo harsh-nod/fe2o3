@@ -431,7 +431,17 @@ Before enabling runtime admission, the remaining work is:
    Pending producer ID zero is not silently excluded. Synthetic witnesses do not
    establish actual constructor/Begin reachability; instrumented frozen-baseline
    CPU comparisons do not establish native performance parity.
-   Remaining bodies include construction and producer release;
+   The [actual producer release packet](evidence/dev-producer-release-2026-09-22/README.md)
+   shares the ordered preflight and take/decrement/free-append commit. Actual and
+   historical execution agree for Pending, Unknown, Success and NoEffect while
+   preserving represented custody, the whole stable owner and producer incarnation.
+   Raw safety requires sufficient count storage only after header success; selected
+   slots are proved distinct from lookup identity and strict reference ordering.
+   Existing malformed free prefixes are preserved, not silently excluded or repaired.
+   The runtime observes physical capacity only after preceding header checks; the
+   proof consumes an explicit observation. Synthetic witnesses and instrumented CPU
+   comparisons do not establish constructor/Begin reachability or native parity.
+   Remaining bodies include construction and outer stable wrappers;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

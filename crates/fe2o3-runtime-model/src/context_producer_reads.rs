@@ -29,6 +29,9 @@ macro_rules! reader_rust_expr {
 #[macro_use]
 mod acquire;
 
+#[macro_use]
+mod release;
+
 impl Deref for ContextProducerReadJournalV1 {
     type Target = ContextReadLeasedJournalV1;
 
@@ -45,6 +48,7 @@ fn storage<T>(capacity: usize) -> Result<Vec<T>, ContextVersionJournalErrorV1> {
     Ok(result)
 }
 
+#[cfg(test)]
 fn read_key(request: &ContextProducerReadV1) -> (u64, u64, u64) {
     (
         request.read.allocation.key.local,
@@ -171,56 +175,27 @@ impl ContextProducerReadJournalV1 {
 
     /// Quiescence releases custody even when the producer is still Pending or
     /// Unknown. It never asserts that the consumer observed successful input.
+    #[allow(clippy::question_mark)]
     pub fn release_producer_reads(
         &mut self,
         consumer: ContextWriterKeyV1,
         references: &[ContextProducerReadReferenceV1],
         evidence: &ContextReadQuiescenceEvidenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        if evidence.consumer != consumer {
-            return Err(E::SettlementEvidenceMismatch);
-        }
-        if references.is_empty() {
-            return Err(E::RosterCapacity);
-        }
-        if self
-            .free
-            .len()
-            .checked_add(references.len())
-            .is_none_or(|count| count > self.reservations.len() || count > self.free.capacity())
-        {
-            return Err(E::InvalidState);
-        }
-        let mut previous = None;
-        let mut group = 0;
-        for reference in references {
-            if reference.consumer != consumer {
-                return Err(E::InvalidReference);
-            }
-            let request = self.lookup_producer_read(*reference)?;
-            let key = (read_key(&request), reference.incarnation);
-            if previous.is_some_and(|prior| prior >= key) {
-                return Err(E::NonCanonicalRoster);
-            }
-            group = if previous.is_some_and(|prior: ((u64, u64, u64), u64)| prior.0.0 == key.0.0) {
-                group + 1
-            } else {
-                1
-            };
-            if self.counts[request.read.allocation.slot] < group {
-                return Err(E::InvalidState);
-            }
-            previous = Some(key);
-        }
-        for reference in references {
-            let entry = self.reservations[reference.slot]
-                .take()
-                .expect("preflighted reservation");
-            self.counts[entry.request.read.allocation.slot] -= 1;
-            self.free.push(reference.slot);
-        }
-        Ok(())
+        producer_release_execution_body!(
+            reader_rust_expr,
+            self,
+            consumer,
+            references,
+            evidence,
+            release::producer_release_preflight_exec_v1,
+            release::producer_release_commit_exec_v1,
+            [],
+            _value,
+            [],
+            [],
+            []
+        )
     }
 
     pub fn acquire_reads(
@@ -388,3 +363,6 @@ mod query_baseline;
 
 #[cfg(test)]
 mod acquire_baseline;
+
+#[cfg(test)]
+mod release_baseline;
