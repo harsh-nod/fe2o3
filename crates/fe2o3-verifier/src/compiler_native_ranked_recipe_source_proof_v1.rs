@@ -5,8 +5,8 @@ use crate::InertFunctionalRefinementReceiptSignatureV2;
 use fe2o3_functional_proof::VerusToolchainIdentityV2;
 use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
 use fe2o3_lower_mir_kernel::{
-    NativeRankedSourceCandidateV1, ProductionRankedAccessSourceV1,
-    ProductionRankedExecutableEffectSourceV1,
+    NativeRankedSourceCandidateV1, ProductionRankedSourceRowsV1,
+    decode_production_ranked_source_rows_v1,
 };
 use fe2o3_pliron::{
     ProductionRankedKernelV1, ProductionRankedRecipeDecodeErrorV1,
@@ -16,15 +16,14 @@ use fe2o3_pliron::{
 };
 use std::mem::size_of;
 
-/// Inert recipe bytes with the complete ordered replay metadata. Auxiliary rows
-/// are still borrowed typed inputs, not a complete native artifact wire format.
+/// Inert recipe and source-row frames with ordered replay metadata. Signatures
+/// and enclosing source inputs are not yet a complete native artifact wire format.
 #[derive(Clone, Copy)]
 pub struct NativeCompilerRankedRecipeRootV1<'a> {
     pub semantic_root: u32,
     pub launch_rank: u8,
     pub recipe_bytes: &'a [u8],
-    pub access_sources: &'a [ProductionRankedAccessSourceV1],
-    pub executable_effect_sources: &'a [ProductionRankedExecutableEffectSourceV1],
+    pub source_rows_bytes: &'a [u8],
     pub ranked_ir: &'a str,
     pub effect_receipts: &'a [InertFunctionalRefinementReceiptSignatureV2],
 }
@@ -115,8 +114,13 @@ impl ProductionRankedRecipeProofResolverV1 for OrderedResolver<'_> {
     }
 }
 
+struct DecodedRoot {
+    kernel: ProductionRankedKernelV1,
+    source_rows: ProductionRankedSourceRowsV1,
+}
+
 struct DecodedRecipes {
-    kernels: Vec<ProductionRankedKernelV1>,
+    roots: Vec<DecodedRoot>,
     storage: usize,
 }
 
@@ -144,9 +148,9 @@ impl DecodedRecipes {
         if inputs.len() != checked.len() {
             return Err(E::Mismatch("complete typed ranked root roster"));
         }
-        let header = size_of::<Vec<ProductionRankedKernelV1>>();
+        let header = size_of::<Vec<DecodedRoot>>();
         budget.reserve_storage(header)?;
-        let (mut kernels, payload) = ranked_source::reserve_vec(inputs.len(), budget)?;
+        let (mut roots, payload) = ranked_source::reserve_vec(inputs.len(), budget)?;
         let mut storage = header.checked_add(payload).ok_or(Resource::Arithmetic)?;
         for (input, root) in inputs.iter().zip(checked) {
             budget.charge_work(1)?;
@@ -158,16 +162,28 @@ impl DecodedRecipes {
                 budget,
             )?;
             budget.reserve_storage(receipt.retained_storage())?;
+            let (source_rows, row_receipt) =
+                decode_production_ranked_source_rows_v1(input.source_rows_bytes, budget)
+                    .map_err(E::RankedSourceRowsWire)?;
+            budget.reserve_storage(row_receipt.retained_storage())?;
+            let inline = size_of::<ProductionRankedKernelV1>()
+                .checked_add(size_of::<ProductionRankedSourceRowsV1>())
+                .ok_or(Resource::Arithmetic)?;
             let nested = receipt
                 .retained_storage()
-                .checked_sub(size_of::<ProductionRankedKernelV1>())
+                .checked_add(row_receipt.retained_storage())
+                .ok_or(Resource::Arithmetic)?
+                .checked_sub(inline)
                 .ok_or(Resource::Accounting)?;
-            kernels.push(kernel);
-            // The prepaid vector slot now owns the kernel's inline header.
-            budget.release_storage(size_of::<ProductionRankedKernelV1>())?;
+            roots.push(DecodedRoot {
+                kernel,
+                source_rows,
+            });
+            // The prepaid root slot now owns both inline headers (and padding).
+            budget.release_storage(inline)?;
             storage = storage.checked_add(nested).ok_or(Resource::Arithmetic)?;
         }
-        Ok(Self { kernels, storage })
+        Ok(Self { roots, storage })
     }
 
     fn replay<T>(
@@ -179,15 +195,15 @@ impl DecodedRecipes {
         let header = size_of::<Vec<NativeCompilerRankedRootV1<'_>>>();
         budget.reserve_storage(header)?;
         let (mut roots, payload) = ranked_source::reserve_vec(inputs.len(), budget)?;
-        for (input, kernel) in inputs.iter().zip(&self.kernels) {
+        for (input, root) in inputs.iter().zip(&self.roots) {
             budget.charge_work(1)?;
             roots.push(NativeCompilerRankedRootV1 {
                 candidate: NativeRankedSourceCandidateV1::from_untrusted_parts(
                     input.semantic_root,
                     input.launch_rank,
-                    kernel,
-                    input.access_sources,
-                    input.executable_effect_sources,
+                    &root.kernel,
+                    root.source_rows.access_sources(),
+                    root.source_rows.executable_effect_sources(),
                     input.ranked_ir,
                 ),
                 effect_receipts: input.effect_receipts,
@@ -196,7 +212,7 @@ impl DecodedRecipes {
         // The legacy continuation independently imports again and recompiles.
         let result = replay(&roots, budget);
         drop(roots);
-        drop(self.kernels);
+        drop(self.roots);
         budget.release_storage(
             header
                 .checked_add(payload)
@@ -237,8 +253,8 @@ fn recipe_scope<T>(
 /// Validates the source packet once, reconstructs recipes using its checked
 /// commitments, then independently imports, recompiles and replays correspondence.
 /// Recipe transport adds no compiler-origin, artifact, or launch authority.
-/// Returned storage excludes discarded decoded inputs; caller-owned auxiliary
-/// rows and signatures remain borrowed. Success/error/unwind restore the floor.
+/// Returned storage excludes discarded decoded recipes and source rows;
+/// caller-owned signatures remain borrowed. Success/error/unwind restore the floor.
 pub fn validate_native_compiler_ranked_recipe_source_proof_v1(
     inputs: NativeCompilerRankedRecipeSourceProofInputsV1<'_>,
     budget: &mut Budget<'_>,

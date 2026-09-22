@@ -11,8 +11,10 @@ mod production_formal_memory_evidence_v4;
 mod production_formal_memory_v1;
 mod production_lineage_evidence_v3;
 mod production_masked_shift_query_v1;
+mod production_ranked_source_wire_v1;
 mod production_semantic_kir_v1;
 mod production_source_launch_v1;
+pub use production_ranked_source_wire_v1::*;
 pub use production_semantic_kir_v1::ProductionMemoryDischargeFailureV1;
 pub use production_source_launch_v1::*;
 

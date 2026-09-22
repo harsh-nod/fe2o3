@@ -91,6 +91,7 @@ pub enum NativeCompilerSourceProofErrorV1 {
     EffectReceipt(fe2o3_functional_proof::FunctionalRefinementImportErrorV2),
     RankedRecipe(fe2o3_pliron::ProductionRankedKernelErrorV1),
     RankedRecipeWire(fe2o3_pliron::ProductionRankedRecipeWireErrorV1),
+    RankedSourceRowsWire(fe2o3_lower_mir_kernel::ProductionRankedSourceRowsWireErrorV1),
     RankedCompile(Box<fe2o3_pliron::ProductionRankedCompileErrorV2>),
     Aggregate(Box<crate::ProductionMirPlironPerCompilationVerusErrorV1>),
     Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),

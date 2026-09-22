@@ -203,7 +203,7 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
     wrapper_header: fn() -> Result<usize, E>,
     budget: &mut Budget<'w>,
     replay: impl for<'p> FnOnce(
-        NativeCompilerRankedSourceProofInputsV1<'p>,
+        NativeCompilerRankedRecipeSourceProofInputsV1<'p>,
         &mut Budget<'w>,
     ) -> Result<(T, usize), E>,
 ) -> Result<NativeSourcePacketPartsV1<T>, E> {
@@ -388,19 +388,45 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
     }
     let (candidates, candidate_storage) = source.candidates(budget)?;
     budget.reserve_storage(candidate_storage)?;
-    let mut ranked_roots = reserved_vec(count, budget)?;
     if candidates.len() != count {
         return Err(E::Mismatch("complete typed ranked candidate roster"));
     }
-    for (candidate, root) in candidates.iter().zip(ranked.roots()) {
+    budget.reserve_storage(std::mem::size_of::<Vec<(Vec<u8>, Vec<u8>)>>())?;
+    let mut encoded = reserved_vec(count, budget)?;
+    for candidate in &candidates {
+        let (recipe, storage) = fe2o3_pliron::encode_production_ranked_recipe_v1(
+            candidate.kernel(),
+            budget,
+        )
+        .map_err(|error| {
+            E::Replay(fe2o3_verifier::NativeCompilerSourceProofErrorV1::RankedRecipeWire(error))
+        })?;
+        budget.reserve_storage(storage.retained_storage())?;
+        let (rows, storage) = fe2o3_lower_mir_kernel::encode_production_ranked_source_rows_v1(
+            candidate.access_sources(),
+            candidate.executable_effect_sources(),
+            budget,
+        )
+        .map_err(|error| {
+            E::Replay(fe2o3_verifier::NativeCompilerSourceProofErrorV1::RankedSourceRowsWire(error))
+        })?;
+        budget.reserve_storage(storage.retained_storage())?;
+        encoded.push((recipe, rows));
+    }
+    let mut ranked_roots = reserved_vec(count, budget)?;
+    for ((candidate, root), (recipe, rows)) in candidates.iter().zip(ranked.roots()).zip(&encoded) {
         budget.charge_work(2)?;
-        ranked_roots.push(NativeCompilerRankedRootV1 {
-            candidate: *candidate,
+        ranked_roots.push(NativeCompilerRankedRecipeRootV1 {
+            semantic_root: candidate.semantic_root(),
+            launch_rank: candidate.launch_rank(),
+            recipe_bytes: recipe,
+            source_rows_bytes: rows,
+            ranked_ir: candidate.ranked_ir(),
             effect_receipts: root.verification().effect_receipts(),
         });
     }
     let (proof, proof_storage) = replay(
-        NativeCompilerRankedSourceProofInputsV1 {
+        NativeCompilerRankedRecipeSourceProofInputsV1 {
             source: NativeCompilerSourceProofInputsV1 {
                 semantic_mir: semantic.canonical_encoding(),
                 native_module: &native_module,
@@ -426,6 +452,7 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
     drop(launches);
     drop(joins);
     drop(ranked_roots);
+    drop(encoded);
     drop(candidates);
     Ok(NativeSourcePacketPartsV1 {
         proof,

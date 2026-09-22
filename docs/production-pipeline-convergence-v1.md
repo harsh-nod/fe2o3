@@ -104,6 +104,14 @@ claims. It enforces structural bounds before construction and rejects any
 normalization that changes the encoded recipe. Diagnostic ranked text and graph
 hashes are not parsed as substitute recipes.
 
+`encode_production_ranked_source_rows_v1` and its decoder transport the lowerer's
+ordered access and generated-effect rows in a separate versioned frame. This
+preserves absent versus present output-extent proposals, all three ranked value
+forms through the recipe's existing grammar, explicit effect origins and exact
+recipe identities. Rows are not sorted or repaired. Structural decoding does
+not establish source correspondence or the truth of an extent proposal; those
+still require replay and canonical-owner rederivation.
+
 The Direct and UnitLocal recipe-source verifier entrypoints first validate the
 source packet, then resolve claims against its complete ordered signed effect
 roster and checked aggregate commitments. They share the existing typed replay
@@ -111,16 +119,22 @@ continuations, which independently re-import signatures, recompile, rebuild V5
 and aggregate subjects, and replay source correspondence. UnitLocal recovery
 preserves original N and independently admitted E; it does not rerun the erasure
 producer. Embedded test keys establish consistency, not protected origin.
+Native backend packet preparation now encodes recipes and source rows and uses
+these reconstructive entrypoints for both Direct and UnitLocal source owners.
+Its retained result is still a source-proof owner, not a complete serialized
+capsule or protected publication continuation.
 
 Work and live logical payload use the shared verification ledger. Resolver
 callbacks can charge work but cannot replace or release the storage ledger;
 ignored callback denials still fail. Parsed owner reservations remain live
 through normalized capacity reconciliation, and returned receipts exclude
-discarded temporary recipes. Existing checked constructors and proof engines
+discarded temporary recipes and source rows. Correspondence counts and minimum
+remaining wire sizes are checked before allocation; exact capacities are
+prepaid and remain live throughout replay. Existing checked constructors and proof engines
 retain their separate bounded scratch/work domains: this is not an RSS or
 whole-process accounting claim.
 
-Complete correspondence/launch/signature packet transport remains outstanding:
+Complete launch/signature/staging packet transport remains outstanding:
 the new entrypoints still borrow those auxiliary typed inputs. This component
 does not complete native artifact recovery, compiler/Worker custody, generated
 safe launch, protected proof execution or tutorial/GPU qualification. M0-M7

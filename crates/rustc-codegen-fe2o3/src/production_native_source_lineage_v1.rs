@@ -36,10 +36,11 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1 as Induction;
 use fe2o3_verifier::{
-    CanonicalProductionMirPlironVerusExecutionEvidenceV1 as Signed, NativeCompilerRankedRootV1,
-    NativeCompilerRankedSourceProofInputsV1, NativeCompilerRootStagingV1,
-    NativeCompilerSourceProofInputsV1, NativeCompilerStagingCommitmentV1,
-    ValidatedNativeCompilerRankedSourceProofV1, validate_native_compiler_ranked_source_proof_v1,
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1 as Signed,
+    NativeCompilerRankedRecipeRootV1, NativeCompilerRankedRecipeSourceProofInputsV1,
+    NativeCompilerRootStagingV1, NativeCompilerSourceProofInputsV1,
+    NativeCompilerStagingCommitmentV1, ValidatedNativeCompilerRankedSourceProofV1,
+    validate_native_compiler_ranked_recipe_source_proof_v1,
 };
 
 #[derive(Debug)]

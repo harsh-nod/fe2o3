@@ -18,6 +18,9 @@ mod expressions;
 
 #[path = "ranked_recipe_wire_v1/schema.rs"]
 mod schema;
+#[path = "ranked_recipe_wire_v1/value_leaf.rs"]
+mod value_leaf;
+pub use value_leaf::*;
 #[cfg(test)]
 #[path = "ranked_recipe_wire_v1/schema_tests.rs"]
 mod schema_tests;

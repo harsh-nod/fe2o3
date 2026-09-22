@@ -1,6 +1,7 @@
 //! Recovery keeps only inert transport inputs, never the producer's recipe owner.
 use super::*;
 use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
+use fe2o3_lower_mir_kernel::encode_production_ranked_source_rows_v1;
 use fe2o3_pliron::encode_production_ranked_recipe_v1;
 
 struct DurableFixture {
@@ -11,6 +12,7 @@ struct DurableFixture {
     correspondence: Roster,
     verus: Roster,
     recipe: Vec<u8>,
+    source_rows: Vec<u8>,
     signature: InertFunctionalRefinementReceiptSignatureV2,
     staging: NativeCompilerStagingCommitmentV1,
 }
@@ -30,7 +32,16 @@ impl DurableFixture {
         } = fixture;
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = Budget::new(&mut work, STORAGE);
-        let (recipe, _) = encode_production_ranked_recipe_v1(&kernel, &mut budget).unwrap();
+        let (recipe, recipe_storage) =
+            encode_production_ranked_recipe_v1(&kernel, &mut budget).unwrap();
+        budget
+            .reserve_storage(recipe_storage.retained_storage())
+            .unwrap();
+        let (source_rows, _) =
+            encode_production_ranked_source_rows_v1(&access(), &[], &mut budget).unwrap();
+        budget
+            .release_storage(recipe_storage.retained_storage())
+            .unwrap();
         drop(kernel);
         Self {
             semantic,
@@ -40,6 +51,7 @@ impl DurableFixture {
             correspondence,
             verus,
             recipe,
+            source_rows,
             signature,
             staging,
         }
@@ -48,7 +60,6 @@ impl DurableFixture {
     fn replay<T>(
         &self,
         receipts: &[InertFunctionalRefinementReceiptSignatureV2],
-        access: &[ProductionRankedAccessSourceV1],
         budget: &mut Budget<'_>,
         replay: impl FnOnce(
             NativeCompilerSourceProofInputsV1<'_>,
@@ -70,8 +81,7 @@ impl DurableFixture {
             semantic_root: 0,
             launch_rank: 1,
             recipe_bytes: &self.recipe,
-            access_sources: access,
-            executable_effect_sources: &[],
+            source_rows_bytes: &self.source_rows,
             ranked_ir: TEXT,
             effect_receipts: receipts,
         }];
@@ -93,7 +103,6 @@ impl DurableFixture {
     fn direct(
         &self,
         receipts: &[InertFunctionalRefinementReceiptSignatureV2],
-        access: &[ProductionRankedAccessSourceV1],
         budget: &mut Budget<'_>,
     ) -> Result<
         (
@@ -102,7 +111,7 @@ impl DurableFixture {
         ),
         E,
     > {
-        self.replay(receipts, access, budget, |source, ranked_roots, budget| {
+        self.replay(receipts, budget, |source, ranked_roots, budget| {
             validate_native_compiler_ranked_recipe_source_proof_v1(
                 NativeCompilerRankedRecipeSourceProofInputsV1 {
                     source,
@@ -129,9 +138,7 @@ fn durable_recipe_direct_recovery_reimports_and_retains_independent_owner() {
     drop(typed);
     let durable = DurableFixture::capture(original);
     budget.reserve_storage(37).unwrap();
-    let (checked, storage) = durable
-        .direct(&[durable.signature], &access(), &mut budget)
-        .unwrap();
+    let (checked, storage) = durable.direct(&[durable.signature], &mut budget).unwrap();
     assert_eq!(budget.storage(), 37);
     // Discarded decoded recipes must not inflate the final retained receipt.
     assert_eq!(storage.retained_storage(), typed_storage.retained_storage());
@@ -190,7 +197,6 @@ fn durable_recipe_unit_local_recovery_uses_freshly_admitted_e_not_erasure_produc
     let (checked, storage) = durable
         .replay(
             &[durable.signature],
-            &access(),
             &mut budget,
             |original, ranked_roots, budget| {
                 validate_native_compiler_unit_local_erased_recipe_source_proof_v1(
@@ -253,7 +259,7 @@ fn durable_recipe_unit_local_recovery_uses_freshly_admitted_e_not_erasure_produc
 
 #[test]
 fn durable_recipe_rejects_missing_extra_and_foreign_receipts_and_wrong_source_map() {
-    let durable = DurableFixture::capture(fixture());
+    let mut durable = DurableFixture::capture(fixture());
     let foreign = InertFunctionalRefinementReceiptSignatureV2::from_untrusted_parts(
         *durable.signature.wire(),
         [91; 32],
@@ -266,17 +272,16 @@ fn durable_recipe_rejects_missing_extra_and_foreign_receipts_and_wrong_source_ma
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = Budget::new(&mut work, STORAGE);
         budget.reserve_storage(37).unwrap();
-        assert!(durable.direct(&receipts, &access(), &mut budget).is_err());
+        assert!(durable.direct(&receipts, &mut budget).is_err());
         assert_eq!(budget.storage(), 37);
     }
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
+    durable.source_rows = encode_production_ranked_source_rows_v1(&[], &[], &mut budget)
+        .unwrap()
+        .0;
     budget.reserve_storage(37).unwrap();
-    assert!(
-        durable
-            .direct(&[durable.signature], &[], &mut budget)
-            .is_err()
-    );
+    assert!(durable.direct(&[durable.signature], &mut budget).is_err());
     assert_eq!(budget.storage(), 37);
 }
 
@@ -306,7 +311,7 @@ fn durable_recipe_decode_does_not_approve_changed_typed_operand() {
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(37).unwrap();
     let error = durable
-        .direct(&[durable.signature], &access(), &mut budget)
+        .direct(&[durable.signature], &mut budget)
         .err()
         .unwrap();
     assert!(matches!(error, E::RankedCompile(_)), "{error:?}");
@@ -322,7 +327,6 @@ fn durable_recipe_rejects_incomplete_or_substituted_root_metadata() {
         budget.reserve_storage(37).unwrap();
         let result = durable.replay(
             &[durable.signature],
-            &access(),
             &mut budget,
             |source, roots, budget| {
                 let mut changed = vec![roots[0]];
@@ -354,9 +358,7 @@ fn durable_recipe_partial_progress_denials_restore_floor_and_history() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(37).unwrap();
-    durable
-        .direct(&[durable.signature], &access(), &mut budget)
-        .unwrap();
+    durable.direct(&[durable.signature], &mut budget).unwrap();
     let full_work = budget.work();
     let peak = budget.peak_storage();
     for (work_limit, storage_limit) in [
@@ -370,11 +372,69 @@ fn durable_recipe_partial_progress_denials_restore_floor_and_history() {
         let mut budget = Budget::new(&mut work, storage_limit);
         budget.reserve_storage(37).unwrap();
         assert!(budget.reserve_storage(usize::MAX).is_err());
-        assert!(
-            durable
-                .direct(&[durable.signature], &access(), &mut budget)
-                .is_err()
-        );
+        assert!(durable.direct(&[durable.signature], &mut budget).is_err());
+        assert_eq!(budget.storage(), 37);
+        assert_eq!(budget.failed_storage(), Some(usize::MAX));
+    }
+}
+
+#[test]
+fn durable_recipe_rejects_truncated_source_rows_after_recipe_import() {
+    let mut durable = DurableFixture::capture(fixture());
+    durable.source_rows.pop().unwrap();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    budget.reserve_storage(37).unwrap();
+    assert!(budget.reserve_storage(usize::MAX).is_err());
+    let error = durable
+        .direct(&[durable.signature], &mut budget)
+        .err()
+        .unwrap();
+    assert!(matches!(error, E::RankedSourceRowsWire(_)), "{error:?}");
+    assert_eq!(budget.storage(), 37);
+    assert_eq!(budget.failed_storage(), Some(usize::MAX));
+    assert!(budget.peak_storage() > 37);
+}
+
+#[test]
+fn durable_recipe_does_not_replace_decoded_source_rows_with_expected_rows() {
+    use fe2o3_lower_mir_kernel::{
+        ProductionRankedExecutableEffectOriginV1 as Origin,
+        ProductionRankedExecutableEffectSourceV1 as Effect,
+        decode_production_ranked_source_rows_v1,
+    };
+    let mut durable = DurableFixture::capture(fixture());
+    let extra_effect = Effect::new(0, 0, 0, 8, Origin::GeneratedFromSemanticTerminator, [3; 32]);
+    for (access, effects) in [
+        (
+            vec![ProductionRankedAccessSourceV1::new(0, Some(0), 0, 0, 8)],
+            vec![],
+        ),
+        (
+            vec![ProductionRankedAccessSourceV1::new(0, Some(1), 0, 0, 7)],
+            vec![],
+        ),
+        (vec![access()[0], access()[0]], vec![]),
+        (access().to_vec(), vec![extra_effect]),
+    ] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+        let mut budget = Budget::new(&mut work, STORAGE);
+        durable.source_rows =
+            encode_production_ranked_source_rows_v1(&access, &effects, &mut budget)
+                .unwrap()
+                .0;
+        let (decoded, _) =
+            decode_production_ranked_source_rows_v1(&durable.source_rows, &mut budget).unwrap();
+        assert_eq!(decoded.access_sources(), access);
+        assert_eq!(decoded.executable_effect_sources(), effects);
+        drop(decoded);
+        budget.reserve_storage(37).unwrap();
+        assert!(budget.reserve_storage(usize::MAX).is_err());
+        let error = durable
+            .direct(&[durable.signature], &mut budget)
+            .err()
+            .unwrap();
+        assert!(matches!(error, E::Source(_)), "{error:?}");
         assert_eq!(budget.storage(), 37);
         assert_eq!(budget.failed_storage(), Some(usize::MAX));
     }

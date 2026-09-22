@@ -1275,10 +1275,11 @@ fn fmt_semantic_source_location_v1(
 /// This is compiler-internal correspondence, not proof authority. It is
 /// revalidated against all three retained IR owners before formal admission.
 ///
-/// Optional output extent provenance is in-memory only. Reconstructing the five
-/// legacy coordinate fields (including a legacy payload decode) uses `new` and
-/// loses that proposal. Existing codecs/digests must not serialize it under an
-/// old version. Eq/Ord compare the complete in-memory row, including the proposal;
+/// Optional output extent provenance is preserved by the separately versioned
+/// ranked source-row transport. Reconstructing the five legacy coordinate fields
+/// (including a legacy payload decode) uses `new` and loses that proposal.
+/// Existing codecs/digests must not serialize it under an old version.
+/// Eq/Ord compare the complete in-memory row, including the proposal;
 /// neither trait is a wire identity or an authentication check. Existing source
 /// replay validates the base coordinates, not this optional extent meaning.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

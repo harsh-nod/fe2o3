@@ -732,6 +732,72 @@ fn base_field_reconstruction_loses_proposal_and_never_authenticates_extent() {
 }
 
 #[test]
+fn serialized_extent_proposals_still_require_exact_operand_checks() {
+    use crate::{decode_production_ranked_source_rows_v1, encode_production_ranked_source_rows_v1};
+    let extent = ProductionRankedValueV1::Argument(0);
+    let kernel = ranked_kernel(extent, access());
+    let valid = extent_source(extent);
+    let rows = [
+        valid,
+        source(),
+        source().with_output_extent(ProductionRankedOutputExtentSourceV1::new(
+            1,
+            local(2),
+            extent,
+            local(1),
+        )),
+        source().with_output_extent(ProductionRankedOutputExtentSourceV1::new(
+            0,
+            local(0),
+            extent,
+            local(1),
+        )),
+        source().with_output_extent(ProductionRankedOutputExtentSourceV1::new(
+            0,
+            local(2),
+            ProductionRankedValueV1::Argument(1),
+            local(1),
+        )),
+        source().with_output_extent(ProductionRankedOutputExtentSourceV1::new(
+            0,
+            local(2),
+            extent,
+            local(0),
+        )),
+    ];
+    for (ordinal, row) in rows.into_iter().enumerate() {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut budget = Budget::new(&mut work, 1_000_000);
+        budget.reserve_storage(37).unwrap();
+        let (bytes, encoded_storage) =
+            encode_production_ranked_source_rows_v1(&[row], &[], &mut budget).unwrap();
+        budget
+            .reserve_storage(encoded_storage.retained_storage())
+            .unwrap();
+        let (decoded, storage) =
+            decode_production_ranked_source_rows_v1(&bytes, &mut budget).unwrap();
+        budget.reserve_storage(storage.retained_storage()).unwrap();
+        assert_eq!(decoded.access_sources(), [row]);
+        let expected = match ordinal {
+            0 => Ok(()),
+            1 => Err(JoinError::MissingExtentSource),
+            _ => Err(JoinError::ExtentSource),
+        };
+        assert_eq!(
+            extent_query(&kernel, decoded.access_sources(), extent, &mut budget),
+            expected
+        );
+        drop(decoded);
+        budget.release_storage(storage.retained_storage()).unwrap();
+        drop(bytes);
+        budget
+            .release_storage(encoded_storage.retained_storage())
+            .unwrap();
+        assert_eq!(budget.storage(), 37);
+    }
+}
+
+#[test]
 fn extent_proposal_requires_exact_source_view_index_and_operand() {
     let extent = ProductionRankedValueV1::Argument(0);
     let kernel = ranked_kernel(extent, access());

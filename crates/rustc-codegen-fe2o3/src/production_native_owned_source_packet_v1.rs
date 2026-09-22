@@ -2,9 +2,9 @@
 use super::*;
 use fe2o3_lower_mir_kernel::ProductionUnitLocalErasedSourceOwnerV1 as ErasedSource;
 use fe2o3_verifier::{
-    NativeCompilerUnitLocalErasedSourceProofInputsV1,
+    NativeCompilerUnitLocalErasedRecipeSourceProofInputsV1,
     ValidatedNativeCompilerUnitLocalErasedSourceProofV1 as ErasedProof,
-    validate_native_compiler_unit_local_erased_source_proof_v1,
+    validate_native_compiler_unit_local_erased_recipe_source_proof_v1,
 };
 use std::mem::size_of;
 
@@ -82,7 +82,7 @@ pub(crate) fn prepare_borrowed_native_source_packet_v1(
             budget,
             |inputs, budget| {
                 let (proof, receipt) =
-                    validate_native_compiler_ranked_source_proof_v1(inputs, budget)
+                    validate_native_compiler_ranked_recipe_source_proof_v1(inputs, budget)
                         .map_err(E::Replay)?;
                 Ok((proof, receipt.retained_storage()))
             },
@@ -109,15 +109,16 @@ pub(crate) fn prepare_borrowed_erased_native_source_packet_v1(
             packet_header::<ErasedProof>,
             budget,
             |inputs, budget| {
-                let (proof, receipt) = validate_native_compiler_unit_local_erased_source_proof_v1(
-                    NativeCompilerUnitLocalErasedSourceProofInputsV1 {
-                        original: inputs.source,
-                        ranked_roots: inputs.ranked_roots,
-                        erased: source.erased(),
-                    },
-                    budget,
-                )
-                .map_err(E::Replay)?;
+                let (proof, receipt) =
+                    validate_native_compiler_unit_local_erased_recipe_source_proof_v1(
+                        NativeCompilerUnitLocalErasedRecipeSourceProofInputsV1 {
+                            original: inputs.source,
+                            ranked_roots: inputs.ranked_roots,
+                            erased: source.erased(),
+                        },
+                        budget,
+                    )
+                    .map_err(E::Replay)?;
                 Ok((proof, receipt.retained_storage()))
             },
         )?;
