@@ -92,12 +92,20 @@ class _Budget:
         self.used = 0
         self.identity_bytes = 0
         self.source_bytes = 0
+        self.fragment_match_bytes = 0
 
     def rows(self, value: Any, label: str) -> list[Any]:
         if not isinstance(value, list) or len(value) > self.maximum - self.used:
             _fail(f"{label} exceeds the record bound or is not an array")
         self.used += len(value)
         return value
+
+    def fragment_search(self, source_bytes: int) -> None:
+        # Account for both full-source searches, including overlapping matches.
+        amount = 2 * source_bytes
+        if amount > MAX_RUNTIME_BYTES - self.fragment_match_bytes:
+            _fail("fixture fragment matching exceeds its aggregate byte-span bound")
+        self.fragment_match_bytes += amount
 
 
 def _reference(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
@@ -179,6 +187,86 @@ def _fragment_intervals(tab: dict[str, Any], runtime: dict[str, Any], encoded: b
     return intervals
 
 
+def _fixture_display_declaration(tab: dict[str, Any]) -> None:
+    scope = tab["sourceDigestScope"]
+    digests = tab["sourceFragmentsSha256"]
+    if scope == "file":
+        if digests is not None:
+            _fail("whole-file fixture display cannot carry fragment metadata")
+    elif scope == "displayed":
+        if _digest(tab["sourceSha256"], "fixture display source digest") != tab["displayedSha256"]:
+            _fail("fixture display source and displayed digests differ")
+        if digests is not None:
+            if not isinstance(digests, list) or not 0 < len(digests) <= 64:
+                _fail("fixture display fragment metadata exceeds its bound or is empty")
+            for digest in digests:
+                _digest(digest, "fixture display fragment digest")
+    else:
+        _fail("unsupported fixture display digest scope")
+
+
+class _FixtureDisplayIndex:
+    """Exact excerpt/source correspondence, separate from fixture selection."""
+
+    def __init__(self, budget: _Budget):
+        self.budget = budget
+        self.parts = {}
+        self.sources = {}
+        self.mappings = {}
+
+    def match(self, location: tuple[str, int], tab: dict[str, Any], live: dict[str, Any],
+              path: str, source: str, digest: str, offset: int, symbol: str,
+              source_offset: int) -> None:
+        if location not in self.parts:
+            displayed = _utf8(live.get("displayedCode"), "fixture displayed code")
+            if tab["sourceFragmentsSha256"] is None:
+                if live.get("sourceFragments") is not None:
+                    _fail("contiguous fixture display has unexpected fragments")
+                intervals = [(0, len(displayed))]
+            else:
+                intervals = _fragment_intervals(tab, live, displayed)
+            self.budget.rows(intervals, "fixture display fragments")
+            parts = [(start, end, displayed[start:end]) for start, end in intervals]
+            if any(not part for _, _, part in parts):
+                _fail("fixture display fragments must be nonempty")
+            self.parts[location] = parts
+        parts = self.parts[location]
+        source_key = (path, digest)
+        if source_key not in self.sources:
+            self.sources[source_key] = _utf8(source, "fixture matched source")
+        encoded = self.sources[source_key]
+        mapping_key = (location, path, digest)
+        if mapping_key not in self.mappings:
+            self.budget.rows(parts, "fixture physical fragment mappings")
+            starts = []
+            for _, _, part in parts:
+                if len(part) > len(encoded):
+                    _fail("fixture display fragment exceeds its physical source")
+                self.budget.fragment_search(len(encoded))
+                start = encoded.find(part)
+                if start < 0:
+                    _fail("fixture display fragment differs from its physical source")
+                if encoded.find(part, start + 1) >= 0:
+                    _fail("fixture display fragment has ambiguous physical occurrences")
+                starts.append(start)
+            spans = sorted((start, start + len(part))
+                           for start, (_, _, part) in zip(starts, parts, strict=True))
+            if any(right[0] < left[1] for left, right in zip(spans, spans[1:])):
+                _fail("fixture display fragments overlap or repeat in physical source")
+            self.mappings[mapping_key] = starts
+        token = symbol.encode("utf-8")
+        matches = []
+        for index, (start, end, part) in enumerate(parts):
+            relative = offset - start
+            if not start <= offset < end:
+                continue
+            width = len(token) + (2 if part[relative:relative + 2] == b"r#" else 0)
+            if offset + width <= end and _name_token_matches(part, relative, symbol):
+                matches.append(self.mappings[mapping_key][index] + relative)
+        if matches != [source_offset]:
+            _fail("fixture display does not map to the exact selected physical function")
+
+
 def _fixture_cfg(body: str, features: set[str]) -> bool:
     """Evaluate only literal feature/AMDGPU cfg expressions, without expansion."""
     if len(body) > 8192 or len(body.encode("utf-8")) > 8192:
@@ -257,6 +345,8 @@ def _fixture_declarations(
             cfg = re.fullmatch(r"cfg\s*\((.*)\)", body, re.DOTALL)
             if cfg is not None:
                 enabled = _fixture_cfg(cfg[1], features) and enabled
+            elif match[1] and body == "no_std":
+                pass
             elif re.fullmatch(r'cfg_attr\s*\(\s*target_arch\s*=\s*"amdgpu"\s*,\s*no_std\s*\)', body) and match[1]:
                 pass
             else:
@@ -586,6 +676,7 @@ def validate_kernel_inventory(
     negative_display_keys = set()
     bound_positive = set()
     unresolved = []
+    fixture_displays = _FixtureDisplayIndex(budget)
     for row in budget.rows(inventory["displayItems"], "display items"):
         _object(row, DISPLAY_FIELDS, "display item")
         lesson = _text(row["lessonId"], "lessonId")
@@ -649,9 +740,9 @@ def validate_kernel_inventory(
                 negative_display_keys.update(refs_keys)
             if status == "fixture-source-contract":
                 if (classification != "kernel" or not ids or refs or matching_cases
-                        or tab["kind"] != "kernel" or tab["sourceItem"] is not None
-                        or tab["sourceDigestScope"] != "file" or tab["sourceFragmentsSha256"] is not None):
-                    _fail("fixture display requires an exclusive whole-file positive binding")
+                        or tab["kind"] != "kernel" or tab["sourceItem"] is not None):
+                    _fail("fixture display requires an exclusive positive binding")
+                _fixture_display_declaration(tab)
                 if load_fixture_sources is None or rust_syntax is None:
                     _fail("fixture display requires current physical source validation")
                 for kernel_id in ids:
@@ -663,15 +754,22 @@ def validate_kernel_inventory(
                         if tab["sourcePath"] not in fixture["compilerInput"]["sourcePaths"]:
                             _fail("fixture display path is not an exact selected source")
                         path, source_offset, source, digest = selected_source(key)
-                        encoded = _utf8(source, "fixture source")
-                        if (path != tab["sourcePath"] or source_offset != offset
-                                or len(encoded) != tab["displayedUtf8Bytes"]
-                                or digest != tab["sourceSha256"] or digest != tab["displayedSha256"]):
+                        if path != tab["sourcePath"]:
                             _fail("fixture display differs from the exact current source occurrence")
+                        if tab["sourceDigestScope"] == "file":
+                            encoded = _utf8(source, "fixture source")
+                            if (source_offset != offset or len(encoded) != tab["displayedUtf8Bytes"]
+                                    or digest != tab["sourceSha256"] or digest != tab["displayedSha256"]):
+                                _fail("fixture display differs from the exact current source occurrence")
                         if runtime_inventory is not None:
                             live = runtime_tabs[location]
-                            if live.get("sourceFragments") is not None or live["displayedCode"] != source or not candidates[coordinate]:
-                                _fail("fixture display differs from the live whole-file occurrence")
+                            if tab["sourceDigestScope"] == "file":
+                                if (live.get("sourceFragments") is not None
+                                        or live["displayedCode"] != source or not candidates[coordinate]):
+                                    _fail("fixture display differs from the live whole-file occurrence")
+                            else:
+                                fixture_displays.match(location, tab, live, path, source, digest,
+                                                       offset, symbol, source_offset)
                             bound_positive.add(key)
             elif status == "pending":
                 unresolved.append({"lessonId": lesson, "tabOrdinal": ordinal,

@@ -392,7 +392,7 @@ class FixtureDisplayTests(unittest.TestCase):
     def test_wrong_file_feature_bytes_and_occurrence_reject(self):
         for field, value in (("sourcePath", "example/src/right.rs"), ("sourceSha256", "0" * 64),
                              ("displayedSha256", "0" * 64), ("displayedUtf8Bytes", 1),
-                             ("sourceDigestScope", "displayed"), ("sourceFragmentsSha256", [])):
+                             ("sourceDigestScope", "unknown"), ("sourceFragmentsSha256", [])):
             self.setUp()
             self.tab[field] = value
             with self.subTest(field=field), self.assertRaises(IDENTITIES.KernelInventoryError):
@@ -451,6 +451,33 @@ class FixtureDisplayTests(unittest.TestCase):
                     IDENTITIES.KernelInventoryError, "unsupported fixture selection attribute",
                 ):
                     self.validate(False)
+
+    def test_inner_no_std_preserves_selection_and_pending_qualification(self):
+        for runtime in (True, False):
+            self.setUp()
+            self.sources[self.library] = "#![no_std]\n" + self.sources[self.library].split("\n", 1)[1]
+            before = copy.deepcopy((self.manifest, self.runtime, self.sources))
+            with self.subTest(runtime=runtime):
+                result = self.validate(runtime)
+                self.assertEqual(result["kernelIdentities"][0]["variants"], variants())
+                self.assertEqual(result["sourceBoundVariantCount"], 0)
+                self.assertEqual(result["sourceBoundPairCount"], 0)
+                self.assertEqual(result["variantBindingStatus"], "pending")
+                self.assertEqual((self.manifest, self.runtime, self.sources), before)
+
+    def test_no_std_extension_rejects_outer_arguments_and_hidden_literals(self):
+        for attribute in (
+            "#[no_std]", "#![no_std()]", "#![no_std(extra)]",
+            '#![no_std = "unexpected"]', '#![no_std "unexpected"]',
+            '#![no_std r#"unexpected"#]', "#![no_std::other]", "#![no_main]", "#![unknown]",
+            '#![cfg_attr(feature = "left", no_std)]',
+        ):
+            self.setUp()
+            self.sources[self.library] = attribute + "\n" + self.sources[self.library].split("\n", 1)[1]
+            with self.subTest(attribute=attribute), self.assertRaisesRegex(
+                IDENTITIES.KernelInventoryError, "unsupported fixture selection attribute",
+            ):
+                self.validate(False)
 
     def test_fixture_attributes_require_one_supported_body_form(self):
         for attribute in ("doc[hidden]", "inline{always}", "inline(sometimes)",
@@ -529,6 +556,244 @@ class FixtureDisplayTests(unittest.TestCase):
         loader = mock.Mock(return_value=(self.library, self.sources, ["left"]))
         self.assertEqual(self.validate(load_fixture_sources=loader)["unresolvedBindings"], [])
         loader.assert_called_once_with(self.fixture)
+
+    def excerpt(self, parts, explicit=True):
+        source = "\n\n".join(parts)
+        digest = hashlib.sha256(source.encode()).hexdigest()
+        self.tab.update(sourceDigestScope="displayed", sourceSha256=digest,
+                        displayedSha256=digest, displayedUtf8Bytes=len(source.encode()),
+                        sourceFragmentsSha256=(
+                            [hashlib.sha256(part.encode()).hexdigest() for part in parts] if explicit else None))
+        self.runtime["lessons"][0]["codeTabs"][0] = {
+            "displayedCode": source, "sourceFragments": list(parts) if explicit else None,
+        }
+        self.row["functionUtf8Offset"] = next(
+            item["functionUtf8Offset"] for item in self.scanner.ordinary_rust_function_items(source)
+            if item["kernelSymbol"] == "same")
+
+    def test_exact_excerpts_keep_variants_pending_and_require_live_coverage(self):
+        for fragment in ("#[kernel] fn same() {}", "fn same() {}"):
+            for explicit in (False, True):
+                self.setUp()
+                self.excerpt([fragment], explicit)
+                before = copy.deepcopy((self.manifest, self.runtime, self.sources))
+                with self.subTest(fragment=fragment, explicit=explicit):
+                    result = self.validate()
+                    self.assertEqual(result["unresolvedBindings"], [])
+                    self.assertEqual(result["requiredPairCount"], 1)
+                    self.assertEqual(result["kernelIdentities"][0]["variants"], variants())
+                    self.assertEqual(result["sourceBoundVariantCount"], 0)
+                    self.assertEqual(result["sourceBoundPairCount"], 0)
+                    pending = self.validate(False)
+                    self.assertIsNone(pending["requiredPairCount"])
+                    self.assertFalse(pending["inventoryComplete"])
+                    self.assertFalse(pending["runtimeCensusValidated"])
+                    self.assertTrue(any("selection" in row for row in pending["unresolvedBindings"]))
+                    self.assertEqual((self.manifest, self.runtime, self.sources), before)
+
+    def test_multiple_exact_nonoverlapping_fragments_and_adjacent_spans(self):
+        parts = ["// before\n", "#[kernel] fn same() {}", "\n// after\n"]
+        self.sources[self.path] = "".join(parts)
+        for order in (parts, parts[::-1]):
+            self.excerpt(order)
+            with self.subTest(order=order):
+                self.assertEqual(self.validate()["unresolvedBindings"], [])
+
+    def test_excerpt_metadata_and_unmatched_bytes_refuse(self):
+        for mutation, message, runtime in (
+            (lambda: self.tab.update(sourceSha256="0" * 64), "digests differ", False),
+            (lambda: self.tab.update(sourceFragmentsSha256=[]), "empty", False),
+            (lambda: self.tab.update(sourceFragmentsSha256=["bad"]), "SHA-256", False),
+            (lambda: self.runtime["lessons"][0]["codeTabs"][0].update(sourceFragments=None),
+             "fragment coverage", True),
+            (lambda: self.runtime["lessons"][0]["codeTabs"][0].update(sourceFragments=[""]),
+             "reconstruct", True),
+            (lambda: self.tab.update(sourceFragmentsSha256=["0" * 64]), "fragment digest", True),
+            (lambda: self.excerpt(["#[kernel] fn same() { }"]), "differs from its physical source", True),
+        ):
+            self.setUp()
+            self.excerpt(["#[kernel] fn same() {}"])
+            mutation()
+            with self.subTest(message=message), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, message):
+                self.validate(runtime)
+        self.setUp()
+        self.excerpt(["#[kernel] fn same() {}"], explicit=False)
+        self.runtime["lessons"][0]["codeTabs"][0]["sourceFragments"] = ["#[kernel] fn same() {}"]
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "unexpected fragments"):
+            self.validate()
+
+    def test_exact_excerpt_requires_its_selected_feature_and_physical_function(self):
+        left = "#[kernel] fn same() { let value = 1; }"
+        right = "#[kernel] fn same() { let value = 2; }"
+        self.sources[self.library] = "mod left;"
+        self.sources[self.path] = f'#[cfg(feature="left")]\n{left}\n#[cfg(feature="right")]\n{right}\n'
+        for feature, selected, foreign in (("left", left, right), ("right", right, left)):
+            self.fixture["compilerInput"]["features"] = [feature]
+            self.excerpt([selected])
+            self.assertEqual(self.validate()["unresolvedBindings"], [])
+            self.excerpt([foreign])
+            with self.subTest(feature=feature), self.assertRaisesRegex(
+                IDENTITIES.KernelInventoryError, "exact selected physical function",
+            ):
+                self.validate()
+        self.sources[self.path] = "fn same() {}"
+        self.excerpt(["fn same() {}"])
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "roster differs"):
+            self.validate()
+
+    def test_excerpt_raw_names_and_utf8_byte_offsets(self):
+        fragment = "// UTF-8: \u03bb\n#[kernel] fn r#same() {}"
+        self.sources[self.path] = "// physical prefix\n" + fragment + "\n"
+        self.excerpt([fragment])
+        self.assertEqual(self.validate()["unresolvedBindings"], [])
+        byte_offset = self.row["functionUtf8Offset"]
+        physical_offset = self.scanner.ordinary_rust_function_items(self.sources[self.path])[0]["functionUtf8Offset"]
+        for wrong, reason in ((fragment.index("r#same"), "live function census"),
+                              (physical_offset, "outside a Rust tab"),
+                              (byte_offset + 2, "live function census")):
+            self.row["functionUtf8Offset"] = wrong
+            with self.subTest(wrong=wrong), self.assertRaisesRegex(
+                IDENTITIES.KernelInventoryError, reason,
+            ):
+                self.validate()
+
+    def test_overlapping_repeated_empty_and_ambiguous_physical_fragments_refuse(self):
+        for parts, message in (
+            (["#[kernel] fn same() {}", "fn same() {}"], "overlap or repeat"),
+            (["#[kernel] fn same() {}", "#[kernel] fn same() {}"], "overlap or repeat"),
+            (["#[kernel] fn same() {}", ""], "nonempty"),
+            (["#[kernel] fn same() {}", "// absent"], "differs from its physical source"),
+        ):
+            self.setUp()
+            self.excerpt(parts)
+            with self.subTest(parts=parts), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, message):
+                self.validate()
+        self.setUp()
+        fragment = "#[kernel] fn same() {}"
+        self.sources[self.path] = f'#[cfg(feature="left")]\n{fragment}\n#[cfg(feature="right")]\n{fragment}'
+        self.excerpt([fragment])
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "ambiguous physical"):
+            self.validate()
+        self.setUp()
+        self.sources[self.path] += "// repeated\n// repeated\n"
+        self.excerpt([fragment, "// repeated"])
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "ambiguous physical"):
+            self.validate()
+
+    def test_mapping_checks_each_row_and_is_independent_of_row_order(self):
+        same, other = "#[kernel] fn same() {}", "#[kernel] fn other() {}"
+        self.sources[self.path] = f'#[cfg(feature="left")]\n{same}\n#[cfg(feature="right")]\n{same}\n{other}'
+        self.fixture["compilerInput"]["kernelSymbols"].append("other")
+        self.manifest["kernelInventory"]["kernels"].append({
+            "kernelId": "other", "variants": variants(),
+            "selections": [{"kind": "fixture", "fixtureId": "left", "kernelSymbol": "other"}],
+        })
+        self.excerpt([same, other])
+        second = {**self.row, "kernelSymbol": "other", "kernelIds": ["other"],
+                  "functionUtf8Offset": self.scanner.ordinary_rust_function_items(
+                      self.runtime["lessons"][0]["codeTabs"][0]["displayedCode"])[1]["functionUtf8Offset"]}
+        rows = self.manifest["kernelInventory"]["displayItems"]
+        rows.append(second)
+        for _ in range(2):
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "ambiguous physical"):
+                self.validate()
+            rows.reverse()
+        # A unique full-byte mapping still cannot authorize a second occurrence
+        # of the same symbol inside an ordinary nested helper.
+        self.setUp()
+        fragment = "#[kernel] fn same() { fn same() {} }"
+        self.sources[self.path] = fragment
+        self.excerpt([fragment])
+        functions = self.scanner.ordinary_rust_function_items(fragment)
+        self.manifest["kernelInventory"]["displayItems"].append({
+            **self.row, "functionUtf8Offset": functions[1]["functionUtf8Offset"],
+        })
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "exact selected physical function"):
+            self.validate()
+
+    def test_fragment_count_and_exact_matching_and_record_boundaries(self):
+        fragment = "#[kernel] fn same() {}"
+        parts = [f"// piece-{index:02d}\n" for index in range(63)] + [fragment]
+        self.sources[self.path] = "".join(parts)
+        self.excerpt(parts)
+        self.assertEqual(self.validate()["unresolvedBindings"], [])
+        self.excerpt(parts + ["// extra"])
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "fragment metadata"):
+            self.validate()
+        self.setUp()
+        self.sources[self.path] = "// " + "x" * 1024 + "\n" + fragment
+        self.excerpt([fragment])
+        exact = 2 * len(self.sources[self.path].encode())
+        with mock.patch.object(IDENTITIES, "MAX_RUNTIME_BYTES", exact):
+            self.assertEqual(self.validate()["unresolvedBindings"], [])
+        with mock.patch.object(IDENTITIES, "MAX_RUNTIME_BYTES", exact - 1):
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate byte-span bound"):
+                self.validate()
+        minimum = None
+        for limit in range(1, 150):
+            try:
+                self.validate(max_records=limit)
+                minimum = limit
+                break
+            except IDENTITIES.KernelInventoryError:
+                pass
+        self.assertIsNotNone(minimum)
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "record bound"):
+            self.validate(max_records=minimum - 1)
+
+    def test_repeated_excerpt_tabs_reuse_physical_selection_and_encoding(self):
+        self.excerpt(["#[kernel] fn same() {}"])
+        self.manifest["curriculum"]["lessons"][0]["codeTabs"].append(copy.deepcopy(self.tab))
+        self.manifest["kernelInventory"]["displayItems"].append({**self.row, "tabOrdinal": 1})
+        self.runtime["lessons"][0]["codeTabs"].append(copy.deepcopy(self.runtime["lessons"][0]["codeTabs"][0]))
+        loader = mock.Mock(return_value=(self.library, self.sources, ["left"]))
+        with mock.patch.object(IDENTITIES, "_utf8", wraps=IDENTITIES._utf8) as encoded:
+            result = self.validate(load_fixture_sources=loader)
+            copies = [call for call in encoded.call_args_list if call.args[1] == "fixture matched source"]
+        self.assertEqual(result["unresolvedBindings"], [])
+        self.assertEqual(len(copies), 1)
+        loader.assert_called_once_with(self.fixture)
+
+    def test_shared_fragment_cache_does_not_transfer_feature_selection(self):
+        fragment = ('#[cfg(feature="left")]\n#[kernel] fn same() { let left = 1; }\n'
+                    '#[cfg(feature="right")]\n#[kernel] fn same() { let right = 2; }')
+        self.sources[self.library] = "mod left;"
+        self.sources[self.path] = "// physical prefix\n" + fragment
+        self.add_right()
+        self.manifest["compilerFixtures"][1]["compilerInput"]["sourcePaths"] = [self.path]
+        self.excerpt([fragment])
+        functions = self.scanner.ordinary_rust_function_items(fragment)
+        rows = self.manifest["kernelInventory"]["displayItems"]
+        rows.append({**self.row, "kernelIds": ["right"],
+                     "functionUtf8Offset": functions[1]["functionUtf8Offset"]})
+        expected = copy.deepcopy(rows)
+        self.assertEqual(self.validate()["unresolvedBindings"], [])
+        for first in (0, 1):
+            rows[:] = copy.deepcopy([expected[first], expected[1 - first]])
+            rows[1]["kernelIds"] = rows[0]["kernelIds"].copy()
+            with self.subTest(first=first), self.assertRaisesRegex(
+                IDENTITIES.KernelInventoryError, "exact selected physical function",
+            ):
+                self.validate()
+
+    def test_multiple_valid_rows_share_one_exact_search_budget(self):
+        fragment = "#[kernel] fn same() {}\n#[kernel] fn other() {}"
+        self.sources[self.path] = "// " + "x" * 1024 + "\n" + fragment
+        self.fixture["compilerInput"]["kernelSymbols"].append("other")
+        self.manifest["kernelInventory"]["kernels"].append({
+            "kernelId": "other", "variants": variants(),
+            "selections": [{"kind": "fixture", "fixtureId": "left", "kernelSymbol": "other"}],
+        })
+        self.excerpt([fragment])
+        functions = self.scanner.ordinary_rust_function_items(fragment)
+        rows = self.manifest["kernelInventory"]["displayItems"]
+        rows.append({**self.row, "kernelSymbol": "other", "kernelIds": ["other"],
+                     "functionUtf8Offset": functions[1]["functionUtf8Offset"]})
+        exact = 2 * len(self.sources[self.path].encode())
+        for _ in range(2):
+            with mock.patch.object(IDENTITIES, "MAX_RUNTIME_BYTES", exact):
+                self.assertEqual(self.validate()["unresolvedBindings"], [])
+            rows.reverse()
 
     def binding(self, implementation="left", reference=None):
         fixture = next(row for row in self.manifest["compilerFixtures"] if row["fixtureId"] == implementation)

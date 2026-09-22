@@ -8828,14 +8828,14 @@
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-scalar-gemm.request.json",
-        "requestSha256": null,
-        "requestBytes": null,
+        "requestSha256": "75edfdc1a03c1545a3cab89c2474fde70a7d5fe5bd8a8538fdb1c07479a6b9cc",
+        "requestBytes": 1170,
         "expectationPath": "config/tutorial-simulation-v1/gfx942-scalar-gemm.expectation.json",
-        "expectationSha256": null,
-        "expectationBytes": null,
+        "expectationSha256": "e4c3461dea759f54c42a739f7bb33333aa14369eb166f8fb2f52336a8da6f31b",
+        "expectationBytes": 1199,
         "bundleVersion": 7,
         "canonicalKirVersion": 12,
-        "status": "pending-design"
+        "status": "pending-reconciliation"
       }
     },
     {
@@ -11382,12 +11382,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-fill-simulation:fill",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-fill-simulation",
+                "kernelSymbol": "fill"
+              },
+              "selectionSha256": "8325edc594fa0ba0c5ab3d5aabec8a6351ddbbf475535b41ef10097302a74666",
+              "sourcePath": "examples/fill/src/lib.rs",
+              "sourceSha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+              "functionUtf8Offset": 148
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -14205,10 +14216,12 @@
         "functionUtf8Offset": 221,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-decode:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: the exact displayed excerpt maps uniquely to the selected physical kernel and feature closure; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -14331,10 +14344,12 @@
         "functionUtf8Offset": 221,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-decode:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: the exact displayed excerpt maps uniquely to the selected physical kernel and feature closure; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gradient-stage-performance-lab",
