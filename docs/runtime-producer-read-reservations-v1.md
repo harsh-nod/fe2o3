@@ -364,8 +364,16 @@ Before enabling runtime admission, the remaining work is:
    Pending reservation during enrollment of another allocation. They do not
    establish actual reader-wrapper refinement, universal issued-model existence,
    physical storage/unwind guarantees or production constructor/Begin reachability.
-   Remaining bodies include construction, Begin,
-   stable/producer reader admission/release and unread guards.
+   The [actual-type Begin packet](evidence/dev-journal-begin-execution-2026-09-21/README.md)
+   connects production preflight, staging and commit to shared executable bodies.
+   Its raw contract preserves exact rejection identity and error precedence;
+   helper contracts preserve aliases, dirty tails and repeated destinations
+   without adding canonicality or valid-custody premises. Concrete executions,
+   mutation controls and complete frozen-baseline CPU comparisons qualify this
+   normal-content scope, not historical issued-custody or storage/unwind refinement.
+   Mixed non-exclusive CPU measurements make no parity or speedup claim.
+   Remaining bodies include construction, stable/producer reader admission/release
+   and unread guards; Begin's historical custody correspondence remains separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement
    return/scratch/commit bodies now have actual-typed operation correspondence.

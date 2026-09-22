@@ -20,17 +20,20 @@ fn retained_indexed_access_v1(journal: &JournalContentsV1) {
 }
 
 #[inline]
-fn shared_retained_writer_key_v1(left: WriterKeyV1, right: WriterKeyV1) -> bool {
+pub(super) fn shared_retained_writer_key_v1(left: WriterKeyV1, right: WriterKeyV1) -> bool {
     retained_writer_key_body!(left, right)
 }
 
 #[inline]
-fn shared_retained_allocation_less_v1(left: AllocationKeyV1, right: AllocationKeyV1) -> bool {
+pub(super) fn shared_retained_allocation_less_v1(
+    left: AllocationKeyV1,
+    right: AllocationKeyV1,
+) -> bool {
     retained_allocation_less_body!(left, right)
 }
 
 #[inline]
-fn shared_retained_allocation_v1(
+pub(super) fn shared_retained_allocation_v1(
     journal: &JournalContentsV1,
     reference: AllocationReferenceV1,
 ) -> Result<AllocationEntryV1, ReadErrorV1> {

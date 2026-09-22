@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "begin_tests.rs"]
+mod begin_shared;
+
 type AllocationKey = ContextAllocationKeyV1;
 type AllocationReference = ContextAllocationReferenceV1;
 type DeviceKey = ContextJournalDeviceKeyV1;
@@ -1015,13 +1018,8 @@ fn short_traces_match_independent_writer_and_allocation_maps() {
 #[test]
 fn begin_routes_full_preflight_before_bounded_planning_and_commit() {
     let source = include_str!("../context_version_journal.rs");
-    let preflight = source
-        .split("fn preflight_begin_write(")
-        .nth(1)
-        .unwrap()
-        .split("pub fn begin_write(")
-        .next()
-        .unwrap();
+    let adapter = include_str!("begin.rs");
+    let bodies = include_str!("begin_bodies.rs");
     let begin = source
         .split("pub fn begin_write(")
         .nth(1)
@@ -1029,13 +1027,20 @@ fn begin_routes_full_preflight_before_bounded_planning_and_commit() {
         .split("fn read_allocation(")
         .next()
         .unwrap();
-    let helpers = source
-        .split("fn read_allocation(")
-        .nth(1)
-        .unwrap()
-        .split("fn count_indexed_access(")
-        .next()
-        .unwrap();
+    assert!(begin.contains("begin::begin_exec_v1(self, writer, canonical)"));
+    assert!(adapter.contains("include!(\"begin_bodies.rs\")"));
+    for body in [
+        "reserved",
+        "canonical",
+        "destinations",
+        "slots",
+        "preflight",
+        "stage",
+        "commit",
+        "execution",
+    ] {
+        assert!(adapter.contains(&std::format!("begin_{body}_body!")));
+    }
     for forbidden in [
         "try_reserve",
         ".reserve(",
@@ -1050,97 +1055,87 @@ fn begin_routes_full_preflight_before_bounded_planning_and_commit() {
         ".sort",
         ".clone(",
         ".extend(",
+        "loop {",
+        "$journal.allocations.iter",
+        "$journal.members.iter",
+        "$journal.writers.iter",
+        "< $journal.allocation_capacity",
+        "< $journal.writer_capacity",
     ] {
         assert!(
-            !preflight.contains(forbidden)
-                && !begin.contains(forbidden)
-                && !helpers.contains(forbidden),
-            "allocation/growth form: {forbidden}"
-        );
-    }
-    for forbidden in [
-        "for ",
-        "while ",
-        "loop {",
-        ".iter(",
-        ".iter_mut(",
-        ".into_iter(",
-        ".for_each(",
-    ] {
-        assert!(!helpers.contains(forbidden), "helper scan: {forbidden}");
-    }
-    for forbidden in [
-        "try_reserve",
-        ".push(",
-        ".resize",
-        ".collect(",
-        ".sort",
-        ".clone(",
-        "while ",
-        "loop {",
-        "self.allocations.iter",
-        "self.writers.iter",
-        "self.members.iter",
-        "0..self.allocation_capacity",
-        "0..self.writer_capacity",
-    ] {
-        assert!(
-            !preflight.contains(forbidden) && !begin.contains(forbidden),
+            !bodies.contains(forbidden) && !adapter.contains(forbidden),
             "Begin contains {forbidden}"
         );
     }
-    for traversal in [
-        "canonical.windows(2)",
-        "for destination in canonical",
-        "for index in 0..count",
-    ] {
-        assert!(preflight.contains(traversal));
-    }
-    for traversal in ["canonical.iter().enumerate()", "for index in 0..count"] {
-        assert!(begin.contains(traversal));
-    }
-    let first_plan = begin.find("self.store_plan(index, plan)").unwrap();
-    assert!(preflight.trim_start().starts_with("&self,"));
-    assert!(preflight.contains("Ok(reserved_count)"));
-    assert!(
-        begin
-            .find("self.preflight_begin_write(writer, canonical)?")
-            .unwrap()
-            < first_plan
-    );
+    assert_eq!(bodies.matches("while $index < $roster.len()").count(), 3);
+    assert_eq!(bodies.matches("while $index < $count").count(), 2);
+    let preflight = bodies
+        .split("macro_rules! begin_preflight_body")
+        .nth(1)
+        .unwrap()
+        .split("macro_rules! begin_stage_body")
+        .next()
+        .unwrap();
     let mut previous = 0;
-    for validation in [
-        "self.lookup_reserved(writer)?",
-        ".checked_sub(1)",
-        "count > self.allocation_capacity",
-        "NonCanonicalRoster",
-        "self.exact_allocation(destination.allocation)?",
+    for token in [
+        "begin_reserved_exec_v1",
+        "checked_sub(1)",
+        "allocation_capacity",
+        "begin_canonical_exec_v1",
+        "begin_destinations_exec_v1",
+        "member_free.len()",
+        "scratch.len()",
+        "begin_slots_exec_v1",
+        "Ok(reserved_count)",
+    ] {
+        let at = preflight.find(token).unwrap();
+        assert!(at > previous, "out-of-order preflight: {token}");
+        previous = at;
+    }
+    let destinations = bodies
+        .split("macro_rules! begin_destinations_body")
+        .nth(1)
+        .unwrap()
+        .split("macro_rules! begin_slots_body")
+        .next()
+        .unwrap();
+    let mut previous = 0;
+    for token in [
+        "shared_retained_allocation_v1",
         "AllocationDeviceMismatch",
         "AllocationExtentMismatch",
         "AllocationBusy",
         "EpochExhausted",
-        "MemberCapacity",
-        "count > self.scratch.len()",
-        "self.members.get(member) != Some(&None)",
-        "self.scratch[index].is_some()",
     ] {
-        let position = preflight.find(validation).unwrap();
-        assert!(position > previous, "out-of-order preflight: {validation}");
-        previous = position;
+        let at = destinations.find(token).unwrap();
+        assert!(at > previous, "out-of-order destination: {token}");
+        previous = at;
     }
-    assert!(first_plan < begin.find("self.scratch[index].take()").unwrap());
+    let execution = bodies
+        .split("macro_rules! begin_execution_body")
+        .nth(1)
+        .unwrap();
     assert!(
-        begin.find("self.scratch[index].take()").unwrap()
-            < begin.find("self.reserved_count = reserved_count").unwrap()
+        execution.find("begin_preflight_exec_v1").unwrap()
+            < execution.find("begin_stage_exec_v1").unwrap()
     );
-    let plan_helper = source
-        .split("fn store_plan(")
+    assert!(
+        execution.find("begin_stage_exec_v1").unwrap()
+            < execution.find("begin_commit_exec_v1").unwrap()
+    );
+    let commit = bodies
+        .split("macro_rules! begin_commit_body")
         .nth(1)
         .unwrap()
-        .split("fn count_indexed_access(")
+        .split("macro_rules! begin_execution_body")
         .next()
         .unwrap();
-    assert!(plan_helper.contains("self.scratch[index] = Some(plan)"));
+    assert!(commit.contains(".take().expect(\"complete member plan\")"));
+    assert!(commit.contains(".as_mut().expect(\"retained exact allocation\")"));
+    assert!(
+        commit.find("entry.pending_member").unwrap()
+            < commit.find("$journal.reserved_count =").unwrap()
+    );
 }
 
 // Rank all observable faults independently; unlike production, do not short-circuit.
