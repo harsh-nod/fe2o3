@@ -15,7 +15,11 @@ mod preview;
 #[path = "fe2o3_author/candidate.rs"]
 mod candidate;
 
-const USAGE: &str = "usage: fe2o3-author inspect\n       fe2o3-author operations --bundle-identity HEX --start N --limit N\n       fe2o3-author select --selector JSON\n       fe2o3-author materialize --selector JSON --helper NAME\n       fe2o3-author materialize-const-u32 --selector JSON --helper NAME\n       fe2o3-author preview-helper-insertion --selector JSON --helper NAME --source PATH --expected-source-sha256 HEX\n       fe2o3-author create-source-candidate --selector JSON --helper NAME --source PATH --expected-source-sha256 HEX --expected-proposal-sha256 HEX --candidate PATH\nRead exact canonical simulation Bundle V6 bytes from stdin. Output is diagnostic JSON, never a production resume token. Helper-insertion preview reads only the explicit relative Rust source path and never writes, compiles, or runs source. Explicit candidate creation writes only a new named file on supported Linux filesystems, never replaces the original, and never compiles or runs source.";
+#[cfg(test)]
+#[path = "fe2o3_author/call_target_tests.rs"]
+mod call_target_tests;
+
+const USAGE: &str = "usage: fe2o3-author inspect\n       fe2o3-author operations --bundle-identity HEX --start N --limit N\n       fe2o3-author select --selector JSON\n       fe2o3-author call-target --selector JSON\n       fe2o3-author materialize --selector JSON --helper NAME\n       fe2o3-author materialize-const-u32 --selector JSON --helper NAME\n       fe2o3-author preview-helper-insertion --selector JSON --helper NAME --source PATH --expected-source-sha256 HEX\n       fe2o3-author create-source-candidate --selector JSON --helper NAME --source PATH --expected-source-sha256 HEX --expected-proposal-sha256 HEX --candidate PATH\nRead exact canonical simulation Bundle V6 bytes from stdin. Output is diagnostic JSON, never a production resume token. Helper-insertion preview reads only the explicit relative Rust source path and never writes, compiles, or runs source. Explicit candidate creation writes only a new named file on supported Linux filesystems, never replaces the original, and never compiles or runs source.";
 const MAX_SELECTOR_BYTES: usize = 16 * 1024;
 
 enum Query {
@@ -26,6 +30,7 @@ enum Query {
         limit: u32,
     },
     Select(AuthoringRegionSelectorV1),
+    CallTarget(AuthoringRegionSelectorV1),
     Materialize(AuthoringRegionSelectorV1, String),
     MaterializeConstU32(AuthoringRegionSelectorV1, String),
     PreviewHelperInsertion {
@@ -76,6 +81,7 @@ fn parse(arguments: &[String]) -> Result<Query, String> {
             limit: decimal(limit)?,
         }),
         ["select", "--selector", value] => Ok(Query::Select(selector(value)?)),
+        ["call-target", "--selector", value] => Ok(Query::CallTarget(selector(value)?)),
         ["materialize", "--selector", value, "--helper", helper] => {
             Ok(Query::Materialize(selector(value)?, (*helper).into()))
         }
@@ -173,6 +179,11 @@ fn run(query: Query) -> Result<(), String> {
         Query::Select(selector) => output(
             &snapshot
                 .select_region(&selector)
+                .map_err(|error| error.to_string())?,
+        ),
+        Query::CallTarget(selector) => output(
+            &snapshot
+                .inspect_call_target_v1(&selector)
                 .map_err(|error| error.to_string())?,
         ),
         Query::Materialize(selector, helper) => output(
