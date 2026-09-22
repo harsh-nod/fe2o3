@@ -1,0 +1,4 @@
+   Compiling spin v0.12.3
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `release` profile [optimized] target(s) in 47.03s
+  Executable unittests src/lib.rs (/run/user/1000/fe2o3-owner-unknown-20260922.acRoc4ya/target/release/deps/fe2o3_runtime_model-6ac4be0e051a3fb8)

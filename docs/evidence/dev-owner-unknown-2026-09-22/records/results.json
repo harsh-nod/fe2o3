@@ -1,0 +1,1400 @@
+{
+  "raw": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 193,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "positive-before": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 728,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "journal_noop": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 1827,
+            "byte_end": 1914,
+            "line_start": 39,
+            "line_end": 41,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        journal_unknown_wrapper_body!(self, writer, shared_retained_unknown_v1)",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 1754,
+            "byte_end": 1821,
+            "line_start": 38,
+            "line_end": 38,
+            "column_start": 17,
+            "column_end": 84,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_unknown_relation_v1(*old(self), *final(self), writer, result),",
+                "highlight_start": 17,
+                "highlight_end": 84
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs:38:17\n   |\n38 |           ensures owner_unknown_relation_v1(*old(self), *final(self), writer, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n39 | /     {\n40 | |         journal_unknown_wrapper_body!(self, writer, shared_retained_unknown_v1)\n41 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable_noop": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 2137,
+            "byte_end": 2195,
+            "line_start": 47,
+            "line_end": 49,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        stable_unknown_wrapper_body!(self, writer)",
+                "highlight_start": 1,
+                "highlight_end": 51
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 2063,
+            "byte_end": 2131,
+            "line_start": 46,
+            "line_end": 46,
+            "column_start": 17,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures stable_unknown_relation_v1(*old(self), *final(self), writer, result),",
+                "highlight_start": 17,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs:46:17\n   |\n46 |           ensures stable_unknown_relation_v1(*old(self), *final(self), writer, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n47 | /     {\n48 | |         stable_unknown_wrapper_body!(self, writer)\n49 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_noop": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 2422,
+            "byte_end": 2482,
+            "line_start": 55,
+            "line_end": 57,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        producer_unknown_wrapper_body!(self, writer)",
+                "highlight_start": 1,
+                "highlight_end": 53
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 2346,
+            "byte_end": 2416,
+            "line_start": 54,
+            "line_end": 54,
+            "column_start": 17,
+            "column_end": 87,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures producer_unknown_relation_v1(*old(self), *final(self), writer, result),",
+                "highlight_start": 17,
+                "highlight_end": 87
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs:54:17\n   |\n54 |           ensures producer_unknown_relation_v1(*old(self), *final(self), writer, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n55 | /     {\n56 | |         producer_unknown_wrapper_body!(self, writer)\n57 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/unknown_wrapper_bodies.rs",
+            "byte_start": 450,
+            "byte_end": 518,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 9,
+            "column_end": 77,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.stable.mark_unknown($writer) }",
+                "highlight_start": 9,
+                "highlight_end": 77
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+                "byte_start": 2432,
+                "byte_end": 2476,
+                "line_start": 56,
+                "line_end": 56,
+                "column_start": 9,
+                "column_end": 53,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        producer_unknown_wrapper_body!(self, writer)",
+                    "highlight_start": 9,
+                    "highlight_end": 53
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_unknown_wrapper_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/unknown_wrapper_bodies.rs",
+                "byte_start": 358,
+                "byte_end": 400,
+                "line_start": 14,
+                "line_end": 14,
+                "column_start": 1,
+                "column_end": 43,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_unknown_wrapper_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 43
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 2346,
+            "byte_end": 2416,
+            "line_start": 54,
+            "line_end": 54,
+            "column_start": 17,
+            "column_end": 87,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures producer_unknown_relation_v1(*old(self), *final(self), writer, result),",
+                "highlight_start": 17,
+                "highlight_end": 87
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs:54:17\n   |\n54 |         ensures producer_unknown_relation_v1(*old(self), *final(self), writer, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/unknown_wrapper_bodies.rs:16:9\n   |\n16 |         { $owner.next_incarnation = 0; $owner.stable.mark_unknown($writer) }\n   |         -------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_chain": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 1563,
+            "byte_end": 1610,
+            "line_start": 32,
+            "line_end": 34,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    retained_unknown_body!(journal, writer)",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 1488,
+            "byte_end": 1561,
+            "line_start": 31,
+            "line_end": 31,
+            "column_start": 13,
+            "column_end": 86,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures owner_unknown_relation_v1(*old(journal), *final(journal), writer, result),",
+                "highlight_start": 13,
+                "highlight_end": 86
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs:31:13\n   |\n31 |       ensures owner_unknown_relation_v1(*old(journal), *final(journal), writer, result),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n32 | / {\n33 | |     retained_unknown_body!(journal, writer)\n34 | | }\n   | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_mutation": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 1563,
+            "byte_end": 1610,
+            "line_start": 32,
+            "line_end": 34,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    retained_unknown_body!(journal, writer)",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 1488,
+            "byte_end": 1561,
+            "line_start": 31,
+            "line_end": 31,
+            "column_start": 13,
+            "column_end": 86,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures owner_unknown_relation_v1(*old(journal), *final(journal), writer, result),",
+                "highlight_start": 13,
+                "highlight_end": 86
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs:31:13\n   |\n31 |       ensures owner_unknown_relation_v1(*old(journal), *final(journal), writer, result),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n32 | / {\n33 | |     retained_unknown_body!(journal, writer)\n34 | | }\n   | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "unknown_shortcut": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/retained_bodies.rs",
+            "byte_start": 5292,
+            "byte_end": 5305,
+            "line_start": 137,
+            "line_end": 137,
+            "column_start": 22,
+            "column_end": 35,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        if unknown { return Ok(()); }",
+                "highlight_start": 22,
+                "highlight_end": 35
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+                "byte_start": 1569,
+                "byte_end": 1608,
+                "line_start": 33,
+                "line_end": 33,
+                "column_start": 5,
+                "column_end": 44,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    retained_unknown_body!(journal, writer)",
+                    "highlight_start": 5,
+                    "highlight_end": 44
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "retained_unknown_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/retained_bodies.rs",
+                "byte_start": 5006,
+                "byte_end": 5040,
+                "line_start": 131,
+                "line_end": 131,
+                "column_start": 1,
+                "column_end": 35,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! retained_unknown_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 35
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs",
+            "byte_start": 1488,
+            "byte_end": 1561,
+            "line_start": 31,
+            "line_end": 31,
+            "column_start": 13,
+            "column_end": 86,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures owner_unknown_relation_v1(*old(journal), *final(journal), writer, result),",
+                "highlight_start": 13,
+                "highlight_end": 86
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_bodies_v1.rs:31:13\n    |\n 31 |     ensures owner_unknown_relation_v1(*old(journal), *final(journal), writer, result),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/retained_bodies.rs:137:22\n    |\n137 |         if unknown { return Ok(()); }\n    |                      ------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 6958,
+            "byte_end": 7585,
+            "line_start": 124,
+            "line_end": 137,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *actual;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "    let ghost model_before = *model;",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    let result: Result<(), ReadErrorV1> = Ok(());",
+                "highlight_start": 1,
+                "highlight_end": 50
+              },
+              {
+                "text": "    let model_result = logical::unknown_exec_v1(&mut model.stable.journal, model_writer);",
+                "highlight_start": 1,
+                "highlight_end": 90
+              },
+              {
+                "text": "    proof {",
+                "highlight_start": 1,
+                "highlight_end": 12
+              },
+              {
+                "text": "        owner_unknown_paired_transition(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 1,
+                "highlight_end": 86
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, writer, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 94
+              },
+              {
+                "text": "        if logical::producer_invariant_v1(model_before) && model_result.is_ok() {",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "            logical::unknown_preserves_producer_invariant_v1(model_before, *model, model_writer);",
+                "highlight_start": 1,
+                "highlight_end": 98
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              },
+              {
+                "text": "    (result, model_result)",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 5738,
+            "byte_end": 5815,
+            "line_start": 107,
+            "line_end": 107,
+            "column_start": 9,
+            "column_end": 86,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        producer_unknown_relation_v1(*old(actual), *final(actual), writer, results.0),",
+                "highlight_start": 9,
+                "highlight_end": 86
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs:107:9\n    |\n107 |           producer_unknown_relation_v1(*old(actual), *final(actual), writer, results.0),\n    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n124 | / {\n125 | |     let ghost before = *actual;\n126 | |     let ghost model_before = *model;\n127 | |     let result: Result<(), ReadErrorV1> = Ok(());\n...   |\n136 | |     (result, model_result)\n137 | | }\n    | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 4561,
+            "byte_end": 4617,
+            "line_start": 89,
+            "line_end": 89,
+            "column_start": 48,
+            "column_end": 104,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    requires represents(before, model_before), owner_unknown_relation_v1(before, after, writer, result),",
+                "highlight_start": 48,
+                "highlight_end": 104
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 7189,
+            "byte_end": 7359,
+            "line_start": 130,
+            "line_end": 131,
+            "column_start": 9,
+            "column_end": 93,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_unknown_paired_transition(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 86
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, writer, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 93
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs:130:9\n    |\n 89 |       requires represents(before, model_before), owner_unknown_relation_v1(before, after, writer, result),\n    |                                                  -------------------------------------------------------- failed precondition\n...\n130 | /         owner_unknown_paired_transition(before.stable.journal, actual.stable.journal,\n131 | |             model_before.stable.journal, model.stable.journal, writer, result, model_result);\n    | |____________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 5237,
+            "byte_end": 5513,
+            "line_start": 102,
+            "line_end": 104,
+            "column_start": 1,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_unknown_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "    model: &mut logical::ProducerReadContentsV1, writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1)",
+                "highlight_start": 1,
+                "highlight_end": 118
+              },
+              {
+                "text": "    -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 77
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs:102:1\n    |\n102 | / fn producer_unknown_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,\n103 | |     model: &mut logical::ProducerReadContentsV1, writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1)\n104 | |     -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))\n    | |____________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 3 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 3 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 6958,
+            "byte_end": 7556,
+            "line_start": 124,
+            "line_end": 137,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *actual;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "    let ghost model_before = *model;",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    let result = actual.mark_unknown(writer);",
+                "highlight_start": 1,
+                "highlight_end": 46
+              },
+              {
+                "text": "    let model_result: Result<(), logical::ReadErrorV1> = Ok(());",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "    proof {",
+                "highlight_start": 1,
+                "highlight_end": 12
+              },
+              {
+                "text": "        owner_unknown_paired_transition(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 1,
+                "highlight_end": 86
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, writer, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 94
+              },
+              {
+                "text": "        if logical::producer_invariant_v1(model_before) && model_result.is_ok() {",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "            logical::unknown_preserves_producer_invariant_v1(model_before, *model, model_writer);",
+                "highlight_start": 1,
+                "highlight_end": 98
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              },
+              {
+                "text": "    (result, model_result)",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 5825,
+            "byte_end": 5944,
+            "line_start": 108,
+            "line_end": 108,
+            "column_start": 9,
+            "column_end": 128,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        logical::unknown_execution_relation_v1(old(model).stable.journal, final(model).stable.journal, model_writer, results.1),",
+                "highlight_start": 9,
+                "highlight_end": 128
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs:108:9\n    |\n108 |           logical::unknown_execution_relation_v1(old(model).stable.journal, final(model).stable.journal, model_writer, results.1),\n    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n124 | / {\n125 | |     let ghost before = *actual;\n126 | |     let ghost model_before = *model;\n127 | |     let result = actual.mark_unknown(writer);\n...   |\n136 | |     (result, model_result)\n137 | | }\n    | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 4627,
+            "byte_end": 4737,
+            "line_start": 90,
+            "line_end": 90,
+            "column_start": 9,
+            "column_end": 119,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::unknown_execution_relation_v1(model_before, model_after, writer_reference_view(writer), model_result),",
+                "highlight_start": 9,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 7160,
+            "byte_end": 7330,
+            "line_start": 130,
+            "line_end": 131,
+            "column_start": 9,
+            "column_end": 93,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_unknown_paired_transition(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 86
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, writer, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 93
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs:130:9\n    |\n 90 |           logical::unknown_execution_relation_v1(model_before, model_after, writer_reference_view(writer), model_result),\n    |           -------------------------------------------------------------------------------------------------------------- failed precondition\n...\n130 | /         owner_unknown_paired_transition(before.stable.journal, actual.stable.journal,\n131 | |             model_before.stable.journal, model.stable.journal, writer, result, model_result);\n    | |____________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_read_invariant_v1.rs",
+            "byte_start": 30690,
+            "byte_end": 30767,
+            "line_start": 591,
+            "line_end": 591,
+            "column_start": 9,
+            "column_end": 86,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        mark_unknown_relation_v1(before.stable.journal, after.stable.journal, writer),",
+                "highlight_start": 9,
+                "highlight_end": 86
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 7426,
+            "byte_end": 7510,
+            "line_start": 133,
+            "line_end": 133,
+            "column_start": 13,
+            "column_end": 97,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            logical::unknown_preserves_producer_invariant_v1(model_before, *model, model_writer);",
+                "highlight_start": 13,
+                "highlight_end": 97
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs:133:13\n    |\n133 |             logical::unknown_preserves_producer_invariant_v1(model_before, *model, model_writer);\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_read_invariant_v1.rs:591:9\n    |\n591 |         mark_unknown_relation_v1(before.stable.journal, after.stable.journal, writer),\n    |         ----------------------------------------------------------------------------- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs",
+            "byte_start": 5237,
+            "byte_end": 5513,
+            "line_start": 102,
+            "line_end": 104,
+            "column_start": 1,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_unknown_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "    model: &mut logical::ProducerReadContentsV1, writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1)",
+                "highlight_start": 1,
+                "highlight_end": 118
+              },
+              {
+                "text": "    -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 77
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_unknown_correspondence_v1.rs:102:1\n    |\n102 | / fn producer_unknown_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,\n103 | |     model: &mut logical::ProducerReadContentsV1, writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1)\n104 | |     -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))\n    | |____________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "positive-after": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 728,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}
