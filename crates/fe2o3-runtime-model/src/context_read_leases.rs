@@ -14,6 +14,9 @@ include!("context_read_leases/count_bodies.rs");
 #[cfg(test)]
 mod acquire_count_baseline;
 
+#[cfg(test)]
+pub(crate) use guard_test_support::{StableReadFaultV1, StableReadResetV1};
+
 #[allow(unused_macros)]
 #[macro_use]
 mod guard_templates {

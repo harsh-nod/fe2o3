@@ -1,0 +1,4244 @@
+{
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  },
+  "foreign": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 4 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 4 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 537,
+            "byte_end": 593,
+            "line_start": 11,
+            "line_end": 11,
+            "column_start": 13,
+            "column_end": 69,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::RosterCapacity);",
+                "highlight_start": 13,
+                "highlight_end": 69
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |     ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:11:13\n   |\n11 |             return Err(ContextVersionJournalErrorV1::RosterCapacity);\n   |             -------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 678,
+            "byte_end": 732,
+            "line_start": 14,
+            "line_end": 14,
+            "column_start": 13,
+            "column_end": 67,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 13,
+                "highlight_end": 67
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |     ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:14:13\n   |\n14 |             return Err(ContextVersionJournalErrorV1::InvalidState);\n   |             ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 404,
+            "byte_end": 461,
+            "line_start": 8,
+            "line_end": 8,
+            "column_start": 13,
+            "column_end": 70,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidWriterId);",
+                "highlight_start": 13,
+                "highlight_end": 70
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |     ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:8:13\n   |\n 8 |             return Err(ContextVersionJournalErrorV1::InvalidWriterId);\n   |             --------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs",
+            "byte_start": 1312,
+            "byte_end": 1344,
+            "line_start": 32,
+            "line_end": 32,
+            "column_start": 18,
+            "column_end": 50,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        requires producer_budget_domain_v1(*self), count <= u64::MAX,",
+                "highlight_start": 18,
+                "highlight_end": 50
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 752,
+            "byte_end": 792,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 9,
+            "column_end": 49,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        $contents.validate_read_capacity($count)",
+                "highlight_start": 9,
+                "highlight_end": 49
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs:32:18\n   |\n32 |         requires producer_budget_domain_v1(*self), count <= u64::MAX,\n   |                  -------------------------------- failed precondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:18:5\n   |\n18 |     producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)\n   |     --------------------------------------------------------------------------------------------------------------------- in this macro invocation\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:16:9\n   |\n16 |         $contents.validate_read_capacity($count)\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: this error originates in the macro `producer_stable_acquire_header_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 424,
+            "byte_end": 631,
+            "line_start": 12,
+            "line_end": 13,
+            "column_start": 1,
+            "column_end": 102,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 106
+              },
+              {
+                "text": "    count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 102
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:12:1\n   |\n12 | / fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,\n13 | |     count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)\n   | |_____________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "zero": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 3 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 3 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 551,
+            "byte_end": 607,
+            "line_start": 11,
+            "line_end": 11,
+            "column_start": 13,
+            "column_end": 69,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::RosterCapacity);",
+                "highlight_start": 13,
+                "highlight_end": 69
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |     ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:11:13\n   |\n11 |             return Err(ContextVersionJournalErrorV1::RosterCapacity);\n   |             -------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 692,
+            "byte_end": 746,
+            "line_start": 14,
+            "line_end": 14,
+            "column_start": 13,
+            "column_end": 67,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 13,
+                "highlight_end": 67
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |     ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:14:13\n   |\n14 |             return Err(ContextVersionJournalErrorV1::InvalidState);\n   |             ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs",
+            "byte_start": 1312,
+            "byte_end": 1344,
+            "line_start": 32,
+            "line_end": 32,
+            "column_start": 18,
+            "column_end": 50,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        requires producer_budget_domain_v1(*self), count <= u64::MAX,",
+                "highlight_start": 18,
+                "highlight_end": 50
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 766,
+            "byte_end": 806,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 9,
+            "column_end": 49,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        $contents.validate_read_capacity($count)",
+                "highlight_start": 9,
+                "highlight_end": 49
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs:32:18\n   |\n32 |         requires producer_budget_domain_v1(*self), count <= u64::MAX,\n   |                  -------------------------------- failed precondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:18:5\n   |\n18 |     producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)\n   |     --------------------------------------------------------------------------------------------------------------------- in this macro invocation\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:16:9\n   |\n16 |         $contents.validate_read_capacity($count)\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: this error originates in the macro `producer_stable_acquire_header_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 424,
+            "byte_end": 631,
+            "line_start": 12,
+            "line_end": 13,
+            "column_start": 1,
+            "column_end": 102,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 106
+              },
+              {
+                "text": "    count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 102
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:12:1\n   |\n12 | / fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,\n13 | |     count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)\n   | |_____________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "max": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 3 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 3 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 544,
+            "byte_end": 600,
+            "line_start": 11,
+            "line_end": 11,
+            "column_start": 13,
+            "column_end": 69,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::RosterCapacity);",
+                "highlight_start": 13,
+                "highlight_end": 69
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |     ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:11:13\n   |\n11 |             return Err(ContextVersionJournalErrorV1::RosterCapacity);\n   |             -------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 685,
+            "byte_end": 739,
+            "line_start": 14,
+            "line_end": 14,
+            "column_start": 13,
+            "column_end": 67,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 13,
+                "highlight_end": 67
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |     ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:14:13\n   |\n14 |             return Err(ContextVersionJournalErrorV1::InvalidState);\n   |             ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs",
+            "byte_start": 1312,
+            "byte_end": 1344,
+            "line_start": 32,
+            "line_end": 32,
+            "column_start": 18,
+            "column_end": 50,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        requires producer_budget_domain_v1(*self), count <= u64::MAX,",
+                "highlight_start": 18,
+                "highlight_end": 50
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 759,
+            "byte_end": 799,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 9,
+            "column_end": 49,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        $contents.validate_read_capacity($count)",
+                "highlight_start": 9,
+                "highlight_end": 49
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs:32:18\n   |\n32 |         requires producer_budget_domain_v1(*self), count <= u64::MAX,\n   |                  -------------------------------- failed precondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:18:5\n   |\n18 |     producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)\n   |     --------------------------------------------------------------------------------------------------------------------- in this macro invocation\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:16:9\n   |\n16 |         $contents.validate_read_capacity($count)\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: this error originates in the macro `producer_stable_acquire_header_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 424,
+            "byte_end": 631,
+            "line_start": 12,
+            "line_end": 13,
+            "column_start": 1,
+            "column_end": 102,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 106
+              },
+              {
+                "text": "    count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 102
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:12:1\n   |\n12 | / fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,\n13 | |     count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)\n   | |_____________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "empty": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 226,
+            "byte_end": 821,
+            "line_start": 3,
+            "line_end": 17,
+            "column_start": 91,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $generation:expr, $consumer:ident, $count:ident, $output:ident) => {{",
+                "highlight_start": 91,
+                "highlight_end": 92
+              },
+              {
+                "text": "        if $consumer.context_generation != $generation {",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::ForeignContext);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $consumer.local == 0 || $consumer.local == u64::MAX {",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidWriterId);",
+                "highlight_start": 1,
+                "highlight_end": 71
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $count != $output.len() {",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::RosterCapacity);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if !producer_stable_output_vacant_exec_v1($output) {",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        $contents.validate_read_capacity($count)",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |       ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:3:91\n   |\n 3 |       ($contents:ident, $generation:expr, $consumer:ident, $count:ident, $output:ident) => {{\n   |  ___________________________________________________________________________________________-\n 4 | |         if $consumer.context_generation != $generation {\n 5 | |             return Err(ContextVersionJournalErrorV1::ForeignContext);\n...  |\n16 | |         $contents.validate_read_capacity($count)\n17 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs",
+            "byte_start": 1312,
+            "byte_end": 1344,
+            "line_start": 32,
+            "line_end": 32,
+            "column_start": 18,
+            "column_end": 50,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        requires producer_budget_domain_v1(*self), count <= u64::MAX,",
+                "highlight_start": 18,
+                "highlight_end": 50
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 775,
+            "byte_end": 815,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 9,
+            "column_end": 49,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        $contents.validate_read_capacity($count)",
+                "highlight_start": 9,
+                "highlight_end": 49
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs:32:18\n   |\n32 |         requires producer_budget_domain_v1(*self), count <= u64::MAX,\n   |                  -------------------------------- failed precondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:18:5\n   |\n18 |     producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)\n   |     --------------------------------------------------------------------------------------------------------------------- in this macro invocation\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:16:9\n   |\n16 |         $contents.validate_read_capacity($count)\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: this error originates in the macro `producer_stable_acquire_header_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 424,
+            "byte_end": 631,
+            "line_start": 12,
+            "line_end": 13,
+            "column_start": 1,
+            "column_end": 102,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 106
+              },
+              {
+                "text": "    count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 102
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:12:1\n   |\n12 | / fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,\n13 | |     count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)\n   | |_____________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "length": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 689,
+            "byte_end": 743,
+            "line_start": 14,
+            "line_end": 14,
+            "column_start": 13,
+            "column_end": 67,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 13,
+                "highlight_end": 67
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |     ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:14:13\n   |\n14 |             return Err(ContextVersionJournalErrorV1::InvalidState);\n   |             ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs",
+            "byte_start": 1312,
+            "byte_end": 1344,
+            "line_start": 32,
+            "line_end": 32,
+            "column_start": 18,
+            "column_end": 50,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        requires producer_budget_domain_v1(*self), count <= u64::MAX,",
+                "highlight_start": 18,
+                "highlight_end": 50
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 763,
+            "byte_end": 803,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 9,
+            "column_end": 49,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        $contents.validate_read_capacity($count)",
+                "highlight_start": 9,
+                "highlight_end": 49
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs:32:18\n   |\n32 |         requires producer_budget_domain_v1(*self), count <= u64::MAX,\n   |                  -------------------------------- failed precondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:18:5\n   |\n18 |     producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)\n   |     --------------------------------------------------------------------------------------------------------------------- in this macro invocation\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:16:9\n   |\n16 |         $contents.validate_read_capacity($count)\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: this error originates in the macro `producer_stable_acquire_header_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 424,
+            "byte_end": 631,
+            "line_start": 12,
+            "line_end": 13,
+            "column_start": 1,
+            "column_end": 102,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 106
+              },
+              {
+                "text": "    count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 102
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:12:1\n   |\n12 | / fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,\n13 | |     count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)\n   | |_____________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "output": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 226,
+            "byte_end": 794,
+            "line_start": 3,
+            "line_end": 17,
+            "column_start": 91,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $generation:expr, $consumer:ident, $count:ident, $output:ident) => {{",
+                "highlight_start": 91,
+                "highlight_end": 92
+              },
+              {
+                "text": "        if $consumer.context_generation != $generation {",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::ForeignContext);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $consumer.local == 0 || $consumer.local == u64::MAX {",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidWriterId);",
+                "highlight_start": 1,
+                "highlight_end": 71
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $count == 0 || $count != $output.len() {",
+                "highlight_start": 1,
+                "highlight_end": 52
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::RosterCapacity);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if false {",
+                "highlight_start": 1,
+                "highlight_end": 19
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        $contents.validate_read_capacity($count)",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |       ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:3:91\n   |\n 3 |       ($contents:ident, $generation:expr, $consumer:ident, $count:ident, $output:ident) => {{\n   |  ___________________________________________________________________________________________-\n 4 | |         if $consumer.context_generation != $generation {\n 5 | |             return Err(ContextVersionJournalErrorV1::ForeignContext);\n...  |\n16 | |         $contents.validate_read_capacity($count)\n17 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs",
+            "byte_start": 1312,
+            "byte_end": 1344,
+            "line_start": 32,
+            "line_end": 32,
+            "column_start": 18,
+            "column_end": 50,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        requires producer_budget_domain_v1(*self), count <= u64::MAX,",
+                "highlight_start": 18,
+                "highlight_end": 50
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 748,
+            "byte_end": 788,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 9,
+            "column_end": 49,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        $contents.validate_read_capacity($count)",
+                "highlight_start": 9,
+                "highlight_end": 49
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_acquire_bodies_v1.rs:32:18\n   |\n32 |         requires producer_budget_domain_v1(*self), count <= u64::MAX,\n   |                  -------------------------------- failed precondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:18:5\n   |\n18 |     producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)\n   |     --------------------------------------------------------------------------------------------------------------------- in this macro invocation\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:16:9\n   |\n16 |         $contents.validate_read_capacity($count)\n   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: this error originates in the macro `producer_stable_acquire_header_body` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 424,
+            "byte_end": 631,
+            "line_start": 12,
+            "line_end": 13,
+            "column_start": 1,
+            "column_end": 102,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 106
+              },
+              {
+                "text": "    count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 102
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:12:1\n   |\n12 | / fn producer_stable_acquire_header_exec_v1(contents: &ContextProducerReadJournalV1, consumer: WriterKeyV1,\n13 | |     count: usize, output: &[Option<ContextReadLeaseReferenceV1>]) -> (result: Result<(), ReadErrorV1>)\n   | |_____________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "budget": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 226,
+            "byte_end": 843,
+            "line_start": 3,
+            "line_end": 17,
+            "column_start": 91,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $generation:expr, $consumer:ident, $count:ident, $output:ident) => {{",
+                "highlight_start": 91,
+                "highlight_end": 92
+              },
+              {
+                "text": "        if $consumer.context_generation != $generation {",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::ForeignContext);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $consumer.local == 0 || $consumer.local == u64::MAX {",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidWriterId);",
+                "highlight_start": 1,
+                "highlight_end": 71
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $count == 0 || $count != $output.len() {",
+                "highlight_start": 1,
+                "highlight_end": 52
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::RosterCapacity);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if !producer_stable_output_vacant_exec_v1($output) {",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        $contents.stable.validate_read_capacity($count)",
+                "highlight_start": 1,
+                "highlight_end": 56
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 878,
+                "byte_end": 995,
+                "line_start": 18,
+                "line_end": 18,
+                "column_start": 5,
+                "column_end": 122,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    producer_stable_acquire_header_body!(contents, contents.stable.journal.context_generation(), consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 122
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 85,
+                "byte_end": 133,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 49,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 49
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 798,
+            "byte_end": 870,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 13,
+            "column_end": 85,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == producer_stable_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 85
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:16:13\n   |\n16 |       ensures result == producer_stable_header_v1(*contents, consumer, count, output@),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:3:91\n   |\n 3 |       ($contents:ident, $generation:expr, $consumer:ident, $count:ident, $output:ident) => {{\n   |  ___________________________________________________________________________________________-\n 4 | |         if $consumer.context_generation != $generation {\n 5 | |             return Err(ContextVersionJournalErrorV1::ForeignContext);\n...  |\n16 | |         $contents.stable.validate_read_capacity($count)\n17 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_delegate": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 1512,
+            "byte_end": 1730,
+            "line_start": 27,
+            "line_end": 31,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        producer_stable_acquire_body!(verus_exec_expr, self, consumer, requests, output,",
+                "highlight_start": 1,
+                "highlight_end": 89
+              },
+              {
+                "text": "            producer_stable_acquire_header_exec_v1, value, result, [],",
+                "highlight_start": 1,
+                "highlight_end": 71
+              },
+              {
+                "text": "            [proof { assert(value =~= ()); }], [])",
+                "highlight_start": 1,
+                "highlight_end": 51
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 1386,
+            "byte_end": 1506,
+            "line_start": 26,
+            "line_end": 26,
+            "column_start": 17,
+            "column_end": 137,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures producer_stable_acquire_relation_v1(*old(self), *final(self), consumer, requests@, old(output)@, final(output)@, result),",
+                "highlight_start": 17,
+                "highlight_end": 137
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:26:17\n   |\n26 |           ensures producer_stable_acquire_relation_v1(*old(self), *final(self), consumer, requests@, old(output)@, final(output)@, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n27 | /     {\n28 | |         producer_stable_acquire_body!(verus_exec_expr, self, consumer, requests, output,\n29 | |             producer_stable_acquire_header_exec_v1, value, result, [],\n30 | |             [proof { assert(value =~= ()); }], [])\n31 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "release_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+            "byte_start": 1637,
+            "byte_end": 1751,
+            "line_start": 39,
+            "line_end": 39,
+            "column_start": 9,
+            "column_end": 123,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $contents.next_incarnation = 0; $contents.stable.$release($consumer, $references, $evidence $($capacity_arg)*) }",
+                "highlight_start": 9,
+                "highlight_end": 123
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+                "byte_start": 2288,
+                "byte_end": 2410,
+                "line_start": 40,
+                "line_end": 40,
+                "column_start": 9,
+                "column_end": 131,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        producer_stable_release_body!(self, consumer, references, evidence, release_reads_observed_v1, [, observed_free_capacity])",
+                    "highlight_start": 9,
+                    "highlight_end": 131
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_stable_release_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs",
+                "byte_start": 1460,
+                "byte_end": 1501,
+                "line_start": 36,
+                "line_end": 36,
+                "column_start": 1,
+                "column_end": 42,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_stable_release_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 42
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 2125,
+            "byte_end": 2272,
+            "line_start": 37,
+            "line_end": 38,
+            "column_start": 17,
+            "column_end": 63,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures producer_stable_release_relation_v1(*old(self), *final(self), consumer, references@,",
+                "highlight_start": 17,
+                "highlight_end": 101
+              },
+              {
+                "text": "            evidence.consumer, observed_free_capacity, result),",
+                "highlight_start": 1,
+                "highlight_end": 63
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:37:17\n   |\n37 |           ensures producer_stable_release_relation_v1(*old(self), *final(self), consumer, references@,\n   |  _________________^\n38 | |             evidence.consumer, observed_free_capacity, result),\n   | |______________________________________________________________^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_producer_reads/stable_wrapper_bodies.rs:39:9\n   |\n39 |           { $contents.next_incarnation = 0; $contents.stable.$release($consumer, $references, $evidence $($capacity_arg)*) }\n   |           ------------------------------------------------------------------------------------------------------------------ at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual_acquire": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 4352,
+            "byte_end": 4980,
+            "line_start": 58,
+            "line_end": 71,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *actual;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "    let ghost model_before = *model;",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    let ghost output_before = output@;",
+                "highlight_start": 1,
+                "highlight_end": 39
+              },
+              {
+                "text": "    let _count = requests.len();",
+                "highlight_start": 1,
+                "highlight_end": 33
+              },
+              {
+                "text": "    proof { logical::producer_capacity_arithmetic_v1(*model); }",
+                "highlight_start": 1,
+                "highlight_end": 64
+              },
+              {
+                "text": "    let result: Result<(), ReadErrorV1> = Err(ReadErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 74
+              },
+              {
+                "text": "    let model_result = logical::stable_wrapper_acquire_exec_v1(model, model_consumer, model_requests, model_output);",
+                "highlight_start": 1,
+                "highlight_end": 117
+              },
+              {
+                "text": "    proof {",
+                "highlight_start": 1,
+                "highlight_end": 12
+              },
+              {
+                "text": "        producer_stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@,",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "            output_before, output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 74
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              },
+              {
+                "text": "    (result, model_result)",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 4044,
+            "byte_end": 4171,
+            "line_start": 55,
+            "line_end": 55,
+            "column_start": 9,
+            "column_end": 136,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        producer_stable_acquire_relation_v1(*old(actual), *final(actual), consumer, requests@, old(output)@, final(output)@, results.0),",
+                "highlight_start": 9,
+                "highlight_end": 136
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:55:9\n   |\n55 |           producer_stable_acquire_relation_v1(*old(actual), *final(actual), consumer, requests@, old(output)@, final(output)@, results.0),\n   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n58 | / {\n59 | |     let ghost before = *actual;\n60 | |     let ghost model_before = *model;\n61 | |     let ghost output_before = output@;\n...  |\n70 | |     (result, model_result)\n71 | | }\n   | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 2009,
+            "byte_end": 2116,
+            "line_start": 31,
+            "line_end": 31,
+            "column_start": 9,
+            "column_end": 116,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        producer_stable_acquire_relation_v1(before, after, consumer, requests, output_before, output_after, result),",
+                "highlight_start": 9,
+                "highlight_end": 116
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 4770,
+            "byte_end": 4944,
+            "line_start": 67,
+            "line_end": 68,
+            "column_start": 9,
+            "column_end": 73,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        producer_stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@,",
+                "highlight_start": 9,
+                "highlight_end": 110
+              },
+              {
+                "text": "            output_before, output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 73
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:67:9\n   |\n31 |           producer_stable_acquire_relation_v1(before, after, consumer, requests, output_before, output_after, result),\n   |           ----------------------------------------------------------------------------------------------------------- failed precondition\n...\n67 | /         producer_stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@,\n68 | |             output_before, output@, model_output@, result, model_result);\n   | |________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 3031,
+            "byte_end": 3508,
+            "line_start": 45,
+            "line_end": 49,
+            "column_start": 1,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_acquire_historical_exec_v1(actual: &mut ContextProducerReadJournalV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 134
+              },
+              {
+                "text": "    consumer: WriterKeyV1, model_consumer: logical::WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "    requests: &[ContextAllocationReadV1], model_requests: &[logical::AllocationReadV1],",
+                "highlight_start": 1,
+                "highlight_end": 88
+              },
+              {
+                "text": "    output: &mut [Option<ContextReadLeaseReferenceV1>], model_output: &mut Vec<Option<logical::ReadReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 114
+              },
+              {
+                "text": "    -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 77
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:45:1\n   |\n45 | / fn producer_stable_acquire_historical_exec_v1(actual: &mut ContextProducerReadJournalV1, model: &mut logical::ProducerReadContentsV1,\n46 | |     consumer: WriterKeyV1, model_consumer: logical::WriterKeyV1,\n47 | |     requests: &[ContextAllocationReadV1], model_requests: &[logical::AllocationReadV1],\n48 | |     output: &mut [Option<ContextReadLeaseReferenceV1>], model_output: &mut Vec<Option<logical::ReadReferenceV1>>)\n49 | |     -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))\n   | |____________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical_acquire": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 4352,
+            "byte_end": 4954,
+            "line_start": 58,
+            "line_end": 71,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *actual;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "    let ghost model_before = *model;",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    let ghost output_before = output@;",
+                "highlight_start": 1,
+                "highlight_end": 39
+              },
+              {
+                "text": "    let _count = requests.len();",
+                "highlight_start": 1,
+                "highlight_end": 33
+              },
+              {
+                "text": "    proof { logical::producer_capacity_arithmetic_v1(*model); }",
+                "highlight_start": 1,
+                "highlight_end": 64
+              },
+              {
+                "text": "    let result = actual.acquire_reads(consumer, requests, output);",
+                "highlight_start": 1,
+                "highlight_end": 67
+              },
+              {
+                "text": "    let model_result: Result<(), logical::ReadErrorV1> = Err(logical::ReadErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 98
+              },
+              {
+                "text": "    proof {",
+                "highlight_start": 1,
+                "highlight_end": 12
+              },
+              {
+                "text": "        producer_stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@,",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "            output_before, output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 74
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              },
+              {
+                "text": "    (result, model_result)",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 4181,
+            "byte_end": 4350,
+            "line_start": 56,
+            "line_end": 57,
+            "column_start": 9,
+            "column_end": 65,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        logical::stable_wrapper_acquire_relation_v1(*old(model), *final(model), model_consumer, model_requests@,",
+                "highlight_start": 9,
+                "highlight_end": 113
+              },
+              {
+                "text": "            old(model_output)@, final(model_output)@, results.1),",
+                "highlight_start": 1,
+                "highlight_end": 65
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:56:9\n   |\n56 | /         logical::stable_wrapper_acquire_relation_v1(*old(model), *final(model), model_consumer, model_requests@,\n57 | |             old(model_output)@, final(model_output)@, results.1),\n   | |________________________________________________________________^ failed this postcondition\n58 | / {\n59 | |     let ghost before = *actual;\n60 | |     let ghost model_before = *model;\n61 | |     let ghost output_before = output@;\n...  |\n70 | |     (result, model_result)\n71 | | }\n   | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 2126,
+            "byte_end": 2336,
+            "line_start": 32,
+            "line_end": 33,
+            "column_start": 9,
+            "column_end": 113,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::stable_wrapper_acquire_relation_v1(model_before, model_after, writer_key_view(consumer),",
+                "highlight_start": 9,
+                "highlight_end": 106
+              },
+              {
+                "text": "            stable_requests_view(requests), stable_output_view(output_before), model_output_after, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 113
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 4744,
+            "byte_end": 4918,
+            "line_start": 67,
+            "line_end": 68,
+            "column_start": 9,
+            "column_end": 73,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        producer_stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@,",
+                "highlight_start": 9,
+                "highlight_end": 110
+              },
+              {
+                "text": "            output_before, output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 73
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:67:9\n   |\n32 | /         logical::stable_wrapper_acquire_relation_v1(model_before, model_after, writer_key_view(consumer),\n33 | |             stable_requests_view(requests), stable_output_view(output_before), model_output_after, model_result),\n   | |________________________________________________________________________________________________________________- failed precondition\n...\n67 | /         producer_stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@,\n68 | |             output_before, output@, model_output@, result, model_result);\n   | |________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 3031,
+            "byte_end": 3508,
+            "line_start": 45,
+            "line_end": 49,
+            "column_start": 1,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_acquire_historical_exec_v1(actual: &mut ContextProducerReadJournalV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 134
+              },
+              {
+                "text": "    consumer: WriterKeyV1, model_consumer: logical::WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "    requests: &[ContextAllocationReadV1], model_requests: &[logical::AllocationReadV1],",
+                "highlight_start": 1,
+                "highlight_end": 88
+              },
+              {
+                "text": "    output: &mut [Option<ContextReadLeaseReferenceV1>], model_output: &mut Vec<Option<logical::ReadReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 114
+              },
+              {
+                "text": "    -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 77
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:45:1\n   |\n45 | / fn producer_stable_acquire_historical_exec_v1(actual: &mut ContextProducerReadJournalV1, model: &mut logical::ProducerReadContentsV1,\n46 | |     consumer: WriterKeyV1, model_consumer: logical::WriterKeyV1,\n47 | |     requests: &[ContextAllocationReadV1], model_requests: &[logical::AllocationReadV1],\n48 | |     output: &mut [Option<ContextReadLeaseReferenceV1>], model_output: &mut Vec<Option<logical::ReadReferenceV1>>)\n49 | |     -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))\n   | |____________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual_release": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 6325,
+            "byte_end": 6887,
+            "line_start": 88,
+            "line_end": 97,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *actual;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "    let ghost model_before = *model;",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    let _count = references.len();",
+                "highlight_start": 1,
+                "highlight_end": 35
+              },
+              {
+                "text": "    let result: Result<(), ReadErrorV1> = Err(ReadErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 74
+              },
+              {
+                "text": "    let model_result = logical::stable_wrapper_release_exec_v1(model, model_consumer, model_references, model_evidence, observed_free_capacity);",
+                "highlight_start": 1,
+                "highlight_end": 145
+              },
+              {
+                "text": "    proof { stable_release_paired_transition(before.stable, actual.stable, model_before.stable, model.stable,",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "        consumer, references@, evidence.consumer, observed_free_capacity, result, model_result); }",
+                "highlight_start": 1,
+                "highlight_end": 99
+              },
+              {
+                "text": "    (result, model_result)",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 5913,
+            "byte_end": 6067,
+            "line_start": 83,
+            "line_end": 84,
+            "column_start": 9,
+            "column_end": 66,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        producer_stable_release_relation_v1(*old(actual), *final(actual), consumer, references@,",
+                "highlight_start": 9,
+                "highlight_end": 97
+              },
+              {
+                "text": "            evidence.consumer, observed_free_capacity, results.0),",
+                "highlight_start": 1,
+                "highlight_end": 66
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:83:9\n   |\n83 | /         producer_stable_release_relation_v1(*old(actual), *final(actual), consumer, references@,\n84 | |             evidence.consumer, observed_free_capacity, results.0),\n   | |_________________________________________________________________^ failed this postcondition\n...\n88 | / {\n89 | |     let ghost before = *actual;\n90 | |     let ghost model_before = *model;\n91 | |     let _count = references.len();\n...  |\n96 | |     (result, model_result)\n97 | | }\n   | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 7327,
+            "byte_end": 7442,
+            "line_start": 121,
+            "line_end": 121,
+            "column_start": 9,
+            "column_end": 124,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        stable_release_execution_relation_v1(before, after, consumer, references, evidence, observed_free_capacity, result),",
+                "highlight_start": 9,
+                "highlight_end": 124
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 6662,
+            "byte_end": 6855,
+            "line_start": 94,
+            "line_end": 95,
+            "column_start": 13,
+            "column_end": 96,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    proof { stable_release_paired_transition(before.stable, actual.stable, model_before.stable, model.stable,",
+                "highlight_start": 13,
+                "highlight_end": 110
+              },
+              {
+                "text": "        consumer, references@, evidence.consumer, observed_free_capacity, result, model_result); }",
+                "highlight_start": 1,
+                "highlight_end": 96
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:94:13\n    |\n 94 |       proof { stable_release_paired_transition(before.stable, actual.stable, model_before.stable, model.stable,\n    |  _____________^\n 95 | |         consumer, references@, evidence.consumer, observed_free_capacity, result, model_result); }\n    | |_______________________________________________________________________________________________^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs:121:9\n    |\n121 |           stable_release_execution_relation_v1(before, after, consumer, references, evidence, observed_free_capacity, result),\n    |           ------------------------------------------------------------------------------------------------------------------- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 4975,
+            "byte_end": 5462,
+            "line_start": 73,
+            "line_end": 77,
+            "column_start": 1,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_release_historical_exec_v1(actual: &mut ContextProducerReadJournalV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 134
+              },
+              {
+                "text": "    consumer: WriterKeyV1, model_consumer: logical::WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "    references: &[ContextReadLeaseReferenceV1], model_references: &[logical::ReadReferenceV1],",
+                "highlight_start": 1,
+                "highlight_end": 95
+              },
+              {
+                "text": "    evidence: &ContextReadQuiescenceEvidenceV1, model_evidence: logical::WriterKeyV1, observed_free_capacity: usize)",
+                "highlight_start": 1,
+                "highlight_end": 117
+              },
+              {
+                "text": "    -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 77
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:73:1\n   |\n73 | / fn producer_stable_release_historical_exec_v1(actual: &mut ContextProducerReadJournalV1, model: &mut logical::ProducerReadContentsV1,\n74 | |     consumer: WriterKeyV1, model_consumer: logical::WriterKeyV1,\n75 | |     references: &[ContextReadLeaseReferenceV1], model_references: &[logical::ReadReferenceV1],\n76 | |     evidence: &ContextReadQuiescenceEvidenceV1, model_evidence: logical::WriterKeyV1, observed_free_capacity: usize)\n77 | |     -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))\n   | |____________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical_release": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 6325,
+            "byte_end": 6873,
+            "line_start": 88,
+            "line_end": 97,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *actual;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "    let ghost model_before = *model;",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    let _count = references.len();",
+                "highlight_start": 1,
+                "highlight_end": 35
+              },
+              {
+                "text": "    let result = actual.release_reads_observed_v1(consumer, references, evidence, observed_free_capacity);",
+                "highlight_start": 1,
+                "highlight_end": 107
+              },
+              {
+                "text": "    let model_result: Result<(), logical::ReadErrorV1> = Err(logical::ReadErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 98
+              },
+              {
+                "text": "    proof { stable_release_paired_transition(before.stable, actual.stable, model_before.stable, model.stable,",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "        consumer, references@, evidence.consumer, observed_free_capacity, result, model_result); }",
+                "highlight_start": 1,
+                "highlight_end": 99
+              },
+              {
+                "text": "    (result, model_result)",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 6147,
+            "byte_end": 6323,
+            "line_start": 86,
+            "line_end": 87,
+            "column_start": 9,
+            "column_end": 63,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        logical::release_execution_relation_v1(old(model).stable, final(model).stable, model_consumer, model_references@,",
+                "highlight_start": 9,
+                "highlight_end": 122
+              },
+              {
+                "text": "            model_evidence, observed_free_capacity, results.1),",
+                "highlight_start": 1,
+                "highlight_end": 63
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:86:9\n   |\n86 | /         logical::release_execution_relation_v1(old(model).stable, final(model).stable, model_consumer, model_references@,\n87 | |             model_evidence, observed_free_capacity, results.1),\n   | |______________________________________________________________^ failed this postcondition\n88 | / {\n89 | |     let ghost before = *actual;\n90 | |     let ghost model_before = *model;\n91 | |     let _count = references.len();\n...  |\n96 | |     (result, model_result)\n97 | | }\n   | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs",
+            "byte_start": 7452,
+            "byte_end": 7657,
+            "line_start": 122,
+            "line_end": 123,
+            "column_start": 9,
+            "column_end": 113,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::release_execution_relation_v1(model_before, model_after, writer_key_view(consumer),",
+                "highlight_start": 9,
+                "highlight_end": 101
+              },
+              {
+                "text": "            stable_references_view(references), writer_key_view(evidence), observed_free_capacity, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 113
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 6648,
+            "byte_end": 6841,
+            "line_start": 94,
+            "line_end": 95,
+            "column_start": 13,
+            "column_end": 96,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    proof { stable_release_paired_transition(before.stable, actual.stable, model_before.stable, model.stable,",
+                "highlight_start": 13,
+                "highlight_end": 110
+              },
+              {
+                "text": "        consumer, references@, evidence.consumer, observed_free_capacity, result, model_result); }",
+                "highlight_start": 1,
+                "highlight_end": 96
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:94:13\n    |\n 94 |       proof { stable_release_paired_transition(before.stable, actual.stable, model_before.stable, model.stable,\n    |  _____________^\n 95 | |         consumer, references@, evidence.consumer, observed_free_capacity, result, model_result); }\n    | |_______________________________________________________________________________________________^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_stable_release_correspondence_v1.rs:122:9\n    |\n122 | /         logical::release_execution_relation_v1(model_before, model_after, writer_key_view(consumer),\n123 | |             stable_references_view(references), writer_key_view(evidence), observed_free_capacity, model_result),\n    | |________________________________________________________________________________________________________________- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 4975,
+            "byte_end": 5462,
+            "line_start": 73,
+            "line_end": 77,
+            "column_start": 1,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_release_historical_exec_v1(actual: &mut ContextProducerReadJournalV1, model: &mut logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 134
+              },
+              {
+                "text": "    consumer: WriterKeyV1, model_consumer: logical::WriterKeyV1,",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "    references: &[ContextReadLeaseReferenceV1], model_references: &[logical::ReadReferenceV1],",
+                "highlight_start": 1,
+                "highlight_end": 95
+              },
+              {
+                "text": "    evidence: &ContextReadQuiescenceEvidenceV1, model_evidence: logical::WriterKeyV1, observed_free_capacity: usize)",
+                "highlight_start": 1,
+                "highlight_end": 117
+              },
+              {
+                "text": "    -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 77
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:73:1\n   |\n73 | / fn producer_stable_release_historical_exec_v1(actual: &mut ContextProducerReadJournalV1, model: &mut logical::ProducerReadContentsV1,\n74 | |     consumer: WriterKeyV1, model_consumer: logical::WriterKeyV1,\n75 | |     references: &[ContextReadLeaseReferenceV1], model_references: &[logical::ReadReferenceV1],\n76 | |     evidence: &ContextReadQuiescenceEvidenceV1, model_evidence: logical::WriterKeyV1, observed_free_capacity: usize)\n77 | |     -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))\n   | |____________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "conditional_budget": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 1242,
+            "byte_end": 1327,
+            "line_start": 24,
+            "line_end": 24,
+            "column_start": 18,
+            "column_end": 103,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        requires producer_stable_acquire_domain_v1(*old(self), consumer, requests.len(), old(output)@),",
+                "highlight_start": 18,
+                "highlight_end": 103
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs",
+            "byte_start": 17043,
+            "byte_end": 17138,
+            "line_start": 260,
+            "line_end": 260,
+            "column_start": 19,
+            "column_end": 114,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    let foreign = actual.acquire_reads(WriterKeyV1 { context_generation: 0, ..consumer }, &requests, &mut output);",
+                "highlight_start": 19,
+                "highlight_end": 114
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs:260:19\n    |\n260 |     let foreign = actual.acquire_reads(WriterKeyV1 { context_generation: 0, ..consumer }, &requests, &mut output);\n    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:24:18\n    |\n 24 |         requires producer_stable_acquire_domain_v1(*old(self), consumer, requests.len(), old(output)@),\n    |                  ------------------------------------------------------------------------------------- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs",
+            "byte_start": 1242,
+            "byte_end": 1327,
+            "line_start": 24,
+            "line_end": 24,
+            "column_start": 18,
+            "column_end": 103,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        requires producer_stable_acquire_domain_v1(*old(self), consumer, requests.len(), old(output)@),",
+                "highlight_start": 18,
+                "highlight_end": 103
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs",
+            "byte_start": 17235,
+            "byte_end": 17317,
+            "line_start": 262,
+            "line_end": 262,
+            "column_start": 19,
+            "column_end": 101,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    let invalid = actual.acquire_reads(WriterKeyV1 { local: 0, ..consumer }, &requests, &mut output);",
+                "highlight_start": 19,
+                "highlight_end": 101
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs:262:19\n    |\n262 |     let invalid = actual.acquire_reads(WriterKeyV1 { local: 0, ..consumer }, &requests, &mut output);\n    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_bodies_v1.rs:24:18\n    |\n 24 |         requires producer_stable_acquire_domain_v1(*old(self), consumer, requests.len(), old(output)@),\n    |                  ------------------------------------------------------------------------------------- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs",
+            "byte_start": 16492,
+            "byte_end": 16551,
+            "line_start": 247,
+            "line_end": 247,
+            "column_start": 1,
+            "column_end": 60,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_raw_prefix_witness_v1() -> (result: bool)",
+                "highlight_start": 1,
+                "highlight_end": 60
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs:247:1\n    |\n247 | fn producer_stable_raw_prefix_witness_v1() -> (result: bool)\n    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_producer_stable_historical_v1::production::producer_stable_raw_prefix_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_producer_stable_historical_v1::production::producer_stable_raw_prefix_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "header_projection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 953,
+            "byte_end": 1217,
+            "line_start": 18,
+            "line_end": 21,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if exists|i: int| 0 <= i < stable_output_view(output).len() && stable_output_view(output)[i].is_some() {",
+                "highlight_start": 5,
+                "highlight_end": 109
+              },
+              {
+                "text": "        let i = choose|i: int| 0 <= i < stable_output_view(output).len() && stable_output_view(output)[i].is_some();",
+                "highlight_start": 1,
+                "highlight_end": 117
+              },
+              {
+                "text": "        assert(output[i].is_some());",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 287,
+            "byte_end": 472,
+            "line_start": 6,
+            "line_end": 7,
+            "column_start": 13,
+            "column_end": 127,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures producer_stable_header_v1(actual, consumer, count, output)",
+                "highlight_start": 13,
+                "highlight_end": 71
+              },
+              {
+                "text": "        == begin_result_from(logical::stable_wrapper_acquire_header_v1(model, writer_key_view(consumer), count, Seq::empty())),",
+                "highlight_start": 1,
+                "highlight_end": 127
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:6:13\n   |\n 6 |       ensures producer_stable_header_v1(actual, consumer, count, output)\n   |  _____________^\n 7 | |         == begin_result_from(logical::stable_wrapper_acquire_header_v1(model, writer_key_view(consumer), count, Seq::empty())),\n   | |______________________________________________________________________________________________________________________________^ failed this postcondition\n...\n18 | /     if exists|i: int| 0 <= i < stable_output_view(output).len() && stable_output_view(output)[i].is_some() {\n19 | |         let i = choose|i: int| 0 <= i < stable_output_view(output).len() && stable_output_view(output)[i].is_some();\n20 | |         assert(output[i].is_some());\n21 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "synchronous_witness": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 3624,
+            "byte_end": 3667,
+            "line_start": 51,
+            "line_end": 51,
+            "column_start": 9,
+            "column_end": 52,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        writer_key_view(consumer) == model_consumer, stable_requests_view(requests@) == model_requests@,",
+                "highlight_start": 9,
+                "highlight_end": 52
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs",
+            "byte_start": 9796,
+            "byte_end": 9947,
+            "line_start": 135,
+            "line_end": 136,
+            "column_start": 16,
+            "column_end": 58,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    let late = producer_stable_acquire_historical_exec_v1(&mut actual, &mut model, consumer, model_consumer,",
+                "highlight_start": 16,
+                "highlight_end": 109
+              },
+              {
+                "text": "        &bad, &model_bad, &mut output, &mut model_output);",
+                "highlight_start": 1,
+                "highlight_end": 58
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs:135:16\n    |\n135 |       let late = producer_stable_acquire_historical_exec_v1(&mut actual, &mut model, consumer, model_consumer,\n    |  ________________^\n136 | |         &bad, &model_bad, &mut output, &mut model_output);\n    | |_________________________________________________________^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:51:9\n    |\n 51 |           writer_key_view(consumer) == model_consumer, stable_requests_view(requests@) == model_requests@,\n    |           ------------------------------------------- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs",
+            "byte_start": 3624,
+            "byte_end": 3667,
+            "line_start": 51,
+            "line_end": 51,
+            "column_start": 9,
+            "column_end": 52,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        writer_key_view(consumer) == model_consumer, stable_requests_view(requests@) == model_requests@,",
+                "highlight_start": 9,
+                "highlight_end": 52
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs",
+            "byte_start": 10086,
+            "byte_end": 10247,
+            "line_start": 139,
+            "line_end": 140,
+            "column_start": 20,
+            "column_end": 68,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    let acquired = producer_stable_acquire_historical_exec_v1(&mut actual, &mut model, consumer, model_consumer,",
+                "highlight_start": 20,
+                "highlight_end": 113
+              },
+              {
+                "text": "        &requests, &model_requests, &mut output, &mut model_output);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs:139:20\n    |\n139 |       let acquired = producer_stable_acquire_historical_exec_v1(&mut actual, &mut model, consumer, model_consumer,\n    |  ____________________^\n140 | |         &requests, &model_requests, &mut output, &mut model_output);\n    | |___________________________________________________________________^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_correspondence_v1.rs:51:9\n    |\n 51 |           writer_key_view(consumer) == model_consumer, stable_requests_view(requests@) == model_requests@,\n    |           ------------------------------------------- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs",
+            "byte_start": 7408,
+            "byte_end": 7524,
+            "line_start": 103,
+            "line_end": 103,
+            "column_start": 1,
+            "column_end": 117,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_stable_acquired_fixture_v1() -> (result: (ContextProducerReadJournalV1, logical::ProducerReadContentsV1))",
+                "highlight_start": 1,
+                "highlight_end": 117
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs:103:1\n    |\n103 | fn producer_stable_acquired_fixture_v1() -> (result: (ContextProducerReadJournalV1, logical::ProducerReadContentsV1))\n    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_producer_stable_historical_v1::production::producer_stable_acquired_fixture_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_producer_stable_historical_v1::production::producer_stable_acquired_fixture_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "capacity_witness": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs",
+            "byte_start": 12805,
+            "byte_end": 12867,
+            "line_start": 179,
+            "line_end": 179,
+            "column_start": 12,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    assert(shortage.0 == Err(ReadErrorV1::InvalidState) && actual == held);",
+                "highlight_start": 12,
+                "highlight_end": 74
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs:179:12\n    |\n179 |     assert(shortage.0 == Err(ReadErrorV1::InvalidState) && actual == held);\n    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_producer_stable_historical_v1::production::producer_stable_live_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_producer_stable_historical_v1::production::producer_stable_live_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "alias_witness": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs",
+            "byte_start": 20042,
+            "byte_end": 20104,
+            "line_start": 321,
+            "line_end": 321,
+            "column_start": 12,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    assert(output@[0].unwrap().slot == 0 && output@[1].unwrap().slot == 0);",
+                "highlight_start": 12,
+                "highlight_end": 74
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_producer_stable_witnesses_v1.rs:321:12\n    |\n321 |     assert(output@[0].unwrap().slot == 0 && output@[1].unwrap().slot == 0);\n    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_producer_stable_historical_v1::production::producer_stable_raw_alias_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_producer_stable_historical_v1::production::producer_stable_raw_alias_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}

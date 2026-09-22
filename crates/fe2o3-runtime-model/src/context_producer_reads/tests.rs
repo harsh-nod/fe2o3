@@ -7,6 +7,7 @@ type Status = ContextProducerReadStatusV1;
 mod acquire_shared;
 mod query_shared;
 mod release_shared;
+mod stable_wrappers_shared;
 
 mod begin_guards {
     use super::*;

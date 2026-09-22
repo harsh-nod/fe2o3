@@ -441,7 +441,19 @@ Before enabling runtime admission, the remaining work is:
    The runtime observes physical capacity only after preceding header checks; the
    proof consumes an explicit observation. Synthetic witnesses and instrumented CPU
    comparisons do not establish constructor/Begin reachability or native parity.
-   Remaining bodies include construction and outer stable wrappers;
+   The [producer-owner stable wrapper packet](evidence/dev-producer-stable-2026-09-22/README.md)
+   shares both public outer stable-read wrappers. Actual and historical wrappers
+   execute independently, retaining synchronous consumers and exact context/ID/roster/
+   output-before-budget precedence. Acquisition preserves the existing repeated
+   stable header; release delegates without reading producer counts, epoch or budget.
+   Raw acquisition conditions arithmetic/storage premises on preceding checks;
+   raw release retains the stable leaf's unconditional count-storage premise.
+   Both preserve producer reservation fields exactly. Synthetic represented witnesses
+   include nonempty NoEffect custody, subset release/replay and malformed raw state.
+   Frozen comparisons use unchanged current stable leaves, not older leaf baselines.
+   CPU qualification includes shared resolved allocations and legal combined-budget
+   exhaustion, without claiming constructor/settlement reachability or native parity.
+   Remaining bodies include construction, enrollment/retirement and settlement wrappers;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement
