@@ -1,5 +1,8 @@
 #![cfg(target_os = "linux")]
 
+#[path = "worker_v3_hsaco_admission/nominal_v3.rs"]
+mod nominal_v3;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -1370,6 +1373,27 @@ fn evidence_in_directory_for_kernels_and_providers(
     fe2o3_artifact_transaction::BuildAttempt,
     InertProtectedFirstBuildWorkerV3EvidenceV1,
 ) {
+    evidence_with_descriptor_source(
+        directory,
+        hsaco,
+        config,
+        kernel_symbols,
+        external_providers,
+        None,
+    )
+}
+
+fn evidence_with_descriptor_source(
+    directory: &TestDirectory,
+    hsaco: Vec<u8>,
+    config: EvidenceConfig,
+    kernel_symbols: &[(&str, &str)],
+    external_providers: Vec<WorkerInputV1>,
+    descriptor_source: Option<&[u8]>,
+) -> (
+    fe2o3_artifact_transaction::BuildAttempt,
+    InertProtectedFirstBuildWorkerV3EvidenceV1,
+) {
     let attempt = begin_build_attempt(
         &directory.0,
         &producer(),
@@ -1377,12 +1401,13 @@ fn evidence_in_directory_for_kernels_and_providers(
         BuildSession::from_bytes([config.attempt_seed.wrapping_add(1); 16]),
     )
     .unwrap();
-    let handoff = outer_for_kernels(
+    let handoff = outer_with_descriptor_source(
         config.invocation_seed,
         config.module_seed,
         &hsaco,
         kernel_symbols,
         config.lineage_mutation,
+        descriptor_source,
     );
     let receipt = publish_compiler_module_handoff_in_slot_v3(
         &directory.0,
@@ -3915,16 +3940,24 @@ fn association_from_outer(
     .unwrap()
 }
 
-fn outer_for_kernels(
+fn outer_with_descriptor_source(
     invocation_seed: u8,
     module_seed: u8,
     hsaco: &[u8],
     kernel_symbols: &[(&str, &str)],
     lineage_mutation: DescriptorLineageMutation,
+    descriptor_source: Option<&[u8]>,
 ) -> InertSemanticCompilerModuleHandoffV3 {
     let handoff = module_handoff_for_kernels(module_seed, hsaco, kernel_symbols);
     InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
-        &capsule_bytes(invocation_seed, &handoff, lineage_mutation),
+        &capsule_bytes_with_semantic_to_llvm(
+            invocation_seed,
+            &handoff,
+            lineage_mutation,
+            None,
+            None,
+            descriptor_source,
+        ),
         handoff.canonical_bytes(),
     ))
     .unwrap()

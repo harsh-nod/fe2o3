@@ -18,6 +18,9 @@ use fe2o3_kernel_descriptor::{
 use rmpv::{Value, encode::write_value};
 use sha2::{Digest, Sha256};
 
+#[path = "public_api/nominal_v3.rs"]
+mod nominal_v3;
+
 const ELF_HEADER_BYTES: usize = 64;
 const PROGRAM_HEADER_BYTES: usize = 56;
 const SECTION_HEADER_BYTES: usize = 64;

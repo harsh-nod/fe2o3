@@ -36,6 +36,20 @@ Protected worker execution, proof/artifact custody, generated safe launch and
 target-matched GPU qualification remain separate unfinished integration work.
 This boundary does not complete #272 milestones or qualify the tutorial corpus.
 
+The finalizer now has a version-explicit nominal V3 continuation using the same
+strict Worker V3 first-build transaction and shared ELF/physical checks. It
+retains exact descriptor bytes, binds them to the retained ABI receipt, checks
+the export manifest, rejects same-width nominal substitutions and mixed schema
+sections, and patches only the canonical digest field. Raw reconstruction
+rechecks the artifact independently. Fixture-worker tests cover descriptor-derived
+launch and original transaction retention; their synthetic ELF/receipts do not
+establish production compiler or protected proof provenance.
+
+The normal CLI, publication/recovery, generated host admission, and the nominal
+P4 source-proof handoff are not yet joined to this V3 continuation. Its bounded
+descriptor traversal does not claim whole-process resource metering. No tutorial
+kernel gains end-to-end qualification and M0-M7 remain open from this change.
+
 ## One transaction
 
 The completed convergence target sends every kernel-containing final crate
