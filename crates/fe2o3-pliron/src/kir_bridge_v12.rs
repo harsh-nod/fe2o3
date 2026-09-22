@@ -13,6 +13,9 @@ pub const KIR_PLIRON_BRIDGE_V12_IDENTITY_DOMAIN_V1: &[u8] =
 mod native_profile_v1;
 pub(crate) use native_profile_v1::{NativeBridgeWitnessV1, import_native_neutral_v1};
 
+#[path = "kir_bridge_canonical_ranked_v1.rs"]
+pub(crate) mod canonical_ranked_v1;
+
 #[derive(Clone, Copy)]
 enum KirBridgeTypeProfileV12 {
     Legacy,

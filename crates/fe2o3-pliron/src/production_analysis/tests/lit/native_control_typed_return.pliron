@@ -1,0 +1,18 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK-WITNESSES
+// CHECK: PASS
+// CHECK: WITNESS TensorLayout
+// CHECK: WITNESS MemoryBounds
+// CHECK: WITNESS AtomicLegality
+// CHECK: WITNESS RaceFreedom
+// CHECK: WITNESS HierarchicalOwnership
+// CHECK: WITNESS BarrierConvergence
+// CHECK: WITNESS PipelineProtocol
+// CHECK: WITNESS WorkgroupMemory
+// CHECK: WITNESS SemanticRefinement
+builtin.func @native_control_typed_return: builtin.function <(builtin.integer ui32) -> (builtin.integer ui32)>
+{
+  ^entry(x: builtin.integer ui32):
+    gpu.return (x) [] []: <(builtin.integer ui32) -> ()>
+}

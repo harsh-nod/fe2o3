@@ -1,0 +1,15 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: FE2O3-PROGRESS-002
+// CHECK: exit-free cycle is only conditionally reachable
+// The cycle is reachable only through a genuinely unknown Boolean condition.
+// Recognizing native unconditional edges cannot prove that condition feasible.
+builtin.func @native_control_cycle_incomplete: builtin.function <(builtin.integer i1) -> ()>
+{
+  ^entry(condition: builtin.integer i1):
+    gpu.cond_branch (condition) [^cycle, ^exit] [operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+  ^cycle():
+    gpu.branch () [^cycle] []: <() -> ()>
+  ^exit():
+    gpu.return () [] []: <() -> ()>
+}

@@ -934,3 +934,7 @@ fn canonical_ranked_owner_rejects_same_source_substituted_pipeline_storage() {
 fn canonical_ranked_owner_rejects_same_source_wrong_pipeline_operation() {
     cr_reject_reachable_pipeline_binding(CrPipelineBindingDamage::WrongOperation);
 }
+
+mod canonical_ranked_policy_tests {
+    include!("production_canonical_ranked_checks_v1_tests.rs");
+}

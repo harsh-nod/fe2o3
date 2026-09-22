@@ -1,5 +1,6 @@
 // The new facade authenticates original N. It is not the completed ranked
 // result needed to attach reports, optimize a successor or activate default.
+include!("production_canonical_ranked_checks_v1.rs");
 #[derive(Clone, Copy)]
 enum CrQueryFailureV1 {
     Resource(ArgumentResourceV1),

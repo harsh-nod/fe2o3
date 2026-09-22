@@ -667,3 +667,10 @@ mod tests {
     #[path = "pliron_workgroup_memory_tests.rs"]
     mod pliron_workgroup_memory;
 }
+#[path = "canonical_ranked_checks_v1.rs"]
+mod canonical_ranked_checks_v1;
+pub use canonical_ranked_checks_v1::{
+    CanonicalRankedPolicyChecksErrorV1, CanonicalRankedPolicyFailureV1,
+    CanonicalRankedPolicyHistoryV1, CanonicalRankedPolicyResourceObservationV1,
+    CheckedCanonicalRankedPoliciesV1, with_canonical_ranked_policy_checks_v1,
+};

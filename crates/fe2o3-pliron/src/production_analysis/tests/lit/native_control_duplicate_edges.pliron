@@ -1,0 +1,20 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK-WITNESSES
+// CHECK: PASS
+// CHECK: WITNESS TensorLayout
+// CHECK: WITNESS MemoryBounds
+// CHECK: WITNESS AtomicLegality
+// CHECK: WITNESS RaceFreedom
+// CHECK: WITNESS HierarchicalOwnership
+// CHECK: WITNESS BarrierConvergence
+// CHECK: WITNESS PipelineProtocol
+// CHECK: WITNESS WorkgroupMemory
+// CHECK: WITNESS SemanticRefinement
+builtin.func @native_control_duplicate_edges: builtin.function <(builtin.integer i1, builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>
+{
+  ^entry(b: builtin.integer i1, left: builtin.integer ui32, right: builtin.integer ui32):
+    gpu.cond_branch (b, left, right) [^join, ^join] [operand_segment_sizes: builtin.operand_segment_sizes [1, 1, 1]]: <(builtin.integer i1, builtin.integer ui32, builtin.integer ui32) -> ()>
+  ^join(x: builtin.integer ui32):
+    gpu.return (x) [] []: <(builtin.integer ui32) -> ()>
+}

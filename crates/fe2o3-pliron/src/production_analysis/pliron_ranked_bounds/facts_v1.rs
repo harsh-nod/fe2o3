@@ -154,6 +154,16 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::BooleanBranchArgs)
     } else if operation.downcast_ref::<AnalysisSplitOp>().is_some() {
         Some(RankedOperationKind::AnalysisSplit)
+    } else if operation
+        .downcast_ref::<dialect_gpu::optimization_v1::BranchOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::BranchArgs)
+    } else if operation
+        .downcast_ref::<dialect_gpu::optimization_v1::ReturnOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::Return)
     } else if operation.downcast_ref::<BranchOp>().is_some() {
         Some(RankedOperationKind::Branch)
     } else if operation.downcast_ref::<BranchArgsOp>().is_some() {
