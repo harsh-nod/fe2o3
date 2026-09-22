@@ -56,6 +56,10 @@ pub const fn __checked_ordered_program_words_v1(words: &[u16]) -> [u64; 4] {
 }
 
 #[doc(hidden)]
+#[path = "ordered_program_repeat_v1.rs"]
+pub mod repeat_v1;
+
+#[doc(hidden)]
 #[macro_export]
 macro_rules! __fe2o3_ordered_program_destination_v1 {
     (scratch) => {
@@ -188,6 +192,25 @@ macro_rules! __fe2o3_ordered_program_step_v1 {
 ///     mov(out, input0, input1);
 /// };
 /// ```
+///
+/// A second, explicitly compile-time spelling supports one nonempty
+/// initialization and one nonnested block repeated by a literal 1..=15 count.
+/// The complete expansion must still contain at most 16 instructions. It
+/// produces the same single marker and five typed constants as the flat form;
+/// it is not a GPU loop, schedule recipe or additional executable description.
+/// Scratch/output state flows through all copies. Runtime data expressions
+/// still evaluate once, left to right, before the marker call.
+///
+/// ```no_run
+/// use fe2o3_device::amdgpu_ordered_program;
+/// let (a, b, c) = (19_u32, 23_u32, 42_u32);
+/// let value = amdgpu_ordered_program! {
+///     gfx942_xnack_off_wave64;
+///     scratch(32); out(33); in(34) = a; in(35) = b; in(36) = c;
+///     init { mov(out, input0); }
+///     repeat(2) { add(out, out, input1); }
+/// };
+/// ```
 #[macro_export]
 macro_rules! amdgpu_ordered_program {
     (
@@ -206,6 +229,36 @@ macro_rules! amdgpu_ordered_program {
         const __PACKED: [u64; 4] = $crate::ordered_program::__checked_ordered_program_words_v1(__WORDS);
         $crate::diagnostics::__amdgpu_ordered_program_e32_v1::<
             __COUNT, { __PACKED[0] }, { __PACKED[1] }, { __PACKED[2] }, { __PACKED[3] },
+        >($a, $b, $c, $scratch, $output, $input0, $input1, $input2)
+    }};
+    (
+        gfx942_xnack_off_wave64;
+        scratch($scratch:literal); out($output:literal);
+        in($input0:literal) = $a:expr;
+        in($input1:literal) = $b:expr;
+        in($input2:literal) = $c:expr;
+        init { $( $initial_opcode:ident ( $( $initial_role:ident ),* ) ; )* }
+        repeat($repetitions:literal) {
+            $( $repeated_opcode:ident ( $( $repeated_role:ident ),* ) ; )*
+        }
+    ) => {{
+        const __INITIAL: &[u16] = &[
+            $($crate::__fe2o3_ordered_program_step_v1!($initial_opcode($($initial_role),*))),*
+        ];
+        const __REPEATED: &[u16] = &[
+            $($crate::__fe2o3_ordered_program_step_v1!($repeated_opcode($($repeated_role),*))),*
+        ];
+        const __REPETITIONS: usize = $repetitions;
+        const __EXPANDED: (u8, [u64; 4]) =
+            $crate::ordered_program::repeat_v1::__checked_ordered_repeat_v1(
+                __INITIAL, __REPEATED, __REPETITIONS,
+            );
+        $crate::diagnostics::__amdgpu_ordered_program_e32_v1::<
+            { __EXPANDED.0 },
+            { __EXPANDED.1[0] },
+            { __EXPANDED.1[1] },
+            { __EXPANDED.1[2] },
+            { __EXPANDED.1[3] },
         >($a, $b, $c, $scratch, $output, $input0, $input1, $input2)
     }};
     ($($unsupported:tt)*) => {
