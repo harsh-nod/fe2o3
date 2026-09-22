@@ -1,0 +1,34 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "fe2o3-runtime-model",
+    "--release",
+    "--lib",
+    "::tests::acquire_shared::performance::shared_producer_acquire_performance",
+    "--",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_HOME": "/home/harsh/.cargo",
+    "CARGO_TARGET_DIR": "/run/user/1000/fe2o3-producer-acquire-20260922.NTfM19WM/target",
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_HOME": "/home/harsh/.rustup"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790107436909930824,
+  "group_absent": true,
+  "pid": 3516469,
+  "started_ns": 1790107427538685681,
+  "stderr_sha256": "08d06408b6ca539c41d9d6ae0e259195507bb9c8a436795f118cb94e598fa28a",
+  "stdin_sha256": null,
+  "stdout_sha256": "809382b2bcae772f1c5efb8a2e87ba54f670f66131f2b4d28c45458b6474af14",
+  "timeout_seconds": 300
+}

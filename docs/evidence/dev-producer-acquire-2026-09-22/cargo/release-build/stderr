@@ -1,0 +1,3 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `release` profile [optimized] target(s) in 36.95s
+  Executable unittests src/lib.rs (/run/user/1000/fe2o3-producer-acquire-20260922.NTfM19WM/target/release/deps/fe2o3_runtime_model-e7657b5f29c51f12)
