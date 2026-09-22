@@ -5,6 +5,7 @@
     feature = "guarded-loop-read-control",
     feature = "guarded-loop-read-stale",
     feature = "guarded-loop-read-different",
+    feature = "nominal-policy4-unitlocal",
 ))]
 mod guarded_loop_read;
 
@@ -141,6 +142,7 @@ mod ordered_program_v32;
 
 #[cfg(not(any(
     feature = "guarded-loop-read",
+    feature = "nominal-policy4-unitlocal",
     feature = "guarded-loop-read-control",
     feature = "guarded-loop-read-stale",
     feature = "guarded-loop-read-different",
@@ -260,7 +262,7 @@ pub fn wrapped_fill(mut output: DisjointSlice<f32>) -> KernelResult {
     Ok(())
 }
 
-#[cfg(feature = "private-unit-helper")]
+#[cfg(any(feature = "private-unit-helper", feature = "nominal-policy4-unitlocal"))]
 #[inline(never)]
 fn private_unit_helper() {
     let index = 0_usize;

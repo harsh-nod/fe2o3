@@ -19,6 +19,12 @@ use fe2o3_lower_mir_kernel::{
 use std::mem::size_of;
 
 type R<T> = Result<T, E>;
+#[path = "production_pipeline_nominal_policy4_native_v3.rs"]
+mod native;
+#[cfg(test)]
+#[path = "production_pipeline_nominal_policy4_source_v3_tests.rs"]
+mod source_tests;
+
 enum Output {
     Direct(Direct),
     Erased(Erased),

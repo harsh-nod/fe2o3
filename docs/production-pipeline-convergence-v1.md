@@ -6,6 +6,36 @@ work under [#134](https://github.com/harsh-nod/fe2o3/issues/134) to one
 production transaction. The former scalar, GEMM, attention, collective, and MoE compiler oracles have been deleted. They are not additional production architectures. Differential evidence may remain as
 inert fixtures or offline tools, never as another route in production crates.
 
+## Nominal P4 native-text boundary
+
+The nominal descriptor continuation retains the original source, authenticated
+bindings and actual P4 optimized output O. Its consuming native-text continuation
+uses the existing target-bound emitter and LLVM22 layout binder, embeds one V3
+descriptor section, and retains that same owner. It does not advance O to a later
+optimization stage or reconstruct an independent executable graph.
+
+Replay checks source-to-O history, nominal source ABI, physical argument packing,
+target requirements, all five stored symbol vectors, a source-derived catalog,
+and the complete emitted text including the descriptor suffix. Input storage
+transfers unchanged; the caller reserves only the returned additional receipt.
+This is an inert compiler boundary, not a Worker V3 handoff or launch authority.
+Nonempty source catalogs and deferred matrix/LDS/atomic/synchronization
+requirements still reject rather than discard their obligations.
+
+The source harness covers eight ordinary-MIR guarded-read cases and two
+retained-MIR private-helper cases across gfx942/gfx950. The latter assert genuine
+helper/call erasure; they do not claim ordinary-MIR helper retention. Exact
+retained-MIR flags are checked by the request validator and full-argv digest,
+not by portable metadata alone. Tests check allocation-capacity receipts,
+unchanged descriptor/O backing, text substitution, resource refusals, and
+consuming-error cleanup. Diagnostic work/peak observations include negative
+checks and are not performance measurements. These source tests must be run
+explicitly with their ignored parent tests; declarations alone are not coverage.
+
+Protected worker execution, proof/artifact custody, generated safe launch and
+target-matched GPU qualification remain separate unfinished integration work.
+This boundary does not complete #272 milestones or qualify the tutorial corpus.
+
 ## One transaction
 
 The completed convergence target sends every kernel-containing final crate

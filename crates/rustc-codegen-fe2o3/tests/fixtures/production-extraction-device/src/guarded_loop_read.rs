@@ -24,9 +24,14 @@ pub fn guarded_loop_read(input: &[u32], limit: usize, mut output: DisjointSlice<
     }
 }
 
-#[cfg(feature = "guarded-loop-read-control")]
+#[cfg(any(
+    feature = "guarded-loop-read-control",
+    feature = "nominal-policy4-unitlocal"
+))]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn guarded_loop_read_control(_input: &[u32], _limit: usize, mut output: DisjointSlice<u32>) {
+    #[cfg(feature = "nominal-policy4-unitlocal")]
+    super::private_unit_helper();
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = 7;
     }

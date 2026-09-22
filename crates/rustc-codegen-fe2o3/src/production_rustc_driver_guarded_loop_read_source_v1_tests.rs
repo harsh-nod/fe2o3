@@ -115,6 +115,26 @@ struct Observation {
 fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
+
+pub(super) fn check_nominal_output(
+    case: Case,
+    source: Option<&fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1>,
+    output: &kir::VerifiedCanonicalKernelIrModuleV12,
+    obligations: &[kir::FormalMemoryObligations],
+    floor: usize,
+) -> std::result::Result<(), String> {
+    if let Some(source) = source {
+        let (observed, _) = rows::source_rows(case, source, floor).map_err(|e| format!("{e:?}"))?;
+        rows::check_summary(case, &observed);
+        rows::check_source_successes(case, &observed);
+    } else {
+        assert_eq!(case, Case::Control);
+    }
+    let observed =
+        rows::graph_rows(case, output.module(), obligations).map_err(|e| format!("{e:?}"))?;
+    rows::check_summary(case, &observed);
+    Ok(())
+}
 fn source_stamps() -> Vec<Stamp> {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     [

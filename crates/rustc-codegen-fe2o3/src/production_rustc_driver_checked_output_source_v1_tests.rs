@@ -418,6 +418,7 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 
 enum OrdinarySourceCase {
     GuardedLoopRead(guarded_loop_read::Case),
+    NominalPolicy4ErasedControl,
     ConditionalDescriptorPair,
     ReferenceFill,
     MaskedShift(masked_shift_source::Config),
@@ -518,6 +519,12 @@ fn ordinary_rust_source_cases(
     let mut private_helper_needs_retained_mir = true;
     let mut fixed_erased_observed = false;
     for case in cases {
+        if matches!(case, OrdinarySourceCase::NominalPolicy4ErasedControl) {
+            assert!(
+                observer.is_some(),
+                "nominal Erased case needs its exact source observer"
+            );
+        }
         if matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper)
             && !private_helper_needs_retained_mir
         {
@@ -617,6 +624,15 @@ fn ordinary_rust_source_cases(
                 Some(case.feature()),
                 case.roots(),
                 usize::from(*case != guarded_loop_read::Case::Control),
+                1,
+                0,
+            ),
+            OrdinarySourceCase::NominalPolicy4ErasedControl => (
+                "nominal-policy4-unitlocal",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("nominal-policy4-unitlocal"),
+                guarded_loop_read::Case::Control.roots(),
+                0,
                 1,
                 0,
             ),
@@ -806,9 +822,12 @@ fn ordinary_rust_source_cases(
         ) {
             args.push("-Zinline-mir=no".into());
         }
-        if matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper) {
-            args.push("-Zinline-mir=no".into());
-            args.push("-Zmir-opt-level=0".into());
+        if matches!(
+            case,
+            OrdinarySourceCase::RetainedPrivateUnitHelper
+                | OrdinarySourceCase::NominalPolicy4ErasedControl
+        ) {
+            args.extend(["-Zinline-mir=no", "-Zmir-opt-level=0"].map(str::to_owned));
         }
         let original: Vec<OsString> = args.iter().map(OsString::from).collect();
         let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&original).unwrap()
@@ -864,7 +883,8 @@ fn ordinary_rust_source_cases(
             );
         progress::clear_inherited_jobserver(&mut command);
         let simulation_case = match case {
-            OrdinarySourceCase::GuardedLoopRead(_) => None,
+            OrdinarySourceCase::GuardedLoopRead(_)
+            | OrdinarySourceCase::NominalPolicy4ErasedControl => None,
             OrdinarySourceCase::MaskedShift(config) => {
                 Some(simulation::Case::MaskedShift(config.batch))
             }
