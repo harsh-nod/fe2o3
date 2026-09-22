@@ -20,8 +20,12 @@ pub struct PreparedFinalizedNominalWorkerHsacoV3 {
     finalized: FinalizedNominalHsacoV3,
     output: ContentIdentityV1,
     descriptor: ContentIdentityV1,
+    identity: crate::FinalizedProtectedWorkerV3HsacoIdentityV1,
 }
 impl PreparedFinalizedNominalWorkerHsacoV3 {
+    pub const fn identity(&self) -> crate::FinalizedProtectedWorkerV3HsacoIdentityV1 {
+        self.identity
+    }
     pub fn raw(&self) -> &InspectedProtectedWorkerV3HsacoV1 {
         &self.raw
     }
@@ -45,6 +49,16 @@ impl PreparedFinalizedNominalWorkerHsacoV3 {
     }
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+    pub(crate) fn into_compact_replay_parts(
+        self,
+    ) -> crate::worker_v3_hsaco_finalization::OwnedPreparedFinalizedProtectedWorkerV3ReplayPartsV1
+    {
+        crate::worker_v3_hsaco_finalization::OwnedPreparedFinalizedProtectedWorkerV3ReplayPartsV1 {
+            identity: self.identity,
+            source: self.raw.into_source_evidence(),
+            finalized_bytes: self.finalized.into_bytes(),
+        }
     }
 }
 
@@ -90,6 +104,9 @@ impl<E> From<WorkerV3HsacoInspectionError> for NominalWorkerFinalizationErrorV3<
 /// checks. There is no V1 fallback, caller-supplied descriptor, or authority upgrade.
 /// `prepaid_scratch` covers only the descriptor traversal described by
 /// `NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3`; retained evidence stays caller-paid.
+/// Shared strict inspection and finalization-identity serialization/hashing use
+/// the existing bounded artifact/transaction domain outside `charge`; this is
+/// not an aggregate work or storage receipt for the complete transition.
 pub fn finalize_protected_worker_nominal_hsaco_v3<E>(
     source: InertProtectedFirstBuildWorkerV3EvidenceV1,
     prepaid_scratch: usize,
@@ -136,11 +153,17 @@ pub fn finalize_protected_worker_nominal_hsaco_v3<E>(
         .map_err(NominalFinalizationErrorV3::Work)?;
     let output = ContentIdentityV1::calculate(finalized.as_bytes());
     let descriptor = ContentIdentityV1::calculate(finalized.descriptor_bytes());
+    // Exact finalization identity uses the existing bounded transaction/plan
+    // serialization domain, separate from the descriptor traversal quota.
+    let identity = crate::worker_v3_hsaco_finalization::calculate_nominal_worker_finalized_identity(
+        &raw, &finalized, output, descriptor,
+    );
     Ok(PreparedFinalizedNominalWorkerHsacoV3 {
         raw,
         finalized,
         output,
         descriptor,
+        identity,
     })
 }
 

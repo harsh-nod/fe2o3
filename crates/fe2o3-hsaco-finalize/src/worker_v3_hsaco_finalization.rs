@@ -35,8 +35,11 @@ use crate::{
 
 const PROTECTED_FINALIZED_IDENTITY_DOMAIN_V3: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-CANONICAL-FINALIZATION/V1\0";
+const NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3: &[u8] =
+    b"FE2O3/STRICT-V3-PROTECTED-WORKER-NOMINAL-DESCRIPTOR-FINALIZATION/V3\0";
 
-/// Stable native-V3 identity of one protected canonical-finalization transition.
+/// Stable Worker V3 finalization identity. Descriptor V1 and nominal V3 use
+/// distinct domains; this identity version is not a descriptor schema version.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FinalizedProtectedWorkerV3HsacoIdentityV1([u8; 32]);
 
@@ -192,6 +195,9 @@ pub(crate) struct OwnedPreparedFinalizedProtectedWorkerV3ReplayPartsV1 {
 }
 
 impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
+    pub(crate) const fn raw(&self) -> &InspectedProtectedWorkerV3HsacoV1 {
+        &self.raw
+    }
     pub const fn identity(&self) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
         self.identity
     }
@@ -202,10 +208,6 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
 
     pub const fn source_evidence_identity(&self) -> ProtectedFirstBuildWorkerV3IdentityV1 {
         self.raw.source_evidence_identity()
-    }
-
-    pub(crate) const fn source_evidence(&self) -> &InertProtectedFirstBuildWorkerV3EvidenceV1 {
-        self.raw.source_evidence()
     }
 
     pub const fn binding_identity(&self) -> ProtectedCompilerHandoffBindingIdentityV3 {
@@ -655,6 +657,43 @@ fn calculate_protected_v3_finalized_identity(
     descriptor_bytes: &[u8],
     canonical_descriptor_evidence: ContentIdentityV1,
 ) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
+    calculate_worker_finalized_identity(
+        raw,
+        finalized.as_bytes(),
+        finalized.inspection().digest(),
+        finalized_output,
+        descriptor_bytes,
+        canonical_descriptor_evidence,
+        PROTECTED_FINALIZED_IDENTITY_DOMAIN_V3,
+    )
+}
+
+pub(crate) fn calculate_nominal_worker_finalized_identity(
+    raw: &InspectedProtectedWorkerV3HsacoV1,
+    finalized: &crate::FinalizedNominalHsacoV3,
+    output: ContentIdentityV1,
+    descriptor: ContentIdentityV1,
+) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
+    calculate_worker_finalized_identity(
+        raw,
+        finalized.as_bytes(),
+        finalized.digest(),
+        output,
+        finalized.descriptor_bytes(),
+        descriptor,
+        NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3,
+    )
+}
+
+fn calculate_worker_finalized_identity(
+    raw: &InspectedProtectedWorkerV3HsacoV1,
+    finalized_bytes: &[u8],
+    canonical_digest: CanonicalCodeObjectDigest,
+    finalized_output: ContentIdentityV1,
+    descriptor_bytes: &[u8],
+    canonical_descriptor_evidence: ContentIdentityV1,
+    domain: &[u8],
+) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
     let expectation = raw.binding_expectation();
     let outer_identity = expectation.outer_handoff_identity();
     let nested_identity = expectation.nested_handoff_identity();
@@ -709,19 +748,29 @@ fn calculate_protected_v3_finalized_identity(
         wavefront_size: launch.wavefront_size(),
         observed_kernel_symbols_identity,
         finalized_output,
-        exact_finalized_bytes: finalized.as_bytes(),
-        canonical_digest: *finalized.inspection().digest().as_bytes(),
+        exact_finalized_bytes: finalized_bytes,
+        canonical_digest: *canonical_digest.as_bytes(),
         canonical_descriptor_evidence,
         exact_canonical_descriptor_bytes: descriptor_bytes,
     };
-    FinalizedProtectedWorkerV3HsacoIdentityV1(calculate_protected_finalized_identity_v3(&preimage))
+    FinalizedProtectedWorkerV3HsacoIdentityV1(calculate_finalized_identity_in_domain(
+        &preimage, domain,
+    ))
 }
 
+#[cfg(test)]
 fn calculate_protected_finalized_identity_v3(
     preimage: &ProtectedFinalizationIdentityPreimageV3<'_>,
 ) -> [u8; 32] {
+    calculate_finalized_identity_in_domain(preimage, PROTECTED_FINALIZED_IDENTITY_DOMAIN_V3)
+}
+
+fn calculate_finalized_identity_in_domain(
+    preimage: &ProtectedFinalizationIdentityPreimageV3<'_>,
+    domain: &[u8],
+) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(PROTECTED_FINALIZED_IDENTITY_DOMAIN_V3);
+    hasher.update(domain);
     // This stage is structural. A zero authority tag prevents identity reuse by a future
     // authenticated finalization schema.
     hasher.update([0]);
@@ -873,13 +922,27 @@ mod v3_tests {
         let first = calculate_protected_finalized_identity_v3(&preimage);
         let second = calculate_protected_finalized_identity_v3(&preimage);
         assert_eq!(first, second);
-        assert_ne!(first, [0; 32]);
+        // Independently computed from the pre-extraction 94a6909 implementation.
+        assert_eq!(
+            first,
+            [
+                0x9b, 0x88, 0x88, 0x0e, 0xa3, 0x10, 0x00, 0xa2, 0xdf, 0x7a, 0x6e, 0x3a, 0xf9, 0x5b,
+                0x3b, 0x68, 0x1d, 0xdd, 0x59, 0x09, 0x2e, 0x07, 0x8d, 0x17, 0xb2, 0xe2, 0xc0, 0xa3,
+                0x3c, 0x09, 0x3c, 0xfe,
+            ]
+        );
+        assert_ne!(
+            first,
+            calculate_finalized_identity_in_domain(&preimage, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3)
+        );
     }
 
     #[test]
     fn native_v3_finalization_identity_binds_every_lineage_axis() {
         let base = fixture_preimage();
         let expected = calculate_protected_finalized_identity_v3(&base);
+        let nominal =
+            calculate_finalized_identity_in_domain(&base, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3);
         macro_rules! assert_axis {
             ($field:ident, $value:expr) => {{
                 let mut changed = base.clone();
@@ -888,6 +951,15 @@ mod v3_tests {
                     calculate_protected_finalized_identity_v3(&changed),
                     expected,
                     "V3 finalization identity omitted {}",
+                    stringify!($field)
+                );
+                assert_ne!(
+                    calculate_finalized_identity_in_domain(
+                        &changed,
+                        NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3
+                    ),
+                    nominal,
+                    "nominal finalization identity omitted {}",
                     stringify!($field)
                 );
             }};

@@ -833,7 +833,30 @@ pub fn prepare_protected_worker_v3_compact_finalizer_replay_v2(
     PreparedProtectedWorkerV3CompactFinalizerReplayV2,
     ProtectedWorkerV3CompactFinalizerReplayErrorV1,
 > {
-    let finalized = finalized.into_compact_replay_parts();
+    prepare_versioned_compact_finalizer_replay(
+        crate::worker_v3_finalized_schema::FinalizedOwner::V1(finalized),
+    )
+}
+
+/// Consumes nominal descriptor custody without changing the Worker V3 replay wire.
+pub fn prepare_nominal_worker_compact_finalizer_replay_v3(
+    finalized: crate::PreparedFinalizedNominalWorkerHsacoV3,
+) -> Result<
+    PreparedProtectedWorkerV3CompactFinalizerReplayV2,
+    ProtectedWorkerV3CompactFinalizerReplayErrorV1,
+> {
+    prepare_versioned_compact_finalizer_replay(
+        crate::worker_v3_finalized_schema::FinalizedOwner::NominalV3(finalized),
+    )
+}
+
+pub(crate) fn prepare_versioned_compact_finalizer_replay(
+    finalized: crate::worker_v3_finalized_schema::FinalizedOwner,
+) -> Result<
+    PreparedProtectedWorkerV3CompactFinalizerReplayV2,
+    ProtectedWorkerV3CompactFinalizerReplayErrorV1,
+> {
+    let finalized = finalized.into_replay_parts();
     let source = finalized.source.into_compact_replay_parts();
     let request_parts = extract_worker_v3_request_replay_parts_v1(
         &source.bootstrap_request_bytes,

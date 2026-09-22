@@ -41,6 +41,7 @@ mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
 mod worker_v3_compact_finalizer_replay;
+mod worker_v3_finalized_schema;
 mod worker_v3_hsaco_admission;
 mod worker_v3_hsaco_finalization;
 mod worker_v3_hsaco_publication;
@@ -237,6 +238,7 @@ pub use worker_v3_compact_finalizer_replay::{
     ProtectedWorkerV3CompactFinalizerReplayIdentityV2,
     ProtectedWorkerV3CompactFinalizerReplayPartsV1, ProtectedWorkerV3CompactFinalizerReplayPartsV2,
     ProtectedWorkerV3CompactFinalizerReplayV1, ProtectedWorkerV3CompactFinalizerReplayV2,
+    prepare_nominal_worker_compact_finalizer_replay_v3,
     prepare_protected_worker_v3_compact_finalizer_replay_v1,
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
 };
@@ -253,15 +255,18 @@ pub use worker_v3_hsaco_finalization::{
     finalize_protected_worker_v3_hsaco_v1,
 };
 pub use worker_v3_hsaco_publication::{
-    PreparedProtectedWorkerV3HsacoPublicationV1, PublishedProtectedWorkerV3HsacoV1,
-    PublishedProtectedWorkerV3LoadEnvelopePartsV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
+    PreparedNominalWorkerPublicationV3, PreparedProtectedWorkerV3HsacoPublicationV1,
+    PublishedNominalWorkerHsacoV3, PublishedProtectedWorkerV3HsacoV1,
+    PublishedProtectedWorkerV3LoadEnvelopePartsV1, RecoveredNominalWorkerPublicationV3,
+    RecoveredProtectedWorkerV3HsacoPublicationV1,
     RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1,
     RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     SealedProtectedWorkerV3HsacoPublicationIntentV1, WorkerV3HsacoPublicationErrorV1,
+    persist_prepared_nominal_worker_publication_v3,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
-    prepare_protected_worker_v3_hsaco_publication_v1,
-    publish_recovered_protected_worker_v3_hsaco_v1,
-    recover_protected_worker_v3_hsaco_publication_v1,
+    prepare_nominal_worker_publication_v3, prepare_protected_worker_v3_hsaco_publication_v1,
+    publish_recovered_nominal_worker_hsaco_v3, publish_recovered_protected_worker_v3_hsaco_v1,
+    recover_nominal_worker_publication_v3, recover_protected_worker_v3_hsaco_publication_v1,
     revalidate_protected_worker_v3_finalizer_derivation_v1,
 };
 

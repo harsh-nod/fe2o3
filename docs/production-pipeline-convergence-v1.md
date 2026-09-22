@@ -62,10 +62,24 @@ rechecks the artifact independently. Fixture-worker tests cover descriptor-deriv
 launch and original transaction retention; their synthetic ELF/receipts do not
 establish production compiler or protected proof provenance.
 
-The normal CLI, publication/recovery, generated host admission, and the nominal
-P4 source-proof owner are not yet joined to this V3 finalizer continuation. Its bounded
-descriptor traversal does not claim whole-process resource metering. No tutorial
-kernel gains end-to-end qualification and M0-M7 remain open from this change.
+Typed nominal publication now consumes that finalizer owner, retaining exact
+descriptor bytes through the existing compact replay and durable transaction.
+Restart reconstruction selects the strict descriptor codec from the exact ABI
+receipt and repeats inspection/finalization before publication. A closed internal
+schema distinction shares the existing publication authority bridge; it does not
+flatten nominal V3 into V1. Legacy identities retain their domain and encoding,
+while nominal finalization uses a distinct domain over the same custody axes.
+Typed V1 and nominal recovery APIs reject each other's artifacts. Published
+nominal output can transfer its exact current-publication lease and replay parts
+without acquiring compiler, proof, load or launch authority.
+
+The normal CLI, generated host admission, and nominal P4 source-proof owner are
+not yet joined to this nominal publication continuation. Native-aware production
+lineage construction and independent replay remain required. Descriptor traversal
+quotas and existing bounded artifact/replay allocations are separate; publication
+does not produce a complete resource receipt or claim whole-process metering.
+The synthetic receipt/artifact tests do not qualify any tutorial kernel, and
+M0-M7 remain open.
 
 ## One transaction
 

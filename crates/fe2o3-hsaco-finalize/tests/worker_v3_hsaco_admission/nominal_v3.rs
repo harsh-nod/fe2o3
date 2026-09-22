@@ -6,12 +6,18 @@ use fe2o3_hsaco_finalize::{
     finalize_protected_worker_nominal_hsaco_v3,
 };
 use fe2o3_kernel_descriptor::*;
+#[path = "nominal_publication_v3.rs"]
+mod publication;
 
 fn free(_: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
 fn nominal_slice_source(release: &str) -> Vec<u8> {
+    nominal_slice_source_type(release, ScalarTypeV1::F32)
+}
+
+fn nominal_slice_source_type(release: &str, scalar: ScalarTypeV1) -> Vec<u8> {
     let compiler = CompilerIdentityV1::new(
         Text::new("rustc").unwrap(),
         Text::new(release).unwrap(),
@@ -21,16 +27,10 @@ fn nominal_slice_source(release: &str) -> Vec<u8> {
         Text::new("nominal-worker-fixture").unwrap(),
         Text::new("test").unwrap(),
     );
-    let source = SourceTypeRecordV3::new(
-        SourceTypeDescriptorV3::SharedSlice(ScalarTypeV1::F32),
-        &mut free,
-    )
-    .unwrap();
-    let layout = device_layout_record_v3(
-        DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32),
-        &mut free,
-    )
-    .unwrap();
+    let source =
+        SourceTypeRecordV3::new(SourceTypeDescriptorV3::SharedSlice(scalar), &mut free).unwrap();
+    let layout =
+        device_layout_record_v3(DeviceLayoutDescriptorV1::shared_slice(scalar), &mut free).unwrap();
     let components = [
         PhysicalComponentV3 {
             kind: PhysicalAbiComponentKind::GlobalPointer,
