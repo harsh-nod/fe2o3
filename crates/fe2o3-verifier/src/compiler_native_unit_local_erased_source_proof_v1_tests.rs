@@ -6,12 +6,15 @@ use fe2o3_lower_mir_kernel::{
     ProductionUnitLocalErasedSourceOwnerV1,
 };
 
-fn unit_source() -> ProductionPreRankedKirOwnerV1 {
-    unit_source_with_value(11)
+fn unit_source_with_value(private_value: u32) -> ProductionPreRankedKirOwnerV1 {
+    unit_source_for_stores(private_value, &STORES[..1])
 }
 
-fn unit_source_with_value(private_value: u32) -> ProductionPreRankedKirOwnerV1 {
-    let base = source();
+fn unit_source_for_stores(
+    private_value: u32,
+    specs: &[StoreSpec],
+) -> ProductionPreRankedKirOwnerV1 {
+    let base = source_for_stores(specs);
     let semantic = base.semantic_ssa().source_semantic();
     let original = &semantic.functions()[0];
     let unit = SemanticTypeIdV1::from_index(0);
@@ -55,7 +58,7 @@ fn unit_source_with_value(private_value: u32) -> ProductionPreRankedKirOwnerV1 {
                 original.blocks()[0].statements().to_vec(),
                 SemanticTerminatorKindV1::Call(
                     SemanticDirectCallV1::new_callable(
-                        SemanticCallableIdV1::from_index(1),
+                        SemanticCallableIdV1::from_index(semantic.functions().len() as u32),
                         vec![],
                         Some(SemanticCallDestinationV1::new(
                             place(3, unit),
@@ -137,23 +140,31 @@ fn unit_source_with_value(private_value: u32) -> ProductionPreRankedKirOwnerV1 {
         )],
     )
     .unwrap();
+    let mut functions = semantic.functions().to_vec();
+    functions[0] = root;
+    functions.push(helper);
     let semantic = InertSemanticMirRequestV1::new(
         semantic.target(),
         semantic.types().to_vec(),
         vec![],
         vec![],
         vec![],
-        vec![root, helper],
-        vec![SemanticFunctionIdV1::from_index(0)],
+        functions,
+        semantic.roots().to_vec(),
     )
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
-    let inputs = [ProductionSourceLaunchRootInputV1::new(
-        NAME,
-        BINDING,
-        ProductionSourceLaunchInputV1::new(1, Some([1, 1, 1]), [1, 1, 1]),
-    )];
+    let inputs: Vec<_> = specs
+        .iter()
+        .map(|spec| {
+            ProductionSourceLaunchRootInputV1::new(
+                spec.name,
+                spec.binding,
+                ProductionSourceLaunchInputV1::new(1, Some([1, 1, 1]), [1, 1, 1]),
+            )
+        })
+        .collect();
     let launch = ProductionSourceLaunchRosterV1::try_new(&semantic, &inputs).unwrap();
     let semantic =
         ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
@@ -178,18 +189,30 @@ fn unit_source_with_value(private_value: u32) -> ProductionPreRankedKirOwnerV1 {
 }
 
 pub(super) fn unit_fixture() -> (Fixture, ProductionUnitLocalErasedSourceOwnerV1) {
-    let source = unit_source();
-    let fixture = fixture_from_source(&source);
+    unit_fixture_for_stores(&STORES[..1])
+}
+
+pub(super) fn unit_fixture_for_stores(
+    specs: &[StoreSpec],
+) -> (Fixture, ProductionUnitLocalErasedSourceOwnerV1) {
+    let source = unit_source_for_stores(11, specs);
+    let fixture = fixture_for_stores(&source, specs);
     let toolchain = VerusToolchainIdentityV2::new(d(72), d(73), d(74), d(75), d(76)).unwrap();
-    let (lowering, _, _) = ranked(&source, toolchain);
-    let roots = vec![ProductionRankedSemanticProjectionRootV1::new(
-        SemanticFunctionIdV1::from_index(0),
-        1,
-        lowering,
-        TEXT.into(),
-        vec![ProductionRankedAccessSourceV1::new(0, Some(1), 0, 0, 8)],
-        vec![],
-    )];
+    let roots: Vec<_> = specs
+        .iter()
+        .enumerate()
+        .map(|(ordinal, &spec)| {
+            let (lowering, _, _) = ranked_for_root(&source, ordinal, spec, toolchain);
+            ProductionRankedSemanticProjectionRootV1::new(
+                SemanticFunctionIdV1::from_index(ordinal as u32),
+                1,
+                lowering,
+                TEXT.into(),
+                vec![ProductionRankedAccessSourceV1::new(0, Some(1), 0, 0, 8)],
+                vec![],
+            )
+        })
+        .collect();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     let floor = ProductionUnitLocalErasedSourceOwnerV1::input_storage_floor_v1(
@@ -223,7 +246,7 @@ fn validate_unit(
         BINDING,
         ProductionSourceLaunchInputV1::new(1, Some([1, 1, 1]), [1, 1, 1]),
     )];
-    let commitments = [fixture.staging];
+    let commitments = [fixture.roots[0].staging];
     let staging = [NativeCompilerRootStagingV1 {
         semantic_root: 0,
         commitments: &commitments,
@@ -232,7 +255,7 @@ fn validate_unit(
         candidate: NativeRankedSourceCandidateV1::from_untrusted_parts(
             0,
             1,
-            &fixture.kernel,
+            &fixture.roots[0].kernel,
             access,
             &[],
             TEXT,
@@ -285,7 +308,7 @@ fn typed_unit_replay_retains_original_n_and_exact_e_with_signed_global_effect() 
     let (checked, storage) = validate_unit(
         &fixture,
         owner.erased(),
-        &[fixture.signature],
+        &[fixture.roots[0].signature],
         &[ProductionRankedAccessSourceV1::new(0, Some(1), 0, 0, 8)],
         &mut budget,
     )
@@ -355,7 +378,7 @@ fn typed_unit_replay_rejects_n_as_e_and_freshly_verified_changed_e() {
             validate_unit(
                 &fixture,
                 erased,
-                &[fixture.signature],
+                &[fixture.roots[0].signature],
                 &[ProductionRankedAccessSourceV1::new(0, Some(1), 0, 0, 8)],
                 &mut budget
             )
@@ -372,7 +395,10 @@ fn typed_unit_replay_refuses_missing_duplicate_receipts_and_changed_source_map()
     let mut budget = Budget::new(&mut work, STORAGE);
     let floor = owner.retained_storage_floor_v1();
     budget.reserve_storage(floor).unwrap();
-    for signatures in [vec![], vec![fixture.signature, fixture.signature]] {
+    for signatures in [
+        vec![],
+        vec![fixture.roots[0].signature, fixture.roots[0].signature],
+    ] {
         assert!(
             validate_unit(
                 &fixture,
@@ -389,7 +415,7 @@ fn typed_unit_replay_refuses_missing_duplicate_receipts_and_changed_source_map()
         validate_unit(
             &fixture,
             owner.erased(),
-            &[fixture.signature],
+            &[fixture.roots[0].signature],
             &[ProductionRankedAccessSourceV1::new(0, Some(0), 0, 0, 8)],
             &mut budget
         )
@@ -408,7 +434,7 @@ fn typed_unit_replay_rejects_resigned_false_aggregate_and_legacy_route() {
     let access = [ProductionRankedAccessSourceV1::new(0, Some(1), 0, 0, 8)];
     assert!(
         fixture
-            .validate(&fixture.kernel, &access, &mut budget)
+            .validate(&fixture.roots[0].kernel, &access, &mut budget)
             .is_err()
     );
     replace_and_resign_aggregate_claim(&mut fixture, 0);
@@ -416,7 +442,7 @@ fn typed_unit_replay_rejects_resigned_false_aggregate_and_legacy_route() {
         validate_unit(
             &fixture,
             owner.erased(),
-            &[fixture.signature],
+            &[fixture.roots[0].signature],
             &access,
             &mut budget
         ),
@@ -429,7 +455,7 @@ fn typed_unit_replay_rejects_resigned_false_aggregate_and_legacy_route() {
 fn typed_unit_replay_exact_and_one_short_work_and_peak_storage_restore_floor() {
     let (fixture, owner) = unit_fixture();
     let access = [ProductionRankedAccessSourceV1::new(0, Some(1), 0, 0, 8)];
-    let signatures = [fixture.signature];
+    let signatures = [fixture.roots[0].signature];
     let floor = owner.retained_storage_floor_v1();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
@@ -474,7 +500,7 @@ fn typed_unit_replay_compares_complete_original_n_even_for_silent_helper_changes
         validate_unit(
             &fixture,
             owner.erased(),
-            &[fixture.signature],
+            &[fixture.roots[0].signature],
             &[ProductionRankedAccessSourceV1::new(0, Some(1), 0, 0, 8)],
             &mut budget
         ),

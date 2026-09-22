@@ -18,7 +18,9 @@ fn complete_packet_direct_recovery_drops_every_producer() {
     let durable = DurableFixture::capture(fixture());
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
-    let (_, baseline) = durable.direct(&[durable.signature], &mut budget).unwrap();
+    let (_, baseline) = durable
+        .direct(&[durable.roots[0].signature], &mut budget)
+        .unwrap();
     let expected = (
         durable.semantic.clone(),
         durable.native_graph.clone(),
@@ -98,7 +100,7 @@ fn complete_packet_unit_local_recovers_actual_e_and_rejects_n_as_e() {
         .unwrap();
     let (_, baseline) = durable
         .replay(
-            &[durable.signature],
+            &[durable.roots[0].signature],
             &mut budget,
             |original, ranked_roots, budget| {
                 validate_native_compiler_unit_local_erased_recipe_source_proof_v1(
@@ -278,50 +280,54 @@ fn complete_packet_wire_valid_semantic_mutations_reach_existing_replay() {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = Budget::new(&mut work, STORAGE);
         let (bytes, _) = base
-            .replay(&[base.signature], &mut budget, |source, ranked, budget| {
-                let mut root = ranked[0];
-                let mut signatures = root.effect_receipts.to_vec();
-                let mut row = base.staging;
-                let mut stage_id = 0;
-                match mutation {
-                    0 => {
-                        signatures[0] =
-                            InertFunctionalRefinementReceiptSignatureV2::from_untrusted_parts(
-                                *signatures[0].wire(),
-                                [91; 32],
-                            )
+            .replay(
+                &[base.roots[0].signature],
+                &mut budget,
+                |source, ranked, budget| {
+                    let mut root = ranked[0];
+                    let mut signatures = root.effect_receipts.to_vec();
+                    let mut row = base.roots[0].staging;
+                    let mut stage_id = 0;
+                    match mutation {
+                        0 => {
+                            signatures[0] =
+                                InertFunctionalRefinementReceiptSignatureV2::from_untrusted_parts(
+                                    *signatures[0].wire(),
+                                    [91; 32],
+                                )
+                        }
+                        1 => row.toolchain[4][0] ^= 1,
+                        2 => root.launch_rank = 2,
+                        3 => root.ranked_ir = "changed diagnostic text",
+                        4 => {
+                            root.source_rows_bytes =
+                                &root.source_rows_bytes[..root.source_rows_bytes.len() - 1]
+                        }
+                        5 => root.recipe_bytes = &root.recipe_bytes[..root.recipe_bytes.len() - 1],
+                        6 => stage_id = 7,
+                        7 => root.semantic_root = 7,
+                        _ => unreachable!(),
                     }
-                    1 => row.toolchain[4][0] ^= 1,
-                    2 => root.launch_rank = 2,
-                    3 => root.ranked_ir = "changed diagnostic text",
-                    4 => {
-                        root.source_rows_bytes =
-                            &root.source_rows_bytes[..root.source_rows_bytes.len() - 1]
-                    }
-                    5 => root.recipe_bytes = &root.recipe_bytes[..root.recipe_bytes.len() - 1],
-                    6 => stage_id = 7,
-                    7 => root.semantic_root = 7,
-                    _ => unreachable!(),
-                }
-                root.effect_receipts = &signatures;
-                let commitments = [row];
-                let staging = [NativeCompilerRootStagingV1 {
-                    semantic_root: stage_id,
-                    commitments: &commitments,
-                }];
-                let source = NativeCompilerSourceProofInputsV1 {
-                    staging_roots: &staging,
-                    ..source
-                };
-                encode_native_compiler_source_packet_v1(
-                    NativeCompilerRankedRecipeSourceProofInputsV1 {
-                        source,
-                        ranked_roots: &[root],
-                    },
-                    None,
-                    budget,
-                )
-            })
+                    root.effect_receipts = &signatures;
+                    let commitments = [row];
+                    let staging = [NativeCompilerRootStagingV1 {
+                        semantic_root: stage_id,
+                        commitments: &commitments,
+                    }];
+                    let source = NativeCompilerSourceProofInputsV1 {
+                        staging_roots: &staging,
+                        ..source
+                    };
+                    encode_native_compiler_source_packet_v1(
+                        NativeCompilerRankedRecipeSourceProofInputsV1 {
+                            source,
+                            ranked_roots: &[root],
+                        },
+                        None,
+                        budget,
+                    )
+                },
+            )
             .unwrap();
         budget.reserve_storage(37).unwrap();
         assert!(budget.reserve_storage(usize::MAX).is_err());

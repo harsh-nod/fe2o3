@@ -7,6 +7,9 @@ use fe2o3_pliron::encode_production_ranked_recipe_v1;
 #[path = "compiler_native_source_packet_recovery_v1_tests.rs"]
 mod complete_packet;
 
+#[path = "compiler_native_source_packet_multi_root_v1_tests.rs"]
+mod multiple_roots;
+
 struct DurableFixture {
     semantic: Vec<u8>,
     native: Vec<u8>,
@@ -14,6 +17,11 @@ struct DurableFixture {
     middle: Roster,
     correspondence: Roster,
     verus: Roster,
+    roots: Vec<DurableRoot>,
+}
+
+struct DurableRoot {
+    spec: StoreSpec,
     recipe: Vec<u8>,
     source_rows: Vec<u8>,
     signature: InertFunctionalRefinementReceiptSignatureV2,
@@ -26,7 +34,7 @@ impl DurableFixture {
         erased: Option<&[u8]>,
         budget: &mut Budget<'_>,
     ) -> Result<(Vec<u8>, NativeCompilerSourcePacketStorageV1), E> {
-        self.replay(&[self.signature], budget, |source, ranked_roots, budget| {
+        self.with_inputs(budget, |source, ranked_roots, budget| {
             encode_native_compiler_source_packet_v1(
                 NativeCompilerRankedRecipeSourceProofInputsV1 {
                     source,
@@ -46,23 +54,41 @@ impl DurableFixture {
             middle,
             correspondence,
             verus,
-            kernel,
-            signature,
-            staging,
+            roots,
         } = fixture;
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
-        let mut budget = Budget::new(&mut work, STORAGE);
-        let (recipe, recipe_storage) =
-            encode_production_ranked_recipe_v1(&kernel, &mut budget).unwrap();
-        budget
-            .reserve_storage(recipe_storage.retained_storage())
-            .unwrap();
-        let (source_rows, _) =
-            encode_production_ranked_source_rows_v1(&access(), &[], &mut budget).unwrap();
-        budget
-            .release_storage(recipe_storage.retained_storage())
-            .unwrap();
-        drop(kernel);
+        let roots = roots
+            .into_iter()
+            .map(
+                |SignedStore {
+                     spec,
+                     kernel,
+                     signature,
+                     staging,
+                 }| {
+                    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+                    let mut budget = Budget::new(&mut work, STORAGE);
+                    let (recipe, recipe_storage) =
+                        encode_production_ranked_recipe_v1(&kernel, &mut budget).unwrap();
+                    budget
+                        .reserve_storage(recipe_storage.retained_storage())
+                        .unwrap();
+                    let (source_rows, _) =
+                        encode_production_ranked_source_rows_v1(&access(), &[], &mut budget)
+                            .unwrap();
+                    budget
+                        .release_storage(recipe_storage.retained_storage())
+                        .unwrap();
+                    drop(kernel);
+                    DurableRoot {
+                        spec,
+                        recipe,
+                        source_rows,
+                        signature,
+                        staging,
+                    }
+                },
+            )
+            .collect();
         Self {
             semantic,
             native,
@@ -70,10 +96,7 @@ impl DurableFixture {
             middle,
             correspondence,
             verus,
-            recipe,
-            source_rows,
-            signature,
-            staging,
+            roots,
         }
     }
 
@@ -87,24 +110,56 @@ impl DurableFixture {
             &mut Budget<'_>,
         ) -> Result<T, E>,
     ) -> Result<T, E> {
-        let launch = [ProductionSourceLaunchRootInputV1::new(
-            NAME,
-            BINDING,
-            ProductionSourceLaunchInputV1::new(1, Some([1, 1, 1]), [1, 1, 1]),
-        )];
-        let commitments = [self.staging];
-        let staging = [NativeCompilerRootStagingV1 {
-            semantic_root: 0,
-            commitments: &commitments,
-        }];
-        let roots = [NativeCompilerRankedRecipeRootV1 {
-            semantic_root: 0,
-            launch_rank: 1,
-            recipe_bytes: &self.recipe,
-            source_rows_bytes: &self.source_rows,
-            ranked_ir: TEXT,
-            effect_receipts: receipts,
-        }];
+        assert_eq!(self.roots.len(), 1);
+        self.with_inputs(budget, |source, roots, budget| {
+            let mut root = roots[0];
+            root.effect_receipts = receipts;
+            replay(source, &[root], budget)
+        })
+    }
+
+    fn with_inputs<T>(
+        &self,
+        budget: &mut Budget<'_>,
+        replay: impl FnOnce(
+            NativeCompilerSourceProofInputsV1<'_>,
+            &[NativeCompilerRankedRecipeRootV1<'_>],
+            &mut Budget<'_>,
+        ) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let launch: Vec<_> = self
+            .roots
+            .iter()
+            .map(|root| {
+                ProductionSourceLaunchRootInputV1::new(
+                    root.spec.name,
+                    root.spec.binding,
+                    ProductionSourceLaunchInputV1::new(1, Some([1, 1, 1]), [1, 1, 1]),
+                )
+            })
+            .collect();
+        let staging: Vec<_> = self
+            .roots
+            .iter()
+            .enumerate()
+            .map(|(ordinal, root)| NativeCompilerRootStagingV1 {
+                semantic_root: ordinal as u32,
+                commitments: std::slice::from_ref(&root.staging),
+            })
+            .collect();
+        let roots: Vec<_> = self
+            .roots
+            .iter()
+            .enumerate()
+            .map(|(ordinal, root)| NativeCompilerRankedRecipeRootV1 {
+                semantic_root: ordinal as u32,
+                launch_rank: 1,
+                recipe_bytes: &root.recipe,
+                source_rows_bytes: &root.source_rows,
+                ranked_ir: TEXT,
+                effect_receipts: std::slice::from_ref(&root.signature),
+            })
+            .collect();
         replay(
             NativeCompilerSourceProofInputsV1 {
                 semantic_mir: &self.semantic,
@@ -153,12 +208,14 @@ fn durable_recipe_direct_recovery_reimports_and_retains_independent_owner() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     let (typed, typed_storage) = original
-        .validate(&original.kernel, &access(), &mut budget)
+        .validate(&original.roots[0].kernel, &access(), &mut budget)
         .unwrap();
     drop(typed);
     let durable = DurableFixture::capture(original);
     budget.reserve_storage(37).unwrap();
-    let (checked, storage) = durable.direct(&[durable.signature], &mut budget).unwrap();
+    let (checked, storage) = durable
+        .direct(&[durable.roots[0].signature], &mut budget)
+        .unwrap();
     assert_eq!(budget.storage(), 37);
     // Discarded decoded recipes must not inflate the final retained receipt.
     assert_eq!(storage.retained_storage(), typed_storage.retained_storage());
@@ -216,7 +273,7 @@ fn durable_recipe_unit_local_recovery_uses_freshly_admitted_e_not_erasure_produc
     let floor = budget.storage();
     let (checked, storage) = durable
         .replay(
-            &[durable.signature],
+            &[durable.roots[0].signature],
             &mut budget,
             |original, ranked_roots, budget| {
                 validate_native_compiler_unit_local_erased_recipe_source_proof_v1(
@@ -281,12 +338,12 @@ fn durable_recipe_unit_local_recovery_uses_freshly_admitted_e_not_erasure_produc
 fn durable_recipe_rejects_missing_extra_and_foreign_receipts_and_wrong_source_map() {
     let mut durable = DurableFixture::capture(fixture());
     let foreign = InertFunctionalRefinementReceiptSignatureV2::from_untrusted_parts(
-        *durable.signature.wire(),
+        *durable.roots[0].signature.wire(),
         [91; 32],
     );
     for receipts in [
         vec![],
-        vec![durable.signature, durable.signature],
+        vec![durable.roots[0].signature, durable.roots[0].signature],
         vec![foreign],
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
@@ -297,18 +354,22 @@ fn durable_recipe_rejects_missing_extra_and_foreign_receipts_and_wrong_source_ma
     }
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
-    durable.source_rows = encode_production_ranked_source_rows_v1(&[], &[], &mut budget)
+    durable.roots[0].source_rows = encode_production_ranked_source_rows_v1(&[], &[], &mut budget)
         .unwrap()
         .0;
     budget.reserve_storage(37).unwrap();
-    assert!(durable.direct(&[durable.signature], &mut budget).is_err());
+    assert!(
+        durable
+            .direct(&[durable.roots[0].signature], &mut budget)
+            .is_err()
+    );
     assert_eq!(budget.storage(), 37);
 }
 
 #[test]
 fn durable_recipe_decode_does_not_approve_changed_typed_operand() {
     let mut fixture = fixture();
-    let mut operations = fixture.kernel.blocks()[0].operations().to_vec();
+    let mut operations = fixture.roots[0].kernel.blocks()[0].operations().to_vec();
     let ProductionRankedOperationV1::SemanticExpression {
         expression: ProductionSemanticExpressionV2::Constant { bits, .. },
         ..
@@ -317,7 +378,7 @@ fn durable_recipe_decode_does_not_approve_changed_typed_operand() {
         panic!()
     };
     *bits = 8;
-    fixture.kernel = ProductionRankedKernelV1::new(
+    fixture.roots[0].kernel = ProductionRankedKernelV1::new(
         NAME,
         0,
         vec![ProductionRankedBlockV1::new(
@@ -331,7 +392,7 @@ fn durable_recipe_decode_does_not_approve_changed_typed_operand() {
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(37).unwrap();
     let error = durable
-        .direct(&[durable.signature], &mut budget)
+        .direct(&[durable.roots[0].signature], &mut budget)
         .err()
         .unwrap();
     assert!(matches!(error, E::RankedCompile(_)), "{error:?}");
@@ -346,7 +407,7 @@ fn durable_recipe_rejects_incomplete_or_substituted_root_metadata() {
         let mut budget = Budget::new(&mut work, STORAGE);
         budget.reserve_storage(37).unwrap();
         let result = durable.replay(
-            &[durable.signature],
+            &[durable.roots[0].signature],
             &mut budget,
             |source, roots, budget| {
                 let mut changed = vec![roots[0]];
@@ -378,7 +439,9 @@ fn durable_recipe_partial_progress_denials_restore_floor_and_history() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(37).unwrap();
-    durable.direct(&[durable.signature], &mut budget).unwrap();
+    durable
+        .direct(&[durable.roots[0].signature], &mut budget)
+        .unwrap();
     let full_work = budget.work();
     let peak = budget.peak_storage();
     for (work_limit, storage_limit) in [
@@ -392,7 +455,11 @@ fn durable_recipe_partial_progress_denials_restore_floor_and_history() {
         let mut budget = Budget::new(&mut work, storage_limit);
         budget.reserve_storage(37).unwrap();
         assert!(budget.reserve_storage(usize::MAX).is_err());
-        assert!(durable.direct(&[durable.signature], &mut budget).is_err());
+        assert!(
+            durable
+                .direct(&[durable.roots[0].signature], &mut budget)
+                .is_err()
+        );
         assert_eq!(budget.storage(), 37);
         assert_eq!(budget.failed_storage(), Some(usize::MAX));
     }
@@ -401,13 +468,13 @@ fn durable_recipe_partial_progress_denials_restore_floor_and_history() {
 #[test]
 fn durable_recipe_rejects_truncated_source_rows_after_recipe_import() {
     let mut durable = DurableFixture::capture(fixture());
-    durable.source_rows.pop().unwrap();
+    durable.roots[0].source_rows.pop().unwrap();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(37).unwrap();
     assert!(budget.reserve_storage(usize::MAX).is_err());
     let error = durable
-        .direct(&[durable.signature], &mut budget)
+        .direct(&[durable.roots[0].signature], &mut budget)
         .err()
         .unwrap();
     assert!(matches!(error, E::RankedSourceRowsWire(_)), "{error:?}");
@@ -439,19 +506,20 @@ fn durable_recipe_does_not_replace_decoded_source_rows_with_expected_rows() {
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = Budget::new(&mut work, STORAGE);
-        durable.source_rows =
+        durable.roots[0].source_rows =
             encode_production_ranked_source_rows_v1(&access, &effects, &mut budget)
                 .unwrap()
                 .0;
         let (decoded, _) =
-            decode_production_ranked_source_rows_v1(&durable.source_rows, &mut budget).unwrap();
+            decode_production_ranked_source_rows_v1(&durable.roots[0].source_rows, &mut budget)
+                .unwrap();
         assert_eq!(decoded.access_sources(), access);
         assert_eq!(decoded.executable_effect_sources(), effects);
         drop(decoded);
         budget.reserve_storage(37).unwrap();
         assert!(budget.reserve_storage(usize::MAX).is_err());
         let error = durable
-            .direct(&[durable.signature], &mut budget)
+            .direct(&[durable.roots[0].signature], &mut budget)
             .err()
             .unwrap();
         assert!(matches!(error, E::Source(_)), "{error:?}");

@@ -133,8 +133,12 @@ through the existing recipe validators, and retains its bytes alongside the
 source-proof owner and original N envelope. This is not yet a serialized capsule
 or protected publication continuation. The packet has a dedicated versioned
 schema and an explicit aggregate 4 MiB limit, including duplicate nested bytes.
-A future enclosing ProofBinding carrier must also fit its own overhead within
-the unchanged receipt limit; larger leaf limits are not additive allowances.
+This source-packet limit is independent of the existing refined-forwarding
+output limit (64 MiB, including its complete B/C/S/O/I/J/K/P/H/L/R/F history).
+The legacy ProofBinding receipt's 4 MiB cap cannot carry every admitted pair.
+Integrating both requires explicit versioned receipt/capsule dispatch while
+preserving historical limits, not silently narrowing advanced output to 4 MiB
+or selecting the older single-transition route. That integration is not landed.
 
 Work and live logical payload use the shared verification ledger. Resolver
 callbacks can charge work but cannot replace or release the storage ledger;
@@ -149,9 +153,13 @@ whole-process accounting claim.
 The complete packet decoder borrows wire payloads and reserves its typed launch,
 staging and signature metadata through replay. Returned proof receipts exclude
 these discarded adapters. Tests recover Direct and UnitLocal after dropping
-producer owners, preserve distinct inert root records, reject malformed framing
-and wire-valid semantic mutations, and exercise exact/one-short work and storage
-limits. These test-key fixtures are not protected proofs. Native capsule
+producer owners and packet bytes. Genuine signed two-root fixtures share one
+semantic module and preserve source order `[0, 1]` independently of canonical
+binding order `[1, 0]`, with distinct stores of 7 and 11. They compare complete
+N/E, catalog and signed rosters, unchanged retained-storage receipts, cross-root
+substitution failures, and second-root truncation cleanup. Exact/one-short work
+and storage tests retain the caller's floor and failure history. These test-key
+fixtures are not protected proofs. Native capsule
 embedding, compiler/Worker custody, generated safe launch, protected proof
 execution and tutorial/GPU qualification remain outstanding. M0-M7 remain open.
 
