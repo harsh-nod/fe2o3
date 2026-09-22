@@ -80,8 +80,9 @@ pub use compiler_proof_binding_v3::{
 };
 pub use compiler_refined_forwarding_output_v1::{
     CheckedCompilerRefinedForwardingOutputV1, CompilerRefinedForwardingOutputErrorV1,
-    CompilerRefinedForwardingOutputStorageV1, RefinedForwardingOriginalSourceProofV1,
-    check_compiler_refined_forwarding_output_v1,
+    CompilerRefinedForwardingOutputStorageV1, RecoveredCompilerRefinedForwardingOutputV1,
+    RecoveredCompilerRefinedForwardingStorageV1, RefinedForwardingOriginalSourceProofV1,
+    check_compiler_refined_forwarding_output_v1, recover_compiler_refined_forwarding_output_v1,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a

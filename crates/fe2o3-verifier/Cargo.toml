@@ -39,6 +39,9 @@ toml = "1.1.4"
 ed25519-dalek = { version = "2.2.0", features = ["fast", "rand_core", "zeroize"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 
+[dev-dependencies]
+fe2o3-kernel-opt = { workspace = true, features = ["test-support"] }
+
 [[bin]]
 name = "fe2o3-verifier-test-recorder"
 path = "tests/support/recorder.rs"

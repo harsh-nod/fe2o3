@@ -34,8 +34,7 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_kernel_opt::{
     InertRefinedForwardingHistoryBytesV1 as HistoryBytes, RefinedForwardingHistoryWireErrorV1,
-    encode_refined_forwarding_history_v1, materialize_refined_forwarding_history_v1,
-    read_refined_forwarding_history_v1,
+    encode_refined_forwarding_history_v1,
 };
 use fe2o3_lower_mir_kernel::{
     OriginalNativeFormalMemoryErrorV1, analyze_original_native_formal_memory_v1,
@@ -43,7 +42,7 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_verifier::{
     CompilerRefinedForwardingOutputErrorV1, RefinedForwardingOriginalSourceProofV1 as Source,
-    check_compiler_refined_forwarding_output_v1,
+    recover_compiler_refined_forwarding_output_v1,
 };
 use std::{
     fmt,
@@ -91,8 +90,8 @@ impl RefinedForwardingWireStorageV1 {
     }
 }
 
-/// No conversion into a worker/publication artifact. Keeping the signed A owner
-/// is necessary for every replay; bytes cannot replace its custody.
+/// No conversion into a worker/publication artifact. The live compiler owner
+/// remains retained; independent byte replay does not authenticate its origin.
 pub(crate) struct PreparedRefinedForwardingWireV1 {
     live: Live,
     wire: Vec<u8>,
@@ -744,25 +743,16 @@ fn word(out: &mut Vec<u8>, value: usize) -> R<()> {
 
 fn verify(live: &Live, wire: &[u8], budget: &mut Budget<'_>) -> R<()> {
     scoped(budget, |budget| {
-        budget.reserve_storage(READ_STORAGE)?;
-        let limit = budget.storage_limit();
-        let frame = read_inert_refined_forwarding_output_v1(wire, limit, |w| budget.charge_work(w))
-            .map_err(E::Framing)?;
-        let history_frame = read_refined_forwarding_history_v1(frame.field(Field::History), budget)
-            .map_err(E::History)?;
-        budget.reserve_storage(history_frame.storage().retained_storage())?;
-        let history = materialize_refined_forwarding_history_v1(&history_frame, budget)
-            .map_err(E::History)?;
-        budget.reserve_storage(history.storage().retained_storage())?;
+        let source_packet = match &live.source {
+            SourceLineage::Direct(source) => source.source_packet(),
+            SourceLineage::Erased(source) => source.source_packet(),
+        };
         let (checked, receipt) =
-            check_compiler_refined_forwarding_output_v1(&frame, &history, source(live), budget)
+            recover_compiler_refined_forwarding_output_v1(wire, source_packet, budget)
                 .map_err(E::Verification)?;
         budget.reserve_storage(receipt.retained_storage())?;
         budget.charge_work(1)?;
         drop(checked);
-        drop(history);
-        drop(history_frame);
-        drop(frame);
         Ok(())
     })
 }

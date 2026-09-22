@@ -2,6 +2,65 @@ use super::*;
 use crate::materialize_refined_forwarding_history_v1 as materialize;
 
 #[test]
+fn history_final_graph_transfer_preserves_actual_allocation_and_admission_receipt() {
+    for nonempty in [false, true] {
+        let (wire, expected) = with_history(nonempty, |inputs, floor| {
+            (
+                encode(inputs, floor),
+                inputs.output.canonical().canonical_bytes().to_vec(),
+            )
+        });
+        let mut work = Work::new(WORK);
+        let mut b = Budget::new(&mut work, STORAGE);
+        let (independent, expected_storage) =
+            Owner::from_canonical_bytes_with_verification_budget_v12(&expected, &mut b).unwrap();
+        drop(independent);
+        let wire_storage = wire.storage().retained_storage();
+        b.reserve_storage(37 + wire_storage).unwrap();
+        assert!(b.reserve_storage(usize::MAX).is_err());
+        let frame = read_refined_forwarding_history_v1(wire.canonical_bytes(), &mut b).unwrap();
+        let frame_storage = frame.storage().retained_storage();
+        b.reserve_storage(frame_storage).unwrap();
+        let decoded = materialize(&frame, &mut b).unwrap();
+        let history_storage = decoded.storage().retained_storage();
+        b.reserve_storage(history_storage).unwrap();
+        let checked = decoded.check_semantics(&mut b).unwrap();
+        let checked_storage = checked.storage().retained_storage();
+        b.reserve_storage(checked_storage).unwrap();
+        let pointer = checked.output().canonical().canonical_bytes().as_ptr();
+        drop(checked);
+        b.release_storage(checked_storage).unwrap();
+        let before = (b.work(), b.storage(), b.peak_storage(), b.failed_storage());
+        let (output, storage) = decoded.into_final_graph();
+        assert_eq!(
+            (b.work(), b.storage(), b.peak_storage(), b.failed_storage()),
+            before
+        );
+        assert_eq!(
+            storage.retained_storage(),
+            expected_storage.retained_storage()
+        );
+        b.release_storage(
+            history_storage
+                .checked_sub(storage.retained_storage())
+                .unwrap(),
+        )
+        .unwrap();
+        drop(frame);
+        b.release_storage(frame_storage).unwrap();
+        drop(wire);
+        b.release_storage(wire_storage).unwrap();
+        assert_eq!(output.canonical().canonical_bytes().as_ptr(), pointer);
+        assert_eq!(output.canonical().canonical_bytes(), expected);
+        assert_eq!(b.storage(), 37 + storage.retained_storage());
+        drop(output);
+        b.release_storage(storage.retained_storage()).unwrap();
+        assert_eq!(b.storage(), 37);
+        assert_eq!(b.failed_storage(), Some(usize::MAX));
+    }
+}
+
+#[test]
 fn history_decoded_all_twelve_actual_owners_replay_full_semantics() {
     for nonempty in [false, true] {
         with_history(nonempty, |inputs, floor| {

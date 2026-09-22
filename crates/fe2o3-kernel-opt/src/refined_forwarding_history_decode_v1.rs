@@ -21,7 +21,7 @@ use fe2o3_kernel_analysis::{
     CanonicalKirPrivateCellOriginV1 as Promotion,
 };
 use fe2o3_kernel_ir::{
-    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrReplayStorageV12, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKirOperationCoordinateV1 as Site,
     InertCanonicalKirTransitionGraphIdentityV1 as Identity,
@@ -69,6 +69,7 @@ const ROLES: [Role; 12] = [
 pub struct DecodedRefinedForwardingHistoryV1<'frame, 'wire> {
     frame: &'frame Frame<'wire>,
     graphs: Vec<Owner>,
+    final_graph_storage: CanonicalKernelIrReplayStorageV12,
     loads: Vec<Load>,
     policy7: P7Rows<'wire>,
     tail: TailRows,
@@ -83,6 +84,42 @@ pub struct DecodedRefinedForwardingHistoryV1<'frame, 'wire> {
 impl<'frame, 'wire> DecodedRefinedForwardingHistoryV1<'frame, 'wire> {
     pub fn graph(&self, role: Role) -> &Owner {
         &self.graphs[role as usize]
+    }
+    /// Moves the actual freshly admitted F graph without re-admission or allocation.
+    /// This alone establishes no history semantics, source relation or authority.
+    ///
+    /// After consumption drops all other graphs and rows, the caller transfers its
+    /// existing reservation H by releasing H minus the returned graph receipt G.
+    /// G remains reserved; do not reserve it a second time. Frame/wire reservations
+    /// are separate and can be released when their own owners are dropped.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_kernel_opt::{DecodedRefinedForwardingHistoryV1 as History, RefinedForwardingHistoryRoleV1 as Role};
+    /// fn borrowed(h: History<'_, '_>) {
+    ///     let graph = h.graph(Role::F);
+    ///     let _ = h.into_final_graph();
+    ///     let _ = graph.canonical();
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_kernel_opt::DecodedRefinedForwardingHistoryV1 as History;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn receipt(h: History<'_, '_>, b: &mut Budget<'_>) {
+    ///     let checked = h.check_semantics(b).unwrap();
+    ///     let _ = h.into_final_graph();
+    ///     let _ = checked.output();
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_kernel_opt::DecodedRefinedForwardingHistoryV1 as History;
+    /// fn reused(h: History<'_, '_>) { let _ = h.into_final_graph(); let _ = h.storage(); }
+    /// ```
+    pub fn into_final_graph(mut self) -> (Owner, CanonicalKernelIrReplayStorageV12) {
+        let graph = self
+            .graphs
+            .pop()
+            .expect("fixed twelve-role history ends in F");
+        (graph, self.final_graph_storage)
     }
     pub const fn frame(&self) -> &'frame Frame<'wire> {
         self.frame
@@ -197,6 +234,7 @@ pub fn materialize_refined_forwarding_history_v1<'frame, 'wire>(
         meter.reserve(retained)?;
         let (mut graphs, capacity) = meter.table::<Owner>(12)?;
         retained = add(retained, capacity)?;
+        let mut final_graph_storage = None;
         for role in ROLES {
             meter.work(1)?;
             let (graph, storage) = meter.derive(|b| {
@@ -205,6 +243,9 @@ pub fn materialize_refined_forwarding_history_v1<'frame, 'wire>(
             })?;
             meter.reserve(storage.retained_storage())?;
             retained = add(retained, storage.retained_storage())?;
+            if role == Role::F {
+                final_graph_storage = Some(storage);
+            }
             meter.push(&mut graphs, graph)?;
         }
         // Do not substitute actual identities for unchecked wire claims.
@@ -258,6 +299,7 @@ pub fn materialize_refined_forwarding_history_v1<'frame, 'wire>(
         Ok(DecodedRefinedForwardingHistoryV1 {
             frame,
             graphs,
+            final_graph_storage: final_graph_storage.ok_or(Resource::Accounting)?,
             loads,
             policy7,
             tail,

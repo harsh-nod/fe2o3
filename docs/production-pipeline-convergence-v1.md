@@ -140,6 +140,31 @@ Integrating both requires explicit versioned receipt/capsule dispatch while
 preserving historical limits, not silently narrowing advanced output to 4 MiB
 or selecting the older single-transition route. That integration is not landed.
 
+`recover_compiler_refined_forwarding_output_v1` independently recovers the signed
+Direct or UnitLocal source from its complete packet, freshly admits every graph
+in the existing final-output history, and invokes the complete source/history/
+formal/descriptor/native-text checker. Only after that succeeds does it consume
+the history and move the actual F graph with its original admission receipt into
+an immutable owner alongside the recovered source proof and checked content
+identities. The temporary history and packet adapters are not retained. No
+replacement graph is decoded or synthesized during that move.
+
+The existing nondefault refined-forwarding backend wire check now uses this
+independent recovery while retaining its live compiler owner and exact field
+comparisons. The recovered owner is currently dropped after that check; Worker
+evidence retention/publication is not wired. Its output identity binds the
+embedded fields, not an external Worker request: later admission must bind that
+exact frame, NativeV2 and descriptor to the actual request and finalizer. Dropped
+history is not available for self-contained replay, and this owner supplies no
+protected origin, rustc ABI authentication, machine refinement or launch authority.
+
+Genuine two-root tests cover both source routes and gfx942/gfx950 emitted output,
+after producer and both input buffers are dropped. They retain exact N/E/source
+rosters and actual F, reject cross-source histories and final output, and preserve
+resource floors at exact/one-short limits. Separate nonzero-history tests confirm
+the transferred allocation is actual F after induction and forwarding rewrites.
+These remain CPU consistency tests using public test keys, not hardware results.
+
 Work and live logical payload use the shared verification ledger. Resolver
 callbacks can charge work but cannot replace or release the storage ledger;
 ignored callback denials still fail. Parsed owner reservations remain live

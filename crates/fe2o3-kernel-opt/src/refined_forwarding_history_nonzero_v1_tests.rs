@@ -385,8 +385,32 @@ fn transport(inputs: Inputs<'_>, floor: usize, expected: Expected) {
             )),
         }
         assert_eq!(budget.storage(), live_floor);
-        drop(decoded);
-        budget.release_storage(decoded_storage).unwrap();
+        let pointer = decoded
+            .graph(RefinedForwardingHistoryRoleV1::F)
+            .canonical()
+            .canonical_bytes()
+            .as_ptr();
+        let functions = decoded
+            .graph(RefinedForwardingHistoryRoleV1::F)
+            .module()
+            .functions
+            .as_ptr();
+        let (output, storage) = decoded.into_final_graph();
+        budget
+            .release_storage(
+                decoded_storage
+                    .checked_sub(storage.retained_storage())
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            output.canonical().canonical_bytes(),
+            inputs.output.canonical().canonical_bytes()
+        );
+        assert_eq!(output.canonical().canonical_bytes().as_ptr(), pointer);
+        assert_eq!(output.module().functions.as_ptr(), functions);
+        drop(output);
+        budget.release_storage(storage.retained_storage()).unwrap();
     }
     budget.release_storage(frame_storage).unwrap();
     drop(wire);

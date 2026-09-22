@@ -80,3 +80,6 @@ pub use owned_loop_unroll_v1::*;
 pub use owned_private_cell_promotion_v1::*;
 pub use structural_replay_admission_v2::*;
 pub use structural_replay_admission_v3::*;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support;

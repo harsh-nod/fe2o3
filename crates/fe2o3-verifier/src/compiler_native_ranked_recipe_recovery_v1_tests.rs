@@ -10,6 +10,9 @@ mod complete_packet;
 #[path = "compiler_native_source_packet_multi_root_v1_tests.rs"]
 mod multiple_roots;
 
+#[path = "compiler_refined_forwarding_recovery_fixture_v1_tests.rs"]
+mod final_output;
+
 struct DurableFixture {
     semantic: Vec<u8>,
     native: Vec<u8>,

@@ -57,6 +57,13 @@ use fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1 as Semantic;
 #[path = "compiler_refined_forwarding_output_joins_v1.rs"]
 mod joins;
 
+#[path = "compiler_refined_forwarding_recovery_v1.rs"]
+mod recovery;
+pub use recovery::{
+    RecoveredCompilerRefinedForwardingOutputV1, RecoveredCompilerRefinedForwardingStorageV1,
+    recover_compiler_refined_forwarding_output_v1,
+};
+
 /// Bytes cannot construct this input: both variants retain independently imported
 /// signed ranked evidence and their connected original source owners.
 #[derive(Clone, Copy)]
@@ -71,6 +78,8 @@ pub enum CompilerRefinedForwardingOutputErrorV1 {
     Resource(Resource),
     Framing(FrameError<Resource>),
     History(CanonicalRefinedForwardingHistoryErrorV1),
+    HistoryWire(fe2o3_kernel_opt::RefinedForwardingHistoryWireErrorV1),
+    SourcePacket(crate::NativeCompilerSourceProofErrorV1),
     Source(ProductionSemanticKirErrorV1),
     OriginalFormal(OriginalNativeFormalMemoryErrorV1),
     FinalFormal(CanonicalOutputGuardedFormalMemoryErrorV1),
