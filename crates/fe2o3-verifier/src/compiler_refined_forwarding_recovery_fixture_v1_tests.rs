@@ -44,6 +44,9 @@ use fe2o3_lower_mir_kernel::{
 };
 use std::{collections::BTreeSet, fmt::Write};
 
+#[path = "compiler_native_semantic_handoff_v4_tests.rs"]
+mod capsule_v4;
+
 fn subject(
     graph: &VerifiedCanonicalKernelIrModuleV12,
     catalog: &Catalog,
@@ -501,15 +504,24 @@ fn fixture_with_stores(
     profile: Profile,
     specs: &[StoreSpec],
 ) -> (Vec<u8>, [Vec<u8>; 14]) {
+    fixture_from_source(unit, profile, specs, source_for_stores(specs))
+}
+
+fn fixture_from_source(
+    unit: bool,
+    profile: Profile,
+    specs: &[StoreSpec],
+    source: ProductionPreRankedKirOwnerV1,
+) -> (Vec<u8>, [Vec<u8>; 14]) {
     let (durable, erased) = if unit {
-        let (fixture, producer) = unit_local_erased_fixture::unit_fixture_for_stores(specs);
+        let (fixture, producer) = unit_local_erased_fixture::unit_fixture_from_base(specs, source);
         (
             DurableFixture::capture(fixture),
             Some(producer.erased().canonical().canonical_bytes().to_vec()),
         )
     } else {
         (
-            DurableFixture::capture(fixture_for_stores(&source_for_stores(specs), specs)),
+            DurableFixture::capture(fixture_for_stores(&source, specs)),
             None,
         )
     };

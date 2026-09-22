@@ -15,6 +15,14 @@ fn unit_source_for_stores(
     specs: &[StoreSpec],
 ) -> ProductionPreRankedKirOwnerV1 {
     let base = source_for_stores(specs);
+    unit_source_from_base(private_value, specs, base)
+}
+
+fn unit_source_from_base(
+    private_value: u32,
+    specs: &[StoreSpec],
+    base: ProductionPreRankedKirOwnerV1,
+) -> ProductionPreRankedKirOwnerV1 {
     let semantic = base.semantic_ssa().source_semantic();
     let original = &semantic.functions()[0];
     let unit = SemanticTypeIdV1::from_index(0);
@@ -195,7 +203,14 @@ pub(super) fn unit_fixture() -> (Fixture, ProductionUnitLocalErasedSourceOwnerV1
 pub(super) fn unit_fixture_for_stores(
     specs: &[StoreSpec],
 ) -> (Fixture, ProductionUnitLocalErasedSourceOwnerV1) {
-    let source = unit_source_for_stores(11, specs);
+    unit_fixture_from_base(specs, source_for_stores(specs))
+}
+
+pub(super) fn unit_fixture_from_base(
+    specs: &[StoreSpec],
+    base: ProductionPreRankedKirOwnerV1,
+) -> (Fixture, ProductionUnitLocalErasedSourceOwnerV1) {
+    let source = unit_source_from_base(11, specs, base);
     let fixture = fixture_for_stores(&source, specs);
     let toolchain = VerusToolchainIdentityV2::new(d(72), d(73), d(74), d(75), d(76)).unwrap();
     let roots: Vec<_> = specs

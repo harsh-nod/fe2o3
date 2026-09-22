@@ -64,6 +64,13 @@ pub use recovery::{
     recover_compiler_refined_forwarding_carrier_v1, recover_compiler_refined_forwarding_output_v1,
 };
 
+#[path = "compiler_native_semantic_handoff_v4.rs"]
+mod capsule;
+pub use capsule::{
+    RecoveredCompilerNativeSemanticHandoffStorageV4, RecoveredCompilerNativeSemanticHandoffV4,
+    recover_compiler_native_semantic_handoff_v4,
+};
+
 /// Bytes cannot construct this input: both variants retain independently imported
 /// signed ranked evidence and their connected original source owners.
 #[derive(Clone, Copy)]
@@ -95,6 +102,9 @@ pub enum CompilerRefinedForwardingOutputErrorV1 {
     Capabilities(DescriptorCapabilityProjectionErrorV1),
     Coordinates(ProductionTargetCoordinateErrorV1),
     TextDescriptor(NativeV12TextDescriptorReplayErrorV1),
+    TargetLineage(fe2o3_compiler_lineage::ProductionTargetLineageErrorV3),
+    NativeLowering(fe2o3_compiler_lineage::NativeLoweringAssociationErrorV1),
+    Invocation(fe2o3_rustc_invocation::ValidationError),
     Mismatch(&'static str),
     Panicked,
 }
@@ -422,6 +432,16 @@ pub fn check_compiler_refined_forwarding_output_v1<'a, 'h, 'w>(
     source: Source<'a>,
     budget: &mut Budget<'_>,
 ) -> R<(Checked<'a, 'h, 'w>, Storage)> {
+    check_with_capsule(frame, history, source, None, budget)
+}
+
+fn check_with_capsule<'a, 'h, 'w>(
+    frame: &'a Frame<'w>,
+    history: &'a History<'h, 'w>,
+    source: Source<'a>,
+    capsule: Option<&capsule::Join<'_>>,
+    budget: &mut Budget<'_>,
+) -> R<(Checked<'a, 'h, 'w>, Storage)> {
     scoped(budget, |budget| {
         budget.charge_work(4)?;
         if budget.storage_limit() > MAX_STORAGE {
@@ -525,9 +545,22 @@ pub fn check_compiler_refined_forwarding_output_v1<'a, 'h, 'w>(
         drop(original_formal);
         budget.release_storage(original_storage.retained_storage())?;
 
-        codec::<Native>(frame.field(Field::NativeV2).len(), budget)?;
-        let native = Native::decode(frame.field(Field::NativeV2)).map_err(E::Native)?;
-        let profile = joins::profile(&native)?;
+        let owned_native;
+        let native = if let Some(capsule) = capsule {
+            let native = capsule.handoff.module_handoff();
+            bytes(
+                frame.field(Field::NativeV2),
+                native.canonical_bytes(),
+                "V4 exact outer/embedded native module",
+                budget,
+            )?;
+            native
+        } else {
+            codec::<Native>(frame.field(Field::NativeV2).len(), budget)?;
+            owned_native = Native::decode(frame.field(Field::NativeV2)).map_err(E::Native)?;
+            &owned_native
+        };
+        let profile = joins::profile(native)?;
         let (coordinates, coordinate_storage) = check_production_target_coordinate_preservation_v1(
             neutral,
             history.graph(Role::B),
@@ -563,7 +596,7 @@ pub fn check_compiler_refined_forwarding_output_v1<'a, 'h, 'w>(
         codec::<Descriptor>(frame.field(Field::Descriptor).len(), budget)?;
         let descriptor =
             Descriptor::decode(frame.field(Field::Descriptor)).map_err(E::Descriptor)?;
-        joins::roots(frame, &inputs, output, &native, &descriptor, budget)?;
+        joins::roots(frame, &inputs, output, native, &descriptor, budget)?;
         joins::capabilities(output, &descriptor, budget)?;
         budget.charge_work(native.module_bytes().len())?;
         let llvm =
@@ -579,6 +612,9 @@ pub fn check_compiler_refined_forwarding_output_v1<'a, 'h, 'w>(
         )
         .map_err(E::TextDescriptor)?;
         budget.reserve_storage(relation.storage().retained_storage())?;
+        if let Some(capsule) = capsule {
+            capsule.check(frame, history, &inputs, &descriptor, &relation, budget)?;
+        }
         budget.reserve_storage(HASH_STORAGE)?;
         let limit = budget.storage_limit();
         let identity = inert_refined_forwarding_output_identity_v1(frame, limit, |work| {
@@ -596,7 +632,6 @@ pub fn check_compiler_refined_forwarding_output_v1<'a, 'h, 'w>(
         drop(descriptor);
         drop(final_roster);
         drop(final_formal);
-        drop(native);
         drop(checked_history);
         Ok((
             Checked {

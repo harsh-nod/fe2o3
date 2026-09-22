@@ -384,6 +384,12 @@ impl InertSemanticCompilerModuleHandoffV4 {
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.backing[self.range.clone()]
     }
+    /// Entire retained allocation capacity, including unselected prefix/suffix
+    /// bytes and spare capacity. Semantic admission must prepay this, not just
+    /// the selected wire length, plus the separate decoded-metadata allowance.
+    pub fn backing_capacity(&self) -> usize {
+        self.backing.capacity()
+    }
     /// Exact distinct V4 pair-binding segment, sharing the input allocation.
     pub fn pair_binding_bytes(&self) -> &[u8] {
         &self.backing[self.pair_range.clone()]

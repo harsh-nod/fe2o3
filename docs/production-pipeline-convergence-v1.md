@@ -188,14 +188,33 @@ immutable transport. Revalidation rebuilds expected base receipts from the live
 owner and compares every canonical byte. Public construction or decoding of the
 compact association still grants no authority.
 
-Independent V4 semantic admission must still recover source/F and join every
-base/carrier/outer field before retaining evidence in Worker custody. Artifact
-transaction, compiler-execution, Cargo, Worker, runtime and generated-host V4
-consumers are not connected by this producer continuation. It has no publication
-conversion; default production remains unchanged. The signed ordinary-Rust
-fixture also exercises base construction with an explicitly synthetic inert
-invocation, but requires the protected proof runtime. Transport/resource unit
-tests are not a substitute for that fixture or protected production execution.
+`recover_compiler_native_semantic_handoff_v4` now consumes a prepaid V4 transport
+and extends the existing paired recovery with independent native capsule joins.
+It compares original proof preimages, target N/catalog-to-B coordinates,
+semantic-order workgroups, semantic/rustc/LLVM22 layout, actual F native lowering
+and all thirteen semantic-to-LLVM identities. Exact embedded/outer V2 equality
+is checked before borrowing the already decoded outer module; no second complete
+V2 allocation is made. The immutable outer decoder's exact final-commitment
+check remains mandatory. There is no legacy target/lowering admission fallback.
+
+Those joins run while the source, history and independently replayed text
+relation are still borrowed. Only afterward is actual F moved from that history
+into the returned owner alongside the unchanged transport and signed source.
+The caller must keep full enclosing backing capacity (including spare capacity)
+and decoded metadata paid, then reserve the returned additional owner storage.
+Exact/one-short tests check storage cleanup without resetting work or prior
+failures. Signed two-root fixtures use actual profile layout digests, both source
+routes, both AMD profiles, independent root ordering, and resealed substitutions.
+They establish content consistency with public test keys, not protected origin.
+
+Inventory/preflight receipts remain inert until the compiler custody boundary
+authenticates them. Artifact transaction, compiler-execution, Cargo, Worker,
+runtime and generated-host V4 consumers are not connected by this admission
+library. It has no publication conversion; default production remains unchanged.
+The signed ordinary-Rust producer fixture exercises base construction with an
+explicitly synthetic invocation, but requires the protected proof runtime.
+CPU content/resource tests do not replace that fixture, a positive protected
+producer continuation, machine refinement, or protected production execution.
 
 `recover_compiler_refined_forwarding_output_v1` independently recovers the signed
 Direct or UnitLocal source from its complete packet, freshly admits every graph
@@ -217,7 +236,8 @@ uses `recover_compiler_refined_forwarding_carrier_v1` without format fallback.
 Carrier framing, hashing and getters allocate no heap payloads; nested semantic
 admission still runs through the existing complete source-to-F checker.
 
-The recovered owner is currently dropped after that check; Worker
+The producer's original paired-only recovered owner is dropped after its check;
+the new V4 admission retains its recovered owner beside the outer transport. Worker
 evidence retention/publication is not wired. Its output identity binds the
 embedded fields, not an external Worker request: later admission must bind that
 exact frame, NativeV2 and descriptor to the actual request and finalizer. Dropped

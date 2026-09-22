@@ -65,6 +65,13 @@ fn source() -> ProductionPreRankedKirOwnerV1 {
 }
 
 fn source_for_stores(specs: &[StoreSpec]) -> ProductionPreRankedKirOwnerV1 {
+    source_for_stores_with_layout(specs, SemanticLayoutIdentityV1::from_sha256([250; 32]))
+}
+
+fn source_for_stores_with_layout(
+    specs: &[StoreSpec],
+    layout: SemanticLayoutIdentityV1,
+) -> ProductionPreRankedKirOwnerV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let u32_ty = SemanticTypeIdV1::from_index(1);
     let pointer = SemanticTypeIdV1::from_index(2);
@@ -148,7 +155,6 @@ fn source_for_stores(specs: &[StoreSpec]) -> ProductionPreRankedKirOwnerV1 {
         )
         .with_rustc_abi_properties(properties),
     ];
-    let layout = SemanticLayoutIdentityV1::from_sha256([250; 32]);
     let attrs = SemanticAbiValueAttributesV1::new(
         SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
         SemanticAbiExtensionV1::None,

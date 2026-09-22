@@ -1986,6 +1986,7 @@ dependencies = [
  "fe2o3-amdgcn-model",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-build-authority",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",

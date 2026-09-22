@@ -105,6 +105,17 @@ pub fn recover_compiler_refined_forwarding_carrier_v1(
     RecoveredCompilerRefinedForwardingOutputV1,
     RecoveredCompilerRefinedForwardingStorageV1,
 )> {
+    recover_carrier(bytes, None, budget)
+}
+
+pub(super) fn recover_carrier(
+    bytes: &[u8],
+    handoff: Option<&fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV4>,
+    budget: &mut Budget<'_>,
+) -> R<(
+    RecoveredCompilerRefinedForwardingOutputV1,
+    RecoveredCompilerRefinedForwardingStorageV1,
+)> {
     scoped(budget, |budget| {
         budget.charge_work(8)?;
         if budget.storage_limit() > MAX_STORAGE {
@@ -119,9 +130,14 @@ pub fn recover_compiler_refined_forwarding_carrier_v1(
             budget.charge_work(work)
         })
         .map_err(E::Carrier)?;
-        recover_compiler_refined_forwarding_output_v1(
+        let join = handoff.map(|handoff| capsule::Join {
+            handoff,
+            carrier: carrier.identity(),
+        });
+        recover_output(
             carrier.output(),
             carrier.source_packet(),
+            join.as_ref(),
             budget,
         )
     })
@@ -138,6 +154,18 @@ pub fn recover_compiler_refined_forwarding_carrier_v1(
 pub fn recover_compiler_refined_forwarding_output_v1(
     output_bytes: &[u8],
     source_packet: &[u8],
+    budget: &mut Budget<'_>,
+) -> R<(
+    RecoveredCompilerRefinedForwardingOutputV1,
+    RecoveredCompilerRefinedForwardingStorageV1,
+)> {
+    recover_output(output_bytes, source_packet, None, budget)
+}
+
+fn recover_output(
+    output_bytes: &[u8],
+    source_packet: &[u8],
+    capsule: Option<&capsule::Join<'_>>,
     budget: &mut Budget<'_>,
 ) -> R<(
     RecoveredCompilerRefinedForwardingOutputV1,
@@ -191,7 +219,7 @@ pub fn recover_compiler_refined_forwarding_output_v1(
         let history_storage = history.storage().retained_storage();
         budget.reserve_storage(history_storage)?;
         let (checked, receipt) =
-            check_compiler_refined_forwarding_output_v1(&frame, &history, source.proof(), budget)?;
+            check_with_capsule(&frame, &history, source.proof(), capsule, budget)?;
         budget.reserve_storage(receipt.retained_storage())?;
         let (identity, history_identity, limits) = (
             checked.identity(),
