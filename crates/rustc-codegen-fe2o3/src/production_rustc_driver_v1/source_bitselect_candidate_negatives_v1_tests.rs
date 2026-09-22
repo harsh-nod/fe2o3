@@ -3,6 +3,9 @@
 //! No baseline report/map/capture is consumed as a live compiler owner.
 use super::*;
 
+#[path = "source_bitselect_headless_evidence_v1_tests.rs"]
+mod headless_evidence;
+
 const NEGATIVE_OUTPUT: &str = "FE2O3_TEST_SOURCE_CANDIDATE_NEGATIVES_OUTPUT";
 const NEGATIVE_INPUT: &str = "FE2O3_TEST_SOURCE_CANDIDATE_NEGATIVES_INPUT";
 const NEGATIVE_CASE: &str = "FE2O3_TEST_SOURCE_CANDIDATE_NEGATIVES_CASE";
@@ -273,6 +276,22 @@ fn actual_source_candidate_negative_child() {
     );
 }
 
+fn run_negative_publications(directory: &Path) -> Value {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    parse_report(
+        &checked(
+            sanitized(&mut command)
+                .current_dir(repository())
+                .args(["--exact", PUBLICATION_CHILD, "--ignored", "--nocapture"])
+                .env(NEGATIVE_INPUT, directory),
+            directory,
+            "candidate-negative-publications",
+            None,
+        ),
+        PUBLICATION_PREFIX,
+    )
+}
+
 fn run_negative(directory: &Path, name: &str) -> Value {
     let record = derive_negative(directory, name);
     paths::write_new(
@@ -386,19 +405,7 @@ fn actual_source_candidate_negative_ladder() {
         positive["observation"]["whole_kernel_simulation"]["runs"],
         30
     );
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    let publications = parse_report(
-        &checked(
-            sanitized(&mut command)
-                .current_dir(repository())
-                .args(["--exact", PUBLICATION_CHILD, "--ignored", "--nocapture"])
-                .env(NEGATIVE_INPUT, &directory),
-            &directory,
-            "candidate-negative-publications",
-            None,
-        ),
-        PUBLICATION_PREFIX,
-    );
+    let publications = run_negative_publications(&directory);
     let observations: Vec<_> = NEGATIVES
         .iter()
         .map(|case| run_negative(&directory, case.name))

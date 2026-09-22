@@ -180,7 +180,7 @@ fn actual_source_candidate_debug_join_child() {
     println!("\n{JOIN_PREFIX}{}", std::str::from_utf8(&bytes).unwrap());
 }
 
-fn run_pair_child(directory: &Path) -> Value {
+pub(super) fn run_pair_child(directory: &Path) -> Value {
     let records = pair(directory);
     for (record, selector) in records.iter().zip(PAIR) {
         let bytes = serde_json::to_vec_pretty(record).unwrap();

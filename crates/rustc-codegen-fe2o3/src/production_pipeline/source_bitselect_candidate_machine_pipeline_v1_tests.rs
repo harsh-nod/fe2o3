@@ -32,6 +32,42 @@ fn inspect(owner: &VerifiedCanonicalKernelIrModuleV17) -> Result<(Value, String)
 }
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    // Additive test-only acceptance path; the ordinary observer stays unchanged.
+    // The normal-library public API supplies the source seed in the caller.
+    pub(crate) fn observe_source_bitselect_prefix_candidate_machine(
+        self,
+        input: RetainedInput,
+        bindings: Gfx942OrderedProgramRegistersV1,
+    ) -> Result<(Value, String), String> {
+        if bindings != registers() && bindings != edited_registers() {
+            return Err("source-candidate machine requires a closed register plan".into());
+        }
+        let (fresh, (simulation, llvm)) = self.observe_fresh_source_bitselect_candidate_with(
+            input, bindings, |owner| {
+                let simulation = simulation::observe_prefix(owner)?;
+                let llvm = fe2o3_amdgcn_model::lower_canonical_v17_compiler_module_to_gfx942_xnack_minus_llvm_ir(owner)
+                    .map_err(|e| format!("source-prefix exact-owner LLVM: {e}"))?;
+                if llvm.is_empty() || llvm.len() > 64 * 1024 {
+                    return Err("source-prefix diagnostic LLVM publication cap".into());
+                }
+                Ok((simulation, llvm))
+            },
+        )?;
+        let [a, b, mask] = bindings.inputs();
+        let report = json!({
+            "stage":"fresh_source_prefix_machine_diagnostic","fresh":fresh,
+            "register_plan":[bindings.scratch(),bindings.output(),a,b,mask],
+            "whole_kernel_simulation":simulation,
+            "llvm_sha256":<[u8;32]>::from(Sha256::digest(llvm.as_bytes())),
+            "llvm_bytes":llvm.len(),"llvm_generation_limit":16*1024*1024,
+            "same_live_owner_borrowed":true,"old_evidence_reused":false,
+            "ranked_checks":false,"functional_proof":false,"production_resume":false,
+            "native_emitted":false,"hardware_observed":false,
+            "grants_artifact_or_launch_authority":false,
+        });
+        Ok((report, llvm))
+    }
+
     pub(crate) fn observe_source_bitselect_candidate_machine(
         self,
         input: RetainedInput,

@@ -6,13 +6,16 @@ use crate::production_rustc_driver_v1::lower_hex_v1;
 use std::io::Read as _;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 
+#[path = "source_bitselect_headless_prefix_v1_tests.rs"]
+mod prefix;
+
 const HEADLESS_OUTPUT: &str = "FE2O3_TEST_SOURCE_HEADLESS_MACHINE_OUTPUT";
-const CONSUMER: &str = "FE2O3_TEST_SOURCE_HEADLESS_CONSUMER";
+pub(super) const CONSUMER: &str = "FE2O3_TEST_SOURCE_HEADLESS_CONSUMER";
 const NORMAL_PREFIX: &str = "FE2O3_HEADLESS_NORMAL_PUBLISHED ";
 const CONSUMER_BYTE_CAP: u64 = 256 * 1024 * 1024;
 
 // A bounded local file observation, not an attestation of its build or source.
-fn consumer_observation(path: &Path) -> Value {
+pub(super) fn consumer_observation(path: &Path) -> Value {
     assert!(path.is_absolute());
     assert_eq!(path.canonicalize().unwrap(), path);
     let mut file = fs::OpenOptions::new()
@@ -62,7 +65,7 @@ fn consumer_observation(path: &Path) -> Value {
         "ctime":after.ctime(),"ctime_nsec":after.ctime_nsec(),"authenticated_build":false})
 }
 
-fn publish_with_normal_consumer(directory: &Path, consumer: &Path) -> Value {
+pub(super) fn publish_with_normal_consumer(directory: &Path, consumer: &Path) -> Value {
     let actual = super::super::derive_roundtrip(directory, "positive", "baseline");
     let relative = paths::relative_case(directory, "positive");
     let source = relative.join("original.rs");

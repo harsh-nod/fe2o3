@@ -11,7 +11,7 @@ tools, not a general decompiler or a new command-line/wire protocol.
 Use the repository's pinned nightly and existing targeted invocation/provider
 setup. The kernel must be the sole sealed, local, nongeneric kernel root for
 `gfx942:xnack-`, wave64, with required and maximum launch bounds `[64, 1, 1]`.
-The first top-level immutable initializer must be the direct typed-u32 expression
+The sole eligible top-level immutable initializer must be the direct typed-u32 expression
 below; its inputs are three distinct immutable formal parameters in ordinals
 1, 2 and 3. Existing typed-HIR, semantic and Kernel IR checks must all agree.
 
@@ -31,6 +31,31 @@ This excerpt uses the imports and feature setup of
 Macros, aliases, extra eligible initializers, source normalization, escaping
 intermediates, unsupported effects and ambiguous attribution are refused.
 Merely matching source text or supplying a source range is insufficient.
+
+Up to eight preceding immutable `u32` bindings are supported when each is one
+direct AND, OR or XOR of those original formals. They cannot depend on another
+prefix binding, shadow any formal or selected result, invoke a call or macro,
+branch, mutate state, or perform a memory operation. Their exact source stays
+outside the replacement; the current semantic and Kernel IR owners must still
+agree on the selected contiguous three-operation region in the entry block.
+
+For example, this live surrounding computation remains ordinary Rust:
+
+```rust
+let tag = a | mask;
+let selected = b ^ ((a ^ b) & mask);
+// Inside the existing checked output branch:
+*slot = selected ^ tag;
+```
+
+Only the `selected` initializer is promoted. This does not add arbitrary
+statement selection, instruction scheduling, or a continuation from an old IR
+snapshot.
+
+Prefix eligibility does not guarantee that optimization preserves the selected
+operator's exact attribution. If optimized MIR reuses an identical earlier
+expression, the source/semantic join can refuse the promotion. It must not
+substitute matching values for the missing selected source identity.
 
 ## Request a candidate
 
@@ -184,6 +209,14 @@ The source includes distinct acceptance layers:
 5. Separate native O0/O3 checks must consume LLVM emitted by the new public-entry
    candidate workflow and inspect exact instructions, physical operands, result
    use and descriptor capacities.
+6. Public-seeded generated-negative and debug-join ladders connect the normal
+   consumer to exact resource/boundary refusals and stale capture/catalog
+   identity refusals. Capture identity checks do not supply a portable capture
+   importer or qualify production proof invalidation.
+7. A live-prefix ladder preserves the surrounding source and checks a separate
+   whole-kernel `((a & mask) | (b & !mask)) ^ (a | mask)` oracle for default,
+   edited and repeated candidates. Its bounded public-API controls cover the
+   eight-binding limit and exact unsupported-prefix refusals.
 
 These layers are separate obligations, not interchangeable test counts. A passing
 simulator run does not prove complete race freedom or GPU execution. Native
@@ -191,3 +224,7 @@ checker reports are observations of selected output, not protected finalizer
 admission, authenticated build ancestry or physical register-lifetime proofs.
 General source promotion, arbitrary edited graphs, more target profiles and full
 bidirectional authoring remain outside this bounded API.
+
+Dated results and their limits are recorded in the
+[September 22 evidence](evidence/authoring-source-values-20260922.md) and
+[milestone contract review](assembly-authoring-contract-review-20260922.md).

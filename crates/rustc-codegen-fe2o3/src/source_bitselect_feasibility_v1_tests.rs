@@ -22,6 +22,9 @@ use fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1;
 #[path = "source_bitselect_retained_v1_tests.rs"]
 pub(crate) mod retained;
 
+#[path = "source_bitselect_prefix_v1.rs"]
+mod prefix;
+
 pub(crate) const SOURCE_CAP: usize = 64 * 1024;
 const WORK_CAP: usize = 1024 * 1024;
 const STORAGE_CAP: usize = 512 * 1024;
@@ -359,8 +362,8 @@ pub(crate) fn capture<'tcx>(
     });
     let [a, b, mask] = parameters;
     let parameters = [a?, b?, mask?];
-    if ordinal != 0 || binding.els.is_some() {
-        return Err("source-boundary initializer must be the first top-level let".into());
+    if binding.els.is_some() {
+        return Err("source-boundary selected initializer cannot have let-else".into());
     }
     let PatKind::Binding(BindingMode::NONE, result_hir_id, result_ident, None) = binding.pat.kind
     else {
@@ -373,6 +376,19 @@ pub(crate) fn capture<'tcx>(
     {
         return Err("source-boundary result shadows an input name".into());
     }
+    prefix::validate(
+        prefix::SourceContext {
+            tcx,
+            typeck,
+            body,
+            parameters: &parameters,
+            file: &file,
+            source: &original,
+            selected: result_ident,
+        },
+        &block.stmts[..ordinal],
+        &mut meter,
+    )?;
     let operators = tree.operators.map(|expr| {
         canonical_source_provenance_v1(tcx, expr.span, 0)
             .map(|captured| captured.provenance())
