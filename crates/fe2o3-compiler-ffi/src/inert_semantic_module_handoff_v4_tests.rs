@@ -397,4 +397,18 @@ fn native_v4_pair_golden_is_domain_separated_from_v3() {
         ParsedPairBindingV3::decode(&bytes, &WIRE_V3),
         Err(Common::InvalidPairBindingMagic)
     ));
+    // Also pin the production schema, not only this independent reference.
+    let cap = capsule(3, 17);
+    let module = fixture::module_handoff(3, TARGET);
+    let (_, bytes) = wire(&cap, &module);
+    let handoff = InertSemanticCompilerModuleHandoffV4::decode_owned(bytes).unwrap();
+    let (expected, _) = encode_pair_binding(
+        &schema,
+        cap.identity().sha256(),
+        cap.identity().byte_len(),
+        module.identity().sha256(),
+        module.identity().byte_len(),
+    )
+    .unwrap();
+    assert_eq!(handoff.pair_binding_bytes(), expected);
 }

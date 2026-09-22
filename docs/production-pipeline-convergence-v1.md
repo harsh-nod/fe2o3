@@ -147,8 +147,9 @@ The V4 capsule contains the unchanged V3 base plus mandatory F2NRF1, all within
 the unchanged complete 160 MiB capsule ceiling. Its distinct frame/hash uses the
 same private bounded-pair engine as F2NRF1. Shared decoding retains base receipts
 and carrier in one allocation and rejects a base MIR too large to fit in the
-complete source packet before hashing that MIR. This is not a semantic equality
-check: unrelated well-framed members remain inert content.
+complete source packet before deriving the V3 MIR receipt hash. The aggregate
+hashes have already visited those bytes. This is not a semantic equality check:
+unrelated well-framed members remain inert content.
 
 The V4 handoff shares V3's bounded wire parser and identity-neutral pair encoder,
 with explicit V4 outer/pair discriminators and hash domains. It binds complete
@@ -156,8 +157,9 @@ V4 capsule and V2 identities, validates target/final-commitment agreement, and
 retains every nested payload in the same backing, including at nonzero enclosing
 offsets. Direct seal APIs allow all three frames to be written in one final
 allocation. Refused debits and callback/destructor panics precede mutation.
-Maximum-size tests verify no framing allocations and payload-size-independent
-decode allocation traces; old V3 bytes, limits and rejection behavior remain.
+Tests at representative and maximum raw payload sizes verify no framing
+allocations and unchanged decode allocation traces for a fixed metadata shape;
+old V3 bytes, limits and rejection behavior remain.
 
 V4 content decoding is unmetered like the existing V3 codecs. Production must
 prepay its work/working set and full actual backing capacity on the same ledger;

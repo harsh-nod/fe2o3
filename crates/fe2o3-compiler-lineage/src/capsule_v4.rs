@@ -231,7 +231,8 @@ impl InertProductionSemanticCapsuleV4 {
         let identity = frame.identity();
         let carrier_identity = frame.carrier().identity();
         // Equal MIR must fit inside the complete source packet. Check this
-        // necessary (not sufficient) bound before hashing/retaining the MIR.
+        // necessary (not sufficient) bound before deriving the V3 MIR receipt
+        // hash. The aggregate hashes have already visited these bytes.
         let mir_limit = frame.carrier().source_packet().len();
         let base = InertProductionSemanticCapsuleV3::decode_shared_with_mir_limit(
             backing.clone(),
