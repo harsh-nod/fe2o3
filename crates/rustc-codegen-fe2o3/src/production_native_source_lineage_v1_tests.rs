@@ -15,6 +15,16 @@ fn genuine_projector_requires_each_actual_signed_ranked_receipt() {
             );
             let root = ranked.roots()[0].semantic_root().index();
             let floor = budget.storage();
+            let roster_ptr = ranked.roots().as_ptr();
+            let borrowed = prepare_borrowed_native_source_packet_v1(
+                owner.source_semantic_kir(),
+                &ranked,
+                budget,
+            );
+            assert!(matches!(borrowed,
+                Err(E::MissingSignedRankedReceipt { root: actual }) if actual == root));
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(ranked.roots().as_ptr(), roster_ptr);
             let result =
                 try_prepare_native_source_lineage_v1(owner.source_semantic_kir(), ranked, budget);
             assert!(

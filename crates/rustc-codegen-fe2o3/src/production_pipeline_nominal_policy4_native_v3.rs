@@ -4,6 +4,8 @@
 use super::{Output as Admitted, PreparedNominalPolicy4AbiV3 as Input};
 use crate::compiler_descriptor::nominal_v3::NominalDescriptorErrorV3;
 use crate::kernel_ir_codegen::{InertCompilerModuleTextV1 as Module, nominal_v3 as module};
+use crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1;
+use crate::production_pipeline::native_checked_output_handoff_v1::NativeOutputHandoffErrorV1;
 use dialect_amdgcn::{
     NativeV12TextDescriptorReplayErrorV3 as NativeError,
     check_native_v12_text_descriptor_relation_v3,
@@ -41,6 +43,8 @@ pub(crate) enum NominalPolicy4NativeErrorV3 {
     Source(CompilerDescriptorSourceErrorV3<Resource>),
     Native(NativeError),
     Catalog(SourcePipelineCatalogCallbackErrorV1<NativeError>),
+    SourceProof(NativeSourceLineageErrorV1),
+    SourceBinding(SourcePipelineCatalogCallbackErrorV1<NativeOutputHandoffErrorV1>),
     Mismatch(&'static str),
     Panicked,
 }
@@ -60,6 +64,8 @@ impl fmt::Display for E {
     }
 }
 
+#[path = "production_pipeline_nominal_policy4_source_proof_v3.rs"]
+mod source_proof;
 #[cfg(test)]
 #[path = "production_pipeline_nominal_policy4_native_v3_tests.rs"]
 mod tests;
@@ -72,6 +78,8 @@ impl Error for E {
             Self::Source(e) => Some(e),
             Self::Native(e) => Some(e),
             Self::Catalog(e) => Some(e),
+            Self::SourceProof(e) => Some(e),
+            Self::SourceBinding(e) => Some(e),
             Self::Mismatch(_) | Self::Panicked => None,
         }
     }

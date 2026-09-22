@@ -6,7 +6,7 @@ work under [#134](https://github.com/harsh-nod/fe2o3/issues/134) to one
 production transaction. The former scalar, GEMM, attention, collective, and MoE compiler oracles have been deleted. They are not additional production architectures. Differential evidence may remain as
 inert fixtures or offline tools, never as another route in production crates.
 
-## Nominal P4 native-text boundary
+## Nominal P4 continuation
 
 The nominal descriptor continuation retains the original source, authenticated
 bindings and actual P4 optimized output O. Its consuming native-text continuation
@@ -32,6 +32,23 @@ consuming-error cleanup. Diagnostic work/peak observations include negative
 checks and are not performance measurements. These source tests must be run
 explicitly with their ignored parent tests; declarations alone are not coverage.
 
+The following consuming source-proof continuation retains that native owner
+unchanged and borrows its authenticated ranked roster into the existing
+Direct/Erased proof assembler. It shares collector/preflight/context and exact
+source/N/E/catalog/launch binding with the existing output handoff. The original-N
+packet is separately checked byte-for-byte against the retained source and
+catalog, and its subject must match each of the three typed proof rosters.
+Framing, graph hashes, or an erased/optimized graph alone cannot satisfy this
+join. The caller reserves only the additional owned packet receipt; consuming
+failure drops the input and leaves its original reservation for caller retirement.
+
+The ten source cases also exercise the consuming unsigned-proof refusal. Fresh
+control owners cover work/storage refusal and corrupted native-text refusal.
+Component tests cover exact packet bytes, each roster subject, route/graph
+substitution, and resource limits. These are not successful signed-source runs:
+genuine reference-bound Direct/Erased positives, including post-proof failure
+cleanup, still require the protected proof runtime and remain unvalidated.
+
 Protected worker execution, proof/artifact custody, generated safe launch and
 target-matched GPU qualification remain separate unfinished integration work.
 This boundary does not complete #272 milestones or qualify the tutorial corpus.
@@ -46,7 +63,7 @@ launch and original transaction retention; their synthetic ELF/receipts do not
 establish production compiler or protected proof provenance.
 
 The normal CLI, publication/recovery, generated host admission, and the nominal
-P4 source-proof handoff are not yet joined to this V3 continuation. Its bounded
+P4 source-proof owner are not yet joined to this V3 finalizer continuation. Its bounded
 descriptor traversal does not claim whole-process resource metering. No tutorial
 kernel gains end-to-end qualification and M0-M7 remain open from this change.
 

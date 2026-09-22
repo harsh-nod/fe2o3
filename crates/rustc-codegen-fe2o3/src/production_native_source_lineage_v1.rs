@@ -4,6 +4,13 @@
 mod packet;
 use packet::{NativeSourceRefV1, prepare_native_source_packet_v1};
 
+#[path = "production_native_owned_source_packet_v1.rs"]
+mod owned_packet;
+pub(crate) use owned_packet::{
+    PreparedNativeSourceProofPacketV1, prepare_borrowed_erased_native_source_packet_v1,
+    prepare_borrowed_native_source_packet_v1,
+};
+
 #[path = "production_native_erased_source_lineage_v1.rs"]
 mod erased;
 pub(crate) use erased::{
@@ -102,8 +109,7 @@ type E = NativeSourceLineageErrorV1;
 )]
 pub(crate) struct PreparedNativeSourceLineageV1 {
     ranked: AuthenticatedRankedVerificationRosterV1,
-    proof: ValidatedNativeCompilerRankedSourceProofV1,
-    native_module: Vec<u8>,
+    packet: PreparedNativeSourceProofPacketV1<ValidatedNativeCompilerRankedSourceProofV1>,
 }
 #[allow(
     dead_code,
@@ -114,10 +120,10 @@ impl PreparedNativeSourceLineageV1 {
         &self.ranked
     }
     pub(crate) fn proof(&self) -> &ValidatedNativeCompilerRankedSourceProofV1 {
-        &self.proof
+        self.packet.proof()
     }
     pub(crate) fn native_module(&self) -> &[u8] {
-        &self.native_module
+        self.packet.original_native_module()
     }
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
@@ -205,65 +211,16 @@ pub(crate) fn try_prepare_native_source_lineage_v1(
     ranked: AuthenticatedRankedVerificationRosterV1,
     budget: &mut Budget<'_>,
 ) -> Result<(PreparedNativeSourceLineageV1, NativeSourceLineageStorageV1), E> {
-    budget.charge_work(6)?;
-    let floor = budget.storage();
-    let token = budget.work_ledger_identity_v1();
-    let slot = budget as *const Budget<'_> as usize;
-    let minimum = source
-        .pre_ranked_retained_analysis_storage_v1()
-        .ok_or(E::Mismatch("missing native source owner"))?;
-    if floor < minimum {
-        return Err(Resource::Accounting.into());
-    }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let parts = prepare_native_source_packet_v1(
-            NativeSourceRefV1::Direct(source),
-            &ranked,
-            || {
-                std::mem::size_of::<PreparedNativeSourceLineageV1>()
-                    .checked_sub(std::mem::size_of::<
-                        ValidatedNativeCompilerRankedSourceProofV1,
-                    >())
-                    .and_then(|n| {
-                        n.checked_sub(
-                            std::mem::size_of::<AuthenticatedRankedVerificationRosterV1>(),
-                        )
-                    })
-                    .ok_or(E::Resource(Resource::Arithmetic))
-            },
-            budget,
-            |inputs, budget| {
-                let (proof, receipt) =
-                    validate_native_compiler_ranked_source_proof_v1(inputs, budget)
-                        .map_err(E::Replay)?;
-                Ok((proof, receipt.retained_storage()))
-            },
-        )?;
+    packet::with_native_lineage_transfer_v1(budget, move |budget| {
+        let packet = prepare_borrowed_native_source_packet_v1(source, &ranked, budget)?;
+        let retained =
+            owned_packet::roster_wrapper_storage::<_, PreparedNativeSourceLineageV1>(&packet)?;
+        budget.reserve_storage(retained)?;
         Ok((
-            PreparedNativeSourceLineageV1 {
-                ranked,
-                proof: parts.proof,
-                native_module: parts.native_module,
-            },
-            NativeSourceLineageStorageV1(parts.retained),
+            PreparedNativeSourceLineageV1 { ranked, packet },
+            NativeSourceLineageStorageV1(retained),
         ))
-    }));
-    if token != budget.work_ledger_identity_v1() || slot != budget as *const Budget<'_> as usize {
-        drop(result);
-        return Err(Resource::Accounting.into());
-    }
-    let Some(release) = budget.storage().checked_sub(floor) else {
-        drop(result);
-        return Err(Resource::Accounting.into());
-    };
-    if let Err(error) = budget.release_storage(release) {
-        drop(result);
-        return Err(error.into());
-    }
-    match result {
-        Ok(result) => result,
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
+    })
 }
 
 #[cfg(test)]

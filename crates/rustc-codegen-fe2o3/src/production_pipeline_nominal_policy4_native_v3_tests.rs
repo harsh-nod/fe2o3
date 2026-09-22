@@ -119,6 +119,7 @@ impl Output {
             budget.release_storage(ballast).unwrap();
             assert_eq!(budget.storage(), 53);
         }
+        self.source_test_source_proof_quota_failures_v3(fresh, work_limit, storage_limit);
         modes.len()
     }
 

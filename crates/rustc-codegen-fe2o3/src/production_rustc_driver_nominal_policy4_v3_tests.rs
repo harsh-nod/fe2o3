@@ -78,6 +78,7 @@ struct OutputObservation {
     peak: usize,
     native_authority: bool,
     artifact_authority: bool,
+    unsigned_source_proof_refused: bool,
 }
 
 struct OutputCallbacks {
@@ -339,7 +340,7 @@ impl Callbacks for OutputCallbacks {
             } else {
                 0
             };
-            let report = OutputObservation {
+            let mut report = OutputObservation {
                 case: self.case,
                 profile: profile.to_owned(),
                 callbacks: self.callbacks,
@@ -358,8 +359,12 @@ impl Callbacks for OutputCallbacks {
                 peak: budget.peak_storage(),
                 native_authority: native.authenticates_execution(),
                 artifact_authority: native.grants_artifact_or_launch_authority(),
+                unsigned_source_proof_refused: false,
             };
-            drop(native);
+            native.source_test_unsigned_source_proof_refusal_v3(erased, &mut budget);
+            report.unsigned_source_proof_refused = true;
+            report.work = budget.work();
+            report.peak = budget.peak_storage();
             budget.release_storage(total_receipt).unwrap();
             assert_eq!(budget.storage(), 53);
             assert!(budget.work_ledger_identity_v1() == ledger);
@@ -459,6 +464,7 @@ fn check_output_common(path: &Path, roots: &[&str], erased: bool) {
     assert_eq!(report.floor, 53 + report.receipt);
     assert!(report.work > 17 && report.peak > report.floor);
     assert!(!report.native_authority && !report.artifact_authority);
+    assert!(report.unsigned_source_proof_refused);
 }
 fn check_output(path: &Path, roots: &[&str]) {
     check_output_common(path, roots, false);

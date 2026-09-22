@@ -1,4 +1,6 @@
 //! Genuine shared-join CPU tests, not signed collector/protected-stage fixtures.
+#[path = "production_native_packet_binding_v1_tests.rs"]
+mod original_packet;
 use super::*;
 use crate::production_pipeline::{
     checked_output_policy4_v1::prepare_checked_output_artifacts_v1,

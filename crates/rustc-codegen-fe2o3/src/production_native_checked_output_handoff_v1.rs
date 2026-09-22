@@ -9,6 +9,9 @@ use crate::{
     production_worker_handoff::PreparedProductionWorkerHandoff,
 };
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
+use fe2o3_compiler_lineage::{
+    InertNativeNeutralSubjectV1 as Subject, NativeNeutralModuleRefV1 as PacketView,
+};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
@@ -38,6 +41,8 @@ pub(crate) enum NativeOutputHandoffErrorV1 {
     Source(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Descriptor(Box<crate::compiler_descriptor::CompilerDescriptorError>),
     Native(dialect_amdgcn::NativeV12TextDescriptorReplayErrorV1),
+    NativePacket(fe2o3_compiler_lineage::NativeNeutralModuleErrorV1),
+    NativeSubject(fe2o3_compiler_lineage::NativeNeutralSubjectErrorV1),
     Context(Box<crate::production_semantic_body_v1::ProductionSemanticBodyErrorV1>),
     Mismatch(&'static str),
     Panicked,
@@ -60,6 +65,8 @@ impl fmt::Display for NativeOutputHandoffErrorV1 {
             Self::Source(error) => write!(f, "source: {error}"),
             Self::Descriptor(error) => write!(f, "descriptor: {error}"),
             Self::Native(error) => write!(f, "native: {error}"),
+            Self::NativePacket(error) => write!(f, "original native packet: {error}"),
+            Self::NativeSubject(error) => write!(f, "original native subject: {error}"),
             Self::Context(error) => write!(f, "context: {error}"),
             Self::Mismatch(detail) => f.write_str(detail),
             Self::Panicked => f.write_str("validation panicked"),
@@ -490,32 +497,137 @@ pub(crate) fn check_source_inputs_v1(
 }
 
 pub(super) fn check_stage(inputs: StageInputsV1<'_>, budget: &mut Budget<'_>) -> R<()> {
-    budget.charge_work(4 + 64)?;
-    if budget.storage() < inputs.retained_floor {
-        return Err(Resource::Accounting.into());
-    }
-    if inputs
-        .bindings
-        .rustc_preflight_plan
-        .rustc_identity_inventory_sha256()
-        != inputs.bindings.rustc_identity_inventory.sha256()
-    {
-        return Err(E::Mismatch("collector identity/preflight custody"));
-    }
+    check_stage_entry(inputs.retained_floor, budget)?;
     let original = inputs.output.owner.source(inputs.output.catalog)?;
-    inputs
-        .bindings
-        .context_entries
-        .validate_source(original.semantic)
-        .map_err(|e| E::Context(Box::new(e)))?;
-    let replay = inputs.proof.source(budget)?;
-    check_source_inputs_v1(original, replay, budget)?;
+    check_source_binding_prepaid(inputs.bindings, original, inputs.proof, budget)?;
     check_output_inputs_v1(
         inputs.output,
         inputs.bindings.rustc_target.profile(),
         &inputs.bindings.typed_descriptor_roots,
         budget,
     )
+}
+
+fn check_stage_entry(retained_floor: usize, budget: &mut Budget<'_>) -> R<()> {
+    budget.charge_work(4 + 64)?;
+    if budget.storage() < retained_floor {
+        return Err(Resource::Accounting.into());
+    }
+    Ok(())
+}
+
+/// Shared collector/source custody; independent of descriptor wire version.
+pub(super) fn check_source_binding_v1(
+    bindings: &AuthenticatedProductionBindings,
+    original: SourceInputsV1<'_>,
+    proof: SourceProofV1<'_>,
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    budget.charge_work(64)?;
+    check_source_binding_prepaid(bindings, original, proof, budget)
+}
+
+fn check_source_binding_prepaid(
+    bindings: &AuthenticatedProductionBindings,
+    original: SourceInputsV1<'_>,
+    proof: SourceProofV1<'_>,
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    if bindings
+        .rustc_preflight_plan
+        .rustc_identity_inventory_sha256()
+        != bindings.rustc_identity_inventory.sha256()
+    {
+        return Err(E::Mismatch("collector identity/preflight custody"));
+    }
+    bindings
+        .context_entries
+        .validate_source(original.semantic)
+        .map_err(|e| E::Context(Box::new(e)))?;
+    let replay = proof.source(budget)?;
+    check_source_inputs_v1(original, replay, budget)
+}
+
+#[cfg(test)]
+#[path = "production_native_source_binding_entry_v1_tests.rs"]
+mod source_binding_entry_tests;
+
+pub(super) fn check_original_native_packet_v1(
+    original: SourceInputsV1<'_>,
+    proof: SourceProofV1<'_>,
+    bytes: &[u8],
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    let (erased, subjects) = match proof {
+        SourceProofV1::Direct(proof) => (
+            false,
+            [
+                proof.middle_end_roster().native_neutral_subject(),
+                proof.correspondence_roster().native_neutral_subject(),
+                proof.verus_roster().native_neutral_subject(),
+            ],
+        ),
+        SourceProofV1::Erased(proof) => (
+            true,
+            [
+                proof.middle_end_roster().native_neutral_subject(),
+                proof.correspondence_roster().native_neutral_subject(),
+                proof.verus_roster().native_neutral_subject(),
+            ],
+        ),
+    };
+    check_original_native_packet_components_v1(original, erased, subjects, bytes, budget)
+}
+
+/// Inert component check only. Production derives every input from its retained
+/// owners above; component success cannot construct a signed-source stage.
+pub(crate) fn check_original_native_packet_components_v1(
+    original: SourceInputsV1<'_>,
+    erased: bool,
+    subjects: [&Subject; 3],
+    bytes: &[u8],
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    scoped(budget, |budget| {
+        let graph = original.original.canonical().canonical_bytes();
+        let catalog = original.catalog.canonical_bytes();
+        // Complete comparison extents plus two fixed subject hashes. Existing
+        // codecs keep their bounded internals, not an exact stack/RSS claim.
+        let work = bytes
+            .len()
+            .checked_add(graph.len())
+            .and_then(|n| n.checked_add(catalog.len()))
+            .and_then(|n| n.checked_add(4 * (2 * size_of::<Subject>() + 1) + 512))
+            .ok_or(Resource::Arithmetic)?;
+        budget.charge_work(work)?;
+        budget.reserve_storage(
+            size_of::<PacketView<'_>>() + size_of::<Subject>() + size_of::<Sha256>(),
+        )?;
+        if erased != original.erased.is_some() {
+            return Err(E::Mismatch("original packet direct/erased route"));
+        }
+        let expected = Subject::new(
+            *original.original.canonical().identity().digest(),
+            u64::try_from(graph.len()).map_err(|_| Resource::Arithmetic)?,
+            *original.catalog.digest(),
+            u64::try_from(catalog.len()).map_err(|_| Resource::Arithmetic)?,
+        )
+        .map_err(E::NativeSubject)?;
+        let packet = PacketView::decode(bytes).map_err(E::NativePacket)?;
+        if packet.subject() != &expected {
+            return Err(E::Mismatch("exact original packet subject"));
+        }
+        if packet.graph_bytes() != graph {
+            return Err(E::Mismatch("exact original packet N bytes"));
+        }
+        if packet.catalog_bytes() != catalog {
+            return Err(E::Mismatch("exact original packet catalog bytes"));
+        }
+        if subjects.iter().any(|subject| **subject != expected) {
+            return Err(E::Mismatch("each signed-source roster original subject"));
+        }
+        Ok(())
+    })
 }
 
 /// The production owning constructor calls this exact component. Component
