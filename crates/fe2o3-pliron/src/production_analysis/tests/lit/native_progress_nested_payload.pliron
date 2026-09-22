@@ -1,0 +1,26 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @native_progress_nested_payload: builtin.function <(builtin.integer ui8) -> (builtin.integer ui8)>
+{
+  ^entry(n: builtin.integer ui8):
+    initial = gpu.constant <builtin.integer <3: ui8>> : builtin.integer ui8;
+    step = gpu.constant <builtin.integer <1: ui8>> : builtin.integer ui8;
+    gpu.branch (initial, initial) [^outer] []: <(builtin.integer ui8, builtin.integer ui8) -> ()>
+  ^outer(acc: builtin.integer ui8, i: builtin.integer ui8):
+    inner_seed = gpu.binary (i, step) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>;
+    outer_test = gpu.compare (i, n) [] [gpu_compare_predicate: gpu.compare_predicate LessThan]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer i1)>;
+    gpu.cond_branch (outer_test, acc, i, inner_seed, acc) [^inner, ^exit] [operand_segment_sizes: builtin.operand_segment_sizes [1, 3, 1]]: <(builtin.integer i1, builtin.integer ui8, builtin.integer ui8, builtin.integer ui8, builtin.integer ui8) -> ()>
+  ^inner(total: builtin.integer ui8, outer_i: builtin.integer ui8, j: builtin.integer ui8):
+    inner_test = gpu.compare (j, n) [] [gpu_compare_predicate: gpu.compare_predicate LessThan]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer i1)>;
+    gpu.cond_branch (inner_test, total, outer_i, j, total, outer_i) [^inner_body, ^outer_latch] [operand_segment_sizes: builtin.operand_segment_sizes [1, 3, 2]]: <(builtin.integer i1, builtin.integer ui8, builtin.integer ui8, builtin.integer ui8, builtin.integer ui8, builtin.integer ui8) -> ()>
+  ^inner_body(value: builtin.integer ui8, saved_i: builtin.integer ui8, k: builtin.integer ui8):
+    new_value = gpu.binary (value, step) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>;
+    new_j = gpu.binary (k, step) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>;
+    gpu.branch (new_value, saved_i, new_j) [^inner] []: <(builtin.integer ui8, builtin.integer ui8, builtin.integer ui8) -> ()>
+  ^outer_latch(result: builtin.integer ui8, latch_i: builtin.integer ui8):
+    new_i = gpu.binary (latch_i, step) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>;
+    gpu.branch (result, new_i) [^outer] []: <(builtin.integer ui8, builtin.integer ui8) -> ()>
+  ^exit(done: builtin.integer ui8):
+    gpu.return (done) [] []: <(builtin.integer ui8) -> ()>
+}

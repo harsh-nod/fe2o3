@@ -24,6 +24,7 @@ enum Case {
     ResetInduction,
     DuplicateEqual,
     DuplicateReset,
+    NativeReturn,
     UnsupportedTerminator,
     UnreachableCollectiveCycle,
 }
@@ -249,9 +250,13 @@ fn branchy_loop(context: &mut Context, case: Case) -> FuncOp {
     append(context, latch, &next);
     append(context, latch, &repeat);
     append_barrier(context, exit);
-    if matches!(case, Case::UnsupportedTerminator) {
+    if matches!(case, Case::NativeReturn) {
         let ret = dialect_gpu::optimization_v1::ReturnOp::new(context, vec![]);
         append(context, exit, &ret);
+    } else if matches!(case, Case::UnsupportedTerminator) {
+        let unreachable =
+            dialect_gpu::optimization_v1::PreservedTerminatorOp::new_unreachable(context);
+        append(context, exit, &unreachable);
     } else {
         let ret = ReturnOp::new(context);
         append(context, exit, &ret);
@@ -412,6 +417,13 @@ fn cyclic_convergence_fails_closed_without_exact_progress_and_event_contracts() 
 }
 
 #[test]
+fn native_return_preserves_bounds_and_cyclic_convergence() {
+    let report = analyze(Case::NativeReturn, KernelCheckStatusV1::Clean);
+    assert_eq!(report.status(), KernelCheckStatusV1::Clean, "{report:?}");
+    assert!(report.findings().is_empty());
+}
+
+#[test]
 fn cyclic_fallback_does_not_bypass_ranked_bounds_prerequisites() {
     use crate::{RankedBoundsFindingV1, run_pliron_ranked_bounds_check_v1};
 
@@ -427,7 +439,7 @@ fn cyclic_fallback_does_not_bypass_ranked_bounds_prerequisites() {
                 matches!(
                     bounds.findings(),
                     [RankedBoundsFindingV1::UnsupportedTerminator { block: 6, operation }]
-                        if operation == "gpu.return"
+                        if operation == "gpu.preserved_terminator"
                 ),
                 "{bounds:?}"
             ),

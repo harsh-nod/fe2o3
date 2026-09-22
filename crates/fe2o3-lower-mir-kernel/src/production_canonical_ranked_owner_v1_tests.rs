@@ -938,3 +938,7 @@ fn canonical_ranked_owner_rejects_same_source_wrong_pipeline_operation() {
 mod canonical_ranked_policy_tests {
     include!("production_canonical_ranked_checks_v1_tests.rs");
 }
+
+mod canonical_ranked_native_loop_tests {
+    include!("production_canonical_ranked_native_loops_v1_tests.rs");
+}

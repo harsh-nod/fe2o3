@@ -1,0 +1,10 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: FE2O3-PROGRESS-001
+builtin.func @native_progress_no_exit: builtin.function <(builtin.integer ui8) -> (builtin.integer ui8)>
+{
+  ^entry(x: builtin.integer ui8):
+    gpu.branch (x) [^cycle] []: <(builtin.integer ui8) -> ()>
+  ^cycle(i: builtin.integer ui8):
+    gpu.branch (i) [^cycle] []: <(builtin.integer ui8) -> ()>
+}

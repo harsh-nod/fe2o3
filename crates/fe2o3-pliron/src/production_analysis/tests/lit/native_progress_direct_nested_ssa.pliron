@@ -1,0 +1,25 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @native_progress_direct_nested_ssa: builtin.function <(builtin.integer ui8) -> (builtin.integer ui8)>
+{
+  ^entry(n: builtin.integer ui8):
+    initial = gpu.constant <builtin.integer <3: ui8>> : builtin.integer ui8;
+    step = gpu.constant <builtin.integer <1: ui8>> : builtin.integer ui8;
+    gpu.branch (initial) [^outer] []: <(builtin.integer ui8) -> ()>
+  ^outer(i: builtin.integer ui8):
+    inner_seed = gpu.binary (i, step) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>;
+    outer_test = gpu.compare (i, n) [] [gpu_compare_predicate: gpu.compare_predicate LessThan]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer i1)>;
+    gpu.cond_branch (outer_test, inner_seed, i) [^inner, ^exit] [operand_segment_sizes: builtin.operand_segment_sizes [1, 1, 1]]: <(builtin.integer i1, builtin.integer ui8, builtin.integer ui8) -> ()>
+  ^inner(j: builtin.integer ui8):
+    inner_test = gpu.compare (j, n) [] [gpu_compare_predicate: gpu.compare_predicate LessThan]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer i1)>;
+    gpu.cond_branch (inner_test) [^inner_body, ^outer_latch] [operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+  ^inner_body():
+    new_j = gpu.binary (j, step) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>;
+    gpu.branch (new_j) [^inner] []: <(builtin.integer ui8) -> ()>
+  ^outer_latch():
+    new_i = gpu.binary (i, step) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>;
+    gpu.branch (new_i) [^outer] []: <(builtin.integer ui8) -> ()>
+  ^exit(done: builtin.integer ui8):
+    gpu.return (done) [] []: <(builtin.integer ui8) -> ()>
+}

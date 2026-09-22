@@ -301,6 +301,54 @@ fn preflight_progress_execution_resource_upper_bound_v1(
         )?
         .div_ceil(std::mem::size_of::<usize>())
     };
+    // Q counts all canonical and nested payload attempts above. Normalization
+    // adds at most 8 sites per block/backedge candidate, E incoming controls,
+    // and 8Q: payload-query control (Q), bound-entry checks (Q), zero-entry
+    // literals (Q), zero-entry control (Q), entry reachability walks (2Q),
+    // and recurrence walks (2Q). E*Q additionally covers source/target Value
+    // pair movement from argument_at: <=D arguments per occurrence, within
+    // the same 32D allowance. Failed candidates count; certificates are
+    // not an input. Every site permits five width visits, sixteen Value type
+    // lookups (two units per UID), 5*96 fixed dispatch/shape/identity/range
+    // visits, 64 call controls, and 8 numeric word copies. Total: 552+32D.
+    let scalar_probes = checked_progress_sum_v1(
+        &[
+            checked_progress_product_v1(loop_candidates, 8, "progress scalar probes")?,
+            census.successors,
+            checked_progress_product_v1(payload_queries, 8, "progress scalar probes")?,
+            checked_progress_product_v1(
+                payload_queries,
+                census.successors,
+                "progress scalar argument occurrences",
+            )?,
+        ],
+        "progress scalar probes",
+    )?;
+    let scalar_cost = checked_progress_sum_v1(
+        &[
+            552,
+            checked_progress_product_v1(
+                checked_progress_sum_v1(
+                    &[census.results, census.block_arguments],
+                    "progress scalar type scan",
+                )?,
+                32,
+                "progress scalar type scan",
+            )?,
+        ],
+        "progress scalar cost",
+    )?;
+    let scalar_work =
+        checked_progress_product_v1(scalar_probes, scalar_cost, "progress scalar work")?;
+    // Reserve before any reader runs, hold until the whole Progress workspace
+    // drops. Pinned Awi::clone shrinks to its width: <=128 copied bits, plus
+    // its APInt header. This is conservative analysis storage, not allocator
+    // byte telemetry; the clone itself is infallible and may allocate.
+    let scalar_storage = if census.blocks == 0 && census.successors == 0 {
+        0
+    } else {
+        native_progress_scalar_storage_v1()
+    };
     let work = checked_progress_sum_v1(
         &[
             checked_progress_product_v1(structural_items, 4, "progress work upper bound")?,
@@ -309,6 +357,7 @@ fn preflight_progress_execution_resource_upper_bound_v1(
             loop_work,
             parallel_edge_work,
             entry_work,
+            scalar_work,
         ],
         "progress work upper bound",
     )?;
@@ -370,10 +419,22 @@ fn preflight_progress_execution_resource_upper_bound_v1(
             scope_storage,
             parallel_edge_storage,
             entry_storage,
+            scalar_storage,
         ],
         "progress temporary storage upper bound",
     )?;
     let bound =
         ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, retained, temporary)?;
     limits.require(phase, bound)
+}
+
+fn native_progress_scalar_storage_v1() -> usize {
+    // Independent layout tests establish these conservative field extents:
+    // one header (32 words), eight cast options (8 each), two literal facts
+    // (6 each), twelve Values (4 each), sixteen type handles (2 each), one
+    // APInt header (4), and its rounded native-digit payload.
+    // IncomingEdgeV1 has two words instead of the prior source+optional-seed
+    // record. Existing 8E graph storage already covers it without an increment.
+    // The bound chain overlaps the literal reader's empty four-option array.
+    32 + 8 * 8 + 2 * 6 + 12 * 4 + 16 * 2 + 4 + 128_usize.div_ceil(usize::BITS as usize)
 }

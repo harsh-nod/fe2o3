@@ -435,3 +435,6 @@ fn prepaid_row_capacity_is_retained_and_failed_admission_has_no_buffer() {
     drop(rows);
     budget.release_storage(paid).unwrap();
 }
+
+#[path = "canonical_ranked_checks_nine_oracle_v1_tests.rs"]
+mod nine_oracle;

@@ -1,0 +1,18 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @native_progress_dynamic_unsigned: builtin.function <(builtin.integer ui8) -> (builtin.integer ui8)>
+{
+  ^entry(n: builtin.integer ui8):
+    initial = gpu.constant <builtin.integer <0: ui8>> : builtin.integer ui8;
+    step = gpu.constant <builtin.integer <1: ui8>> : builtin.integer ui8;
+    gpu.branch (initial) [^header] []: <(builtin.integer ui8) -> ()>
+  ^header(i: builtin.integer ui8):
+    test = gpu.compare (i, n) [] [gpu_compare_predicate: gpu.compare_predicate LessThan]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer i1)>;
+    gpu.cond_branch (test, i, i) [^body, ^exit] [operand_segment_sizes: builtin.operand_segment_sizes [1, 1, 1]]: <(builtin.integer i1, builtin.integer ui8, builtin.integer ui8) -> ()>
+  ^body(j: builtin.integer ui8):
+    next = gpu.binary (j, step) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>;
+    gpu.branch (next) [^header] []: <(builtin.integer ui8) -> ()>
+  ^exit(done: builtin.integer ui8):
+    gpu.return (done) [] []: <(builtin.integer ui8) -> ()>
+}

@@ -1,0 +1,10 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: gpu.compare
+builtin.func @native_progress_malformed_compare: builtin.function <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>
+{
+  ^entry(x: builtin.integer ui8, y: builtin.integer ui8):
+    bad = gpu.compare (x, y) [] [gpu_compare_predicate: gpu.compare_predicate LessThan]: <(builtin.integer ui8, builtin.integer ui8) -> (builtin.integer ui8)>;
+    gpu.return (x) [] []: <(builtin.integer ui8) -> ()>
+}
