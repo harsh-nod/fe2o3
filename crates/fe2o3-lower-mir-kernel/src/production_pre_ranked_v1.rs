@@ -758,3 +758,78 @@ fn validate_source_ranked_roster_v1(
 #[cfg(test)]
 #[path = "production_pre_ranked_legacy_tests_v1.rs"]
 mod pre_ranked_legacy_tests_v1;
+
+impl ProductionPreRankedKirOwnerV1 {
+    /// Authenticates this original source/N once, derives one graph census and
+    /// lends complete typed source facts. It accepts no caller graph or metadata.
+    /// Keep the original owner, origins and source-capture storage prepaid under
+    /// the existing owner receipt. Escaping output is prepaid before entry;
+    /// callback scratch must drop before return. Existing source replay/planner
+    /// limits remain a separate domain; this is not a whole-compiler/RSS bound.
+    /// Queries keep the original Budget slot/ledger and full live backing floor.
+    /// An observed query failure is sticky; transient violations restored without
+    /// a query cannot be detected. Error/unwind drops dependencies before refund.
+    /// Source facts do not authorize attachment of old ranked reports or native
+    /// emission. RawEmpty/UnitLocal consumer fences remain unchanged.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn escape(owner: &ProductionPreRankedKirOwnerV1, budget: &mut Budget<'_>) {
+    ///     let _ = owner.with_canonical_ranked_metadata_v1(budget, |metadata, _| Ok(metadata));
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_lower_mir_kernel::ProductionCanonicalRankedMetadataV1;
+    /// fn forge() { let _ = ProductionCanonicalRankedMetadataV1 {}; }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_lower_mir_kernel::ProductionCanonicalRankedMetadataV1;
+    /// fn duplicate(metadata: &ProductionCanonicalRankedMetadataV1<'_>) {
+    ///     let _ = Clone::clone(&*metadata);
+    /// }
+    /// ```
+    pub fn with_canonical_ranked_metadata_v1<'w, T>(
+        &self,
+        budget: &mut ArgumentBudgetV1<'w>,
+        run: impl for<'s> FnOnce(
+            &ProductionCanonicalRankedMetadataV1<'s>,
+            &mut ArgumentBudgetV1<'w>,
+        ) -> CrResultV1<T>,
+    ) -> CrResultV1<T> {
+        cr_with_metadata_v1(self, budget, run)
+    }
+
+    /// Adds the real independent foundation builder/checker over the exact same
+    /// graph and source metadata. Every ranked obligation remains pending.
+    /// This is original connected V12 N only: unsupported V15/V16/V17 operations
+    /// retain the foundation's typed refusals. There is no pass/policy selector,
+    /// new ranked-completion constructor, target binding or default activation.
+    /// Resource and output prepayment contracts match the metadata-only entrance.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn escape(owner: &ProductionPreRankedKirOwnerV1, budget: &mut Budget<'_>) {
+    ///     let _ = owner.with_checked_canonical_ranked_source_v1(budget, |view, _| Ok(view));
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_lower_mir_kernel::ProductionCanonicalRankedSourceViewV1;
+    /// fn complete(view: ProductionCanonicalRankedSourceViewV1<'_, '_, '_, '_, '_>) {
+    ///     let _ = view.into_ranked_result();
+    /// }
+    /// ```
+    pub fn with_checked_canonical_ranked_source_v1<'w, T>(
+        &self,
+        budget: &mut ArgumentBudgetV1<'w>,
+        run: impl for<'s, 'v, 'i, 'g, 'm> FnOnce(
+            &mut ProductionCanonicalRankedSourceViewV1<'s, 'v, 'i, 'g, 'm>,
+            &mut ArgumentBudgetV1<'w>,
+        ) -> CrResultV1<T>,
+    ) -> CrResultV1<T> {
+        cr_with_metadata_v1(self, budget, |source, budget| {
+            cr_with_checked_source_v1(source, budget, run)
+        })
+    }
+}

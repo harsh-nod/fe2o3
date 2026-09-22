@@ -76,6 +76,10 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+include!("production_canonical_ranked_metadata_v1.rs");
+include!("production_canonical_ranked_memory_v1.rs");
+include!("production_canonical_ranked_contracts_v1.rs");
+include!("production_canonical_ranked_owner_v1.rs");
 include!("production_ordered_region_pre_ranked_v16.rs");
 include!("production_ordered_region_inspection_v1.rs");
 include!("production_ordered_program_pre_ranked_v17.rs");
@@ -25130,6 +25134,9 @@ mod shared_slice_helper_parameter_tests {
 mod resource_tests {
     mod source_catalog_callback_tests {
         include!("production_source_catalog_callback_v1_tests.rs");
+        mod canonical_ranked_owner_tests {
+            include!("production_canonical_ranked_owner_v1_tests.rs");
+        }
     }
     mod gfx942_inline_scalar_correspondence_v30_tests {
         use super::*;
@@ -25148,6 +25155,9 @@ mod resource_tests {
     }
     mod argument_correspondence_tests {
         include!("production_semantic_kir_v1/tests/production_argument_correspondence_tests.rs");
+        mod canonical_ranked_metadata_tests {
+            include!("production_canonical_ranked_metadata_v1_tests.rs");
+        }
     }
     include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");
     include!("production_semantic_kir_v1/workgroup_sum_wrapping_tests.rs");

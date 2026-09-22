@@ -249,6 +249,22 @@ impl<'s, 'w> ProductionArgumentViewV1<'s, 'w> {
             ProductionArgumentNodeV1<'n>,
         ) -> Result<(), ProductionSemanticKirErrorV1>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.visit_nodes_with_budget_v1(|node, _| visit(node))
+    }
+
+    // Private trusted-consumer plumbing, not a new public custody boundary.
+    // Reserve retained outputs before entering: the traversal refunds its scratch
+    // to its entry floor on ordinary Result exits, exactly as the public visitor.
+    // Like that visitor, this method does not add unwind or ledger-substitution
+    // protection; callers must not release/replace backing or retain allocations
+    // charged above a traversal scratch floor.
+    fn visit_nodes_with_budget_v1(
+        &mut self,
+        mut visit: impl for<'n, 'b> FnMut(
+            ProductionArgumentNodeV1<'n>,
+            &'b mut ArgumentBudgetV1<'w>,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
         let floor = self.budget.storage();
         let result = self.data.visit_nodes(self.budget, &mut visit);
         self.budget.release_storage(self.budget.storage() - floor)?;
@@ -442,11 +458,12 @@ impl<'s> ArgumentViewDataV1<'s> {
         }))
     }
 
-    fn visit_nodes(
+    fn visit_nodes<'work>(
         &self,
-        budget: &mut ArgumentBudgetV1<'_>,
-        visit: &mut impl for<'n> FnMut(
+        budget: &mut ArgumentBudgetV1<'work>,
+        visit: &mut impl for<'n, 'b> FnMut(
             ProductionArgumentNodeV1<'n>,
+            &'b mut ArgumentBudgetV1<'work>,
         ) -> Result<(), ProductionSemanticKirErrorV1>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         let function = &self.semantic.functions()[self.instance.semantic_function.index() as usize];
@@ -477,17 +494,20 @@ impl<'s> ArgumentViewDataV1<'s> {
                     }
                     fe2o3_mir_model::SemanticSourceArgumentBindingV1::ExpandedTuple(_) => None,
                 };
-                visit(ProductionArgumentNodeV1 {
-                    source,
-                    adjusted: None,
-                    ty: source.ty(),
-                    source_path: &[],
-                    local,
-                    ignored: local.and_then(|(id, _)| {
-                        self.ignored.get(id.index() as usize).copied().flatten()
-                    }),
-                    coverage: argument_composite_coverage_v1(first, slot),
-                })?;
+                visit(
+                    ProductionArgumentNodeV1 {
+                        source,
+                        adjusted: None,
+                        ty: source.ty(),
+                        source_path: &[],
+                        local,
+                        ignored: local.and_then(|(id, _)| {
+                            self.ignored.get(id.index() as usize).copied().flatten()
+                        }),
+                        coverage: argument_composite_coverage_v1(first, slot),
+                    },
+                    budget,
+                )?;
             }
         }
         if adjusted.next().is_some() {
@@ -496,14 +516,15 @@ impl<'s> ArgumentViewDataV1<'s> {
         Ok(())
     }
 
-    fn visit_adjusted(
+    fn visit_adjusted<'work>(
         &self,
         source: fe2o3_mir_model::SemanticSourceArgumentV1<'_>,
         mapped: fe2o3_mir_model::SemanticAdjustedArgumentV1<'_>,
         shape: AdjustedArgumentShapeV1,
-        budget: &mut ArgumentBudgetV1<'_>,
-        visit: &mut impl for<'n> FnMut(
+        budget: &mut ArgumentBudgetV1<'work>,
+        visit: &mut impl for<'n, 'b> FnMut(
             ProductionArgumentNodeV1<'n>,
+            &'b mut ArgumentBudgetV1<'work>,
         ) -> Result<(), ProductionSemanticKirErrorV1>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         let floor = budget.storage();
@@ -512,20 +533,22 @@ impl<'s> ArgumentViewDataV1<'s> {
         result
     }
 
-    fn walk_adjusted(
+    fn walk_adjusted<'work>(
         &self,
         source: fe2o3_mir_model::SemanticSourceArgumentV1<'_>,
         mapped: fe2o3_mir_model::SemanticAdjustedArgumentV1<'_>,
         shape: AdjustedArgumentShapeV1,
-        budget: &mut ArgumentBudgetV1<'_>,
-        visit: &mut impl for<'n> FnMut(
+        budget: &mut ArgumentBudgetV1<'work>,
+        visit: &mut impl for<'n, 'b> FnMut(
             ProductionArgumentNodeV1<'n>,
+            &'b mut ArgumentBudgetV1<'work>,
         ) -> Result<(), ProductionSemanticKirErrorV1>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         let prefix = mapped
             .tuple_field()
             .map(ProductionArgumentProjectionV1::Field);
-        let mut emit = |node: ParameterStructureNodeV1<'_>, budget: &mut ArgumentBudgetV1<'_>| {
+        let mut emit = |node: ParameterStructureNodeV1<'_>,
+                        budget: &mut ArgumentBudgetV1<'work>| {
             budget.charge_work(1)?;
             let coverage = if node.physical.is_empty() {
                 ProductionArgumentCoverageV1::Zero
@@ -547,19 +570,22 @@ impl<'s> ArgumentViewDataV1<'s> {
             };
             let local_offset =
                 usize::from(mapped.tuple_field().is_some() && mapped.local_field().is_none());
-            visit(ProductionArgumentNodeV1 {
-                source,
-                adjusted: Some(mapped),
-                ty: node.ty,
-                source_path: node.path,
-                local: Some((mapped.local(), &node.path[local_offset..])),
-                ignored: self
-                    .ignored
-                    .get(mapped.local().index() as usize)
-                    .copied()
-                    .flatten(),
-                coverage,
-            })
+            visit(
+                ProductionArgumentNodeV1 {
+                    source,
+                    adjusted: Some(mapped),
+                    ty: node.ty,
+                    source_path: node.path,
+                    local: Some((mapped.local(), &node.path[local_offset..])),
+                    ignored: self
+                        .ignored
+                        .get(mapped.local().index() as usize)
+                        .copied()
+                        .flatten(),
+                    coverage,
+                },
+                budget,
+            )
         };
         if shape.atomic {
             visit_atomic_argument_structure_v1(
@@ -660,14 +686,14 @@ fn argument_scratch_push_v1<T>(
 
 // Atomic carriers are not scalarized. Their metadata tree can be deeper than
 // the by-value component cap, so use a charged explicit stack and no pointee walk.
-fn visit_atomic_argument_structure_v1(
+fn visit_atomic_argument_structure_v1<'work>(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
     prefix: Option<ProductionArgumentProjectionV1>,
-    budget: &mut ArgumentBudgetV1<'_>,
+    budget: &mut ArgumentBudgetV1<'work>,
     visit: &mut impl FnMut(
         ParameterStructureNodeV1<'_>,
-        &mut ArgumentBudgetV1<'_>,
+        &mut ArgumentBudgetV1<'work>,
     ) -> Result<(), ProductionSemanticKirErrorV1>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let (mut frames, mut path) = (Vec::new(), Vec::new());

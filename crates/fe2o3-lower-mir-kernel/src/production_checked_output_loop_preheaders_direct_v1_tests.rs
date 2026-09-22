@@ -367,22 +367,46 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
                         budget.failed_storage(),
                     )
                 };
-                (result, accepted, peak, denied_storage, work.failed_work())
+                (
+                    result,
+                    accepted,
+                    peak,
+                    denied_storage,
+                    work.failed_work(),
+                    floor,
+                )
             };
-            let (result, measured_work, measured_storage, denied_storage, denied_work) =
+            let (result, measured_work, measured_storage, denied_storage, denied_work, floor) =
                 run(WORK, STORAGE);
             result.unwrap();
             assert_eq!((denied_storage, denied_work), (None, None));
-            let (result, accepted, peak, denied_storage, denied_work) =
+            let (result, accepted, peak, denied_storage, denied_work, exact_floor) =
                 run(measured_work, measured_storage);
             result.unwrap();
             assert_eq!(
                 (accepted, peak, denied_storage, denied_work),
                 (measured_work, measured_storage, None, None)
             );
+            assert_eq!(exact_floor, floor);
+            let full = preheader_public_frontier(profile, mutation, STORAGE);
+            assert!(
+                full.result.is_ok(),
+                "successful public frontier: {:?}",
+                full.result
+            );
+            assert_eq!((full.failed_storage, full.failed_work), (None, None));
+            assert_eq!((full.peak, full.floor), (measured_storage, floor));
             let storage_limit = measured_storage.checked_sub(1).unwrap();
-            let (result, accepted, peak, denied_storage, denied_work) =
+            let expected = preheader_public_frontier(profile, mutation, storage_limit);
+            assert_preheader_frontier_storage(&expected.result, measured_storage);
+            assert_eq!(
+                (expected.failed_storage, expected.failed_work),
+                (Some(measured_storage), None)
+            );
+            assert_eq!(expected.floor, floor);
+            let (result, accepted, peak, denied_storage, denied_work, short_floor) =
                 run(measured_work, storage_limit);
+            assert_eq!(short_floor, floor);
             let error = result.unwrap_err();
             assert_eq!(denied_storage, Some(measured_storage));
             assert_eq!(denied_work, None);
@@ -416,13 +440,338 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
                 (error.actual(), error.limit()),
                 (measured_storage, storage_limit)
             );
-            // Both targets use the same canonical fixture and exact replay schedule.
-            let expected = if mutation {
-                (845_556, 2_671_762)
-            } else {
-                (65_552, 1_655_457)
-            };
-            assert_eq!((accepted, peak), expected);
+            assert_eq!((accepted, peak), (expected.work, expected.peak));
         }
     }
+}
+
+struct PreheaderFrontier {
+    result: Result<(), crate::ProductionCommutativeContinuationErrorV1>,
+    floor: usize,
+    work: usize,
+    peak: usize,
+    failed_storage: Option<usize>,
+    failed_work: Option<usize>,
+}
+
+// Independent paid public stages stop at P8. No final source constructor or
+// private origin builder supplies an expected work/storage observation.
+fn preheader_public_frontier(profile: Profile, mutation: bool, limit: usize) -> PreheaderFrontier {
+    use fe2o3_kernel_analysis::CanonicalKirInventoryV1 as Inventory;
+    let (prefix, inherited) = promoted(profile, mutation);
+    if mutation {
+        let p6 = prefix.prefix().prefix().prefix();
+        for graph in [
+            p6.bound(),
+            p6.checked_output().intermediate_policy5().owner(),
+        ] {
+            preheader_comparison_shape_premise(graph);
+        }
+    }
+    let sibling = vec![0x6d_u8; 29];
+    let floor = inherited
+        .checked_add(std::mem::size_of_val(&sibling))
+        .and_then(|n| n.checked_add(sibling.capacity()))
+        .unwrap();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let (result, accepted, peak, failed_storage) = {
+        let mut budget = AssertOriginBudgetV1::new(&mut work, limit);
+        budget.reserve_storage(floor).unwrap();
+        budget.charge_work(17).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        prefix
+            .verify_equivalence(&mut budget)
+            .expect("promoted prefix checkpoint");
+        let prefix_work = budget.work();
+        let tail = fe2o3_kernel_opt::prepare_owned_loop_preheaders_v1(prefix.output(), &mut budget)
+            .expect("standalone preheader preparation checkpoint");
+        budget.reserve_storage(tail.retained_storage()).unwrap();
+        let prepare_work = budget.work();
+        let (pair, receipt) = tail
+            .replay_against(prefix.output(), &mut budget)
+            .expect("actual preheader pair checkpoint");
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        let pair_work = budget.work();
+        let (input, receipt) = Inventory::derive(prefix.output(), &mut budget)
+            .expect("preheader input inventory checkpoint");
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        let input_work = budget.work();
+        let (output, receipt) = Inventory::derive(tail.output(), &mut budget)
+            .expect("preheader output inventory checkpoint");
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        let output_work = budget.work();
+        let origins = preheader_origin_reference(&pair, &input, &output, &mut budget);
+        let origin_work = budget.work();
+        for (before, after) in [
+            (17, prefix_work),
+            (prefix_work, prepare_work),
+            (prepare_work, pair_work),
+            (pair_work, input_work),
+            (input_work, output_work),
+            (output_work, origin_work),
+        ] {
+            assert!(after > before, "each preceding public checkpoint completed");
+        }
+        budget.charge_work(3).unwrap();
+        let result = prefix.prefix().verify_equivalence(&mut budget);
+        drop(origins);
+        drop((output, input, pair));
+        drop(tail);
+        budget
+            .release_storage(budget.storage().checked_sub(floor).unwrap())
+            .unwrap();
+        assert_eq!(budget.storage(), floor);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(sibling, [0x6d; 29]);
+        (
+            result,
+            budget.work(),
+            budget.peak_storage(),
+            budget.failed_storage(),
+        )
+    };
+    drop(prefix);
+    PreheaderFrontier {
+        result,
+        floor,
+        work: accepted,
+        peak,
+        failed_storage,
+        failed_work: work.failed_work(),
+    }
+}
+
+fn assert_preheader_frontier_storage(
+    result: &Result<(), crate::ProductionCommutativeContinuationErrorV1>,
+    peak: usize,
+) {
+    let Err(crate::ProductionCommutativeContinuationErrorV1::Prefix(store)) = result else {
+        panic!("exact public P8 prefix refusal: {result:?}")
+    };
+    let crate::ProductionRedundantStoreAdmissionErrorV1::Prefix(p6) = store.as_ref() else {
+        panic!("exact public P7 prefix refusal: {store:?}")
+    };
+    let crate::ProductionCheckedOutputAdmissionErrorPolicy6V1::Optimization(
+        fe2o3_kernel_opt::CanonicalPolicy6OptimizationErrorV1::Map(
+            fe2o3_pliron::KirOptimizationMapErrorV12::Resources(AssertOriginResourceV1::Storage(
+                error,
+            )),
+        ),
+    ) = p6.as_ref()
+    else {
+        panic!("exact final-source Policy6 map reservation: {p6:?}")
+    };
+    assert_eq!((error.actual(), error.limit()), (peak, peak - 1));
+}
+
+type PreheaderOriginBacking = (
+    Vec<crate::ProductionLoopPreheaderOriginV1>,
+    Vec<crate::ProductionLoopPreheaderIncomingOriginV1>,
+    Vec<crate::ProductionLoopPreheaderParameterOriginV1>,
+);
+
+fn preheader_reference_rows<T>(count: usize, budget: &mut AssertOriginBudgetV1<'_>) -> Vec<T> {
+    // General source scratch pays six, including its Vec header. It is NOT
+    // the later unroll stage's separate four-unit, backing-only helper.
+    budget.charge_work(6).unwrap();
+    let requested = count.checked_mul(std::mem::size_of::<T>()).unwrap();
+    budget
+        .reserve_storage(
+            requested
+                .checked_add(std::mem::size_of::<Vec<T>>())
+                .unwrap(),
+        )
+        .unwrap();
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(count).unwrap();
+    let actual = rows
+        .capacity()
+        .checked_mul(std::mem::size_of::<T>())
+        .unwrap();
+    budget
+        .reserve_storage(actual.checked_sub(requested).unwrap())
+        .unwrap();
+    rows
+}
+
+fn preheader_origin_reference(
+    pair: &fe2o3_kernel_analysis::CheckedCanonicalKirLoopPreheadersV1<'_>,
+    input: &fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>,
+    output: &fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Option<PreheaderOriginBacking> {
+    use crate::{
+        ProductionLoopPreheaderIncomingOriginV1 as Incoming,
+        ProductionLoopPreheaderOriginV1 as Block,
+        ProductionLoopPreheaderParameterOriginV1 as Parameter,
+    };
+    use std::mem::size_of;
+    assert!(std::ptr::eq(pair.input(), input.owner()));
+    assert!(std::ptr::eq(pair.output(), output.owner()));
+    let start_work = budget.work();
+    let start_storage = budget.storage();
+    budget.charge_work(4).unwrap();
+    let n = pair.preheaders().len();
+    if n == 0 {
+        assert_eq!(budget.work() - start_work, 4);
+        assert_eq!(budget.storage(), start_storage);
+        return None;
+    }
+    let blocks = output.blocks().len();
+    let edges = output.edges().len();
+    let mut incoming = 0usize;
+    let mut parameters = 0usize;
+    // This test-only census joins the whole actual pair/graphs, not the
+    // production Origins rows or their stored/recomputed storage receipt.
+    for selected in pair.preheaders() {
+        let before = input
+            .blocks()
+            .iter()
+            .find(|b| b.coordinate == selected.header)
+            .unwrap();
+        let after = output
+            .blocks()
+            .iter()
+            .find(|b| b.coordinate == selected.preheader)
+            .unwrap();
+        assert_eq!(before.parameters.len(), after.parameters.len());
+        parameters = parameters.checked_add(before.parameters.len()).unwrap();
+        let mut count = 0usize;
+        for edge in output
+            .edges()
+            .iter()
+            .filter(|e| e.target == selected.preheader)
+        {
+            let original = input
+                .edges()
+                .iter()
+                .find(|e| e.coordinate == edge.coordinate)
+                .unwrap();
+            assert_eq!(original.target, selected.header);
+            count = count.checked_add(1).unwrap();
+        }
+        assert!(count > 0);
+        incoming = incoming.checked_add(count).unwrap();
+    }
+    let block_rows = preheader_reference_rows::<Block>(n, budget);
+    let selected_rows = preheader_reference_rows::<Option<usize>>(blocks, budget);
+    budget.charge_work(blocks).unwrap();
+    let cursors = preheader_reference_rows::<usize>(n, budget);
+    budget.charge_work(n.checked_mul(19).unwrap()).unwrap();
+    budget
+        .charge_work(
+            edges
+                .checked_mul(7)
+                .unwrap()
+                .checked_add(incoming.checked_mul(9).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+    budget.charge_work(n.checked_mul(4).unwrap()).unwrap();
+    let incoming_rows = preheader_reference_rows::<Incoming>(incoming, budget);
+    budget.charge_work(incoming).unwrap();
+    budget.charge_work(edges.checked_mul(8).unwrap()).unwrap();
+    let parameter_rows = preheader_reference_rows::<Parameter>(parameters, budget);
+    budget
+        .charge_work(n.checked_add(parameters).unwrap().checked_mul(3).unwrap())
+        .unwrap();
+    let expected_work = 4usize
+        .checked_add(5 * 6)
+        .unwrap()
+        .checked_add(blocks)
+        .unwrap()
+        .checked_add(n.checked_mul(26).unwrap())
+        .unwrap()
+        .checked_add(edges.checked_mul(15).unwrap())
+        .unwrap()
+        .checked_add(incoming.checked_mul(10).unwrap())
+        .unwrap()
+        .checked_add(parameters.checked_mul(3).unwrap())
+        .unwrap();
+    assert_eq!(
+        budget.work().checked_sub(start_work).unwrap(),
+        expected_work
+    );
+    let mut expected_storage = 0usize;
+    for (capacity, cell, header) in [
+        (
+            block_rows.capacity(),
+            size_of::<Block>(),
+            size_of::<Vec<Block>>(),
+        ),
+        (
+            selected_rows.capacity(),
+            size_of::<Option<usize>>(),
+            size_of::<Vec<Option<usize>>>(),
+        ),
+        (
+            cursors.capacity(),
+            size_of::<usize>(),
+            size_of::<Vec<usize>>(),
+        ),
+        (
+            incoming_rows.capacity(),
+            size_of::<Incoming>(),
+            size_of::<Vec<Incoming>>(),
+        ),
+        (
+            parameter_rows.capacity(),
+            size_of::<Parameter>(),
+            size_of::<Vec<Parameter>>(),
+        ),
+    ] {
+        expected_storage = expected_storage
+            .checked_add(header)
+            .unwrap()
+            .checked_add(capacity.checked_mul(cell).unwrap())
+            .unwrap();
+    }
+    assert_eq!(
+        budget.storage().checked_sub(start_storage).unwrap(),
+        expected_storage
+    );
+    drop((selected_rows, cursors));
+    // The enclosing source scope retains even released scratch's logical
+    // charge until all final-source dependents drop. No early refund here.
+    Some((block_rows, incoming_rows, parameter_rows))
+}
+
+fn preheader_comparison_shape_premise(graph: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12) {
+    use fe2o3_kernel_ir::{ComparePredicate, Constant, OperationKind};
+    let mut comparisons = 0;
+    for function in &graph.module().functions {
+        let Some(body) = &function.body else { continue };
+        for block in &body.blocks {
+            for operation in &block.operations {
+                let OperationKind::Compare {
+                    predicate,
+                    lhs,
+                    rhs,
+                } = operation.kind
+                else {
+                    continue;
+                };
+                comparisons += 1;
+                assert_eq!(predicate, ComparePredicate::LessThan);
+                let constant = |value| {
+                    body.blocks
+                        .iter()
+                        .flat_map(|b| &b.operations)
+                        .find_map(|op| {
+                            (op.results.iter().any(|r| r.id == value)).then_some(&op.kind)
+                        })
+                };
+                assert!(matches!(
+                    constant(rhs),
+                    Some(OperationKind::Constant(Constant::U32(3)))
+                ));
+                assert!(!matches!(constant(lhs), Some(OperationKind::Constant(_))));
+            }
+        }
+    }
+    assert_eq!(comparisons, 1);
+    // Complete P6: B/C transition, control index, decoded B/C, then O/I.
+    // One full prefix plus the next prefix stopped at the map before O/I
+    // enters 4+3 solvers, not necessarily 4+3 boundary evaluations. Fixpoint
+    // iterations and root depths are not inferred from the observed delta.
 }

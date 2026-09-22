@@ -456,3 +456,37 @@ fn with_unit_local_ranked_stage_inventory_v1<'w, R>(
         })
     })
 }
+
+// Same-owner original-N source admission only. This neither erases local effects
+// nor reuses the old entry-only ranked result as a completed neutral report.
+fn canonical_ranked_unit_local_join_v1(
+    owner: &ProductionPreRankedKirOwnerV1,
+    inventory: &CanonicalKirInventoryV1<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    match owner.helper_source_policy_v1() {
+        ProductionHelperSourcePolicyV1::RawEmpty => {
+            owner.with_checked_helper_memory_v1(inventory, budget, |_, _| Ok(()))
+        }
+        ProductionHelperSourcePolicyV1::UnitLocal => {
+            owner.with_checked_unit_local_source_v1(inventory, budget, |source, budget| {
+                budget.charge_work(2)?;
+                if !source.belongs_to(inventory) || source.rows.associations.is_empty() {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
+                for expected in &owner.helper_memory.unit_source.associations {
+                    let actual = source
+                        .association(expected.key.root, expected.key.function, budget)?
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                    budget.charge_work(2)?;
+                    if !std::ptr::eq(actual.row, expected)
+                        || inventory.functions().get(expected.key.physical).is_none()
+                    {
+                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                    }
+                }
+                Ok(())
+            })
+        }
+    }
+}

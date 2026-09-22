@@ -1,7 +1,7 @@
 use super::*;
 
 #[path = "production_atomic_argument_view_tests.rs"]
-mod atomic_view_tests;
+pub(super) mod atomic_view_tests;
 
 #[path = "../../production_conditional_output_binding_v1_tests.rs"]
 mod conditional_output_binding_tests;
@@ -775,4 +775,192 @@ fn complete_argument_view_callback_and_budget_errors_restore_live_floor() {
     ));
     assert!(!called);
     assert_eq!(budget.storage(), 23);
+}
+
+#[test]
+fn private_argument_budget_visitor_preserves_every_public_node_and_work_order() {
+    for shape in [
+        ArgumentTupleShape::Mixed,
+        ArgumentTupleShape::AllZero,
+        ArgumentTupleShape::EmptyUnit,
+        ArgumentTupleShape::EmptyTuple,
+    ] {
+        for expanded in [false, true] {
+            let owner = argument_view_owner(expanded, shape);
+            for root in [1, 2] {
+                let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+                let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+                budget.reserve_storage(23).unwrap();
+                owner
+                    .with_checked_arguments_v1(
+                        SemanticFunctionIdV1::from_index(root),
+                        SemanticFunctionIdV1::from_index(0),
+                        &mut budget,
+                        |view| {
+                            let before = view.budget.work();
+                            let expected = collect_argument_nodes(view)?;
+                            let public_work = view.budget.work() - before;
+                            let floor = view.budget.storage();
+                            let slot = std::ptr::from_ref(&*view.budget);
+                            let ledger = view.budget.work_ledger_identity_v1();
+                            let before = view.budget.work();
+                            let mut index = 0;
+                            view.visit_nodes_with_budget_v1(|node, budget| {
+                                assert_eq!(std::ptr::from_ref(&*budget), slot);
+                                assert!(budget.work_ledger_identity_v1() == ledger);
+                                assert!(budget.storage() >= floor);
+                                budget.charge_work(7)?;
+                                let row = &expected[index];
+                                assert_eq!(node.source_argument(), row.source);
+                                assert_eq!(node.adjusted_argument(), row.adjusted);
+                                assert_eq!(node.semantic_type(), row.ty);
+                                assert_eq!(node.source_path(), row.path);
+                                assert_eq!(
+                                    node.local_binding(),
+                                    row.local
+                                        .as_ref()
+                                        .map(|(local, path)| (*local, path.as_slice()))
+                                );
+                                match (node.coverage(), &row.coverage) {
+                                    (
+                                        ProductionArgumentCoverageV1::Zero,
+                                        ObservedCoverage::Zero,
+                                    ) => (),
+                                    (
+                                        ProductionArgumentCoverageV1::Components { first, end },
+                                        ObservedCoverage::Components(a, b),
+                                    ) => assert_eq!((first, end), (*a, *b)),
+                                    (
+                                        ProductionArgumentCoverageV1::Parameter(actual),
+                                        ObservedCoverage::Parameter(slot),
+                                    )
+                                    | (
+                                        ProductionArgumentCoverageV1::WithinAtomicParameter(actual),
+                                        ObservedCoverage::Within(slot),
+                                    ) => assert_eq!(actual.slot(), *slot),
+                                    _ => panic!("private traversal changed structural coverage"),
+                                }
+                                index += 1;
+                                Ok(())
+                            })?;
+                            assert_eq!(index, expected.len());
+                            assert_eq!(view.budget.work() - before, public_work + 7 * index);
+                            assert_eq!(view.budget.storage(), floor);
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(budget.storage(), 23);
+            }
+        }
+    }
+}
+
+#[test]
+fn private_argument_budget_visitor_keeps_prepaid_output_outside_scratch() {
+    let owner = argument_view_owner(true, ArgumentTupleShape::Mixed);
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    budget.reserve_storage(23).unwrap();
+    owner
+        .with_checked_arguments_v1(
+            SemanticFunctionIdV1::from_index(1),
+            SemanticFunctionIdV1::from_index(0),
+            &mut budget,
+            |view| {
+                let mut count = 0usize;
+                view.visit_nodes_with_budget_v1(|_, budget| {
+                    budget.charge_work(1)?;
+                    count += 1;
+                    Ok(())
+                })?;
+                assert!(count > 1);
+                let floor = view.budget.storage();
+                let bytes = count * std::mem::size_of::<usize>();
+                view.budget.reserve_storage(bytes)?;
+                let mut output = Vec::new();
+                output.try_reserve_exact(count).unwrap();
+                let excess = (output.capacity() - count) * std::mem::size_of::<usize>();
+                view.budget.reserve_storage(excess)?;
+                let paid = view.budget.storage();
+                view.visit_nodes_with_budget_v1(|node, budget| {
+                    budget.charge_work(1)?;
+                    assert!(budget.storage() >= paid);
+                    assert!(output.len() < count);
+                    output.push(node.source_path().len());
+                    Ok(())
+                })?;
+                assert_eq!(output.len(), count);
+                assert_eq!(view.budget.storage(), paid);
+                assert!(output.iter().any(|length| *length != 0));
+                drop(output);
+                view.budget.release_storage(bytes + excess)?;
+                assert_eq!(view.budget.storage(), floor);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(budget.storage(), 23);
+}
+
+#[test]
+fn private_argument_budget_visitor_restores_scratch_for_each_typed_callback_failure() {
+    for failure in [0, 1, 2] {
+        let owner = argument_view_owner(true, ArgumentTupleShape::Mixed);
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+        budget.reserve_storage(23).unwrap();
+        let mut visited = 0;
+        let result = owner.with_checked_arguments_v1(
+            SemanticFunctionIdV1::from_index(1),
+            SemanticFunctionIdV1::from_index(0),
+            &mut budget,
+            |view| {
+                let floor = view.budget.storage();
+                let result = view.visit_nodes_with_budget_v1(|_, budget| {
+                    visited += 1;
+                    match failure {
+                        0 => Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch),
+                        1 => {
+                            budget.charge_work(1_000_000)?;
+                            unreachable!("cumulative callback work must exceed the finite budget")
+                        }
+                        2 => {
+                            budget.reserve_storage(1_000_000)?;
+                            unreachable!(
+                                "live backing plus callback request must exceed the budget"
+                            )
+                        }
+                        _ => unreachable!(),
+                    }
+                });
+                assert_eq!(view.budget.storage(), floor);
+                result
+            },
+        );
+        assert_eq!(visited, 1);
+        match (failure, result) {
+            (0, Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)) => (),
+            (
+                1,
+                Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Work(error),
+                )),
+            ) => {
+                assert_eq!(error.limit(), 1_000_000);
+                assert!(error.actual() > error.limit());
+            }
+            (
+                2,
+                Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Storage(error),
+                )),
+            ) => {
+                assert_eq!(error.limit(), 1_000_000);
+                assert!(error.actual() > error.limit());
+            }
+            (_, result) => panic!("unexpected callback failure: {result:?}"),
+        }
+        assert_eq!(budget.storage(), 23);
+    }
 }

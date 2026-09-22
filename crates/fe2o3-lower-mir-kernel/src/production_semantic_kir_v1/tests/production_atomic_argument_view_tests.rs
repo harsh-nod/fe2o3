@@ -9,7 +9,7 @@ const PTR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
 const OPAQUE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
 const CARRIER: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);
 
-fn atomic_argument_owner(length: u64) -> ProductionPreRankedKirOwnerV1 {
+pub(in super::super) fn atomic_argument_owner(length: u64) -> ProductionPreRankedKirOwnerV1 {
     let original = argument_owner_shape(true, ArgumentTupleShape::Mixed, false, true);
     let mut types = original.source_semantic().types().to_vec();
     let marker = &types[6];

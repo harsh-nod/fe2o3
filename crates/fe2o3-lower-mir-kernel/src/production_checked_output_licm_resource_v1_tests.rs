@@ -123,12 +123,22 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
                 measured(profile, mutation, WORK, STORAGE);
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
-            let expected = if mutation {
-                (2_732_468, 3_304_704, 2_685_847, 3_281_565)
-            } else {
-                (249_319, 1_944_506, 238_010, 1_929_013)
-            };
-            assert_eq!((work, peak), (expected.0, expected.1));
+            let full = licm_public_frontier(profile, mutation, STORAGE);
+            assert!(
+                full.result.is_ok(),
+                "successful public frontier: {:?}",
+                full.result
+            );
+            assert_eq!((full.failed_storage, full.failed_work), (None, None));
+            assert_eq!(peak, full.peak);
+            assert_eq!(work, licm_public_success_work(profile, mutation));
+            let expected = licm_public_frontier(profile, mutation, peak - 1);
+            assert_licm_frontier_storage(&expected.result, peak);
+            assert_eq!(expected.floor, full.floor);
+            assert_eq!(
+                (expected.failed_storage, expected.failed_work),
+                (Some(peak), None)
+            );
             let (result, accepted, actual_peak, storage_denial, work_denial) =
                 measured(profile, mutation, work, peak - 1);
             let error =
@@ -160,7 +170,7 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
                 panic!("expected exact Policy6 replay map Storage refusal")
             };
             assert_eq!((error.actual(), error.limit()), (peak, peak - 1));
-            assert_eq!((accepted, actual_peak), (expected.2, expected.3));
+            assert_eq!((accepted, actual_peak), (expected.work, expected.peak));
         }
     }
 }
@@ -169,4 +179,220 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
 fn source_licm_nested_error_and_panic_drop_actual_moved_candidate() {
     let (prefix, inherited) = direct::prefix(Profile::Gfx942, true);
     prefix.exercise_licm_failed_candidate_v1(inherited);
+}
+
+struct LicmFrontier {
+    result: Result<(), crate::ProductionCommutativeContinuationErrorV1>,
+    floor: usize,
+    work: usize,
+    peak: usize,
+    failed_storage: Option<usize>,
+    failed_work: Option<usize>,
+}
+
+// This reconstructs only the public frontier, not LICM's source-site checker.
+// P8's opaque map internals remain a separately matched constituent refusal.
+fn licm_public_frontier(profile: Profile, mutation: bool, limit: usize) -> LicmFrontier {
+    use fe2o3_kernel_analysis::CanonicalKirInventoryV1 as Inventory;
+    use fe2o3_kernel_opt::prepare_owned_licm_v1;
+    let (prefix, inherited) = direct::prefix(profile, mutation);
+    if !mutation {
+        let p6 = prefix.prefix().prefix().prefix().prefix();
+        for graph in [
+            p6.bound(),
+            p6.checked_output().intermediate_policy5().owner(),
+        ] {
+            licm_comparison_shape_premise(graph);
+        }
+    }
+    let sibling = vec![0x6d_u8; 43];
+    let floor = inherited
+        .checked_add(std::mem::size_of_val(&sibling))
+        .and_then(|n| n.checked_add(sibling.capacity()))
+        .unwrap();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let (result, accepted, peak, failed_storage) = {
+        let mut budget = AssertOriginBudgetV1::new(&mut work, limit);
+        budget.reserve_storage(floor).unwrap();
+        budget.charge_work(17).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        prefix
+            .verify_equivalence(&mut budget)
+            .expect("preheader prefix checkpoint");
+        let prefix_work = budget.work();
+        let tail = prepare_owned_licm_v1(prefix.output(), &mut budget)
+            .expect("standalone LICM preparation checkpoint");
+        budget.reserve_storage(tail.retained_storage()).unwrap();
+        let prepare_work = budget.work();
+        let (licm, receipt) = tail
+            .replay_against(prefix.output(), &mut budget)
+            .expect("LICM pair checkpoint");
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        let licm_work = budget.work();
+        let (preheaders, receipt) = prefix
+            .continuation()
+            .replay_against(prefix.prefix().output(), &mut budget)
+            .expect("preheader pair checkpoint");
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        let preheader_work = budget.work();
+        let (input, receipt) = Inventory::derive(prefix.output(), &mut budget)
+            .expect("LICM input inventory checkpoint");
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        let input_work = budget.work();
+        let (output, receipt) = Inventory::derive(tail.output(), &mut budget)
+            .expect("LICM output inventory checkpoint");
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        let output_work = budget.work();
+        for (before, after) in [
+            (17, prefix_work),
+            (prefix_work, prepare_work),
+            (prepare_work, licm_work),
+            (licm_work, preheader_work),
+            (preheader_work, input_work),
+            (input_work, output_work),
+        ] {
+            assert!(after > before, "each preceding public checkpoint completed");
+        }
+        budget.charge_work(3).unwrap();
+        let result = prefix.prefix().prefix().verify_equivalence(&mut budget);
+        drop((output, input, preheaders, licm));
+        drop(tail);
+        budget
+            .release_storage(budget.storage().checked_sub(floor).unwrap())
+            .unwrap();
+        assert_eq!(budget.storage(), floor);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(sibling, [0x6d; 43]);
+        (
+            result,
+            budget.work(),
+            budget.peak_storage(),
+            budget.failed_storage(),
+        )
+    };
+    drop(prefix);
+    LicmFrontier {
+        result,
+        floor,
+        work: accepted,
+        peak,
+        failed_storage,
+        failed_work: work.failed_work(),
+    }
+}
+
+fn assert_licm_frontier_storage(
+    result: &Result<(), crate::ProductionCommutativeContinuationErrorV1>,
+    peak: usize,
+) {
+    let Err(crate::ProductionCommutativeContinuationErrorV1::Prefix(store)) = result else {
+        panic!("exact public P8 prefix refusal: {result:?}")
+    };
+    let crate::ProductionRedundantStoreAdmissionErrorV1::Prefix(p6) = store.as_ref() else {
+        panic!("exact public P7 prefix refusal: {store:?}")
+    };
+    let crate::ProductionCheckedOutputAdmissionErrorPolicy6V1::Optimization(
+        fe2o3_kernel_opt::CanonicalPolicy6OptimizationErrorV1::Map(
+            fe2o3_pliron::KirOptimizationMapErrorV12::Resources(AssertOriginResourceV1::Storage(
+                error,
+            )),
+        ),
+    ) = p6.as_ref()
+    else {
+        panic!("exact final-source Policy6 map reservation: {p6:?}")
+    };
+    assert_eq!((error.actual(), error.limit()), (peak, peak - 1));
+}
+
+// Factory and owner replay each replay the prefix, check the actual final sites,
+// and pay the final unit. Only the factory additionally prepares the LICM tail.
+fn licm_public_success_work(profile: Profile, mutation: bool) -> usize {
+    let (prefix, inherited) = direct::prefix(profile, mutation);
+    let (owner, added) = {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
+        budget.reserve_storage(inherited).unwrap();
+        let (owner, receipt) = prefix.continue_licm_v1(&mut budget).unwrap();
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        (owner, receipt.retained_storage())
+    };
+    let floor = inherited.checked_add(added).unwrap();
+    let replay = {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
+        budget.reserve_storage(floor).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        owner.verify_equivalence(&mut budget).unwrap();
+        assert_eq!(budget.storage(), floor);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.failed_storage(), None);
+        let accepted = budget.work();
+        drop(budget);
+        assert_eq!(work.failed_work(), None);
+        accepted
+    };
+    let prepare = {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
+        budget.reserve_storage(floor).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let tail =
+            fe2o3_kernel_opt::prepare_owned_licm_v1(owner.prefix().output(), &mut budget).unwrap();
+        let retained = tail.retained_storage();
+        budget.reserve_storage(retained).unwrap();
+        drop(tail);
+        budget.release_storage(retained).unwrap();
+        assert_eq!(budget.storage(), floor);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.failed_storage(), None);
+        let accepted = budget.work();
+        drop(budget);
+        assert_eq!(work.failed_work(), None);
+        accepted
+    };
+    drop(owner);
+    17usize
+        .checked_add(replay)
+        .and_then(|n| n.checked_add(prepare))
+        .unwrap()
+}
+
+fn licm_comparison_shape_premise(graph: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12) {
+    use fe2o3_kernel_ir::{ComparePredicate, Constant, OperationKind};
+    let mut comparisons = 0;
+    for function in &graph.module().functions {
+        let Some(body) = &function.body else { continue };
+        for block in &body.blocks {
+            for operation in &block.operations {
+                let OperationKind::Compare {
+                    predicate,
+                    lhs,
+                    rhs,
+                } = operation.kind
+                else {
+                    continue;
+                };
+                comparisons += 1;
+                assert_eq!(predicate, ComparePredicate::Equal);
+                let constant = |value| {
+                    body.blocks
+                        .iter()
+                        .flat_map(|b| &b.operations)
+                        .find_map(|op| {
+                            (op.results.iter().any(|r| r.id == value)).then_some(&op.kind)
+                        })
+                };
+                assert!(matches!(
+                    constant(rhs),
+                    Some(OperationKind::Constant(Constant::U32(0)))
+                ));
+                assert!(!matches!(constant(lhs), Some(OperationKind::Constant(_))));
+            }
+        }
+    }
+    assert_eq!(comparisons, 1);
+    // Each complete P6 replay checks B/C, its control index, the decoded B/C
+    // receipt and O/I. LICM's three P8 replays therefore enter 3*4 solvers.
+    // A solver may iterate: this shape check neither counts boundary
+    // evaluations nor proves root depth. No work expectation uses that count.
 }
