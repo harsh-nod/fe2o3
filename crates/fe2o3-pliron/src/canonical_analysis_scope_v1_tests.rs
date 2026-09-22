@@ -16,6 +16,15 @@ use std::mem::size_of;
 
 type ScopeResult<T> = Result<T, CanonicalAnalysisScopeErrorV1>;
 
+fn sparse_engine_header() -> usize {
+    // Independent Engine layout oracle: report, five worklist Vec headers and
+    // five queue/unresolved cursors. These headers are not retained by the report.
+    size_of::<CanonicalKirSparseV1<'_, '_>>()
+        + 4 * size_of::<Vec<usize>>()
+        + size_of::<Vec<u8>>()
+        + 5 * size_of::<usize>()
+}
+
 fn admit(module: &Module) -> (VerifiedCanonicalKernelIrModuleV12, usize) {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
     let mut budget = Budget::new(&mut work, 1_000_000);
@@ -74,13 +83,12 @@ fn empty_cache_has_independent_exact_and_one_under_work_and_storage_limits() {
     let floor = owner_storage + 17;
     let payload =
         size_of::<CanonicalKirInventoryV1<'_>>() + size_of::<CanonicalKirSparseV1<'_, '_>>();
+    let peak = size_of::<CanonicalKirInventoryV1<'_>>() + sparse_engine_header();
     // Outer checks4 + inventory2 + first request6 + sparse8 + transfer2 + hit6.
     // An empty graph has no row or worklist allocations.
-    for (allowance, storage, success) in [
-        (28, payload, true),
-        (27, payload, false),
-        (28, payload - 1, false),
-    ] {
+    for (allowance, storage, success) in
+        [(28, peak, true), (27, peak, false), (28, peak - 1, false)]
+    {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(5 + allowance);
         work.charge_work(5).unwrap();
         let mut budget = Budget::new(&mut work, floor + storage);
@@ -97,19 +105,19 @@ fn empty_cache_has_independent_exact_and_one_under_work_and_storage_limits() {
         match result {
             Ok(()) => {
                 assert_eq!(budget.work(), 33);
-                assert_eq!(budget.peak_storage(), floor + payload);
+                assert_eq!(budget.peak_storage(), floor + peak);
             }
             Err(CanonicalAnalysisScopeErrorV1::Resource(Resource::Work(error))) => {
                 assert_eq!(error.actual(), 33);
                 assert_eq!(budget.work(), 27);
-                assert_eq!(budget.peak_storage(), floor + payload);
+                assert_eq!(budget.peak_storage(), floor + peak);
             }
             Err(CanonicalAnalysisScopeErrorV1::Sparse(CanonicalKirSparseErrorV1::Resource(
                 Resource::Storage(error),
             ))) => {
-                assert_eq!(error.actual(), floor + payload);
+                assert_eq!(error.actual(), floor + peak);
                 assert_eq!(budget.work(), 25);
-                assert_eq!(budget.failed_storage(), Some(floor + payload));
+                assert_eq!(budget.failed_storage(), Some(floor + peak));
             }
             other => panic!("unexpected independent boundary result: {other:?}"),
         }
@@ -137,7 +145,8 @@ fn nonempty_exact_peak_keeps_inventory_live_with_sparse_worklist_scratch() {
         + size_of::<CanonicalKirSparseExceptionV1>();
     // Sparse inverse heads1 + next1 + queue2 + closure1, plus two queue flags.
     let scratch = 5 * size_of::<usize>() + 2 * size_of::<u8>();
-    let peak = floor + inventory + sparse + scratch;
+    let peak = floor + inventory + sparse + scratch + sparse_engine_header()
+        - size_of::<CanonicalKirSparseV1<'_, '_>>();
     for limit in [peak - 1, peak] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000);
         let mut budget = Budget::new(&mut work, limit);

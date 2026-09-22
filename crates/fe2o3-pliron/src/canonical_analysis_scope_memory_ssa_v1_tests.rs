@@ -194,15 +194,24 @@ fn memory_ssa_header_failure_keeps_the_existing_sparse_cache_live() {
     let sparse = size_of::<CanonicalKirSparseV1<'_, '_>>();
     let memory = size_of::<CanonicalKirMemorySsaV1<'_, '_>>();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000);
-    let mut budget = Budget::new(&mut work, retained + inventory + sparse + memory - 1);
+    let limit = retained + inventory + sparse_engine_header();
+    let mut budget = Budget::new(&mut work, limit);
     budget.reserve_storage(retained).unwrap();
     with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| -> ScopeResult<()> {
         request(scope, false)?;
         let first = std::ptr::from_ref(scope.sparse.as_ref().unwrap());
+        // Admit sparse construction, then leave exactly one byte too little
+        // for MemorySSA's header. Failed-request cleanup retires this pressure.
+        let pressure = sparse_engine_header().checked_sub(sparse + memory)
+            .and_then(|n| n.checked_add(1))
+            .expect("sparse construction must fit both retained headers");
+        scope.budget.reserve_storage(pressure).unwrap();
         let failed: ScopeResult<()> = scope.with_memory_ssa_v1(|_, _| panic!("header failed"));
-        assert!(matches!(failed, Err(CanonicalAnalysisScopeErrorV1::MemorySsa(CanonicalKirMemorySsaErrorV1::Resource(Resource::Storage(error)))) if error.actual() == retained + inventory + sparse + memory));
+        assert!(matches!(failed, Err(CanonicalAnalysisScopeErrorV1::MemorySsa(CanonicalKirMemorySsaErrorV1::Resource(Resource::Storage(error)))) if error.actual() == limit + 1));
         assert!(scope.memory_ssa.is_none());
         assert_eq!(scope.budget.storage(), retained + inventory + sparse);
+        assert_eq!(scope.budget.peak_storage(), limit);
+        assert_eq!(scope.budget.failed_storage(), Some(limit + 1));
         scope.with_sparse_v1(|report, _| -> ScopeResult<()> {
             assert_eq!(std::ptr::from_ref(report), first);
             Ok(())
@@ -285,7 +294,14 @@ fn clean_callback_errors_and_caught_panics_preserve_cache_and_release_scratch() 
                     (_, other) => panic!("changed clean callback result: {other:?}"),
                 }
                 assert_eq!(scope.budget.storage(), floor);
-                assert_eq!(scope.budget.peak_storage(), floor + 19);
+                let construction_peak = retained
+                    + 17
+                    + size_of::<CanonicalKirInventoryV1<'_>>()
+                    + sparse_engine_header();
+                assert_eq!(
+                    scope.budget.peak_storage(),
+                    construction_peak.max(floor + 19)
+                );
                 assert_eq!(std::ptr::from_ref(scope.sparse.as_ref().unwrap()), sparse);
                 assert_eq!(
                     std::ptr::from_ref(scope.memory_ssa.as_ref().unwrap()),
