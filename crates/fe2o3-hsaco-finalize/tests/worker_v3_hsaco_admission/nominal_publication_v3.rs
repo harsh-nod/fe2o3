@@ -7,6 +7,74 @@ use fe2o3_hsaco_finalize::{
     publish_recovered_nominal_worker_hsaco_v3, recover_nominal_worker_publication_v3,
 };
 
+#[allow(dead_code)]
+pub(crate) fn publish_nominal_worker_v3_fixture_in_directory(
+    directory: &TestDirectory,
+    seed: u8,
+    scalar: ScalarTypeV1,
+) -> (
+    fe2o3_artifact_transaction::ProducerIdentity,
+    fe2o3_artifact_transaction::BuildAttempt,
+    fe2o3_hsaco_finalize::PublishedNominalWorkerHsacoV3,
+) {
+    let wire = nominal_slice_source_type("nominal-envelope", scalar);
+    let (attempt, finalized) = finalized(directory, &wire, seed);
+    publish_finalized(directory, attempt, finalized)
+}
+
+#[allow(dead_code)]
+pub(crate) fn publish_two_kernel_nominal_worker_v3_fixture_in_directory(
+    directory: &TestDirectory,
+    seed: u8,
+) -> (
+    fe2o3_artifact_transaction::ProducerIdentity,
+    fe2o3_artifact_transaction::BuildAttempt,
+    fe2o3_hsaco_finalize::PublishedNominalWorkerHsacoV3,
+) {
+    let first = ("synthetic_first_transform", "synthetic_first_transform.kd");
+    let second = (
+        "synthetic_second_transform",
+        "synthetic_second_transform.kd",
+    );
+    let wire = nominal_slice_roster_source(
+        "nominal-envelope",
+        ScalarTypeV1::F32,
+        &[
+            ([0xb1; 32], second.0, second.1),
+            ([0xc1; 32], first.0, first.1),
+        ],
+    );
+    let bytes = super::super::hsaco_fixture::synthetic_two_kernel_slice_fixture_with_descriptor_table_and_workgroup(&wire, 256).bytes;
+    let (attempt, finalized) = finalized_artifact(
+        directory,
+        &wire,
+        seed,
+        with_nominal_descriptor_section(bytes),
+        &[first, second],
+    );
+    publish_finalized(directory, attempt, finalized)
+}
+
+fn publish_finalized(
+    directory: &TestDirectory,
+    attempt: fe2o3_artifact_transaction::BuildAttempt,
+    finalized: PreparedFinalizedNominalWorkerHsacoV3,
+) -> (
+    fe2o3_artifact_transaction::ProducerIdentity,
+    fe2o3_artifact_transaction::BuildAttempt,
+    fe2o3_hsaco_finalize::PublishedNominalWorkerHsacoV3,
+) {
+    let closure = finalized.raw().compiler_closure();
+    let producer = producer();
+    let prepared = prepare_nominal_worker_publication_v3(&producer, finalized).unwrap();
+    let recovered =
+        persist_prepared_nominal_worker_publication_v3(&directory.0, &producer, prepared).unwrap();
+    let published =
+        publish_recovered_nominal_worker_hsaco_v3(&directory.0, &producer, closure, recovered)
+            .unwrap();
+    (producer, attempt, published)
+}
+
 fn finalized(
     directory: &TestDirectory,
     wire: &[u8],
@@ -15,14 +83,33 @@ fn finalized(
     fe2o3_artifact_transaction::BuildAttempt,
     PreparedFinalizedNominalWorkerHsacoV3,
 ) {
+    finalized_artifact(
+        directory,
+        wire,
+        seed,
+        nominal_artifact(wire),
+        &[("vecadd", "vecadd.kd")],
+    )
+}
+
+fn finalized_artifact(
+    directory: &TestDirectory,
+    wire: &[u8],
+    seed: u8,
+    artifact: Vec<u8>,
+    symbols: &[(&str, &str)],
+) -> (
+    fe2o3_artifact_transaction::BuildAttempt,
+    PreparedFinalizedNominalWorkerHsacoV3,
+) {
     let (attempt, source) = evidence_with_descriptor_source(
         directory,
-        nominal_artifact(wire),
+        artifact,
         EvidenceConfig {
             attempt_seed: seed,
             ..EvidenceConfig::BASE
         },
-        &[("vecadd", "vecadd.kd")],
+        symbols,
         Vec::new(),
         Some(wire),
     );

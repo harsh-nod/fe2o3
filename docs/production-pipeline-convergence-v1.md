@@ -73,9 +73,22 @@ Typed V1 and nominal recovery APIs reject each other's artifacts. Published
 nominal output can transfer its exact current-publication lease and replay parts
 without acquiring compiler, proof, load or launch authority.
 
-The normal CLI, generated host admission, and nominal P4 source-proof owner are
-not yet joined to this nominal publication continuation. Native-aware production
-lineage construction and independent replay remain required. Descriptor traversal
+The nominal publication owner can now enter the same receipt-bearing V2 load
+envelope, retaining its exact compiler subject, carriage, replay and publication
+lease through durable restart. Version-explicit host roster readmission repeats
+independent finalizer replay, checks the exact normalized V3 ABI receipt and
+exports, and resolves physical kernels against the complete canonical roster.
+The move-only owner retains nominal types without a V1 projection and rechecks
+currentness before returning a successful revalidation. Nominal host identities
+use a separate domain; the legacy preimage remains unchanged. Synthetic fixtures
+cover retirement/restart, foreign compiler occurrences, retained-directory
+recovery, and two-kernel rosters with opposite descriptor/physical orders.
+
+This readmission is inert: exact descriptor-receipt association is not compiler
+source semantics or verification authority, and it cannot load or launch.
+The normal CLI, generated verified host launch, and nominal P4 source-proof owner
+are not yet joined to this continuation. Native-aware production lineage
+construction and independent replay remain required. Descriptor traversal
 quotas and existing bounded artifact/replay allocations are separate; publication
 does not produce a complete resource receipt or claim whole-process metering.
 The synthetic receipt/artifact tests do not qualify any tutorial kernel, and

@@ -593,13 +593,21 @@ pub(crate) fn slice_fixture_with_descriptor_table(descriptor_table: &[u8]) -> Fi
 pub(crate) fn synthetic_two_kernel_slice_fixture_with_descriptor_table(
     descriptor_table: &[u8],
 ) -> Fixture {
+    synthetic_two_kernel_slice_fixture_with_descriptor_table_and_workgroup(descriptor_table, 64)
+}
+
+#[allow(dead_code)]
+pub(crate) fn synthetic_two_kernel_slice_fixture_with_descriptor_table_and_workgroup(
+    descriptor_table: &[u8],
+    workgroup_size: u32,
+) -> Fixture {
     let mut first = FixtureOptions::valid();
     first.target = "gfx942:xnack-";
     first.entry = "synthetic_first_transform";
     first.descriptor = "synthetic_first_transform.kd";
     first.include_export = false;
-    first.required_workgroup_size = [64, 1, 1];
-    first.max_flat_workgroup_size = 64;
+    first.required_workgroup_size = [workgroup_size, 1, 1];
+    first.max_flat_workgroup_size = workgroup_size;
 
     let mut second = first;
     second.entry = "synthetic_second_transform";

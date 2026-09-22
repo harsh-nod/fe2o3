@@ -124,6 +124,8 @@ fn static_v3_application_fixtures() -> &'static StaticV3ApplicationFixtures {
         let built = Command::new(cargo)
             .current_dir(workspace)
             .env_remove("RUSTFLAGS")
+            // Encoded flags, even empty, override the explicit static target flags.
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
             .env("CARGO_INCREMENTAL", "0")
             .env("CARGO_PROFILE_DEV_DEBUG", "0")
             .env(

@@ -105,6 +105,11 @@ impl<'a> NominalDescriptorInspectionV3<'a> {
     pub fn kernel_bindings(&self) -> &InspectedKernelBindings {
         &self.bindings
     }
+    /// Transfers the independently inspected physical metadata without cloning it.
+    /// The returned metadata remains inert, as it was while borrowed here.
+    pub fn into_kernel_bindings(self) -> InspectedKernelBindings {
+        self.bindings
+    }
     pub fn location(&self) -> DescriptorSectionLocation {
         self.location
     }

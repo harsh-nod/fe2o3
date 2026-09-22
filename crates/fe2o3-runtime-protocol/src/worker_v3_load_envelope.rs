@@ -332,8 +332,13 @@ impl WorkerV3LoadEnvelopeV1 {
     pub fn from_published_hsaco_v1(
         published: PublishedProtectedWorkerV3HsacoV1,
     ) -> Result<Self, WorkerV3LoadEnvelopeErrorV1> {
-        let (replay, record, claim, current_lease) =
-            published.into_load_envelope_parts_v1()?.into_parts();
+        Self::from_published_parts(published.into_load_envelope_parts_v1()?)
+    }
+
+    pub(crate) fn from_published_parts(
+        parts: fe2o3_hsaco_finalize::PublishedProtectedWorkerV3LoadEnvelopePartsV1,
+    ) -> Result<Self, WorkerV3LoadEnvelopeErrorV1> {
+        let (replay, record, claim, current_lease) = parts.into_parts();
         let fe2o3_hsaco_finalize::ProtectedWorkerV3CompactFinalizerReplayPartsV2 {
             outer_handoff,
             external_provider_payloads,

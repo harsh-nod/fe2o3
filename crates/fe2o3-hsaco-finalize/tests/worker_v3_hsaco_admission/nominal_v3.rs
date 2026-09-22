@@ -8,6 +8,11 @@ use fe2o3_hsaco_finalize::{
 use fe2o3_kernel_descriptor::*;
 #[path = "nominal_publication_v3.rs"]
 mod publication;
+#[allow(unused_imports)]
+pub(crate) use publication::{
+    publish_nominal_worker_v3_fixture_in_directory,
+    publish_two_kernel_nominal_worker_v3_fixture_in_directory,
+};
 
 fn free(_: usize) -> Result<(), &'static str> {
     Ok(())
@@ -18,6 +23,14 @@ fn nominal_slice_source(release: &str) -> Vec<u8> {
 }
 
 fn nominal_slice_source_type(release: &str, scalar: ScalarTypeV1) -> Vec<u8> {
+    nominal_slice_roster_source(release, scalar, &[([0xa1; 32], "vecadd", "vecadd.kd")])
+}
+
+fn nominal_slice_roster_source(
+    release: &str,
+    scalar: ScalarTypeV1,
+    roots: &[([u8; 32], &str, &str)],
+) -> Vec<u8> {
     let compiler = CompilerIdentityV1::new(
         Text::new("rustc").unwrap(),
         Text::new(release).unwrap(),
@@ -59,7 +72,6 @@ fn nominal_slice_source_type(release: &str, scalar: ScalarTypeV1) -> Vec<u8> {
         alias: AliasSemantics::SharedReadOnly,
         components: &components,
     }];
-    let id = KernelId::from_bytes([0xa1; 32]);
     let launch = LaunchConstraintsV1::new(
         1,
         BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
@@ -73,26 +85,34 @@ fn nominal_slice_source_type(release: &str, scalar: ScalarTypeV1) -> Vec<u8> {
         EvidenceIdentity::from_opaque_bytes([11; 32]),
         EvidenceDigest::from_sha256_bytes([12; 32]),
     );
-    let kernels = [KernelDescriptorInputV3 {
-        kernel_id: id,
-        logical_name: "vecadd",
-        entry_name: "vecadd",
-        descriptor_symbol: "vecadd.kd",
-        source_evidence: evidence,
-        executable_ir_evidence: evidence,
-        capabilities: &[CapabilityV1::AmdWave],
-        abi_layout: KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
-        launch: &launch,
-        arguments: &args,
-    }];
-    let requirements = [KernelTargetRequirementsV2::new(
-        id,
-        LdsRequirementsV2::new(0, 0).unwrap(),
-        RequiredWavefrontWidthV2::Wave64,
-        false,
-        SynchronizationRequirementsV2::empty(),
-        AtomicRequirementsV2::empty(),
-    )];
+    let kernels: Vec<_> = roots
+        .iter()
+        .map(|(id, entry, symbol)| KernelDescriptorInputV3 {
+            kernel_id: KernelId::from_bytes(*id),
+            logical_name: entry,
+            entry_name: entry,
+            descriptor_symbol: symbol,
+            source_evidence: evidence,
+            executable_ir_evidence: evidence,
+            capabilities: &[CapabilityV1::AmdWave],
+            abi_layout: KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
+            launch: &launch,
+            arguments: &args,
+        })
+        .collect();
+    let requirements: Vec<_> = roots
+        .iter()
+        .map(|(id, _, _)| {
+            KernelTargetRequirementsV2::new(
+                KernelId::from_bytes(*id),
+                LdsRequirementsV2::new(0, 0).unwrap(),
+                RequiredWavefrontWidthV2::Wave64,
+                false,
+                SynchronizationRequirementsV2::empty(),
+                AtomicRequirementsV2::empty(),
+            )
+        })
+        .collect();
     let input = DeviceDescriptorTableInputV3 {
         canonical_code_object_digest: CanonicalCodeObjectDigest::from_bytes([0; 32]),
         code_object_version: DescriptorCodeObjectVersion::V6,
@@ -110,7 +130,12 @@ fn nominal_slice_source_type(release: &str, scalar: ScalarTypeV1) -> Vec<u8> {
 }
 
 fn nominal_artifact(wire: &[u8]) -> Vec<u8> {
-    let mut bytes = slice_fixture_with_descriptor_table_and_workgroup(wire, 256).bytes;
+    with_nominal_descriptor_section(
+        slice_fixture_with_descriptor_table_and_workgroup(wire, 256).bytes,
+    )
+}
+
+fn with_nominal_descriptor_section(mut bytes: Vec<u8>) -> Vec<u8> {
     let u64_at =
         |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
     let sections = u64_at(40);

@@ -35,6 +35,15 @@ use crate::{
 const WORKER_V3_HOST_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-lineage.v1\0";
 const WORKER_V3_HOST_ROSTER_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-roster-lineage.v1\0";
 
+#[path = "recovered_worker_v3_lineage_identity.rs"]
+mod lineage_identity;
+#[path = "recovered_nominal_worker_v3_admission.rs"]
+mod nominal;
+pub use nominal::{
+    RecoveredNominalWorkerV3AdmissionError, RecoveredNominalWorkerV3PinnedRoster,
+    admit_recovered_nominal_worker_v3_roster,
+};
+
 /// Canonical identity of every V3 compiler, publication, descriptor, and selected-kernel axis
 /// independently retained by host admission.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -114,49 +123,19 @@ impl RecoveredWorkerV3ArtifactStateV1 {
         &self,
         current: &DurableCurrentLinkPublicationTokenV1,
     ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        self.envelope
-            .current_publication_lease()
-            .validate_current_token(current)
-            .and_then(|()| current.revalidate_locked_currentness())
-            .map_err(RecoveredWorkerV3AdmissionErrorV1::CurrentPublication)?;
-        self.envelope
-            .wire()
-            .validate_reacquired_publication_lease_v2(self.envelope.current_publication_lease())
-            .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
+        validate_retained_replay_custody(
+            &self.envelope,
+            current,
+            &self.finalizer_derivation,
+            &self.outer_handoff,
+            &self.compiler_execution_subject,
+        )?;
         let inspected = validate_finalized_identity(
             self.envelope.wire().replay().publication_intent_record(),
             current.exact_artifact_bytes(),
         )?;
         if inspected != self.inspection {
             return Err(RecoveredWorkerV3AdmissionErrorV1::InspectionChanged);
-        }
-        validate_finalizer_derivation_association(
-            &self.envelope,
-            current.exact_artifact_bytes(),
-            &self.finalizer_derivation,
-        )?;
-        let outer_handoff = InertSemanticCompilerModuleHandoffV3::decode(
-            self.envelope.wire().replay().outer_handoff(),
-        )
-        .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
-        if outer_handoff != self.outer_handoff {
-            return Err(RecoveredWorkerV3AdmissionErrorV1::CompilerHandoffChanged);
-        }
-        let compiler_execution_subject = self
-            .envelope
-            .wire()
-            .reconstructed_compiler_execution_subject_v1()
-            .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
-        if compiler_execution_subject != self.compiler_execution_subject
-            || self
-                .envelope
-                .wire()
-                .compiler_execution_receipt()
-                .request()
-                .subject()
-                != &compiler_execution_subject
-        {
-            return Err(RecoveredWorkerV3AdmissionErrorV1::CompilerExecutionSubjectChanged);
         }
         #[cfg(target_os = "linux")]
         if let Some(descriptors) = &self.application_descriptors {
@@ -636,6 +615,48 @@ fn admit_recovered_worker_v3_artifact_v1(
     ),
     RecoveredWorkerV3AdmissionErrorV1,
 > {
+    let (custody, current) = reconstruct_replay_custody(&envelope)?;
+    let ReconstructedReplayCustody {
+        finalizer_derivation,
+        outer_handoff: outer,
+        compiler_execution_subject,
+    } = custody;
+    let inspection = validate_finalized_identity(
+        envelope.wire().replay().publication_intent_record(),
+        current.exact_artifact_bytes(),
+    )?;
+    validate_compiler_source_and_exports(&outer, &inspection)?;
+    validate_target_and_code_object(&outer, &inspection)?;
+
+    Ok((
+        RecoveredWorkerV3ArtifactStateV1 {
+            envelope,
+            finalizer_derivation,
+            compiler_execution_subject,
+            outer_handoff: outer,
+            inspection,
+            #[cfg(target_os = "linux")]
+            application_descriptors: None,
+        },
+        current,
+    ))
+}
+
+struct ReconstructedReplayCustody {
+    finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    outer_handoff: InertSemanticCompilerModuleHandoffV3,
+    compiler_execution_subject: InertCompilerExecutionSubjectV1,
+}
+
+fn reconstruct_replay_custody(
+    envelope: &RecoveredWorkerV3LoadEnvelopeV2,
+) -> Result<
+    (
+        ReconstructedReplayCustody,
+        DurableCurrentLinkPublicationTokenV1,
+    ),
+    RecoveredWorkerV3AdmissionErrorV1,
+> {
     envelope
         .wire()
         .validate_reacquired_publication_lease_v2(envelope.current_publication_lease())
@@ -661,15 +682,11 @@ fn admit_recovered_worker_v3_artifact_v1(
     )
     .map_err(RecoveredWorkerV3AdmissionErrorV1::FinalizerDerivation)?;
     validate_finalizer_derivation_association(
-        &envelope,
+        envelope,
         current.exact_artifact_bytes(),
         &finalizer_derivation,
     )?;
 
-    let inspection = validate_finalized_identity(
-        envelope.wire().replay().publication_intent_record(),
-        current.exact_artifact_bytes(),
-    )?;
     let outer =
         InertSemanticCompilerModuleHandoffV3::decode(envelope.wire().replay().outer_handoff())
             .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
@@ -677,21 +694,58 @@ fn admit_recovered_worker_v3_artifact_v1(
         .wire()
         .reconstructed_compiler_execution_subject_v1()
         .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
-    validate_compiler_source_and_exports(&outer, &inspection)?;
-    validate_target_and_code_object(&outer, &inspection)?;
-
     Ok((
-        RecoveredWorkerV3ArtifactStateV1 {
-            envelope,
+        ReconstructedReplayCustody {
             finalizer_derivation,
             compiler_execution_subject,
             outer_handoff: outer,
-            inspection,
-            #[cfg(target_os = "linux")]
-            application_descriptors: None,
         },
         current,
     ))
+}
+
+fn validate_retained_replay_custody(
+    envelope: &RecoveredWorkerV3LoadEnvelopeV2,
+    current: &DurableCurrentLinkPublicationTokenV1,
+    derivation: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    outer: &InertSemanticCompilerModuleHandoffV3,
+    subject: &InertCompilerExecutionSubjectV1,
+) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+    envelope
+        .current_publication_lease()
+        .validate_current_token(current)
+        .and_then(|()| current.revalidate_locked_currentness())
+        .map_err(RecoveredWorkerV3AdmissionErrorV1::CurrentPublication)?;
+    envelope
+        .wire()
+        .validate_reacquired_publication_lease_v2(envelope.current_publication_lease())
+        .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
+    validate_finalizer_derivation_association(
+        envelope,
+        current.exact_artifact_bytes(),
+        derivation,
+    )?;
+    let actual_outer =
+        InertSemanticCompilerModuleHandoffV3::decode(envelope.wire().replay().outer_handoff())
+            .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
+    if &actual_outer != outer {
+        return Err(RecoveredWorkerV3AdmissionErrorV1::CompilerHandoffChanged);
+    }
+    let actual_subject = envelope
+        .wire()
+        .reconstructed_compiler_execution_subject_v1()
+        .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
+    if &actual_subject != subject
+        || envelope
+            .wire()
+            .compiler_execution_receipt()
+            .request()
+            .subject()
+            != subject
+    {
+        return Err(RecoveredWorkerV3AdmissionErrorV1::CompilerExecutionSubjectChanged);
+    }
+    Ok(())
 }
 
 fn select_entrypoint(
@@ -730,6 +784,34 @@ fn derive_host_lineage_identity(
     compiler_execution_receipt: &CompilerExecutionReceiptCarriageV1,
     finalizer_derivation: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
 ) -> WorkerV3HostLineageEvidenceV1 {
+    derive_descriptor_host_lineage_identity(
+        outer,
+        record,
+        HostDescriptorIdentity {
+            digest: inspection.digest(),
+            kernel_id,
+            domain: WORKER_V3_HOST_LINEAGE_DOMAIN_V1,
+        },
+        compiler_execution_subject,
+        compiler_execution_receipt,
+        finalizer_derivation,
+    )
+}
+
+struct HostDescriptorIdentity {
+    digest: fe2o3_kernel_descriptor::CanonicalCodeObjectDigest,
+    kernel_id: KernelId,
+    domain: &'static [u8],
+}
+
+fn derive_descriptor_host_lineage_identity(
+    outer: &InertSemanticCompilerModuleHandoffV3,
+    record: fe2o3_artifact_transaction::WorkerV3PublicationIntentRecordV1,
+    descriptor: HostDescriptorIdentity,
+    compiler_execution_subject: &InertCompilerExecutionSubjectV1,
+    compiler_execution_receipt: &CompilerExecutionReceiptCarriageV1,
+    finalizer_derivation: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+) -> WorkerV3HostLineageEvidenceV1 {
     let capsule = outer.capsule();
     let receipts = capsule.receipts();
     let capsule_identity = capsule.identity();
@@ -739,119 +821,54 @@ fn derive_host_lineage_identity(
     let proof_binding = receipts.proof_binding().identity();
     let finalized_length = u64::try_from(record.output_length())
         .expect("durable publication output length is bounded below u64::MAX");
-    let mut digest = Sha256::new();
-    digest.update(WORKER_V3_HOST_LINEAGE_DOMAIN_V1);
-    digest.update(compiler_execution_subject.identity().sha256());
-    digest.update(compiler_execution_subject.canonical_bytes());
-    digest.update(compiler_execution_receipt.identity().as_bytes());
-    digest.update(compiler_execution_receipt.canonical_bytes());
-    digest.update(finalizer_derivation.identity().as_bytes());
-    digest.update(record.identity().as_bytes());
-    update_identity(
-        &mut digest,
-        outer_identity.sha256(),
-        outer_identity.byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        capsule_identity.sha256(),
-        capsule_identity.byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        module_identity.sha256(),
-        module_identity.byte_len(),
-    );
-    digest.update(15_u16.to_le_bytes());
-    update_identity(
-        &mut digest,
-        receipts.rustc_identity_inventory().identity().sha256(),
-        receipts.rustc_identity_inventory().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.rustc_preflight_plan().identity().sha256(),
-        receipts.rustc_preflight_plan().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.semantic_mir().identity().sha256(),
-        receipts.semantic_mir().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.middle_end().identity().sha256(),
-        receipts.middle_end().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.kernel_ir().identity().sha256(),
-        receipts.kernel_ir().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.mir_to_kir_correspondence().identity().sha256(),
-        receipts.mir_to_kir_correspondence().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        formal_memory.sha256(),
-        formal_memory.byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        proof_binding.sha256(),
-        proof_binding.byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.target_binding().identity().sha256(),
-        receipts.target_binding().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.data_layout().identity().sha256(),
-        receipts.data_layout().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.abi().identity().sha256(),
-        receipts.abi().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.export_manifest().identity().sha256(),
-        receipts.export_manifest().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.amdgpu_lowering().identity().sha256(),
-        receipts.amdgpu_lowering().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts.semantic_to_llvm().identity().sha256(),
-        receipts.semantic_to_llvm().identity().byte_len(),
-    );
-    update_identity(
-        &mut digest,
-        receipts
-            .final_compiler_module_commitment()
-            .identity()
-            .sha256(),
-        receipts
-            .final_compiler_module_commitment()
-            .identity()
-            .byte_len(),
-    );
-    digest.update(record.plan().linked_output().as_bytes());
-    digest.update(record.output_sha256());
-    digest.update(finalized_length.to_le_bytes());
-    digest.update(inspection.digest().as_bytes());
-    digest.update(kernel_id.as_bytes());
+    macro_rules! content {
+        ($identity:expr) => {{
+            let identity = $identity;
+            (*identity.sha256(), identity.byte_len())
+        }};
+    }
+    let preimage = lineage_identity::Preimage {
+        subject: (
+            *compiler_execution_subject.identity().sha256(),
+            compiler_execution_subject.canonical_bytes(),
+        ),
+        receipt: (
+            *compiler_execution_receipt.identity().as_bytes(),
+            compiler_execution_receipt.canonical_bytes(),
+        ),
+        finalizer: *finalizer_derivation.identity().as_bytes(),
+        record: record.identity().as_bytes(),
+        outer: content!(outer_identity),
+        capsule: content!(capsule_identity),
+        module: content!(module_identity),
+        receipts: [
+            content!(receipts.rustc_identity_inventory().identity()),
+            content!(receipts.rustc_preflight_plan().identity()),
+            content!(receipts.semantic_mir().identity()),
+            content!(receipts.middle_end().identity()),
+            content!(receipts.kernel_ir().identity()),
+            content!(receipts.mir_to_kir_correspondence().identity()),
+            content!(formal_memory),
+            content!(proof_binding),
+            content!(receipts.target_binding().identity()),
+            content!(receipts.data_layout().identity()),
+            content!(receipts.abi().identity()),
+            content!(receipts.export_manifest().identity()),
+            content!(receipts.amdgpu_lowering().identity()),
+            content!(receipts.semantic_to_llvm().identity()),
+            content!(receipts.final_compiler_module_commitment().identity()),
+        ],
+        linked: *record.plan().linked_output().as_bytes(),
+        finalized: (record.output_sha256(), finalized_length),
+        code_object: *descriptor.digest.as_bytes(),
+        kernel: *descriptor.kernel_id.as_bytes(),
+    };
 
     WorkerV3HostLineageEvidenceV1 {
-        identity: WorkerV3HostLineageIdentityV1(digest.finalize().into()),
+        identity: WorkerV3HostLineageIdentityV1(lineage_identity::hash(
+            descriptor.domain,
+            &preimage,
+        )),
         finalizer_derivation_sha256: *finalizer_derivation.identity().as_bytes(),
         capsule_sha256: *capsule_identity.sha256(),
         formal_memory_sha256: *formal_memory.sha256(),
@@ -859,11 +876,6 @@ fn derive_host_lineage_identity(
         finalized_sha256: record.output_sha256(),
         finalized_length,
     }
-}
-
-fn update_identity(digest: &mut Sha256, sha256: &[u8; 32], byte_len: u64) {
-    digest.update(sha256);
-    digest.update(byte_len.to_le_bytes());
 }
 
 fn validate_finalizer_derivation_association(
@@ -889,13 +901,7 @@ fn validate_finalized_identity(
     record: fe2o3_artifact_transaction::WorkerV3PublicationIntentRecordV1,
     finalized: &[u8],
 ) -> Result<FinalizedDescriptorInspection, RecoveredWorkerV3AdmissionErrorV1> {
-    if finalized.len() != record.output_length() {
-        return Err(RecoveredWorkerV3AdmissionErrorV1::FinalizedLengthMismatch);
-    }
-    let digest: [u8; 32] = Sha256::digest(finalized).into();
-    if digest != record.output_sha256() || digest != *record.plan().finalized_output().as_bytes() {
-        return Err(RecoveredWorkerV3AdmissionErrorV1::FinalizedIdentityMismatch);
-    }
+    validate_finalized_publication_identity(record, finalized)?;
     let inspection = verify_finalized(finalized)
         .map_err(RecoveredWorkerV3AdmissionErrorV1::FinalizedVerification)?;
     let unfinalized = derive_unfinalized_hsaco_from_finalized_v1(finalized)
@@ -905,6 +911,20 @@ fn validate_finalized_identity(
         return Err(RecoveredWorkerV3AdmissionErrorV1::LinkedIdentityMismatch);
     }
     Ok(inspection)
+}
+
+fn validate_finalized_publication_identity(
+    record: fe2o3_artifact_transaction::WorkerV3PublicationIntentRecordV1,
+    finalized: &[u8],
+) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+    if finalized.len() != record.output_length() {
+        return Err(RecoveredWorkerV3AdmissionErrorV1::FinalizedLengthMismatch);
+    }
+    let digest: [u8; 32] = Sha256::digest(finalized).into();
+    if digest != record.output_sha256() || digest != *record.plan().finalized_output().as_bytes() {
+        return Err(RecoveredWorkerV3AdmissionErrorV1::FinalizedIdentityMismatch);
+    }
+    Ok(())
 }
 
 fn validate_compiler_source_and_exports(

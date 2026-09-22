@@ -7,8 +7,9 @@ mod shared;
     reason = "different vertical test binaries consume different shared fixture constructors"
 )]
 pub(crate) use shared::{
-    PublishedWorkerV3Fixture, TestDirectory, publish_worker_v3_fixture_in_directory,
-    published_synthetic_two_kernel_worker_v3_fixture,
+    PublishedWorkerV3Fixture, TestDirectory, publish_nominal_worker_v3_fixture_in_directory,
+    publish_two_kernel_nominal_worker_v3_fixture_in_directory,
+    publish_worker_v3_fixture_in_directory, published_synthetic_two_kernel_worker_v3_fixture,
     published_synthetic_two_kernel_worker_v3_fixture_with_llvm_build_identity,
     published_worker_v3_fixture, published_worker_v3_fixture_with_llvm_build_identity,
 };

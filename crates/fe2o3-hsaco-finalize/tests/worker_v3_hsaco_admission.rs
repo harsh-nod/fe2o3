@@ -2,6 +2,11 @@
 
 #[path = "worker_v3_hsaco_admission/nominal_v3.rs"]
 mod nominal_v3;
+#[allow(unused_imports)]
+pub(crate) use nominal_v3::{
+    publish_nominal_worker_v3_fixture_in_directory,
+    publish_two_kernel_nominal_worker_v3_fixture_in_directory,
+};
 
 use std::{
     collections::BTreeMap,
