@@ -180,6 +180,10 @@ fn actual_source_headless_debug_join_ladder() {
     assert_eq!(joined["fixed_environment_sequential_sessions"], 2);
     assert_eq!(joined["positive_whole_kernel_oracle_runs"], 60);
     assert_eq!(joined["actual_debug_capture_runs"], 2);
+    assert_eq!(joined["current_owner_inspections"], 2);
+    assert_eq!(joined["exact_stale_inspection_identity_refusals"], 1);
+    assert_eq!(joined["inspection_queries"], 3);
+    assert_eq!(joined["inspection_work_limit"], 3_145_728);
     assert_eq!(joined["exact_source_identity_mismatch_refusals"], 3);
     assert_eq!(joined["old_evidence_used_only_as_negative_input"], true);
     assert_eq!(joined["public_bundle_created"], false);
@@ -193,6 +197,7 @@ fn actual_source_headless_debug_join_ladder() {
     {
         assert_eq!(observation["invocation"]["source_sha256"], *expected_sha256);
         let observed = &observation["observation"];
+        debug_join::require_inspection_observation(observed, index == 1);
         require_fresh_diagnostic(&observed["fresh"]);
         assert_eq!(observed["whole_kernel_simulation"]["runs"], 30);
         assert_eq!(observed["actual_captures"], 1);
@@ -219,7 +224,7 @@ fn actual_source_headless_debug_join_ladder() {
     assert_eq!(hash(&source.join("edited.rs")), edited_sha256);
     seed.recheck();
     let (source_files, source_bytes) = super::super::footprint(&seed.directory);
-    let report = json!({
+    let mut report = json!({
         "kind":"public_seeded_source_candidate_debug_join_observation_v1",
         "normal_consumer_publication":seed.publication,"edit_publications":edits,"joined":joined,
         "normal_library_publication_processes":1,"actual_fresh_callbacks":2,
@@ -241,6 +246,22 @@ fn actual_source_headless_debug_join_ladder() {
         "resource_lifetime_observations":false,"production_resume":false,"hardware_observed":false,
         "grants_artifact_or_launch_authority":false,
     });
+    // Keep the original bounded report schema without growing one json! macro
+    // beyond the crate's existing recursion limit.
+    for (key, value) in [
+        ("current_owner_inspections", 2u64),
+        ("exact_stale_inspection_identity_refusals", 1),
+        ("inspection_queries", 3),
+        ("inspection_work_limit", 3_145_728),
+    ] {
+        assert!(
+            report
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), json!(value))
+                .is_none()
+        );
+    }
     let bytes = serde_json::to_vec_pretty(&report).unwrap();
     assert!(bytes.len() <= 512 * 1024);
     paths::write_new(

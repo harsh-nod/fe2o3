@@ -1,5 +1,23 @@
 use super::*;
 
+#[test]
+fn live_source_identity_line_is_bounded_and_observation_only() {
+    // Formatter component control only: this is not actual source capture.
+    let line = source_identity_line_v17(&[0x12; 32], &[0x34; 32]);
+    assert_eq!(
+        line,
+        format!(
+            "fe2o3 diagnostic source identities: semantic_mir_v32 {}, canonical_kir_v17 {}; observation_only=true, exported_source_authentication=false",
+            "12".repeat(32),
+            "34".repeat(32),
+        )
+    );
+    assert!(line.len() <= 384);
+    assert!(!line.contains('\n'));
+    assert!(!line.starts_with("fe2o3 diagnostic extraction:"));
+    assert_ne!(line, source_identity_line_v17(&[0x34; 32], &[0x12; 32]));
+}
+
 fn scratch() -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "fe2o3-diagnostic-kir-v17-output-{}-{}",
