@@ -108,7 +108,8 @@ def authenticate(repo):
         current = baseline.method((repo / CRATE / 'src' / path).read_text(), 'mark_unknown')
         need(current == original.replace(inner, adapter), 'exact public adapter: ' + owner)
     for path in [RETAINED, CRATE / 'src/context_version_journal/retained.rs',
-                 CRATE / 'src/context_version_journal/declarations.rs', CRATE / 'src/context_version_journal.rs']:
+                 CRATE / 'src/context_version_journal/declarations.rs', CRATE / 'src/context_version_journal.rs',
+                 CRATE / 'verus/context_version_journal_settlement_v1.rs']:
         old = subprocess.check_output(['git', '-C', str(repo), 'show', FROZEN + ':' + str(path)])
         need((repo / path).read_bytes() == old, 'unchanged retained leaf/type/instrumentation: ' + str(path))
 
@@ -177,12 +178,14 @@ def main():
                 status, stdout, stderr = base.run_owned(command, 610, output / name, env)
                 observed = legacy.normalized(base, stdout, stderr, stage)
                 if mutation:
+                    # Reuse the scoped logical-failure checks; this developer record
+                    # captures diagnostics, rather than claiming precommitted replay.
                     legacy.check_result(base, status, stdout, stderr, stage, mutation, {name: observed})
                 else:
                     need(status == 0 and not observed['diagnostics'], 'clean terminal positive')
                     report = observed['result']
                     need(report == {'encountered-error': False, 'encountered-vir-error': False,
-                                    'success': True, 'verified': 193 if name == 'raw' else 724,
+                                    'success': True, 'verified': 193 if name == 'raw' else 728,
                                     'errors': 0, 'is-verifying-entire-crate': True}, 'exact whole-root positive')
                 results[name] = observed
                 print(name, observed['result'], flush=True)
