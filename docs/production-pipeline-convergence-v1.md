@@ -94,6 +94,27 @@ does not produce a complete resource receipt or claim whole-process metering.
 The synthetic receipt/artifact tests do not qualify any tutorial kernel, and
 M0-M7 remain open.
 
+## Durable source replay
+
+Native source replay still needs a reconstructive typed ranked recipe, ordered
+proof requests and complete correspondence/launch/signature transport. Diagnostic
+ranked text or graph hashes cannot stand in for those inputs. A decoded request
+must be reconciled with actual imported signatures; full source verification
+must independently re-import and recompile rather than trust decoding.
+
+The tensor leaf dependency now reuses the existing kernel-IR V8 grammar through
+`encode_tensor_layout_leaf_v1` and `decode_tensor_layout_leaf_v1`. Both require
+the shared verification budget, allocate no heap, and preserve the inherited
+storage ledger. The complete fixed-size schema is at most 117 bytes, including
+opaque and unsupported variants. Syntax round-trip preserves these variants;
+independent semantic checks still reject them. A zero-fill declaration is not
+authenticated zero-fill evidence. No module header or authority owner is created.
+
+Tests cover literal bytes for BF16/FP8/FP4/mixed layouts, independent operand
+swizzles, the full schema bound, malformed input, exact work quotas and historical
+V7/V8 gates. This leaf is not yet a full durable recipe codec, a protected proof,
+or a production/GPU qualification result.
+
 ## One transaction
 
 The completed convergence target sends every kernel-containing final crate

@@ -125,6 +125,13 @@ pub const MAX_TYPE_DEPTH_V1: usize = 64;
 const HEADER_BYTES: usize = 20;
 const MAX_ADDRESS_SPACES: usize = 5;
 
+#[path = "wire_tensor_leaf_v1.rs"]
+mod tensor_leaf_v1;
+use tensor_leaf_v1::TensorLeafWriterV1;
+pub use tensor_leaf_v1::{
+    MAX_TENSOR_LAYOUT_LEAF_BYTES_V1, decode_tensor_layout_leaf_v1, encode_tensor_layout_leaf_v1,
+};
+
 /// A bounded canonical-encoding failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KernelIrEncodeError {
@@ -2580,7 +2587,7 @@ fn decode_matrix_operation(
 }
 
 fn encode_tensor_layout_contract_v1(
-    writer: &mut Writer<'_>,
+    writer: &mut impl TensorLeafWriterV1,
     contract: TensorLayoutContractV1,
 ) -> Result<(), KernelIrEncodeError> {
     match contract.profile {
@@ -2671,7 +2678,7 @@ fn decode_tensor_layout_contract_v1(
 }
 
 fn encode_tensor_fragment_layout_v1(
-    writer: &mut Writer<'_>,
+    writer: &mut impl TensorLeafWriterV1,
     fragment: TensorFragmentLayoutV1,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u8(match fragment.role {
@@ -3671,7 +3678,7 @@ enum_codec!(matrix_layout_tag, decode_matrix_layout, MatrixLayout, "matrix layou
 });
 
 fn encode_matrix_element(
-    writer: &mut Writer<'_>,
+    writer: &mut impl TensorLeafWriterV1,
     element: MatrixElement,
 ) -> Result<(), KernelIrEncodeError> {
     if matches!(element, MatrixElement::Fp4E2M1 | MatrixElement::Fp8E4M3) {
@@ -3753,12 +3760,15 @@ fn require_v7(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIr
     }
 }
 
-fn require_v8(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
-    if writer.version >= KERNEL_IR_VERSION_V8 {
+fn require_v8(
+    writer: &impl TensorLeafWriterV1,
+    feature: &'static str,
+) -> Result<(), KernelIrEncodeError> {
+    if writer.version() >= KERNEL_IR_VERSION_V8 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {
-            version: writer.version,
+            version: writer.version(),
             feature,
         })
     }
