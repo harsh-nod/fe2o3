@@ -1,8 +1,9 @@
 # Assembly authoring implementation status
 
-Latest bounded increment: [exact static helper calls and typed parameter
-correspondence](evidence/authoring-call-targets-20260922.md), following
-[const-specialized helpers, watch/source replay and reproducible native
+Latest bounded increment: [literal-repeat authoring, ordinary LLVM observation
+and source-fault replay](evidence/authoring-repeat-fault-20260922.md), following
+[exact static helper calls and typed parameter correspondence](evidence/authoring-call-targets-20260922.md)
+and [const-specialized helpers, watch/source replay and reproducible native
 inspection](evidence/authoring-const-watch-native-20260922.md).
 Its dated qualification is separate from the historical results below; the broad
 milestone acceptance remains M1/V1/U1 (3/18).
