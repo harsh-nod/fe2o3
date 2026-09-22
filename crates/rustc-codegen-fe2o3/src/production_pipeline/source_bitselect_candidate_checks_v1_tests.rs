@@ -2,6 +2,9 @@
 use super::*;
 use fe2o3_kernel_ir::{Operation, Terminator, ValueDef};
 
+#[path = "source_bitselect_prefix_escape_v1_tests.rs"]
+mod prefix_escape;
+
 fn graph() -> FunctionBody {
     let mut block = BasicBlock::new(BlockId(9));
     block.operations = [
@@ -77,7 +80,7 @@ fn source_candidate_exact_graph_and_all_operand_escape_routes() {
 }
 
 #[test]
-fn source_candidate_dead_output_preceding_work_and_nonentry_refuse() {
+fn source_candidate_dead_output_out_of_bounds_and_nonentry_refuse() {
     let mut body = graph();
     body.blocks[0].terminator = Some(Terminator::Return { values: vec![] });
     assert_eq!(
@@ -88,7 +91,7 @@ fn source_candidate_dead_output_preceding_work_and_nonentry_refuse() {
     body.blocks.insert(0, BasicBlock::new(BlockId(0)));
     assert_eq!(
         check(&body).unwrap_err(),
-        "source-candidate boundary is not the first entry operations"
+        "source-candidate boundary is not three contiguous entry operations"
     );
     assert_eq!(
         require_escape(
@@ -100,7 +103,7 @@ fn source_candidate_dead_output_preceding_work_and_nonentry_refuse() {
             &mut ScanMeter::default()
         )
         .unwrap_err(),
-        "source-candidate boundary is not the first entry operations"
+        "source-candidate boundary is not three contiguous entry operations"
     );
 }
 
