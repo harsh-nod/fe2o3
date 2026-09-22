@@ -1,0 +1,3100 @@
+{
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  },
+  "capacity_zero_epoch": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 164,
+            "byte_end": 501,
+            "line_start": 3,
+            "line_end": 13,
+            "column_start": 41,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $count:ident) => {{",
+                "highlight_start": 41,
+                "highlight_end": 42
+              },
+              {
+                "text": "        if $count > $contents.free_reads.len() {",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::MemberCapacity);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if false",
+                "highlight_start": 1,
+                "highlight_end": 17
+              },
+              {
+                "text": "            || $contents.next_incarnation.checked_add($count as u64).is_none()",
+                "highlight_start": 1,
+                "highlight_end": 79
+              },
+              {
+                "text": "        {",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::EpochExhausted);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        Ok(())",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 418,
+                "byte_end": 457,
+                "line_start": 14,
+                "line_end": 14,
+                "column_start": 9,
+                "column_end": 48,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        stable_read_capacity_body!(self, count)",
+                    "highlight_start": 9,
+                    "highlight_end": 48
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_read_capacity_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 83,
+                "byte_end": 121,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_read_capacity_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 351,
+            "byte_end": 402,
+            "line_start": 12,
+            "line_end": 12,
+            "column_start": 17,
+            "column_end": 68,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == stable_capacity_decision_v1(*self, count),",
+                "highlight_start": 17,
+                "highlight_end": 68
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:12:17\n   |\n12 |           ensures result == stable_capacity_decision_v1(*self, count),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:3:41\n   |\n 3 |       ($contents:ident, $count:ident) => {{\n   |  _________________________________________-\n 4 | |         if $count > $contents.free_reads.len() {\n 5 | |             return Err(ContextVersionJournalErrorV1::MemberCapacity);\n...  |\n12 | |         Ok(())\n13 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "read_device_local": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 1060,
+            "byte_end": 1126,
+            "line_start": 28,
+            "line_end": 28,
+            "column_start": 13,
+            "column_end": 79,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::AllocationExtentMismatch);",
+                "highlight_start": 13,
+                "highlight_end": 79
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 654,
+                "byte_end": 695,
+                "line_start": 20,
+                "line_end": 20,
+                "column_start": 9,
+                "column_end": 50,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        stable_read_validate_body!(self, request)",
+                    "highlight_start": 9,
+                    "highlight_end": 50
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_read_validate_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 533,
+                "byte_end": 571,
+                "line_start": 16,
+                "line_end": 16,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_read_validate_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 581,
+            "byte_end": 638,
+            "line_start": 18,
+            "line_end": 18,
+            "column_start": 17,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == stable_read_decision_v1(self.journal, *request),",
+                "highlight_start": 17,
+                "highlight_end": 74
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:18:17\n   |\n18 |         ensures result == stable_read_decision_v1(self.journal, *request),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:28:13\n   |\n28 |             return Err(ContextVersionJournalErrorV1::AllocationExtentMismatch);\n   |             ------------------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 1186,
+            "byte_end": 1241,
+            "line_start": 31,
+            "line_end": 31,
+            "column_start": 13,
+            "column_end": 68,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidExtent);",
+                "highlight_start": 13,
+                "highlight_end": 68
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 654,
+                "byte_end": 695,
+                "line_start": 20,
+                "line_end": 20,
+                "column_start": 9,
+                "column_end": 50,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        stable_read_validate_body!(self, request)",
+                    "highlight_start": 9,
+                    "highlight_end": 50
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_read_validate_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 533,
+                "byte_end": 571,
+                "line_start": 16,
+                "line_end": 16,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_read_validate_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 581,
+            "byte_end": 638,
+            "line_start": 18,
+            "line_end": 18,
+            "column_start": 17,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == stable_read_decision_v1(self.journal, *request),",
+                "highlight_start": 17,
+                "highlight_end": 74
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:18:17\n   |\n18 |         ensures result == stable_read_decision_v1(self.journal, *request),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:31:13\n   |\n31 |             return Err(ContextVersionJournalErrorV1::InvalidExtent);\n   |             ------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 469,
+            "byte_end": 563,
+            "line_start": 17,
+            "line_end": 17,
+            "column_start": 5,
+            "column_end": 99,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn validate_read(&self, request: &ContextAllocationReadV1) -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 5,
+                "highlight_end": 99
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:17:5\n   |\n17 |     fn validate_read(&self, request: &ContextAllocationReadV1) -> (result: Result<(), ReadErrorV1>)\n   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "read_endpoint": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 1540,
+            "byte_end": 1595,
+            "line_start": 38,
+            "line_end": 38,
+            "column_start": 13,
+            "column_end": 68,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidExtent);",
+                "highlight_start": 13,
+                "highlight_end": 68
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 654,
+                "byte_end": 695,
+                "line_start": 20,
+                "line_end": 20,
+                "column_start": 9,
+                "column_end": 50,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        stable_read_validate_body!(self, request)",
+                    "highlight_start": 9,
+                    "highlight_end": 50
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_read_validate_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 533,
+                "byte_end": 571,
+                "line_start": 16,
+                "line_end": 16,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_read_validate_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 581,
+            "byte_end": 638,
+            "line_start": 18,
+            "line_end": 18,
+            "column_start": 17,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == stable_read_decision_v1(self.journal, *request),",
+                "highlight_start": 17,
+                "highlight_end": 74
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:18:17\n   |\n18 |         ensures result == stable_read_decision_v1(self.journal, *request),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:38:13\n   |\n38 |             return Err(ContextVersionJournalErrorV1::InvalidExtent);\n   |             ------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_output_occupancy": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 2748,
+            "byte_end": 3343,
+            "line_start": 77,
+            "line_end": 91,
+            "column_start": 73,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $consumer:ident, $count:ident, $output:ident) => {{",
+                "highlight_start": 73,
+                "highlight_end": 74
+              },
+              {
+                "text": "        if $consumer.context_generation != $contents.journal.context_generation() {",
+                "highlight_start": 1,
+                "highlight_end": 84
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::ForeignContext);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $consumer.local == 0 || $consumer.local == u64::MAX {",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidWriterId);",
+                "highlight_start": 1,
+                "highlight_end": 71
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if $count == 0 || $count != $output.len() {",
+                "highlight_start": 1,
+                "highlight_end": 52
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::RosterCapacity);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if false {",
+                "highlight_start": 1,
+                "highlight_end": 19
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        $contents.validate_read_capacity($count)",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 2419,
+                "byte_end": 2481,
+                "line_start": 56,
+                "line_end": 56,
+                "column_start": 5,
+                "column_end": 67,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_acquire_header_body!(contents, consumer, count, output)",
+                    "highlight_start": 5,
+                    "highlight_end": 67
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_acquire_header_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 2634,
+                "byte_end": 2673,
+                "line_start": 76,
+                "line_end": 76,
+                "column_start": 1,
+                "column_end": 40,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_acquire_header_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 40
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 2340,
+            "byte_end": 2411,
+            "line_start": 54,
+            "line_end": 54,
+            "column_start": 13,
+            "column_end": 84,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_acquire_header_v1(*contents, consumer, count, output@),",
+                "highlight_start": 13,
+                "highlight_end": 84
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:54:13\n   |\n54 |       ensures result == stable_acquire_header_v1(*contents, consumer, count, output@),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:77:73\n   |\n77 |       ($contents:ident, $consumer:ident, $count:ident, $output:ident) => {{\n   |  _________________________________________________________________________-\n78 | |         if $consumer.context_generation != $contents.journal.context_generation() {\n79 | |             return Err(ContextVersionJournalErrorV1::ForeignContext);\n...  |\n90 | |         $contents.validate_read_capacity($count)\n91 | |     }};\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "length_order": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 2497,
+            "byte_end": 2624,
+            "line_start": 71,
+            "line_end": 72,
+            "column_start": 9,
+            "column_end": 82,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $left.0 < $right.0 || ($left.0 == $right.0 &&",
+                "highlight_start": 9,
+                "highlight_end": 54
+              },
+              {
+                "text": "            ($left.1 < $right.1 || ($left.1 == $right.1 && $left.2 <= $right.2)))",
+                "highlight_start": 1,
+                "highlight_end": 82
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 1643,
+                "byte_end": 1684,
+                "line_start": 39,
+                "line_end": 39,
+                "column_start": 5,
+                "column_end": 46,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_read_order_less_body!(left, right)",
+                    "highlight_start": 5,
+                    "highlight_end": 46
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_read_order_less_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 2409,
+                "byte_end": 2449,
+                "line_start": 69,
+                "line_end": 69,
+                "column_start": 1,
+                "column_end": 41,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_read_order_less_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 41
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 1594,
+            "byte_end": 1635,
+            "line_start": 37,
+            "line_end": 37,
+            "column_start": 13,
+            "column_end": 54,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_order_lt_v1(left, right),",
+                "highlight_start": 13,
+                "highlight_end": 54
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:37:13\n   |\n37 |       ensures result == stable_order_lt_v1(left, right),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:71:9\n   |\n71 | /         $left.0 < $right.0 || ($left.0 == $right.0 &&\n72 | |             ($left.1 < $right.1 || ($left.1 == $right.1 && $left.2 <= $right.2)))\n   | |_________________________________________________________________________________- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "group_count": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 3497,
+            "byte_end": 4742,
+            "line_start": 95,
+            "line_end": 124,
+            "column_start": 71,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $request:ident, $index:ident, $state:ident) => {{",
+                "highlight_start": 71,
+                "highlight_end": 72
+              },
+              {
+                "text": "        match $contents.validate_read(&$request) {",
+                "highlight_start": 1,
+                "highlight_end": 51
+              },
+              {
+                "text": "            Ok(_) => {},",
+                "highlight_start": 1,
+                "highlight_end": 25
+              },
+              {
+                "text": "            Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 45
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let key = ($request.allocation.key.local, $request.byte_offset, $request.byte_len);",
+                "highlight_start": 1,
+                "highlight_end": 92
+              },
+              {
+                "text": "        if let Some(prior) = $state.previous {",
+                "highlight_start": 1,
+                "highlight_end": 47
+              },
+              {
+                "text": "            if !stable_read_order_less_exec_v1(prior, key) {",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::NonCanonicalRoster);",
+                "highlight_start": 1,
+                "highlight_end": 78
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let mut group = 1usize;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "        if let Some(prior) = $state.previous {",
+                "highlight_start": 1,
+                "highlight_end": 47
+              },
+              {
+                "text": "            if prior.0 == key.0 {",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "                group = 1;",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let count = match $contents.readers[$request.allocation.slot].checked_add(group) {",
+                "highlight_start": 1,
+                "highlight_end": 91
+              },
+              {
+                "text": "            Some(count) => count,",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "            None => return Err(ContextVersionJournalErrorV1::InvalidState),",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        if count > $contents.leases.len() {",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let slot = $contents.free_reads[$contents.free_reads.len() - $index - 1];",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "        if slot >= $contents.leases.len() || $contents.leases[slot].is_some() {",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        Ok(StableReadAcquireScanV1 { previous: Some(key), group })",
+                "highlight_start": 1,
+                "highlight_end": 67
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 2978,
+                "byte_end": 3036,
+                "line_start": 65,
+                "line_end": 65,
+                "column_start": 5,
+                "column_end": 63,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_acquire_item_body!(contents, request, index, state)",
+                    "highlight_start": 5,
+                    "highlight_end": 63
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_acquire_item_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 3387,
+                "byte_end": 3424,
+                "line_start": 94,
+                "line_end": 94,
+                "column_start": 1,
+                "column_end": 38,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_acquire_item_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 38
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 2820,
+            "byte_end": 2886,
+            "line_start": 62,
+            "line_end": 62,
+            "column_start": 13,
+            "column_end": 79,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_acquire_item_v1(*contents, request, index, state),",
+                "highlight_start": 13,
+                "highlight_end": 79
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:62:13\n    |\n 62 |       ensures result == stable_acquire_item_v1(*contents, request, index, state),\n    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:95:71\n    |\n 95 |       ($contents:ident, $request:ident, $index:ident, $state:ident) => {{\n    |  _______________________________________________________________________-\n 96 | |         match $contents.validate_read(&$request) {\n 97 | |             Ok(_) => {},\n 98 | |             Err(error) => return Err(error),\n...   |\n123 | |         Ok(StableReadAcquireScanV1 { previous: Some(key), group })\n124 | |     }};\n    | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "selected_tail": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 3497,
+            "byte_end": 4724,
+            "line_start": 95,
+            "line_end": 124,
+            "column_start": 71,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    ($contents:ident, $request:ident, $index:ident, $state:ident) => {{",
+                "highlight_start": 71,
+                "highlight_end": 72
+              },
+              {
+                "text": "        match $contents.validate_read(&$request) {",
+                "highlight_start": 1,
+                "highlight_end": 51
+              },
+              {
+                "text": "            Ok(_) => {},",
+                "highlight_start": 1,
+                "highlight_end": 25
+              },
+              {
+                "text": "            Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 45
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let key = ($request.allocation.key.local, $request.byte_offset, $request.byte_len);",
+                "highlight_start": 1,
+                "highlight_end": 92
+              },
+              {
+                "text": "        if let Some(prior) = $state.previous {",
+                "highlight_start": 1,
+                "highlight_end": 47
+              },
+              {
+                "text": "            if !stable_read_order_less_exec_v1(prior, key) {",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::NonCanonicalRoster);",
+                "highlight_start": 1,
+                "highlight_end": 78
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let mut group = 1usize;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "        if let Some(prior) = $state.previous {",
+                "highlight_start": 1,
+                "highlight_end": 47
+              },
+              {
+                "text": "            if prior.0 == key.0 {",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "                group = $state.group + 1;",
+                "highlight_start": 1,
+                "highlight_end": 42
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let count = match $contents.readers[$request.allocation.slot].checked_add(group) {",
+                "highlight_start": 1,
+                "highlight_end": 91
+              },
+              {
+                "text": "            Some(count) => count,",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "            None => return Err(ContextVersionJournalErrorV1::InvalidState),",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "        };",
+                "highlight_start": 1,
+                "highlight_end": 11
+              },
+              {
+                "text": "        if count > $contents.leases.len() {",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        let slot = $contents.free_reads[$index];",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "        if slot >= $contents.leases.len() || $contents.leases[slot].is_some() {",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 68
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        Ok(StableReadAcquireScanV1 { previous: Some(key), group })",
+                "highlight_start": 1,
+                "highlight_end": 67
+              },
+              {
+                "text": "    }};",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 2978,
+                "byte_end": 3036,
+                "line_start": 65,
+                "line_end": 65,
+                "column_start": 5,
+                "column_end": 63,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_acquire_item_body!(contents, request, index, state)",
+                    "highlight_start": 5,
+                    "highlight_end": 63
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_acquire_item_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 3387,
+                "byte_end": 3424,
+                "line_start": 94,
+                "line_end": 94,
+                "column_start": 1,
+                "column_end": 38,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_acquire_item_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 38
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 2820,
+            "byte_end": 2886,
+            "line_start": 62,
+            "line_end": 62,
+            "column_start": 13,
+            "column_end": 79,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_acquire_item_v1(*contents, request, index, state),",
+                "highlight_start": 13,
+                "highlight_end": 79
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:62:13\n    |\n 62 |       ensures result == stable_acquire_item_v1(*contents, request, index, state),\n    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:95:71\n    |\n 95 |       ($contents:ident, $request:ident, $index:ident, $state:ident) => {{\n    |  _______________________________________________________________________-\n 96 | |         match $contents.validate_read(&$request) {\n 97 | |             Ok(_) => {},\n 98 | |             Err(error) => return Err(error),\n...   |\n123 | |         Ok(StableReadAcquireScanV1 { previous: Some(key), group })\n124 | |     }};\n    | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 4586,
+            "byte_end": 4640,
+            "line_start": 121,
+            "line_end": 121,
+            "column_start": 13,
+            "column_end": 67,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 13,
+                "highlight_end": 67
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 2978,
+                "byte_end": 3036,
+                "line_start": 65,
+                "line_end": 65,
+                "column_start": 5,
+                "column_end": 63,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    stable_acquire_item_body!(contents, request, index, state)",
+                    "highlight_start": 5,
+                    "highlight_end": 63
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_acquire_item_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 3387,
+                "byte_end": 3424,
+                "line_start": 94,
+                "line_end": 94,
+                "column_start": 1,
+                "column_end": 38,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_acquire_item_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 38
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 2820,
+            "byte_end": 2886,
+            "line_start": 62,
+            "line_end": 62,
+            "column_start": 13,
+            "column_end": 79,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == stable_acquire_item_v1(*contents, request, index, state),",
+                "highlight_start": 13,
+                "highlight_end": 79
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:62:13\n    |\n 62 |     ensures result == stable_acquire_item_v1(*contents, request, index, state),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:121:13\n    |\n121 |             return Err(ContextVersionJournalErrorV1::InvalidState);\n    |             ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 2485,
+            "byte_end": 2695,
+            "line_start": 59,
+            "line_end": 60,
+            "column_start": 1,
+            "column_end": 107,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn stable_acquire_item_exec_v1(contents: &ContextReadLeasedJournalV1, request: ContextAllocationReadV1,",
+                "highlight_start": 1,
+                "highlight_end": 104
+              },
+              {
+                "text": "    index: usize, state: StableReadAcquireScanV1) -> (result: Result<StableReadAcquireScanV1, ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 107
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:59:1\n   |\n59 | / fn stable_acquire_item_exec_v1(contents: &ContextReadLeasedJournalV1, request: ContextAllocationReadV1,\n60 | |     index: usize, state: StableReadAcquireScanV1) -> (result: Result<StableReadAcquireScanV1, ReadErrorV1>)\n   | |__________________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "count_update": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 5560,
+            "byte_end": 5669,
+            "line_start": 109,
+            "line_end": 109,
+            "column_start": 17,
+            "column_end": 126,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                contents.readers@[a] == before.readers@[a] + stable_read_slot_count_v1(requests@.take(index + 1), a as usize) by {",
+                "highlight_start": 17,
+                "highlight_end": 126
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:109:17\n    |\n109 |                 contents.readers@[a] == before.readers@[a] + stable_read_slot_count_v1(requests@.take(index + 1), a as usize) by {\n    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "output_write": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "invariant not satisfied at end of loop body",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 5006,
+            "byte_end": 5115,
+            "line_start": 99,
+            "line_end": 99,
+            "column_start": 13,
+            "column_end": 122,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            stable_acquire_commit_prefix_v1(before, *contents, consumer, requests@, output_before, output@, index as nat),",
+                "highlight_start": 13,
+                "highlight_end": 122
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: invariant not satisfied at end of loop body\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:99:13\n   |\n99 |             stable_acquire_commit_prefix_v1(before, *contents, consumer, requests@, output_before, output@, index as nat),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "incarnation_advance": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 4342,
+            "byte_end": 6005,
+            "line_start": 86,
+            "line_end": 115,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    stable_acquire_commit_body!(verus_exec_expr, contents, consumer, requests, output, index, [",
+                "highlight_start": 1,
+                "highlight_end": 96
+              },
+              {
+                "text": "        let ghost before = *contents;",
+                "highlight_start": 1,
+                "highlight_end": 38
+              },
+              {
+                "text": "        let ghost output_before = output@;",
+                "highlight_start": 1,
+                "highlight_end": 43
+              },
+              {
+                "text": "        let reader_capacity = contents.readers.len();",
+                "highlight_start": 1,
+                "highlight_end": 54
+              },
+              {
+                "text": "        proof {",
+                "highlight_start": 1,
+                "highlight_end": 16
+              },
+              {
+                "text": "            assert(before.free_reads@.take(before.free_reads@.len() as int) =~= before.free_reads@);",
+                "highlight_start": 1,
+                "highlight_end": 101
+              },
+              {
+                "text": "            assert(requests@.take(0) =~= Seq::<ContextAllocationReadV1>::empty());",
+                "highlight_start": 1,
+                "highlight_end": 83
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    ], [",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        invariant index <= requests.len(), output_before.len() == requests@.len(),",
+                "highlight_start": 1,
+                "highlight_end": 83
+              },
+              {
+                "text": "            before.readers@.len() == reader_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 54
+              },
+              {
+                "text": "            stable_acquire_commit_ready_v1(before, requests@),",
+                "highlight_start": 1,
+                "highlight_end": 63
+              },
+              {
+                "text": "            stable_acquire_commit_prefix_v1(before, *contents, consumer, requests@, output_before, output@, index as nat),",
+                "highlight_start": 1,
+                "highlight_end": 123
+              },
+              {
+                "text": "        decreases requests.len() - index,",
+                "highlight_start": 1,
+                "highlight_end": 42
+              },
+              {
+                "text": "    ], [",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        proof {",
+                "highlight_start": 1,
+                "highlight_end": 16
+              },
+              {
+                "text": "            assert(requests@.take(index + 1) =~= requests@.take(index as int).push(requests@[index as int]));",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "            stable_read_slot_count_push_v1(requests@.take(index as int), requests@[index as int], requests@[index as int].allocation.slot);",
+                "highlight_start": 1,
+                "highlight_end": 140
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    ], [",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        proof {",
+                "highlight_start": 1,
+                "highlight_end": 16
+              },
+              {
+                "text": "            assert forall|a: int| 0 <= a < contents.readers@.len() implies",
+                "highlight_start": 1,
+                "highlight_end": 75
+              },
+              {
+                "text": "                contents.readers@[a] == before.readers@[a] + stable_read_slot_count_v1(requests@.take(index + 1), a as usize) by {",
+                "highlight_start": 1,
+                "highlight_end": 131
+              },
+              {
+                "text": "                stable_read_slot_count_push_v1(requests@.take(index as int), requests@[index as int], a as usize);",
+                "highlight_start": 1,
+                "highlight_end": 115
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "            assert(contents.free_reads@ =~= before.free_reads@.take(before.free_reads@.len() - index - 1));",
+                "highlight_start": 1,
+                "highlight_end": 108
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    ], [proof { assert(requests@.take(requests@.len() as int) =~= requests@); }])",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 4236,
+            "byte_end": 4340,
+            "line_start": 85,
+            "line_end": 85,
+            "column_start": 13,
+            "column_end": 117,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures stable_acquire_commit_relation_v1(*old(contents), *final(contents), consumer, requests@, final(output)@),",
+                "highlight_start": 13,
+                "highlight_end": 117
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:85:13\n    |\n 85 |       ensures stable_acquire_commit_relation_v1(*old(contents), *final(contents), consumer, requests@, final(output)@),\n    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n 86 | / {\n 87 | |     stable_acquire_commit_body!(verus_exec_expr, contents, consumer, requests, output, index, [\n 88 | |         let ghost before = *contents;\n 89 | |         let ghost output_before = output@;\n...   |\n114 | |     ], [proof { assert(requests@.take(requests@.len() as int) =~= requests@); }])\n115 | | }\n    | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reject_mutates_owner": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+            "byte_start": 7409,
+            "byte_end": 7426,
+            "line_start": 190,
+            "line_end": 190,
+            "column_start": 65,
+            "column_end": 82,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                Err(error) => { $contents.next_incarnation = 0; return Err(error); },",
+                "highlight_start": 65,
+                "highlight_end": 82
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+                "byte_start": 1141,
+                "byte_end": 1469,
+                "line_start": 29,
+                "line_end": 32,
+                "column_start": 9,
+                "column_end": 112,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        stable_acquire_execution_body!(verus_exec_expr, self, consumer, requests, output,",
+                    "highlight_start": 9,
+                    "highlight_end": 90
+                  },
+                  {
+                    "text": "            stable_acquire_preflight_exec_v1, stable_acquire_commit_exec_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 77
+                  },
+                  {
+                    "text": "            value, [], [proof { assert(value =~= ()); }],",
+                    "highlight_start": 1,
+                    "highlight_end": 58
+                  },
+                  {
+                    "text": "            [proof { stable_acquire_preflight_implies_commit_ready_v1(*self, consumer, requests@, output@); }])",
+                    "highlight_start": 1,
+                    "highlight_end": 112
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "stable_acquire_execution_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs",
+                "byte_start": 6898,
+                "byte_end": 6940,
+                "line_start": 181,
+                "line_end": 181,
+                "column_start": 1,
+                "column_end": 43,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! stable_acquire_execution_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 43
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs",
+            "byte_start": 992,
+            "byte_end": 1125,
+            "line_start": 26,
+            "line_end": 27,
+            "column_start": 17,
+            "column_end": 61,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures stable_acquire_execution_relation_v1(*old(self), *final(self), consumer,",
+                "highlight_start": 17,
+                "highlight_end": 89
+              },
+              {
+                "text": "            requests@, old(output)@, final(output)@, result),",
+                "highlight_start": 1,
+                "highlight_end": 61
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_bodies_v1.rs:26:17\n    |\n 26 |           ensures stable_acquire_execution_relation_v1(*old(self), *final(self), consumer,\n    |  _________________^\n 27 | |             requests@, old(output)@, final(output)@, result),\n    | |____________________________________________________________^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_read_leases/acquire_bodies.rs:190:65\n    |\n190 |                   Err(error) => { $contents.next_incarnation = 0; return Err(error); },\n    |                                                                   ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 7786,
+            "byte_end": 7894,
+            "line_start": 135,
+            "line_end": 135,
+            "column_start": 9,
+            "column_end": 117,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        stable_acquire_execution_relation_v1(before, after, consumer, requests, output_before, output_after, result),",
+                "highlight_start": 9,
+                "highlight_end": 117
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 10952,
+            "byte_end": 11117,
+            "line_start": 182,
+            "line_end": 183,
+            "column_start": 9,
+            "column_end": 58,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@, output_before,",
+                "highlight_start": 9,
+                "highlight_end": 116
+              },
+              {
+                "text": "            output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 58
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs:182:9\n    |\n135 |           stable_acquire_execution_relation_v1(before, after, consumer, requests, output_before, output_after, result),\n    |           ------------------------------------------------------------------------------------------------------------ failed precondition\n...\n182 | /         stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@, output_before,\n183 | |             output@, model_output@, result, model_result);\n    | |_________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 7904,
+            "byte_end": 8109,
+            "line_start": 136,
+            "line_end": 137,
+            "column_start": 9,
+            "column_end": 113,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::acquire_execution_relation_v1(model_before, model_after, writer_key_view(consumer),",
+                "highlight_start": 9,
+                "highlight_end": 101
+              },
+              {
+                "text": "            stable_requests_view(requests), stable_output_view(output_before), model_output_after, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 113
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 10928,
+            "byte_end": 11093,
+            "line_start": 182,
+            "line_end": 183,
+            "column_start": 9,
+            "column_end": 58,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@, output_before,",
+                "highlight_start": 9,
+                "highlight_end": 116
+              },
+              {
+                "text": "            output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 58
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs:182:9\n    |\n136 | /         logical::acquire_execution_relation_v1(model_before, model_after, writer_key_view(consumer),\n137 | |             stable_requests_view(requests), stable_output_view(output_before), model_output_after, model_result),\n    | |________________________________________________________________________________________________________________- failed precondition\n...\n182 | /         stable_acquire_paired_transition(before, *actual, model_before, *model, consumer, requests@, output_before,\n183 | |             output@, model_output@, result, model_result);\n    | |_________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "journal_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 8376,
+            "byte_end": 9234,
+            "line_start": 142,
+            "line_end": 156,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if result == Ok(()) {",
+                "highlight_start": 5,
+                "highlight_end": 26
+              },
+              {
+                "text": "        stable_acquire_preflight_implies_commit_ready_v1(before, consumer, requests, output_before);",
+                "highlight_start": 1,
+                "highlight_end": 101
+              },
+              {
+                "text": "        stable_acquired_leases_correspondence(before, model_before, consumer, requests, requests.len());",
+                "highlight_start": 1,
+                "highlight_end": 105
+              },
+              {
+                "text": "        assert(after.readers@ =~= model_after.readers@) by {",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "            assert forall|a: int| 0 <= a < after.readers@.len() implies after.readers@[a] == model_after.readers@[a] by {",
+                "highlight_start": 1,
+                "highlight_end": 122
+              },
+              {
+                "text": "                stable_slot_count_correspondence(requests, a as usize);",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        assert(stable_output_view(output_after) =~= model_output_after) by {",
+                "highlight_start": 1,
+                "highlight_end": 77
+              },
+              {
+                "text": "            assert forall|i: int| 0 <= i < output_after.len() implies",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "                stable_output_view(output_after)[i] == model_output_after[i] by {",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "                stable_acquired_reference_correspondence(before, model_before, consumer, i);",
+                "highlight_start": 1,
+                "highlight_end": 93
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 8166,
+            "byte_end": 8203,
+            "line_start": 138,
+            "line_end": 138,
+            "column_start": 56,
+            "column_end": 93,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures result == begin_result_from(model_result), stable_represents(after, model_after),",
+                "highlight_start": 56,
+                "highlight_end": 93
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs:138:56\n    |\n138 |       ensures result == begin_result_from(model_result), stable_represents(after, model_after),\n    |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n142 | /     if result == Ok(()) {\n143 | |         stable_acquire_preflight_implies_commit_ready_v1(before, consumer, requests, output_before);\n144 | |         stable_acquired_leases_correspondence(before, model_before, consumer, requests, requests.len());\n145 | |         assert(after.readers@ =~= model_after.readers@) by {\n...   |\n156 | |     }\n    | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 8846,
+            "byte_end": 8847,
+            "line_start": 147,
+            "line_end": 147,
+            "column_start": 60,
+            "column_end": 61,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                stable_slot_count_correspondence(requests, a as usize);",
+                "highlight_start": 60,
+                "highlight_end": 61
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs:147:60\n    |\n147 |                 stable_slot_count_correspondence(requests, a as usize);\n    |                                                            ^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "reject_output_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 8376,
+            "byte_end": 9234,
+            "line_start": 142,
+            "line_end": 156,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if result == Ok(()) {",
+                "highlight_start": 5,
+                "highlight_end": 26
+              },
+              {
+                "text": "        stable_acquire_preflight_implies_commit_ready_v1(before, consumer, requests, output_before);",
+                "highlight_start": 1,
+                "highlight_end": 101
+              },
+              {
+                "text": "        stable_acquired_leases_correspondence(before, model_before, consumer, requests, requests.len());",
+                "highlight_start": 1,
+                "highlight_end": 105
+              },
+              {
+                "text": "        assert(after.readers@ =~= model_after.readers@) by {",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "            assert forall|a: int| 0 <= a < after.readers@.len() implies after.readers@[a] == model_after.readers@[a] by {",
+                "highlight_start": 1,
+                "highlight_end": 122
+              },
+              {
+                "text": "                stable_slot_count_correspondence(requests, a as usize);",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        assert(stable_output_view(output_after) =~= model_output_after) by {",
+                "highlight_start": 1,
+                "highlight_end": 77
+              },
+              {
+                "text": "            assert forall|i: int| 0 <= i < output_after.len() implies",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "                stable_output_view(output_after)[i] == model_output_after[i] by {",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "                stable_acquired_reference_correspondence(before, model_before, consumer, i);",
+                "highlight_start": 1,
+                "highlight_end": 93
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 8213,
+            "byte_end": 8267,
+            "line_start": 139,
+            "line_end": 139,
+            "column_start": 9,
+            "column_end": 63,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        stable_output_view(output_after) == model_output_after,",
+                "highlight_start": 9,
+                "highlight_end": 63
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs:139:9\n    |\n139 |           stable_output_view(output_after) == model_output_after,\n    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n142 | /     if result == Ok(()) {\n143 | |         stable_acquire_preflight_implies_commit_ready_v1(before, consumer, requests, output_before);\n144 | |         stable_acquired_leases_correspondence(before, model_before, consumer, requests, requests.len());\n145 | |         assert(after.readers@ =~= model_after.readers@) by {\n...   |\n156 | |     }\n    | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 8846,
+            "byte_end": 8847,
+            "line_start": 147,
+            "line_end": 147,
+            "column_start": 60,
+            "column_end": 61,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                stable_slot_count_correspondence(requests, a as usize);",
+                "highlight_start": 60,
+                "highlight_end": 61
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs:147:60\n    |\n147 |                 stable_slot_count_correspondence(requests, a as usize);\n    |                                                            ^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "output_projection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 9014,
+            "byte_end": 9074,
+            "line_start": 152,
+            "line_end": 152,
+            "column_start": 17,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                stable_output_view(output_after)[i] == model_output_after[i] by {",
+                "highlight_start": 17,
+                "highlight_end": 77
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs:152:17\n    |\n152 |                 stable_output_view(output_after)[i] == model_output_after[i] by {\n    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 8814,
+            "byte_end": 8815,
+            "line_start": 147,
+            "line_end": 147,
+            "column_start": 60,
+            "column_end": 61,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "                stable_slot_count_correspondence(requests, a as usize);",
+                "highlight_start": 60,
+                "highlight_end": 61
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs:147:60\n    |\n147 |                 stable_slot_count_correspondence(requests, a as usize);\n    |                                                            ^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "scan_projection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 2683,
+            "byte_end": 2872,
+            "line_start": 56,
+            "line_end": 57,
+            "column_start": 7,
+            "column_end": 84,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn stable_acquire_item_correspondence(actual: ContextReadLeasedJournalV1, model: logical::ReadContentsV1,",
+                "highlight_start": 7,
+                "highlight_end": 112
+              },
+              {
+                "text": "    request: ContextAllocationReadV1, index: usize, state: StableReadAcquireScanV1)",
+                "highlight_start": 1,
+                "highlight_end": 84
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs",
+            "byte_start": 2932,
+            "byte_end": 3336,
+            "line_start": 59,
+            "line_end": 63,
+            "column_start": 13,
+            "column_end": 6,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures match logical::acquire_item_v1(model, allocation_read_view(request), index, stable_scan_view(state)) {",
+                "highlight_start": 13,
+                "highlight_end": 115
+              },
+              {
+                "text": "        Err(error) => stable_acquire_item_v1(actual, request, index, state) == Err(read_error_embed(error)),",
+                "highlight_start": 1,
+                "highlight_end": 109
+              },
+              {
+                "text": "        Ok(next) => stable_acquire_item_v1(actual, request, index, state).is_ok()",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "            && stable_scan_view(stable_acquire_item_v1(actual, request, index, state).unwrap()) == next,",
+                "highlight_start": 1,
+                "highlight_end": 105
+              },
+              {
+                "text": "    },",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_correspondence_v1.rs:59:13\n   |\n56 |   proof fn stable_acquire_item_correspondence(actual: ContextReadLeasedJournalV1, model: logical::ReadContentsV1,\n   |  _______-\n57 | |     request: ContextAllocationReadV1, index: usize, state: StableReadAcquireScanV1)\n   | |___________________________________________________________________________________- at the end of the function body\n58 |       requires stable_represents(actual, model),\n59 |       ensures match logical::acquire_item_v1(model, allocation_read_view(request), index, stable_scan_view(state)) {\n   |  _____________^\n60 | |         Err(error) => stable_acquire_item_v1(actual, request, index, state) == Err(read_error_embed(error)),\n61 | |         Ok(next) => stable_acquire_item_v1(actual, request, index, state).is_ok()\n62 | |             && stable_scan_view(stable_acquire_item_v1(actual, request, index, state).unwrap()) == next,\n63 | |     },\n   | |_____^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "fixture_free_order": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_witnesses_v1.rs",
+            "byte_start": 3584,
+            "byte_end": 3624,
+            "line_start": 53,
+            "line_end": 53,
+            "column_start": 16,
+            "column_end": 56,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        assert(actual.free_reads@ =~= model.free_reads@);",
+                "highlight_start": 16,
+                "highlight_end": 56
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_witnesses_v1.rs:53:16\n   |\n53 |         assert(actual.free_reads@ =~= model.free_reads@);\n   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_stable_acquire_historical_v1::production::stable_acquire_fixture_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_stable_acquire_historical_v1::production::stable_acquire_fixture_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "alias_fixture": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_witnesses_v1.rs",
+            "byte_start": 8240,
+            "byte_end": 8302,
+            "line_start": 140,
+            "line_end": 140,
+            "column_start": 12,
+            "column_end": 74,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    assert(output@[0].unwrap().slot == 0 && output@[1].unwrap().slot == 0);",
+                "highlight_start": 12,
+                "highlight_end": 74
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_stable_acquire_witnesses_v1.rs:140:12\n    |\n140 |     assert(output@[0].unwrap().slot == 0 && output@[1].unwrap().slot == 0);\n    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_stable_acquire_historical_v1::production::stable_acquire_alias_witness_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_stable_acquire_historical_v1::production::stable_acquire_alias_witness_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}

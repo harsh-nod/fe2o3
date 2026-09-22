@@ -386,7 +386,17 @@ Before enabling runtime admission, the remaining work is:
    count/index safety from represented issued pre-state and preserving complete owner
    custody. The synthetic live fixture and instrumented CPU baseline comparison do
    not establish constructor/acquisition reachability or native performance parity.
-   Remaining bodies include construction and stable/producer reader admission/release;
+   The [actual stable acquisition packet](evidence/dev-stable-acquire-2026-09-22/README.md)
+   shares capacity/read validation, ordered admission and commit into the public
+   mutable output slice. Actual and historical acquisition execute independently
+   from represented reader-invariant pre-state, preserving live lease custody and
+   exact error/output behavior. The raw actual contract separately retains sequential
+   duplicate-free-slot overwrite semantics without claiming custody for malformed
+   state. Concrete fixtures exercise synchronous and overlapping acquisition with
+   an existing live lease, late rejection and raw alias writes. They are synthetic
+   pre-states, not fallible actual-constructor reachability. Instrumented CPU baseline
+   comparisons do not establish native performance parity.
+   Remaining bodies include construction, stable release and producer admission/release;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

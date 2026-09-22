@@ -22,6 +22,9 @@ macro_rules! reader_rust_expr {
     };
 }
 
+#[macro_use]
+mod acquire;
+
 impl Deref for ContextReadLeasedJournalV1 {
     type Target = ContextVersionJournalV1;
 
@@ -81,13 +84,7 @@ impl ContextReadLeasedJournalV1 {
     }
 
     pub fn validate_read_capacity(&self, count: usize) -> Result<(), ContextVersionJournalErrorV1> {
-        if count > self.free_reads.len() {
-            return Err(ContextVersionJournalErrorV1::MemberCapacity);
-        }
-        if self.next_incarnation == 0 || self.next_incarnation.checked_add(count as u64).is_none() {
-            return Err(ContextVersionJournalErrorV1::EpochExhausted);
-        }
-        Ok(())
+        stable_read_capacity_body!(self, count)
     }
 
     #[allow(clippy::question_mark)] // Share explicit early exits with Verus.
@@ -98,108 +95,37 @@ impl ContextReadLeasedJournalV1 {
         stable_reader_count_body!(self, allocation)
     }
 
+    #[allow(clippy::question_mark)]
     pub fn validate_read(
         &self,
         request: &ContextAllocationReadV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        let state = self.journal.lookup_allocation(request.allocation)?;
-        if state.device != request.device {
-            return Err(E::AllocationDeviceMismatch);
-        }
-        if state.byte_extent != request.byte_extent {
-            return Err(E::AllocationExtentMismatch);
-        }
-        if request.byte_len == 0
-            || request
-                .byte_offset
-                .checked_add(request.byte_len)
-                .is_none_or(|end| end > request.byte_extent)
-        {
-            return Err(E::InvalidExtent);
-        }
-        if state.pending_writer.is_some() {
-            return Err(E::AllocationBusy);
-        }
-        if state.attempt_epoch != request.attempt_epoch
-            || state.content_lineage != request.content_lineage
-        {
-            return Err(E::InvalidState);
-        }
-        Ok(())
+        stable_read_validate_body!(self, request)
     }
 
     /// Acquires a canonical (allocation ID, offset, length) roster atomically.
     /// Overlapping readers are permitted. Both output and all model state are
     /// unchanged on error. Work is O(k); storage is acquired only by construction.
+    #[allow(clippy::question_mark)]
     pub fn acquire_reads(
         &mut self,
         consumer: ContextWriterKeyV1,
         requests: &[ContextAllocationReadV1],
         output: &mut [Option<ContextReadLeaseReferenceV1>],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        if consumer.context_generation != self.context_generation() {
-            return Err(E::ForeignContext);
-        }
-        if consumer.local == 0 || consumer.local == u64::MAX {
-            return Err(E::InvalidWriterId);
-        }
-        if requests.is_empty() || requests.len() != output.len() {
-            return Err(E::RosterCapacity);
-        }
-        if output.iter().any(Option::is_some) {
-            return Err(E::InvalidState);
-        }
-        self.validate_read_capacity(requests.len())?;
-        let next = self
-            .next_incarnation
-            .checked_add(requests.len() as u64)
-            .ok_or(E::EpochExhausted)?;
-        if self.next_incarnation == 0 {
-            return Err(E::EpochExhausted);
-        }
-        let mut previous = None;
-        let mut group = 0;
-        for (index, request) in requests.iter().enumerate() {
-            self.validate_read(request)?;
-            let key = read_key(request);
-            if previous.is_some_and(|prior| prior >= key) {
-                return Err(E::NonCanonicalRoster);
-            }
-            group = if previous.is_some_and(|prior: (u64, u64, u64)| prior.0 == key.0) {
-                group + 1
-            } else {
-                1
-            };
-            if self.readers[request.allocation.slot]
-                .checked_add(group)
-                .is_none_or(|count| count > self.leases.len())
-            {
-                return Err(E::InvalidState);
-            }
-            previous = Some(key);
-            let slot = self.free_reads[self.free_reads.len() - index - 1];
-            if self.leases.get(slot) != Some(&None) {
-                return Err(E::InvalidState);
-            }
-        }
-        for (index, request) in requests.iter().enumerate() {
-            let slot = self.free_reads.pop().expect("preflighted free slot");
-            let reference = ContextReadLeaseReferenceV1 {
-                slot,
-                incarnation: self.next_incarnation + index as u64,
-                consumer,
-            };
-            self.leases[slot] = Some(ReadLeaseV1 {
-                reference,
-                request: *request,
-            });
-            self.readers[request.allocation.slot] += 1;
-            output[index] = Some(reference);
-        }
-        self.next_incarnation = next;
-        Ok(())
+        stable_acquire_execution_body!(
+            reader_rust_expr,
+            self,
+            consumer,
+            requests,
+            output,
+            acquire::stable_acquire_preflight_exec_v1,
+            acquire::stable_acquire_commit_exec_v1,
+            _value,
+            [],
+            [],
+            []
+        )
     }
 
     pub fn lookup_read(
@@ -391,3 +317,6 @@ mod guard_baseline;
 
 #[cfg(test)]
 mod guard_test_support;
+
+#[cfg(test)]
+mod acquire_baseline;

@@ -4,6 +4,8 @@ use alloc::{format, string::String};
 type Journal = ContextReadLeasedJournalV1;
 type Error = ContextVersionJournalErrorV1;
 
+mod acquire_shared;
+
 mod begin_guards {
     use super::*;
     type Owner = ContextReadLeasedJournalV1;
