@@ -136,6 +136,46 @@ observations, not reusable admission or launch authority. Editing the candidate
 invalidates its old source identity; the fresh compiler must derive new typed,
 semantic, Kernel IR and LLVM identities from the bytes actually read.
 
+## Separate instruction-changing exercise
+
+The publisher still recognizes and renders the original bitselect; it does not
+accept an arbitrary replacement graph. After publication, an author can make
+a real source edit and request fresh ordinary diagnostic compilation. The
+separate instruction-edit exercise changes only the final
+`xor(out, input1, scratch)` to `or(out, input1, scratch)`, keeping low-register
+bindings `4, 5, [0, 1, 2]` and all surrounding source bytes.
+
+The edited result is `b | (a & mask)`, not the original
+`(a & mask) | (b & !mask)`. A source edit can be well-formed and still be the
+wrong algorithm. Each variant needs its own independent whole-kernel oracle.
+The normal public-seed/export/inspection/simulation runner is
+[`source-promotion-instruction-edit-smoke.mjs`](../scripts/source-promotion-instruction-edit-smoke.mjs);
+its output is diagnostic evidence, not production proof or native qualification.
+Follow the [instruction-edit tutorial](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/source-promotion-instruction-edit-lab-v1.md)
+for fresh preparation, exact runner inputs and separate native requirements.
+
+A semantic-identity comparison must use the normal exporter's observation from
+the same live owner. In the runner's explicit unavailable mode, semantic
+identity stays unavailable; source preflight hashes or reconstructed IR cannot
+supply it. Existing register-only, live-prefix or older native reports do not
+qualify this new instruction sequence.
+
+### Current inspection is not proof invalidation
+
+The public-seeded debug-join regression has a separate current-owner inspection
+check. It copies an actual first owner's inert typed identity, requires exact
+`ProductionOrderedProgramInspectionErrorV1::StaleIdentity` when that identity
+is queried against the second current owner, and then queries the second owner
+with its own identity on the same accounting ledger. Owner bytes and the
+retained storage floor must remain unchanged. This is a test of an existing
+borrowed inspection API, not a new identity import or session-resume interface.
+
+The regression's register-edited pair is separate from the instruction-changing
+runner. Successful stale inspection or debugger capture/cursor rejection does
+not establish general analysis-cache invalidation, ranked-check reuse rules or
+production proof invalidation. Those require their applicable production owner
+and proof route; the diagnostic reports keep those authority flags false.
+
 ## Where this fits in compilation
 
 ```text

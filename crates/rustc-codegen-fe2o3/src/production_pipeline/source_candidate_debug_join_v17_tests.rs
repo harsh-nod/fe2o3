@@ -23,6 +23,9 @@ use fe2o3_kir_sim::{
 };
 use serde_json::{Value, json};
 
+#[path = "source_candidate_inspection_join_v17_tests.rs"]
+mod inspection;
+
 const MAX_RECORDS: usize = 8192;
 const MAX_VALUES: usize = 131_072;
 const MAX_MEMORY: usize = 1024 * 1024;
@@ -468,10 +471,12 @@ pub(crate) struct CandidateDebugEvidenceV17 {
     pub(crate) report: Value,
     catalog: DebugSourceCatalogV1,
     transcript: DebugTranscriptV1,
+    inspection: inspection::InspectionEvidenceV17,
 }
 
 fn observe(
     owner: &OrderedProgramObservationOwnerV32,
+    registers: Gfx942OrderedProgramRegistersV1,
     old: Option<&CandidateDebugEvidenceV17>,
 ) -> Result<CandidateDebugEvidenceV17, String> {
     let prepaid = prepay_fixed_envelope()?;
@@ -496,12 +501,19 @@ fn observe(
     }
     let (transcript, steps) = actual_capture(&module)?;
     let selected = ordered_site(owner)?;
+    let (inspection, inspection_report) = inspection::observe(
+        owner,
+        registers,
+        selected,
+        old.map(|evidence| &evidence.inspection),
+    )?;
     current_source_positive(&module, &transcript, &catalog, selected)?;
     if let Some(old) = old {
         old_evidence_negatives(&module, &transcript, &catalog, old)?;
     }
     let report = json!({
         "stage":"private_actual_source_candidate_catalog_join",
+        "ordered_program_inspection":inspection_report,
         "catalog_identity":catalog.identity().digest,
         "catalog_canonical_bytes":catalog.identity().canonical_len,
         "source_files":catalog.files().len(),"mapped_sites":catalog.sites().len(),
@@ -526,6 +538,7 @@ fn observe(
         report,
         catalog,
         transcript,
+        inspection,
     })
 }
 
@@ -547,7 +560,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         }
         let (fresh, (oracle, mut evidence)) = self
             .observe_fresh_source_bitselect_candidate_debug_with(input, registers, |owner| {
-                observe(owner, previous)
+                observe(owner, registers, previous)
             })?;
         // Existing fresh helper rechecks actual source custody after ALL work.
         if oracle["runs"] != 30

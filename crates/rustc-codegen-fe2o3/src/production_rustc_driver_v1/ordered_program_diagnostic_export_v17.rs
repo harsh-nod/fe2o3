@@ -50,7 +50,29 @@ pub(super) fn extract_in_active_session_v17(tcx: TyCtxt<'_>, output: &Path) -> R
         lower_hex_v1(&inventory),
         lower_hex_v1(&preflight),
     );
+    eprintln!(
+        "{}",
+        source_identity_line_v17(
+            owner
+                .materialized()
+                .semantic_ssa()
+                .source_semantic()
+                .semantic_sha256()
+                .as_bytes(),
+            executable.identity().digest(),
+        )
+    );
     Ok(())
+}
+
+// Two already-computed fixed-size identities from this one live owner.
+// This additive diagnostic does not export source custody or change admission.
+fn source_identity_line_v17(semantic: &[u8; 32], canonical: &[u8; 32]) -> String {
+    format!(
+        "fe2o3 diagnostic source identities: semantic_mir_v32 {}, canonical_kir_v17 {}; observation_only=true, exported_source_authentication=false",
+        lower_hex_v1(semantic),
+        lower_hex_v1(canonical),
+    )
 }
 
 fn publish_new_diagnostic_kir_v17(output: &Path, bytes: &[u8]) -> Result<(), String> {
