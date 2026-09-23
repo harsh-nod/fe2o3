@@ -27,7 +27,11 @@ mod launch;
 mod listener;
 #[allow(unsafe_code)]
 mod process;
+mod program_v2;
 mod provisioning;
+pub use program_v2::{
+    AdmittedIssuerProgramV2, IssuerProgramAdmissionErrorV2, IssuerProgramStorageV2,
+};
 mod session;
 
 pub use authority::{

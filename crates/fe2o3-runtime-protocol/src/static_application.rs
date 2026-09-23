@@ -60,6 +60,20 @@ const DF_1_PIE: u64 = 0x0800_0000;
 const R_X86_64_RELATIVE: u32 = 8;
 const R_X86_64_IRELATIVE: u32 = 37;
 const MAX_PROGRAM_HEADERS: usize = 1_024;
+const MAX_DYNAMIC_TAGS: usize = 32;
+/// Conservative fixed logical parser workspace, including initialized header
+/// arrays, dynamic tags and scalar staging. Not a generated-stack or RSS bound.
+pub const SEALED_STATIC_APPLICATION_WORKSPACE_BYTES_V1: usize = 1024 * 1024;
+
+/// Conservative parser visit bound: byte visits, header/load predicate visits,
+/// table steps and fixed initialization, not instructions or hash/IO work.
+/// Tables can overlap, so each independently bounded scan is included.
+pub const fn sealed_static_application_work_bound_v1(bytes: usize) -> Option<usize> {
+    match bytes.checked_mul(MAX_PROGRAM_HEADERS + 64) {
+        Some(work) => work.checked_add(4 * MAX_PROGRAM_HEADERS * MAX_PROGRAM_HEADERS + 4096),
+        None => None,
+    }
+}
 const X86_64_LOAD_PAGE_BYTES: u64 = 4_096;
 const X86_64_MAX_USER_ADDRESS: u64 = 0x0000_7fff_ffff_ffff;
 
@@ -118,7 +132,7 @@ impl fmt::Display for SealedStaticApplicationErrorV1 {
 
 impl std::error::Error for SealedStaticApplicationErrorV1 {}
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct ProgramHeader {
     kind: u32,
     flags: u32,
@@ -173,11 +187,18 @@ impl ProgramHeader {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct DynamicEntry {
     tag: i64,
     value: u64,
 }
+
+const _: () = assert!(
+    4 * std::mem::size_of::<[ProgramHeader; MAX_PROGRAM_HEADERS]>()
+        + 4 * std::mem::size_of::<[DynamicEntry; MAX_DYNAMIC_TAGS]>()
+        + 8192
+        <= SEALED_STATIC_APPLICATION_WORKSPACE_BYTES_V1
+);
 
 pub fn sealed_static_application_identity_v1(
     bytes: &[u8],
@@ -230,8 +251,9 @@ pub(crate) fn validate_sealed_static_elf_v1(
         .filter(|end| *end <= bytes.len())
         .ok_or(SealedStaticApplicationErrorV1::ProgramHeaderBounds)?;
 
-    let mut programs = Vec::with_capacity(entry_count);
-    for index in 0..entry_count {
+    let mut program_storage = [ProgramHeader::default(); MAX_PROGRAM_HEADERS];
+    let programs = &mut program_storage[..entry_count];
+    for (index, slot) in programs.iter_mut().enumerate() {
         let start = program_offset + index * entry_size;
         let program = &bytes[start..start + entry_size];
         let parsed = ProgramHeader {
@@ -244,27 +266,26 @@ pub(crate) fn validate_sealed_static_elf_v1(
             alignment: read_u64(program, 48)?,
         };
         validate_program_bounds(bytes, parsed)?;
-        programs.push(parsed);
+        *slot = parsed;
     }
 
-    let loads: Vec<_> = programs
-        .iter()
-        .copied()
-        .filter(|program| program.kind == PT_LOAD)
-        .collect();
-    validate_load_segments(&loads, program_offset, table_end, entrypoint)?;
-    validate_auxiliary_segments(&programs, &loads, program_offset, table_size)?;
+    let mut load_storage = [ProgramHeader::default(); MAX_PROGRAM_HEADERS];
+    let mut load_count = 0;
+    for program in programs.iter().filter(|program| program.kind == PT_LOAD) {
+        load_storage[load_count] = *program;
+        load_count += 1;
+    }
+    let loads = &load_storage[..load_count];
+    validate_load_segments(loads, program_offset, table_end, entrypoint)?;
+    validate_auxiliary_segments(programs, loads, program_offset, table_size)?;
 
-    let dynamic: Vec<_> = programs
-        .iter()
-        .copied()
-        .filter(|program| program.kind == PT_DYNAMIC)
-        .collect();
-    if dynamic.len() > 1 || (elf_type == ET_DYN && dynamic.len() != 1) {
+    let mut dynamics = programs.iter().filter(|program| program.kind == PT_DYNAMIC);
+    let dynamic = dynamics.next().copied();
+    if dynamics.next().is_some() || (elf_type == ET_DYN && dynamic.is_none()) {
         return Err(SealedStaticApplicationErrorV1::DynamicSegmentMalformed);
     }
-    if let Some(dynamic) = dynamic.first().copied() {
-        validate_dynamic_segment(bytes, &loads, dynamic, elf_type)?;
+    if let Some(dynamic) = dynamic {
+        validate_dynamic_segment(bytes, loads, dynamic, elf_type)?;
     }
     Ok(())
 }
@@ -411,29 +432,25 @@ fn validate_auxiliary_segments(
     program_offset: usize,
     table_size: usize,
 ) -> Result<(), SealedStaticApplicationErrorV1> {
-    let phdrs: Vec<_> = programs
+    let mut phdrs = programs.iter().filter(|program| program.kind == PT_PHDR);
+    let phdr = phdrs.next();
+    let mut stacks = programs
         .iter()
-        .filter(|program| program.kind == PT_PHDR)
-        .collect();
-    let stacks: Vec<_> = programs
-        .iter()
-        .filter(|program| program.kind == PT_GNU_STACK)
-        .collect();
-    if phdrs.len() > 1 || stacks.len() != 1 {
+        .filter(|program| program.kind == PT_GNU_STACK);
+    let stack = stacks.next();
+    if phdrs.next().is_some() || stack.is_none() || stacks.next().is_some() {
         return Err(SealedStaticApplicationErrorV1::SegmentLayout);
     }
-    if let Some(phdr) = phdrs.first() {
-        let phdr = **phdr;
-        if phdr.flags != PF_R
+    if let Some(phdr) = phdr
+        && (phdr.flags != PF_R
             || phdr.offset != program_offset as u64
             || phdr.file_size != table_size as u64
             || phdr.memory_size != table_size as u64
-            || phdr.alignment != 8
-        {
-            return Err(SealedStaticApplicationErrorV1::SegmentLayout);
-        }
+            || phdr.alignment != 8)
+    {
+        return Err(SealedStaticApplicationErrorV1::SegmentLayout);
     }
-    let stack = **stacks.first().unwrap();
+    let stack = stack.unwrap();
     if stack.flags != PF_R | PF_W || stack.file_size != 0 || stack.memory_size != 0 {
         return Err(SealedStaticApplicationErrorV1::SegmentPermissions);
     }
@@ -524,7 +541,8 @@ fn validate_dynamic_segment(
         .map_err(|_| SealedStaticApplicationErrorV1::DynamicSegmentMalformed)?;
     let end = usize::try_from(dynamic.file_end()?)
         .map_err(|_| SealedStaticApplicationErrorV1::DynamicSegmentMalformed)?;
-    let mut entries = Vec::new();
+    let mut entry_storage = [DynamicEntry::default(); MAX_DYNAMIC_TAGS];
+    let mut entry_count = 0;
     let mut terminated = false;
     for encoded in bytes[start..end].chunks_exact(16) {
         let entry = DynamicEntry {
@@ -544,21 +562,27 @@ fn validate_dynamic_segment(
             terminated = true;
             continue;
         }
-        if entries
+        if entry_storage[..entry_count]
             .iter()
             .any(|previous: &DynamicEntry| previous.tag == entry.tag)
         {
             return Err(SealedStaticApplicationErrorV1::DynamicSegmentMalformed);
         }
         classify_dynamic_tag(entry)?;
-        entries.push(entry);
+        // Only unique allowlisted non-NULL tags occupy workspace. Encoded NULL
+        // padding remains bounded by the image length, not this retained count.
+        *entry_storage
+            .get_mut(entry_count)
+            .ok_or(SealedStaticApplicationErrorV1::DynamicSegmentMalformed)? = entry;
+        entry_count += 1;
     }
     if !terminated {
         return Err(SealedStaticApplicationErrorV1::DynamicSegmentMalformed);
     }
 
-    validate_dynamic_flags(&entries, elf_type)?;
-    validate_dynamic_tables(bytes, loads, &entries)?;
+    let entries = &entry_storage[..entry_count];
+    validate_dynamic_flags(entries, elf_type)?;
+    validate_dynamic_tables(bytes, loads, entries)?;
     Ok(())
 }
 
@@ -1375,5 +1399,120 @@ mod tests {
                 "addend {addend:#x}"
             );
         }
+    }
+
+    #[test]
+    fn maximum_program_header_workspace_accepts_on_the_normal_test_stack() {
+        let table = (PROGRAM * MAX_PROGRAM_HEADERS) as u64;
+        let code = 0x10000;
+        let mut bytes = vec![0; code + 1];
+        header(
+            &mut bytes,
+            ET_EXEC,
+            MAX_PROGRAM_HEADERS as u16,
+            0x400000 + code as u64,
+        );
+        write_program(
+            &mut bytes,
+            0,
+            program(PT_PHDR, PF_R, HEADER as u64, 0x400040, table, table, 8),
+        );
+        write_program(
+            &mut bytes,
+            1,
+            program(
+                PT_LOAD,
+                PF_R,
+                0,
+                0x400000,
+                HEADER as u64 + table,
+                HEADER as u64 + table,
+                0x1000,
+            ),
+        );
+        write_program(
+            &mut bytes,
+            2,
+            program(
+                PT_LOAD,
+                PF_R | PF_X,
+                code as u64,
+                0x400000 + code as u64,
+                1,
+                1,
+                0x1000,
+            ),
+        );
+        write_program(
+            &mut bytes,
+            3,
+            program(PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0, 16),
+        );
+        bytes[code] = 0xc3;
+        assert!(sealed_static_application_identity_v1(&bytes).is_ok());
+        bytes[56..58].copy_from_slice(&((MAX_PROGRAM_HEADERS + 1) as u16).to_le_bytes());
+        assert_eq!(
+            sealed_static_application_identity_v1(&bytes),
+            Err(SealedStaticApplicationErrorV1::ProgramHeaderBounds)
+        );
+        assert!(sealed_static_application_work_bound_v1(usize::MAX).is_none());
+    }
+
+    #[test]
+    fn dynamic_workspace_counts_unique_tags_not_null_padding() {
+        let tags = [
+            DT_STRTAB,
+            DT_SYMTAB,
+            DT_RELA,
+            DT_RELASZ,
+            DT_RELAENT,
+            DT_STRSZ,
+            DT_SYMENT,
+            DT_INIT,
+            DT_FINI,
+            DT_REL,
+            DT_RELSZ,
+            DT_RELENT,
+            DT_DEBUG,
+            DT_BIND_NOW,
+            DT_INIT_ARRAY,
+            DT_FINI_ARRAY,
+            DT_INIT_ARRAYSZ,
+            DT_FINI_ARRAYSZ,
+            DT_FLAGS,
+            DT_GNU_HASH,
+            DT_RELACOUNT,
+            DT_RELCOUNT,
+            DT_FLAGS_1,
+        ];
+        assert_eq!(tags.len(), 23);
+        assert!(tags.len() <= MAX_DYNAMIC_TAGS);
+        let mut bytes = vec![0; 16 * (tags.len() + 100)];
+        let dynamic = program(
+            PT_DYNAMIC,
+            PF_R | PF_W,
+            0,
+            0,
+            bytes.len() as u64,
+            bytes.len() as u64,
+            8,
+        );
+        assert!(validate_dynamic_segment(&bytes, &[], dynamic, ET_EXEC).is_ok());
+        for (index, tag) in tags.into_iter().enumerate() {
+            bytes[index * 16..index * 16 + 8].copy_from_slice(&tag.to_le_bytes());
+        }
+        // Reaching the flag validator proves every unique allowlisted tag was
+        // retained without truncation. Table validity is separately covered.
+        bytes[18 * 16 + 8..18 * 16 + 16].copy_from_slice(&DF_BIND_NOW.to_le_bytes());
+        bytes[22 * 16 + 8..22 * 16 + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_eq!(
+            validate_dynamic_segment(&bytes, &[], dynamic, ET_EXEC),
+            Err(SealedStaticApplicationErrorV1::UnsupportedDynamicTag)
+        );
+        bytes[16..24].copy_from_slice(&DT_STRTAB.to_le_bytes());
+        assert_eq!(
+            validate_dynamic_segment(&bytes, &[], dynamic, ET_EXEC),
+            Err(SealedStaticApplicationErrorV1::DynamicSegmentMalformed)
+        );
     }
 }

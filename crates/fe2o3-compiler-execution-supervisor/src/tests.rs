@@ -29,6 +29,9 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+#[path = "program_v2_tests.rs"]
+mod native_program;
+
 static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
 static TEST_ANCHOR_SERVICE_PEERS: Mutex<Vec<OwnedFd>> = Mutex::new(Vec::new());
 const TEST_ANCHOR_DESCRIPTOR_FLOOR: i32 = 512;

@@ -929,6 +929,7 @@ dependencies = [
  "fe2o3-compiler-execution-issuer",
  "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
+ "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-static-executable",
  "fe2o3-runtime-protocol",
@@ -1639,6 +1640,7 @@ dependencies = [
 name = "fe2o3-protected-static-executable"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-kernel-ir",
  "fe2o3-runtime-protocol",
  "libc",
  "rustix",

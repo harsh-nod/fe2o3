@@ -4,6 +4,26 @@ This package owns the protected process boundary around the static
 compiler-execution issuer. Program admission authenticates the provisioned
 static launcher and issuer before either can enter authority-bearing custody.
 
+## Native Program Status
+
+`AdmittedIssuerProgramV2` freshly consumes a native policy capability and the
+provisioned launcher/issuer sources. It uses bounded native executable admission,
+checks runtime then launcher then issuer, and retains independently sealed
+objects. Every nested operation uses the same caller ledger; exact clone checks
+reject equal bytes in a different inode. Supplied sources may alias because the
+retained images are separate objects. Trusted provisioning must independently
+pin the policy and launcher measurement.
+
+This program owner is inert. Native signing-key custody, authority binding,
+consuming launch, readiness and service/recovery integration remain required.
+Its controlled File clones grant no process authority and do not meter arbitrary
+subsequent File operations. It is not converted into a V1 supervisor. No protected
+proof or GPU qualification is credited; M0-M7 and 47/47 remain incomplete.
+
+The existing serving/deployment path described below remains **V1**.
+
+## Existing Service Path
+
 Both source images are read through stable file descriptions, checked against
 exact SHA-256 and length measurements, validated as loader-independent x86-64
 ELF images, copied into distinct anonymous mode-0555 memfds, sealed with

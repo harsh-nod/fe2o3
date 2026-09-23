@@ -145,3 +145,9 @@ external `Command` would not meter its future spawns; no such native adapter
 is exposed here. Service handlers, native durable-state families, broker V4
 observation, anchor/Worker/ACK ordering, Cargo restart paths, runtime/host joins,
 and coherent provisioning remain required before producer activation.
+
+Fresh native program custody now consumes the pinned policy with independently
+sealed launcher/issuer images through bounded shared executable mechanics. It
+does not yet bind a native signing key, service authority or a consuming launch.
+See the [program status](../crates/fe2o3-compiler-execution-supervisor/README.md)
+and [image accounting](../crates/fe2o3-protected-static-executable/README.md).

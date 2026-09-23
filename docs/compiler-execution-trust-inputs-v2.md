@@ -107,7 +107,8 @@ receipts, publication, acknowledgment and carriage are covered by the
 [publication contract](compiler-execution-publication-v2.md). The native issuer
 launch-input reader checks independently admitted policy and manifest images,
 but does not activate service handlers. Remaining integration includes native
-program/key custody, broker reconstruction, durable-state and service packets,
+key custody and native program-to-supervisor binding, broker reconstruction,
+durable-state and service packets,
 Worker/runtime/finalizer/host admission, and coherent provisioning. Consumers
 must land before activating Cargo and the producer. Existing V1 state must never
 be treated as absent V2 state or silently retried after V2 rejection. The complete
