@@ -178,7 +178,13 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   `cfg_attr` to 64 child attributes. All traversals share one aggregate
   attribute-visit quota, equal in size to but separate from the existing record
   quota; inactive attributes are charged too, and cached selections are not
-  revisited. The record, source-byte and 256-token cfg limits are unchanged.
+  revisited. Each cfg predicate admits at most 512 tokens, including punctuation;
+  its byte and nesting limits remain independent. This accommodates ordinary
+  mutual-exclusion feature predicates, including the existing 318-token
+  advanced-attention predicate, without changing the record, source-byte or
+  aggregate attribute limits. Unsupported predicates and active item macros
+  still reject; accepting a library's cfg does not bind its kernel source or
+  qualify a variant.
 
 The fill fixture's SIMT variant is associated with the exact current
 `examples/fill/src/lib.rs` function and its registered compiler-input identity.

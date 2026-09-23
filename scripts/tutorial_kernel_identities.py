@@ -21,6 +21,7 @@ SCHEMA = "fe2o3-tutorial-kernel-identities-v1"
 MAX_TEXT_BYTES = 4 * 1024 * 1024
 MAX_RUNTIME_BYTES = 16 * 1024 * 1024
 MAX_IDENTITY_BYTES = 16 * 1024 * 1024
+MAX_CFG_TOKENS = 512
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 KERNEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}")
 ISSUE_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*")
@@ -281,7 +282,7 @@ def _fixture_cfg(body: str, features: set[str]) -> bool:
     if "".join(tokens) != body:
         _fail("unsupported fixture cfg syntax")
     tokens = [token for token in tokens if not token.isspace()]
-    if len(tokens) > 256:
+    if len(tokens) > MAX_CFG_TOKENS:
         _fail("fixture cfg exceeds its token bound")
     cursor = 0
 

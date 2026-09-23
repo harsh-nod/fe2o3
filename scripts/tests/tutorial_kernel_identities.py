@@ -451,6 +451,25 @@ class FixtureDisplayTests(unittest.TestCase):
             with self.subTest(predicate=predicate), self.assertRaises(IDENTITIES.KernelInventoryError):
                 IDENTITIES._fixture_cfg(predicate, {"left"})
 
+    def test_cfg_token_boundary_is_exact_and_checks_inactive_predicates(self):
+        predicate = 'any(' + 'feature="left",' * 127 + 'test)'
+        self.assertEqual(len(re.findall(r'[A-Za-z_]+|"[A-Za-z_]+"|[(),=]', predicate)), 512)
+        oversized = predicate[:-1] + ',)'
+        for features, expected in (({"left"}, True), (set(), False)):
+            with self.subTest(features=features):
+                self.assertIs(IDENTITIES._fixture_cfg(predicate, features), expected)
+                self.assertEqual(self.selected_attributes(f"#[cfg_attr({predicate}, kernel)]", features),
+                                 int(expected))
+                with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "token bound"):
+                    IDENTITIES._fixture_cfg(oversized, features)
+                with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "token bound"):
+                    self.selected_attributes(f"#[cfg_attr(test, cfg({oversized}))]", features)
+                unknown = 'any(' + 'feature="left",' * 127 + 'unknown)'
+                with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "cfg predicate"):
+                    IDENTITIES._fixture_cfg(unknown, features)
+                with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "cfg predicate"):
+                    self.selected_attributes(f"#[cfg_attr(test, cfg({unknown}))]", features)
+
     def test_non_test_library_skips_test_only_modules_and_declarations(self):
         self.sources[self.library] = (
             '#[cfg(not(test))] mod left;\n'
@@ -701,7 +720,7 @@ class FixtureDisplayTests(unittest.TestCase):
             with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate byte bound"):
                 self.validate(False)
         for cfg in ("not(" * 34 + 'feature="left"' + ")" * 34,
-                    "all(" + ','.join(['feature="left"'] * 70) + ")", " " * 8193):
+                    "all(" + ','.join(['feature="left"'] * 128) + ")", " " * 8193):
             with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "bound"):
                 IDENTITIES._fixture_cfg(cfg, {"left"})
 
