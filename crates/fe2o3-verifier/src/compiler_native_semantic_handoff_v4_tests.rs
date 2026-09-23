@@ -372,6 +372,14 @@ fn native_capsule_admission_v4_transaction_keeps_exact_owner_until_checked_consu
                     .unwrap();
                 budget.reserve_storage(storage.retained_storage()).unwrap();
                 let (receipt, lease) = publication.into_parts();
+                let (published_subject, storage) =
+                    transaction::InertCompilerExecutionSubjectV2::from_publication(
+                        receipt,
+                        &handoff,
+                        &mut budget,
+                    )
+                    .unwrap();
+                budget.reserve_storage(storage.retained_storage()).unwrap();
                 let (token, storage) = lease.acquire_current_token(&mut budget).unwrap();
                 budget.reserve_storage(storage.retained_storage()).unwrap();
                 let pointer = token.handoff().canonical_bytes().as_ptr();
@@ -420,6 +428,15 @@ fn native_capsule_admission_v4_transaction_keeps_exact_owner_until_checked_consu
                 assert_eq!(budget.storage(), checkpoint);
                 assert_eq!(consumed.receipt(), receipt);
                 let owner = consumed.into_content();
+                let (consumed_subject, storage) =
+                    transaction::InertCompilerExecutionSubjectV2::from_publication(
+                        receipt,
+                        owner.handoff(),
+                        &mut budget,
+                    )
+                    .unwrap();
+                budget.reserve_storage(storage.retained_storage()).unwrap();
+                assert_eq!(published_subject, consumed_subject);
                 assert_eq!(owner.handoff().canonical_bytes().as_ptr(), pointer);
                 assert_eq!(
                     owner.recovered().output().canonical().canonical_bytes(),

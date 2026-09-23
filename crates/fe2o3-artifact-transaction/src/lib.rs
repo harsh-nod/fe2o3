@@ -59,6 +59,13 @@ mod attempt;
 mod attempt_scoped_hsaco_publication;
 mod compiler_artifact_generation_v1;
 mod compiler_execution_subject;
+pub use compiler_execution_subject::native_v2::{
+    CompilerExecutionSubjectErrorV2, INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V2,
+    INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V2, INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V2,
+    INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V2, INERT_COMPILER_EXECUTION_SUBJECT_WORK_V2,
+    InertCompilerExecutionSubjectIdentityV2, InertCompilerExecutionSubjectStorageV2,
+    InertCompilerExecutionSubjectV2,
+};
 mod compiler_module_handoff;
 pub use compiler_module_handoff::native_v4::{
     CompilerModuleHandoffAdmissionErrorV4, CompilerModuleHandoffConsumptionTokenV4,

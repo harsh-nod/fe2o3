@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[path = "compiler_module_handoff_resources.rs"]
-mod resources;
+pub(crate) mod resources;
 use resources::Resources;
 #[path = "compiler_module_handoff_currentness.rs"]
 mod currentness;

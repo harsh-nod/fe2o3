@@ -7,6 +7,35 @@ use fe2o3_kernel_ir::{
 };
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+/// Logical scope/error scratch, excluding success payloads prepaid by the caller.
+pub(crate) const fn fixed_scope_overhead<T>() -> usize {
+    use std::mem::size_of;
+    size_of::<Result<T, HandoffEngineError>>()
+        + size_of::<std::thread::Result<Result<T, HandoffEngineError>>>()
+        + size_of::<Result<T, Resource>>()
+        - 3 * size_of::<T>()
+        + size_of::<Resources<'static, 'static>>()
+        + 2 * size_of::<Option<(usize, CanonicalKernelIrWorkLedgerIdentityV1)>>()
+        + 2 * size_of::<usize>()
+        + size_of::<Result<usize, Resource>>()
+        + size_of::<Result<(), Resource>>()
+        + size_of::<Result<(), HandoffEngineError>>()
+}
+
+/// Shared storage scope for fixed subject codecs as well as transaction owners.
+/// Cleanup preserves work, denial history and exact ledger identity.
+pub(crate) fn with_budget<T>(
+    budget: &mut Budget<'_>,
+    f: impl FnOnce(&mut Budget<'_>) -> T,
+) -> Result<T, Resource> {
+    Resources::Metered(budget)
+        .scoped(|r| Ok(f(r.budget()?)))
+        .map_err(|error| match error {
+            HandoffEngineError::Resource(error) => error,
+            _ => Resource::Accounting,
+        })
+}
+
 pub(super) enum Resources<'budget, 'work> {
     Legacy,
     Metered(&'budget mut Budget<'work>),

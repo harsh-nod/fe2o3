@@ -232,12 +232,20 @@ substituted ledger is never released as if it were the original. Filesystem
 registry and directory metadata retain the existing separate protocol bounds;
 this is not whole-filesystem work accounting or an RSS bound.
 
+[Native execution subject V2](compiler-execution-subject-v2.md) now binds the
+exact V4 occurrence, complete carrier-bearing capsule, cached invocation and
+compiler closure under a distinct fixed 690-byte schema. It uses the existing
+ledger, retains no payload backing, and grants no authority. Publication,
+recovery and raw/concrete-verifier consumption reconstruct the same content.
+The V1 wire/API remains frozen through shared codec mechanics and independent
+golden tests; V2 has no legacy fallback.
+
 Inventory/preflight receipts remain inert until the compiler custody boundary
-authenticates them. Compiler-execution subject/receipt transport, Cargo, Worker,
-runtime and generated-host V4 consumers are still not connected. The transaction
-adapter has no executable-artifact publication conversion; default production
-remains unchanged. No tutorial kernel gains production or hardware coverage
-from this library integration alone.
+authenticates them. Protected execution policy/attestation/carriage, receipt
+transport, Cargo, Worker, runtime and generated-host V4 consumers are still not
+connected. The transaction adapter has no executable-artifact publication
+conversion; default production remains unchanged. No tutorial kernel gains
+production or hardware coverage from this library integration alone.
 The signed ordinary-Rust producer fixture exercises base construction with an
 explicitly synthetic invocation, but requires the protected proof runtime.
 CPU content/resource tests do not replace that fixture, a positive protected

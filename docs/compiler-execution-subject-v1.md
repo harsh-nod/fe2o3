@@ -11,6 +11,10 @@ the `CompilerExecutionProvenance` authority obligation.
 The authoritative implementation is
 `fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1`.
 
+The additive [native subject V2](compiler-execution-subject-v2.md) binds V4
+handoffs under a distinct metered schema. It does not change this V1 contract
+or switch the production execution-receipt consumers.
+
 ## Purpose
 
 The protected attestation issuer and the runtime verifier need one exact,

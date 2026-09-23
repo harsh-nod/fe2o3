@@ -5,35 +5,35 @@ use fe2o3_compiler_ffi::{
     InertSemanticCompilerModuleHandoffErrorV3, InertSemanticCompilerModuleHandoffV3,
     preflight_inert_semantic_compiler_module_handoff_v3,
 };
-use sha2::{Digest, Sha256};
 
 use crate::{
-    AttemptCodecError, BuildAttempt, BuildInvocation, BuildSession, CompilerModuleHandoffReceiptV3,
-    CompilerModuleHandoffSlotV3, CompilerModuleHandoffTransactionIdentityV3,
-    ConsumedCompilerModuleHandoffV3,
+    AttemptCodecError, BuildAttempt, CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3,
+    CompilerModuleHandoffTransactionIdentityV3, ConsumedCompilerModuleHandoffV3,
 };
 
 /// Fixed magic at the start of every inert compiler-execution subject V1.
 pub const INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V1: [u8; 8] = *b"F2O3CES1";
 
-/// The only inert compiler-execution subject version implemented by this crate.
+/// Frozen legacy compiler-execution subject version.
 pub const INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1: u16 = 1;
 
 const SUBJECT_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/INERT-COMPILER-EXECUTION-SUBJECT/V1\0";
-const SHA256_BYTES: usize = 32;
-const HEADER_BYTES: usize = 8 + 2 + 2 + 8 + 4;
-const BUILD_ATTEMPT_BYTES: usize = 8 + 16 + SHA256_BYTES;
-const SLOT_BYTES: usize = 1 + 7;
-const COMPILER_CLOSURE_BYTES: usize = (6 * SHA256_BYTES) + 2 + SHA256_BYTES;
-const CONTENT_BINDING_BYTES: usize = SHA256_BYTES + 8;
-const CONTENT_BINDING_COUNT: usize = 7;
-const SUBJECT_PREIMAGE_BYTES: usize = HEADER_BYTES
-    + BUILD_ATTEMPT_BYTES
-    + SLOT_BYTES
-    + SHA256_BYTES
-    + SHA256_BYTES
-    + COMPILER_CLOSURE_BYTES
-    + (CONTENT_BINDING_COUNT * CONTENT_BINDING_BYTES);
+#[path = "compiler_execution_subject_codec.rs"]
+mod codec;
+#[path = "compiler_execution_subject_v2.rs"]
+pub(crate) mod native_v2;
+#[cfg(test)]
+use codec::{
+    COMPILER_CLOSURE_BYTES, CONTENT_BINDING_BYTES, CONTENT_BINDING_COUNT, HEADER_BYTES, SLOT_BYTES,
+};
+use codec::{SHA256_BYTES, SUBJECT_PREIMAGE_BYTES};
+const SCHEMA: codec::Schema = codec::Schema {
+    magic: INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V1,
+    version: INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1,
+    identity_domain: SUBJECT_IDENTITY_DOMAIN_V1,
+    transaction_label: "V3 handoff transaction",
+    outer_label: "outer V3 handoff",
+};
 
 /// Exact canonical byte length of one inert compiler-execution subject V1.
 pub const INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1: usize = SUBJECT_PREIMAGE_BYTES + SHA256_BYTES;
@@ -227,8 +227,8 @@ impl InertCompilerExecutionSubjectV1 {
 
         Self::from_fields(SubjectFieldsV1 {
             attempt,
-            slot,
-            transaction_identity,
+            slot: slot as u8,
+            transaction_identity: *transaction_identity.as_bytes(),
             rustc_invocation_sha256: capsule.invocation_digest().into_bytes(),
             compiler_closure: *capsule.compiler_closure(),
             rustc_identity_inventory: InertCompilerExecutionContentBindingV1::new(
@@ -270,86 +270,17 @@ impl InertCompilerExecutionSubjectV1 {
     }
 
     fn from_fields(fields: SubjectFieldsV1) -> Result<Self, CompilerExecutionSubjectErrorV1> {
-        if fields.rustc_invocation_sha256 == [0; SHA256_BYTES] {
-            return Err(CompilerExecutionSubjectErrorV1::ZeroIdentity {
-                field: "rustc invocation",
-            });
-        }
-        if fields.transaction_identity.as_bytes() == &[0; SHA256_BYTES] {
-            return Err(CompilerExecutionSubjectErrorV1::ZeroIdentity {
-                field: "V3 handoff transaction",
-            });
-        }
+        let encoded = SCHEMA.encode(&fields)?;
+        Ok(Self::from_encoded(fields, encoded))
+    }
 
-        let mut canonical_bytes = [0_u8; INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1];
-        let mut offset = 0;
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V1,
-        );
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1.to_le_bytes(),
-        );
-        put_slice(&mut canonical_bytes, &mut offset, &0_u16.to_le_bytes());
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &(INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1 as u64).to_le_bytes(),
-        );
-        put_slice(&mut canonical_bytes, &mut offset, &0_u32.to_le_bytes());
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &fields.attempt.generation().to_le_bytes(),
-        );
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            fields.attempt.session().as_bytes(),
-        );
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            fields.attempt.invocation().as_bytes(),
-        );
-        canonical_bytes[offset] = fields.slot as u8;
-        offset += SLOT_BYTES;
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            fields.transaction_identity.as_bytes(),
-        );
-        put_slice(
-            &mut canonical_bytes,
-            &mut offset,
-            &fields.rustc_invocation_sha256,
-        );
-        encode_compiler_closure(&mut canonical_bytes, &mut offset, fields.compiler_closure);
-        for binding in fields.content_bindings() {
-            put_slice(&mut canonical_bytes, &mut offset, binding.sha256());
-            put_slice(
-                &mut canonical_bytes,
-                &mut offset,
-                &binding.byte_len().to_le_bytes(),
-            );
-        }
-        debug_assert_eq!(offset, SUBJECT_PREIMAGE_BYTES);
-        let sha256 = derive_subject_identity(&canonical_bytes[..SUBJECT_PREIMAGE_BYTES]);
-        if sha256 == [0; SHA256_BYTES] {
-            return Err(CompilerExecutionSubjectErrorV1::ZeroIdentity {
-                field: "compiler execution subject",
-            });
-        }
-        put_slice(&mut canonical_bytes, &mut offset, &sha256);
-        debug_assert_eq!(offset, INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1);
-
-        Ok(Self {
+    fn from_encoded(fields: SubjectFieldsV1, encoded: codec::Encoded) -> Self {
+        Self {
             attempt: fields.attempt,
-            slot: fields.slot,
-            transaction_identity: fields.transaction_identity,
+            slot: CompilerModuleHandoffSlotV3::Production,
+            transaction_identity: CompilerModuleHandoffTransactionIdentityV3::from_bytes(
+                fields.transaction_identity,
+            ),
             rustc_invocation_sha256: fields.rustc_invocation_sha256,
             compiler_closure: fields.compiler_closure,
             rustc_identity_inventory: fields.rustc_identity_inventory,
@@ -360,105 +291,17 @@ impl InertCompilerExecutionSubjectV1 {
             compiler_module_pair_binding: fields.compiler_module_pair_binding,
             outer_handoff: fields.outer_handoff,
             identity: InertCompilerExecutionSubjectIdentityV1 {
-                sha256,
+                sha256: encoded.sha256,
                 byte_len: INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1 as u64,
             },
-            canonical_bytes,
-        })
+            canonical_bytes: encoded.canonical_bytes,
+        }
     }
 
     /// Strictly decodes one exact canonical subject without authenticating it.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionSubjectErrorV1> {
-        if bytes.len() != INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1 {
-            return Err(CompilerExecutionSubjectErrorV1::InvalidLength {
-                actual: bytes.len(),
-                expected: INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1,
-            });
-        }
-        let mut reader = Reader::new(bytes);
-        if reader.fixed::<8>()? != INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V1 {
-            return Err(CompilerExecutionSubjectErrorV1::InvalidMagic);
-        }
-        let version = reader.u16()?;
-        if version != INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1 {
-            return Err(CompilerExecutionSubjectErrorV1::UnsupportedVersion(version));
-        }
-        let flags = reader.u16()?;
-        if flags != 0 {
-            return Err(CompilerExecutionSubjectErrorV1::UnsupportedFlags(flags));
-        }
-        let declared_len = reader.u64()?;
-        if declared_len != INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1 as u64 {
-            return Err(CompilerExecutionSubjectErrorV1::InvalidDeclaredLength(
-                declared_len,
-            ));
-        }
-        if reader.u32()? != 0 {
-            return Err(CompilerExecutionSubjectErrorV1::NonzeroReserved);
-        }
-
-        let generation = reader.u64()?;
-        let session = BuildSession::from_bytes(reader.fixed::<16>()?);
-        let invocation = BuildInvocation::from_bytes(reader.fixed::<32>()?);
-        let attempt = BuildAttempt::new(generation, session, invocation)
-            .map_err(CompilerExecutionSubjectErrorV1::Attempt)?;
-        let slot_value = reader.u8()?;
-        let slot = decode_slot(slot_value)?;
-        if reader.fixed::<7>()? != [0; 7] {
-            return Err(CompilerExecutionSubjectErrorV1::NonzeroReserved);
-        }
-        let transaction_identity_bytes = reader.fixed::<32>()?;
-        if transaction_identity_bytes == [0; SHA256_BYTES] {
-            return Err(CompilerExecutionSubjectErrorV1::ZeroIdentity {
-                field: "V3 handoff transaction",
-            });
-        }
-        let transaction_identity =
-            CompilerModuleHandoffTransactionIdentityV3::from_bytes(transaction_identity_bytes);
-        let rustc_invocation_sha256 = reader.fixed::<32>()?;
-        if rustc_invocation_sha256 == [0; SHA256_BYTES] {
-            return Err(CompilerExecutionSubjectErrorV1::ZeroIdentity {
-                field: "rustc invocation",
-            });
-        }
-        let compiler_closure = decode_compiler_closure(&mut reader)?;
-
-        let mut binding = |field| {
-            InertCompilerExecutionContentBindingV1::new(reader.fixed::<32>()?, reader.u64()?, field)
-        };
-        let fields = SubjectFieldsV1 {
-            attempt,
-            slot,
-            transaction_identity,
-            rustc_invocation_sha256,
-            compiler_closure,
-            rustc_identity_inventory: binding("rustc identity inventory")?,
-            rustc_preflight_plan: binding("rustc preflight plan")?,
-            semantic_capsule: binding("semantic capsule")?,
-            final_compiler_module_commitment: binding("final compiler module commitment")?,
-            compiler_module_handoff: binding("compiler module handoff")?,
-            compiler_module_pair_binding: binding("compiler module pair binding")?,
-            outer_handoff: binding("outer V3 handoff")?,
-        };
-        debug_assert_eq!(reader.offset, SUBJECT_PREIMAGE_BYTES);
-        let declared_identity = reader.fixed::<32>()?;
-        if declared_identity == [0; SHA256_BYTES] {
-            return Err(CompilerExecutionSubjectErrorV1::ZeroIdentity {
-                field: "compiler execution subject",
-            });
-        }
-        if !reader.is_empty() {
-            return Err(CompilerExecutionSubjectErrorV1::TrailingBytes);
-        }
-        if derive_subject_identity(&bytes[..SUBJECT_PREIMAGE_BYTES]) != declared_identity {
-            return Err(CompilerExecutionSubjectErrorV1::SubjectIdentityMismatch);
-        }
-
-        let decoded = Self::from_fields(fields)?;
-        if decoded.canonical_bytes.as_slice() != bytes {
-            return Err(CompilerExecutionSubjectErrorV1::NonCanonical);
-        }
-        Ok(decoded)
+        let (fields, encoded) = SCHEMA.decode(bytes)?;
+        Ok(Self::from_encoded(fields, encoded))
     }
 
     /// Returns the exact durable build attempt.
@@ -589,36 +432,7 @@ impl fmt::Debug for InertCompilerExecutionSubjectV1 {
     }
 }
 
-struct SubjectFieldsV1 {
-    attempt: BuildAttempt,
-    slot: CompilerModuleHandoffSlotV3,
-    transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
-    rustc_invocation_sha256: [u8; SHA256_BYTES],
-    compiler_closure: CompilerClosureV2,
-    rustc_identity_inventory: InertCompilerExecutionContentBindingV1,
-    rustc_preflight_plan: InertCompilerExecutionContentBindingV1,
-    semantic_capsule: InertCompilerExecutionContentBindingV1,
-    final_compiler_module_commitment: InertCompilerExecutionContentBindingV1,
-    compiler_module_handoff: InertCompilerExecutionContentBindingV1,
-    compiler_module_pair_binding: InertCompilerExecutionContentBindingV1,
-    outer_handoff: InertCompilerExecutionContentBindingV1,
-}
-
-impl SubjectFieldsV1 {
-    const fn content_bindings(
-        &self,
-    ) -> [InertCompilerExecutionContentBindingV1; CONTENT_BINDING_COUNT] {
-        [
-            self.rustc_identity_inventory,
-            self.rustc_preflight_plan,
-            self.semantic_capsule,
-            self.final_compiler_module_commitment,
-            self.compiler_module_handoff,
-            self.compiler_module_pair_binding,
-            self.outer_handoff,
-        ]
-    }
-}
+type SubjectFieldsV1 = codec::Fields;
 
 /// Failure to construct or strictly decode one compiler-execution subject.
 #[derive(Debug)]
@@ -751,123 +565,15 @@ impl Error for CompilerExecutionSubjectErrorV1 {
     }
 }
 
-fn encode_compiler_closure(output: &mut [u8], offset: &mut usize, closure: CompilerClosureV2) {
-    for digest in [
-        closure.cargo_executable_sha256(),
-        closure.cargo_binding_trampoline_sha256(),
-        closure.cargo_fe2o3_binding_wrapper_sha256(),
-        closure.rustc_executable_sha256(),
-        closure.rustc_runtime_tree_sha256(),
-        closure.codegen_backend_sha256(),
-    ] {
-        put_slice(output, offset, &digest);
-    }
-    put_slice(
-        output,
-        offset,
-        &closure
-            .cargo_binding_transition_protocol_version()
-            .to_le_bytes(),
-    );
-    put_slice(output, offset, &closure.identity_sha256());
-}
-
-fn decode_compiler_closure(
-    reader: &mut Reader<'_>,
-) -> Result<CompilerClosureV2, CompilerExecutionSubjectErrorV1> {
-    let cargo_executable_sha256 = reader.fixed::<32>()?;
-    let cargo_binding_trampoline_sha256 = reader.fixed::<32>()?;
-    let cargo_fe2o3_binding_wrapper_sha256 = reader.fixed::<32>()?;
-    let rustc_executable_sha256 = reader.fixed::<32>()?;
-    let rustc_runtime_tree_sha256 = reader.fixed::<32>()?;
-    let codegen_backend_sha256 = reader.fixed::<32>()?;
-    let transition_version = reader.u16()?;
-    let identity_sha256 = reader.fixed::<32>()?;
-    CompilerClosureV2::from_pins_and_identity(
-        cargo_executable_sha256,
-        cargo_binding_trampoline_sha256,
-        cargo_fe2o3_binding_wrapper_sha256,
-        rustc_executable_sha256,
-        rustc_runtime_tree_sha256,
-        codegen_backend_sha256,
-        transition_version,
-        identity_sha256,
-    )
-    .map_err(CompilerExecutionSubjectErrorV1::CompilerClosure)
-}
-
-fn decode_slot(value: u8) -> Result<CompilerModuleHandoffSlotV3, CompilerExecutionSubjectErrorV1> {
-    match value {
-        0 => Ok(CompilerModuleHandoffSlotV3::Production),
-        _ => Err(CompilerExecutionSubjectErrorV1::InvalidSlot(value)),
-    }
-}
-
-fn derive_subject_identity(bytes: &[u8]) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(SUBJECT_IDENTITY_DOMAIN_V1);
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
-    digest.finalize().into()
-}
-
-fn put_slice(output: &mut [u8], offset: &mut usize, value: &[u8]) {
-    let end = offset
-        .checked_add(value.len())
-        .expect("fixed compiler-execution subject offset cannot overflow");
-    output[*offset..end].copy_from_slice(value);
-    *offset = end;
-}
-
-struct Reader<'a> {
-    bytes: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> Reader<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
-    }
-
-    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], CompilerExecutionSubjectErrorV1> {
-        let end = self
-            .offset
-            .checked_add(N)
-            .ok_or(CompilerExecutionSubjectErrorV1::Truncated)?;
-        let value = self
-            .bytes
-            .get(self.offset..end)
-            .ok_or(CompilerExecutionSubjectErrorV1::Truncated)?;
-        self.offset = end;
-        value
-            .try_into()
-            .map_err(|_| CompilerExecutionSubjectErrorV1::Truncated)
-    }
-
-    fn u8(&mut self) -> Result<u8, CompilerExecutionSubjectErrorV1> {
-        Ok(self.fixed::<1>()?[0])
-    }
-
-    fn u16(&mut self) -> Result<u16, CompilerExecutionSubjectErrorV1> {
-        Ok(u16::from_le_bytes(self.fixed()?))
-    }
-
-    fn u32(&mut self) -> Result<u32, CompilerExecutionSubjectErrorV1> {
-        Ok(u32::from_le_bytes(self.fixed()?))
-    }
-
-    fn u64(&mut self) -> Result<u64, CompilerExecutionSubjectErrorV1> {
-        Ok(u64::from_le_bytes(self.fixed()?))
-    }
-
-    fn is_empty(&self) -> bool {
-        self.offset == self.bytes.len()
-    }
+fn derive_subject_identity(bytes: &[u8]) -> [u8; 32] {
+    SCHEMA.identity(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BuildInvocation, BuildSession};
+    use sha2::{Digest, Sha256};
 
     const GENERATION_OFFSET: usize = HEADER_BYTES;
     const SESSION_OFFSET: usize = GENERATION_OFFSET + 8;
@@ -898,7 +604,7 @@ mod tests {
         InertCompilerExecutionContentBindingV1::new(digest(seed), byte_len, "test").unwrap()
     }
 
-    fn fields() -> SubjectFieldsV1 {
+    pub(super) fn fields() -> SubjectFieldsV1 {
         SubjectFieldsV1 {
             attempt: BuildAttempt::new(
                 7,
@@ -906,10 +612,8 @@ mod tests {
                 BuildInvocation::from_bytes(digest(0x09)),
             )
             .unwrap(),
-            slot: CompilerModuleHandoffSlotV3::Production,
-            transaction_identity: CompilerModuleHandoffTransactionIdentityV3::from_bytes(digest(
-                0x0a,
-            )),
+            slot: 0,
+            transaction_identity: digest(0x0a),
             rustc_invocation_sha256: digest(0x0b),
             compiler_closure: closure(0x10),
             rustc_identity_inventory: content(0x20, 101),
@@ -932,6 +636,88 @@ mod tests {
     }
 
     #[test]
+    fn frozen_v1_wire_matches_independent_golden_and_error_precedence() {
+        let hex = |text: &str| -> [u8; 32] {
+            std::array::from_fn(|i| u8::from_str_radix(&text[2 * i..2 * i + 2], 16).unwrap())
+        };
+        let mut expected = [0; 690];
+        expected[..8].copy_from_slice(b"F2O3CES1");
+        expected[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        expected[12..20].copy_from_slice(&690_u64.to_le_bytes());
+        expected[24..32].copy_from_slice(&7_u64.to_le_bytes());
+        expected[32..48].fill(0x08);
+        expected[48..80].fill(0x09);
+        expected[88..120].fill(0x0a);
+        expected[120..152].fill(0x0b);
+        for i in 0..6 {
+            expected[152 + 32 * i..184 + 32 * i].fill(0x10 + i as u8);
+        }
+        expected[344..346].copy_from_slice(&1_u16.to_le_bytes());
+        expected[346..378].copy_from_slice(&hex(
+            "3332ff237a1c07d67fd6e3f0fad96686c15faa4a6115a48e88c5654876f04a72",
+        ));
+        for i in 0..7 {
+            expected[378 + 40 * i..410 + 40 * i].fill(0x20 + i as u8);
+            expected[410 + 40 * i..418 + 40 * i].copy_from_slice(&(101 + i as u64).to_le_bytes());
+        }
+        expected[658..].copy_from_slice(&hex(
+            "b256d787309ea6c161d5161920fbd05fd4db0f8f5f105a0bb50825ab1ebc6485",
+        ));
+        let original = subject();
+        assert_eq!(*original.canonical_bytes(), expected);
+        assert_eq!(
+            InertCompilerExecutionSubjectV1::decode(&expected).unwrap(),
+            original
+        );
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(expected)),
+            hex("211b14d897e8b21d8234962192b0f70e0bdd379adce8c0999db3aac8a30c112e")
+        );
+        let mut invalid_closure = expected;
+        invalid_closure[152..184].fill(0);
+        invalid_closure[344..346].fill(0);
+        assert!(matches!(
+            InertCompilerExecutionSubjectV1::decode(&invalid_closure),
+            Err(CompilerExecutionSubjectErrorV1::CompilerClosure(
+                CompilerClosureErrorV2::UnsupportedTransitionProtocolVersion { version: 0 }
+            ))
+        ));
+        for (offset, value, error) in [(80, 1, "slot"), (88, 0, "transaction"), (378, 0, "binding")]
+        {
+            let mut bytes = expected;
+            match error {
+                "slot" => {
+                    bytes[offset] = value;
+                    bytes[offset + 1] = 1;
+                }
+                "transaction" => bytes[88..152].fill(0),
+                _ => bytes[378..418].fill(0),
+            }
+            let failure = InertCompilerExecutionSubjectV1::decode(&bytes).unwrap_err();
+            assert!(matches!(
+                (error, failure),
+                ("slot", CompilerExecutionSubjectErrorV1::InvalidSlot(1))
+                    | (
+                        "transaction",
+                        CompilerExecutionSubjectErrorV1::ZeroIdentity {
+                            field: "V3 handoff transaction"
+                        }
+                    )
+                    | (
+                        "binding",
+                        CompilerExecutionSubjectErrorV1::ZeroIdentity {
+                            field: "rustc identity inventory"
+                        }
+                    )
+            ));
+        }
+        let mut direct = expected;
+        direct[32..80].fill(0);
+        reseal(&mut direct);
+        assert!(InertCompilerExecutionSubjectV1::decode(&direct).is_ok());
+    }
+
+    #[test]
     fn canonical_subject_round_trips_every_field_without_authority() {
         let subject = subject();
         let decoded = InertCompilerExecutionSubjectV1::decode(subject.canonical_bytes()).unwrap();
@@ -941,7 +727,7 @@ mod tests {
         assert_eq!(decoded.slot(), CompilerModuleHandoffSlotV3::Production);
         assert_eq!(
             decoded.transaction_identity(),
-            fields().transaction_identity
+            CompilerModuleHandoffTransactionIdentityV3::from_bytes(fields().transaction_identity)
         );
         assert_eq!(decoded.rustc_invocation_sha256(), &digest(0x0b));
         assert_eq!(decoded.compiler_closure(), closure(0x10));
@@ -1063,8 +849,7 @@ mod tests {
         assert_changed(changed);
 
         let mut changed = fields();
-        changed.transaction_identity =
-            CompilerModuleHandoffTransactionIdentityV3::from_bytes(digest(0x30));
+        changed.transaction_identity = digest(0x30);
         assert_changed(changed);
 
         let mut changed = fields();

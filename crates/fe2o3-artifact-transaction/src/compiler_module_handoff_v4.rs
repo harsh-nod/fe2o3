@@ -23,7 +23,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 #[path = "compiler_module_handoff_v4_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 pub const MAX_COMPILER_MODULE_HANDOFF_BYTES_V4: usize =
     fe2o3_compiler_ffi::MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V4;

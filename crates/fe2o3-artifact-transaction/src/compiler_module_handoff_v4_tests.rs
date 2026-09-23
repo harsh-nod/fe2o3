@@ -90,8 +90,16 @@ impl Drop for Fixture {
     }
 }
 
-fn outer(seed: u8) -> Handoff {
+pub(crate) fn outer(seed: u8) -> Handoff {
+    outer_with_carrier(seed, seed)
+}
+
+pub(crate) fn outer_with_carrier(seed: u8, payload_seed: u8) -> Handoff {
     let legacy = super::super::semantic_v3::tests::outer(seed);
+    wrap(&legacy, payload_seed)
+}
+
+pub(crate) fn wrap(legacy: &InertSemanticCompilerModuleHandoffV3, payload_seed: u8) -> Handoff {
     let base = legacy.capsule();
     let pair = NativeRefinedForwardingCarrierLayoutV1::new::<()>(19, 64).unwrap();
     let inner = InertProductionSemanticCapsuleLayoutV4::new::<()>(
@@ -99,7 +107,7 @@ fn outer(seed: u8) -> Handoff {
         pair.encoded_len(),
     )
     .unwrap();
-    let mut bytes = vec![seed; inner.encoded_len()];
+    let mut bytes = vec![payload_seed; inner.encoded_len()];
     bytes[inner.base_range()].copy_from_slice(base.canonical_bytes());
     seal_native_refined_forwarding_carrier_v1(
         pair,
@@ -142,13 +150,41 @@ fn token(
 
 #[test]
 fn native_transaction_v4_roundtrip_retains_backing_lock_and_consumes_once() {
+    use crate::{CompilerExecutionSubjectErrorV2, InertCompilerExecutionSubjectV2 as Subject};
     let f = Fixture::new();
     let mut work = Work::new(usize::MAX);
     let mut budget = Budget::new(&mut work, LIMIT);
     let floor = f.reserve(&mut budget);
     let receipt = f.publish(&mut budget).unwrap();
     assert_eq!(budget.storage(), floor);
-    assert_eq!(f.recover(&mut budget).unwrap(), receipt);
+    let (published, storage) = Subject::from_publication(receipt, &f.handoff, &mut budget).unwrap();
+    budget.reserve_storage(storage.retained_storage()).unwrap();
+    let recovered = f.recover(&mut budget).unwrap();
+    assert_eq!(recovered, receipt);
+    let (subject, storage) = Subject::from_publication(recovered, &f.handoff, &mut budget).unwrap();
+    budget.reserve_storage(storage.retained_storage()).unwrap();
+    assert_eq!(subject, published);
+    drop(subject);
+    budget.release_storage(storage.retained_storage()).unwrap();
+    let mut wrong_length = receipt;
+    wrong_length.length += 1;
+    let checkpoint = budget.storage();
+    assert!(matches!(
+        Subject::from_publication(wrong_length, &f.handoff, &mut budget),
+        Err(CompilerExecutionSubjectErrorV2::HandoffLengthMismatch)
+    ));
+    assert_eq!(budget.storage(), checkpoint);
+    let wrong = outer_with_carrier(7, 29);
+    let wrong_storage = payload_storage(&wrong).unwrap();
+    budget.reserve_storage(wrong_storage).unwrap();
+    let checkpoint = budget.storage();
+    assert!(matches!(
+        Subject::from_publication(receipt, &wrong, &mut budget),
+        Err(CompilerExecutionSubjectErrorV2::HandoffIdentityMismatch)
+    ));
+    assert_eq!(budget.storage(), checkpoint);
+    drop(wrong);
+    budget.release_storage(wrong_storage).unwrap();
     let lease = f.lease(receipt, &mut budget);
     lease.revalidate(&mut budget).unwrap();
     let token = token(&lease, &mut budget);
@@ -176,6 +212,9 @@ fn native_transaction_v4_roundtrip_retains_backing_lock_and_consumes_once() {
     assert_eq!(consumed.receipt(), receipt);
     assert_eq!(consumed.handoff().canonical_bytes().as_ptr(), pointer);
     assert_eq!(consumed.bytes(), f.handoff.canonical_bytes());
+    let (subject, storage) = Subject::from_consumed(&consumed, &mut budget).unwrap();
+    budget.reserve_storage(storage.retained_storage()).unwrap();
+    assert_eq!(subject, published);
     assert!(!consumed.grants_compiler_authority());
     assert!(!consumed.grants_launch_authority());
     assert!(matches!(

@@ -103,6 +103,7 @@ upgrade an experimental target or path into a supported public interface.
 These documents specify the fail-closed protected compiler-execution boundary:
 
 - [Compiler execution subject](compiler-execution-subject-v1.md)
+- [Native compiler execution subject V2](compiler-execution-subject-v2.md)
 - [Compiler execution attestation](compiler-execution-attestation-v1.md)
 - [Compiler execution issuer admission](compiler-execution-issuer-admission-v1.md)
 - [Durable issuer state](compiler-execution-issuer-durable-v2.md)
