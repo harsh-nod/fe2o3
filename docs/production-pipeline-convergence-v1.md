@@ -207,10 +207,37 @@ failures. Signed two-root fixtures use actual profile layout digests, both sourc
 routes, both AMD profiles, independent root ordering, and resealed substitutions.
 They establish content consistency with public test keys, not protected origin.
 
+The artifact transaction now has a distinct, metered V4 schema over the shared
+transaction/currentness engine. It preserves exact attempts, pinned file custody,
+cooperative locks and one-shot consumption, with no legacy decoder or sidecar
+fallback. Recovery strictly decodes V4 before returning a receipt; lease minting
+streams the occurrence hash without allocating a complete payload. These are
+inert content/custody records, not compiler execution or artifact authority.
+
+`recover_compiler_native_semantic_handoff_token_v4` runs the same native semantic
+checker while retaining the transaction token's lock and unchanged backing.
+Only afterward may the caller consume the exact occurrence. Refusal, resource
+failure or unwind before the ready-to-consumed rename leaves the occurrence
+unconsumed; failures after rename do not permit replay. The generic ownership
+adapter is not an authority gate: the verifier adapter supplies the concrete
+privately constructed source/F owner. Its original backing snapshot is checked
+again before consumption.
+
+V4 payload capacity, decoded metadata, hash scratch and owner headers share the
+caller's work/storage ledger and unchanged 256 MiB cap. Returned storage is
+admitted but unreserved: retain the original token reservation, then reserve
+the additional mapped-owner amount. Consumed-owner storage is prepaid before
+commit. Scoped cleanup preserves accepted work, peaks and first denials; a
+substituted ledger is never released as if it were the original. Filesystem
+registry and directory metadata retain the existing separate protocol bounds;
+this is not whole-filesystem work accounting or an RSS bound.
+
 Inventory/preflight receipts remain inert until the compiler custody boundary
-authenticates them. Artifact transaction, compiler-execution, Cargo, Worker,
-runtime and generated-host V4 consumers are not connected by this admission
-library. It has no publication conversion; default production remains unchanged.
+authenticates them. Compiler-execution subject/receipt transport, Cargo, Worker,
+runtime and generated-host V4 consumers are still not connected. The transaction
+adapter has no executable-artifact publication conversion; default production
+remains unchanged. No tutorial kernel gains production or hardware coverage
+from this library integration alone.
 The signed ordinary-Rust producer fixture exercises base construction with an
 explicitly synthetic invocation, but requires the protected proof runtime.
 CPU content/resource tests do not replace that fixture, a positive protected

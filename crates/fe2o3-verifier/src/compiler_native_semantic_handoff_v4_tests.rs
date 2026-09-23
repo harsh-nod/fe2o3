@@ -322,6 +322,130 @@ fn decode(wire: Vec<u8>, budget: &mut Budget<'_>) -> Handoff {
 }
 
 #[test]
+fn native_capsule_admission_v4_transaction_keeps_exact_owner_until_checked_consumption() {
+    use fe2o3_artifact_transaction as transaction;
+    use std::path::Path;
+    transaction::enable_same_mount_namespace_artifact_path_guard_v1();
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    for unit in [false, true] {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            for reject in [false, true] {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let scratch = Scratch(std::env::temp_dir().join(format!(
+                    "fe2o3-native-v4-admission-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                )));
+                std::fs::create_dir(&scratch.0).unwrap();
+                let mut fixture = CapsuleFixture::new(unit, profile);
+                if reject {
+                    fixture.receipts[2] = b"other well-framed semantic MIR".to_vec();
+                }
+                let producer = transaction::ProducerIdentity::from_codegen(
+                    "native",
+                    Some(Path::new("/native.rs")),
+                )
+                .unwrap();
+                let attempt = transaction::begin_build_attempt(
+                    &scratch.0,
+                    &producer,
+                    transaction::BuildInvocation::from_bytes([19; 32]),
+                    transaction::BuildSession::from_bytes([29; 16]),
+                )
+                .unwrap();
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+                let mut budget = Budget::new(&mut work, LIMIT);
+                let handoff = decode(fixture.wire(), &mut budget);
+                let (publication, storage) =
+                    transaction::publish_compiler_module_handoff_with_currentness_v4(
+                        &scratch.0,
+                        &producer,
+                        attempt,
+                        &handoff,
+                        &mut budget,
+                    )
+                    .unwrap();
+                budget.reserve_storage(storage.retained_storage()).unwrap();
+                let (receipt, lease) = publication.into_parts();
+                let (token, storage) = lease.acquire_current_token(&mut budget).unwrap();
+                budget.reserve_storage(storage.retained_storage()).unwrap();
+                let pointer = token.handoff().canonical_bytes().as_ptr();
+                let checkpoint = budget.storage();
+                let mapped =
+                    crate::recover_compiler_native_semantic_handoff_token_v4(token, &mut budget);
+                assert_eq!(budget.storage(), checkpoint);
+                if reject {
+                    assert!(matches!(
+                        mapped,
+                        Err(
+                            transaction::CompilerModuleHandoffAdmissionErrorV4::Admission(
+                                Failure::Mismatch("V4 semantic MIR")
+                            )
+                        )
+                    ));
+                    assert_eq!(
+                        transaction::recover_compiler_module_handoff_receipt_v4(
+                            &scratch.0,
+                            &producer,
+                            attempt,
+                            &mut budget
+                        )
+                        .unwrap(),
+                        receipt
+                    );
+                    continue;
+                }
+                let (token, additional) =
+                    mapped.unwrap_or_else(|_| panic!("signed semantic fixture must admit"));
+                budget
+                    .reserve_storage(additional.retained_storage())
+                    .unwrap();
+                assert_eq!(token.handoff().canonical_bytes().as_ptr(), pointer);
+                assert!(matches!(
+                    lease.acquire_current_token(&mut budget),
+                    Err(transaction::CompilerModuleHandoffErrorV4::Busy)
+                ));
+                let checkpoint = budget.storage();
+                let consumed = transaction::consume_compiler_module_handoff_with_currentness_v4(
+                    &lease,
+                    token,
+                    &mut budget,
+                )
+                .unwrap();
+                assert_eq!(budget.storage(), checkpoint);
+                assert_eq!(consumed.receipt(), receipt);
+                let owner = consumed.into_content();
+                assert_eq!(owner.handoff().canonical_bytes().as_ptr(), pointer);
+                assert_eq!(
+                    owner.recovered().output().canonical().canonical_bytes(),
+                    NativeNeutralModuleRefV1::decode(&fixture.fields[8])
+                        .unwrap()
+                        .graph_bytes()
+                );
+                assert!(!owner.authenticates_execution());
+                assert!(!owner.grants_artifact_or_launch_authority());
+                assert!(matches!(
+                    transaction::recover_compiler_module_handoff_receipt_v4(
+                        &scratch.0,
+                        &producer,
+                        attempt,
+                        &mut budget
+                    ),
+                    Err(transaction::CompilerModuleHandoffErrorV4::Coordination(
+                        transaction::CompilerModuleHandoffErrorV1::AlreadyConsumed
+                    ))
+                ));
+            }
+        }
+    }
+}
+
+#[test]
 fn native_capsule_admission_v4_retains_signed_pair_and_shared_backing_on_both_profiles() {
     for unit in [false, true] {
         for profile in [Profile::Gfx942, Profile::Gfx950] {

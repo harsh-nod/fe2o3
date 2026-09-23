@@ -50,6 +50,12 @@ pub struct RecoveredCompilerNativeSemanticHandoffV4 {
     recovered: RecoveredCompilerRefinedForwardingOutputV1,
     storage: RecoveredCompilerNativeSemanticHandoffStorageV4,
 }
+impl AsRef<Handoff> for RecoveredCompilerNativeSemanticHandoffV4 {
+    fn as_ref(&self) -> &Handoff {
+        &self.handoff
+    }
+}
+
 impl RecoveredCompilerNativeSemanticHandoffV4 {
     pub const fn handoff(&self) -> &Handoff {
         &self.handoff
@@ -69,6 +75,31 @@ impl RecoveredCompilerNativeSemanticHandoffV4 {
     pub const fn authenticates_rustc_abi(&self) -> bool {
         false
     }
+}
+
+/// Runs the native semantic checker while retaining the transaction token's lock
+/// and exact decoded backing. Refusal leaves the ready record unconsumed.
+/// Reserve the returned additional storage before retaining or using the token.
+/// This supplies content/custody agreement, not protected compiler execution,
+/// machine refinement, publication or launch authority.
+pub fn recover_compiler_native_semantic_handoff_token_v4(
+    token: fe2o3_artifact_transaction::CompilerModuleHandoffConsumptionTokenV4,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        fe2o3_artifact_transaction::CompilerModuleHandoffConsumptionTokenV4<
+            RecoveredCompilerNativeSemanticHandoffV4,
+        >,
+        fe2o3_artifact_transaction::CompilerModuleHandoffStorageV4,
+    ),
+    fe2o3_artifact_transaction::CompilerModuleHandoffAdmissionErrorV4<
+        CompilerRefinedForwardingOutputErrorV1,
+    >,
+> {
+    token.try_map_handoff(budget, |handoff, budget| {
+        recover_compiler_native_semantic_handoff_v4(handoff, budget)
+            .map(|(owner, storage)| (owner, storage.retained_storage()))
+    })
 }
 
 /// Consumes a decoded, prepaid V4 transport and independently checks its content

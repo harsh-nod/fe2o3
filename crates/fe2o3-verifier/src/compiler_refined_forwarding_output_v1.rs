@@ -68,7 +68,7 @@ pub use recovery::{
 mod capsule;
 pub use capsule::{
     RecoveredCompilerNativeSemanticHandoffStorageV4, RecoveredCompilerNativeSemanticHandoffV4,
-    recover_compiler_native_semantic_handoff_v4,
+    recover_compiler_native_semantic_handoff_token_v4, recover_compiler_native_semantic_handoff_v4,
 };
 
 /// Bytes cannot construct this input: both variants retain independently imported

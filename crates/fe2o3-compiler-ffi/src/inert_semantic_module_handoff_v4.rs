@@ -295,6 +295,12 @@ pub struct InertSemanticCompilerModuleHandoffV4 {
     pair_identity: InertCompilerModulePairBindingIdentityV4,
     identity: InertSemanticCompilerModuleHandoffIdentityV4,
 }
+impl AsRef<InertSemanticCompilerModuleHandoffV4> for InertSemanticCompilerModuleHandoffV4 {
+    fn as_ref(&self) -> &Self {
+        self
+    }
+}
+
 impl InertSemanticCompilerModuleHandoffV4 {
     /// Transfers a complete canonical vector without another payload allocation.
     /// Framing is checked before allocating even the shared owner header.

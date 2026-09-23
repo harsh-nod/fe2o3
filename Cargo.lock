@@ -759,6 +759,7 @@ dependencies = [
  "fe2o3-build-authority",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
+ "fe2o3-kernel-ir",
  "fe2o3-rustc-invocation",
  "libc",
  "rustix",

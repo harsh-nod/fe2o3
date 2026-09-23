@@ -60,6 +60,18 @@ mod attempt_scoped_hsaco_publication;
 mod compiler_artifact_generation_v1;
 mod compiler_execution_subject;
 mod compiler_module_handoff;
+pub use compiler_module_handoff::native_v4::{
+    CompilerModuleHandoffAdmissionErrorV4, CompilerModuleHandoffConsumptionTokenV4,
+    CompilerModuleHandoffCurrentnessLeaseV4, CompilerModuleHandoffErrorV4,
+    CompilerModuleHandoffPublicationV4, CompilerModuleHandoffReceiptV4,
+    CompilerModuleHandoffSlotV4, CompilerModuleHandoffStorageV4,
+    CompilerModuleHandoffTransactionIdentityV4, ConsumedCompilerModuleHandoffV4,
+    MAX_COMPILER_MODULE_HANDOFF_BYTES_V4, MAX_COMPILER_MODULE_HANDOFF_STORAGE_V4,
+    acquire_compiler_module_handoff_currentness_lease_v4,
+    consume_compiler_module_handoff_with_currentness_v4, publish_compiler_module_handoff_v4,
+    publish_compiler_module_handoff_with_currentness_v4,
+    recover_compiler_module_handoff_receipt_v4,
+};
 mod durable_link_publication;
 mod durable_published_claim;
 mod link_publication;
