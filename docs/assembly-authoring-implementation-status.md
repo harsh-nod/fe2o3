@@ -9,6 +9,17 @@ attempts. This is bounded V2 progress, not terminal-fault snapshots, allocation
 reuse, physical GPU state or broad milestone completion. The accepted broad
 exits remain M1/V1/U1 (3/18); historical tables below retain their dated scope.
 
+An additive [live checkpoint query dashboard](../scripts/debug-session-bridge/README.md#additive-bounded-checkpoint-queries)
+consumes existing ResourceV1 and SourceVariableV2 replies beside separate SSA
+values and initialized bytes, with one live session ledger and explicit bounded
+refreshes. Its ordinary-source walkthrough keeps uncaptured watch stops,
+source-unavailable post-store checkpoints and reverse/repeat revisions distinct.
+The [separate dated qualification](evidence/live-checkpoint-dashboard-20260923.md)
+records fresh ten-module HTTP and actual desktop/mobile dashboard results;
+the earlier live-controls report is not relabeled. This adds no terminal
+snapshot, dynamic activation, allocation reuse, source authentication, GPU
+execution or broad milestone closure.
+
 Earlier bounded increment: [literal-repeat authoring, ordinary LLVM observation
 and source-fault replay](evidence/authoring-repeat-fault-20260922.md), following
 [exact static helper calls and typed parameter correspondence](evidence/authoring-call-targets-20260922.md)

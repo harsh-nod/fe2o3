@@ -12,11 +12,12 @@ import time
 # Repository-local, unchanged command/protocol owner. No second KIR/schema decoder.
 CONSOLE = Path(__file__).resolve().parent.parent / "debug-console"
 sys.path.insert(0, str(CONSOLE))
-from debug_console_commands import CommandError, number, parse_command
+from debug_console_commands import CommandError, number
 from debug_console_process import cleanup
-from debug_console_protocol import LineFramer, ProtocolError, Session, encode
+from debug_console_protocol import LineFramer, ProtocolError, encode
 
 from bridge_inputs import CustodyError
+from bridge_live_queries import LiveQuerySession
 
 REQUEST_SCHEMA = "fe2o3-cpu-debug-bridge-request-v1"
 RESPONSE_SCHEMA = "fe2o3-cpu-debug-bridge-response-v1"
@@ -160,7 +161,7 @@ class CPUProcess:
 
 
 class BridgeSession:
-    """Transport correlation only; unchanged Session owns backend semantic joins."""
+    """V1 correlation plus separately versioned, bridge-local checkpoint queries."""
     def __init__(self, argv, inputs, process_factory=CPUProcess, clock=time.monotonic):
         self.argv = tuple(argv)
         self.inputs = inputs
@@ -183,6 +184,8 @@ class BridgeSession:
     def close(self):
         """Only closed=True permits reconnect; failed reaping retains the owned handle."""
         self.poisoned = True
+        if self.protocol is not None:
+            self.protocol.clear_selection()
         if self.process is None:
             return True
         if not self.process.close():
@@ -239,7 +242,7 @@ class BridgeSession:
         if revision != self.protocol.view["revision"]:
             raise self.error("stale_revision")
         try:
-            body = parse_command(request["command"])
+            body = self.protocol.parse_command(request["command"])
         except (CommandError, TypeError):
             raise self.error("command_refused") from None
         if not isinstance(body, dict) or body.get("operation") == "terminate":
@@ -266,7 +269,7 @@ class BridgeSession:
         self.connection_id = connection_id
         self.bridge_session = secrets.token_hex(32)
         self.used_connections.add(connection_id)
-        self.protocol = Session()
+        self.protocol = LiveQuerySession()
         self.started = self.clock()
         self.poisoned = False
         self.process = self.process_factory()
