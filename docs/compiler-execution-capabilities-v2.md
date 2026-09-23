@@ -19,6 +19,12 @@ secret image under a pinned PolicyV2. It retains that complete typed policy
 identity and exposes only revalidation and read-only transfer, not signing.
 It cannot be constructed from a V1 key owner.
 
+`ProtectedExternalAnchorServiceAdmissionV2` separately admits the anchor endpoint
+and live service pidfd through bounded, allocation-free inspection. It preserves
+the shared continuity checks and requires a distinct service UID. See the
+[anchor custody contract](compiler-execution-anchor-custody-v2.md) for ownership,
+resource accounting and the difference between transport custody and authority.
+
 These APIs do not activate the native producer, service handlers, or launcher.
 No protected proof or GPU execution is credited. M0-M7 and 47/47 remain open.
 See the [native publication contract](compiler-execution-publication-v2.md)
@@ -199,7 +205,7 @@ and coherent provisioning remain required before producer activation.
 
 Fresh native program custody now consumes the pinned policy with independently
 sealed launcher/issuer images through bounded shared executable mechanics. It
-does not yet bind the separately admitted native key, service authority or a
-consuming launch.
+does not yet bind the separately admitted native key and anchor transport into
+service authority or a consuming launch.
 See the [program status](../crates/fe2o3-compiler-execution-supervisor/README.md)
 and [image accounting](../crates/fe2o3-protected-static-executable/README.md).

@@ -15,8 +15,10 @@ retained images are separate objects. Trusted provisioning must independently
 pin the policy and launcher measurement.
 
 This program owner is inert. Native signing-key custody exists separately in
-`fe2o3-compiler-closure-capability`; native program/key authority binding,
-consuming launch, readiness and service/recovery integration remain required.
+`fe2o3-compiler-closure-capability`, and bounded native anchor transport custody
+exists in `fe2o3-broker-authority-service`. Native program/key/anchor authority
+binding, consuming launch, readiness and service/recovery integration remain
+required. See the [anchor custody contract](../../docs/compiler-execution-anchor-custody-v2.md).
 Its controlled File clones grant no process authority and do not meter arbitrary
 subsequent File operations. It is not converted into a V1 supervisor. No protected
 proof or GPU qualification is credited; M0-M7 and 47/47 remain incomplete.

@@ -98,6 +98,11 @@
 //! use fe2o3_broker_authority_service::ProtectedCompilerExecutionOccurrenceV1;
 //! ```
 //!
+//! [`ProtectedExternalAnchorServiceAdmissionV2`] is a separate fresh, bounded
+//! anchor transport owner. It shares V1's mechanical continuity checks, but uses
+//! fixed procfs buffers, finite I/O attempts and allocation-free diagnostics on
+//! the caller's resource ledger. It has no V1-owner conversion or service authority.
+//!
 //! The [`BrokerSessionMachineV1`] is a separate fixed-capacity, in-memory lifecycle model. Its
 //! broker-owned route retains prepared and granted Broker V4 state, requires the V4 static-LLD
 //! identity to match the exact W0 closure, invokes only an externally approved static linker, and
@@ -197,8 +202,10 @@ pub use durable_session_consume::{
 #[cfg(target_os = "linux")]
 pub use linux::{
     AdmissionErrorKindV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
-    ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
-    ProtectedServiceAdmissionV1, current_process_start_time_ticks_v1,
+    ProtectedExternalAnchorServiceAdmissionV1, ProtectedExternalAnchorServiceAdmissionV2,
+    ProtectedExternalAnchorServiceErrorV2, ProtectedExternalAnchorServiceStorageV2,
+    ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,
+    current_process_start_time_ticks_v1,
 };
 #[cfg(target_os = "linux")]
 pub use session::{
