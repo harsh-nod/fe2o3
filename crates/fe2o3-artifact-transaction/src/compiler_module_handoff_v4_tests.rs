@@ -9,14 +9,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 const LIMIT: usize = MAX_COMPILER_MODULE_HANDOFF_STORAGE_V4;
 
-struct Fixture {
-    path: PathBuf,
-    producer: ProducerIdentity,
-    attempt: BuildAttempt,
-    handoff: Handoff,
+pub(super) struct Fixture {
+    pub(super) path: PathBuf,
+    pub(super) producer: ProducerIdentity,
+    pub(super) attempt: BuildAttempt,
+    pub(super) handoff: Handoff,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let path = std::env::temp_dir().join(format!(
             "fe2o3-native-v4-{}-{}",
@@ -40,7 +40,10 @@ impl Fixture {
             handoff: outer(7),
         }
     }
-    fn publish(&self, budget: &mut Budget<'_>) -> Result<CompilerModuleHandoffReceiptV4> {
+    pub(super) fn publish(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<CompilerModuleHandoffReceiptV4> {
         publish_compiler_module_handoff_v4(
             &self.path,
             &self.producer,
@@ -52,7 +55,7 @@ impl Fixture {
     fn recover(&self, budget: &mut Budget<'_>) -> Result<CompilerModuleHandoffReceiptV4> {
         recover_compiler_module_handoff_receipt_v4(&self.path, &self.producer, self.attempt, budget)
     }
-    fn lease(
+    pub(super) fn lease(
         &self,
         receipt: CompilerModuleHandoffReceiptV4,
         budget: &mut Budget<'_>,
@@ -67,7 +70,7 @@ impl Fixture {
         budget.reserve_storage(storage.0).unwrap();
         lease
     }
-    fn slot(&self) -> PathBuf {
+    pub(super) fn slot(&self) -> PathBuf {
         let producer = producer_identity_for::<Schema>(&self.producer);
         let slot = slot_identity_for::<Schema>(
             producer,
@@ -78,7 +81,7 @@ impl Fixture {
             .join(format!("{}{}", Schema::PARENT_PREFIX, hex(&producer)))
             .join(format!("{}{}", Schema::SLOT_PREFIX, hex(&slot)))
     }
-    fn reserve(&self, budget: &mut Budget<'_>) -> usize {
+    pub(super) fn reserve(&self, budget: &mut Budget<'_>) -> usize {
         let floor = payload_storage(&self.handoff).unwrap();
         budget.reserve_storage(floor).unwrap();
         floor
@@ -139,7 +142,7 @@ pub(crate) fn wrap(legacy: &InertSemanticCompilerModuleHandoffV3, payload_seed: 
     Handoff::decode_owned(bytes).unwrap()
 }
 
-fn token(
+pub(super) fn token(
     lease: &CompilerModuleHandoffCurrentnessLeaseV4,
     budget: &mut Budget<'_>,
 ) -> CompilerModuleHandoffConsumptionTokenV4 {

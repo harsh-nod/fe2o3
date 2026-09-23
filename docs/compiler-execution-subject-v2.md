@@ -103,7 +103,10 @@ consumption and the concrete verifier-mapped owner reconstruct the same subject.
 The verifier fixtures cover both source routes and gfx942/gfx950 with public
 test keys; they establish content agreement, not protected origin.
 
-Required next integration is an explicit V2 receipt-transport and protected
+[Native receipt transport V2](compiler-execution-receipt-transport-v2.md) now
+retains the complete subject beside opaque receipt bytes, including consumed
+restart after payload deletion. It supplies content/custody checks, not issuer
+authentication. Required next integration is a protected
 policy/attestation/carriage family, broker occurrence reconstruction, producer
 and Cargo admission before consumption, and matching Worker/runtime/host
 consumers. Semantic replay and canonical subject equality cannot replace issuer

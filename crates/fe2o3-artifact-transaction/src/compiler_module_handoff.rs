@@ -33,6 +33,8 @@ use resources::Resources;
 mod currentness;
 #[path = "compiler_module_handoff_v4.rs"]
 pub(crate) mod native_v4;
+#[path = "compiler_execution_receipt_transport.rs"]
+mod receipt_transport;
 
 const PARENT_PREFIX: &str = ".fe2o3-compiler-module-handoff-v1-";
 const SLOT_PREFIX: &str = "attempt-";
@@ -1029,7 +1031,7 @@ fn publish_in_slot_engine<S: HandoffSchema>(
         &format!("{}{}", S::SLOT_PREFIX, hex(&slot_id)),
         hooks,
     )?;
-    recover_slot::<S>(&slot)?;
+    recover_slot::<S>(&slot, resources)?;
     if entry_exists(&slot, CONSUMED_ENTRY)? {
         read_bound_record::<S>(
             &slot,
@@ -1247,7 +1249,7 @@ fn consume_in_slot_engine_locked<S: HandoffSchema>(
         format!("{}{}", S::SLOT_PREFIX, hex(&slot_id)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-    recover_slot::<S>(&slot)?;
+    recover_slot::<S>(&slot, resources)?;
     if entry_exists(&slot, CONSUMED_ENTRY)? {
         read_bound_record::<S>(
             &slot,
@@ -1606,7 +1608,11 @@ fn remove_all_slot_entries(slot: &PinnedDirectory) -> Result<(), CompilerModuleH
     Ok(())
 }
 
-fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffEngineError> {
+fn recover_slot<S: HandoffSchema>(
+    slot: &PinnedDirectory,
+    resources: &mut Resources<'_, '_>,
+) -> Result<(), HandoffEngineError> {
+    resources.require::<S>()?;
     let names = slot_entries(slot)?;
     for name in &names {
         let name_bytes = name.as_os_str().as_bytes();
@@ -1660,10 +1666,20 @@ fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffE
     if S::VALIDATE_RECORD_DURING_RECOVERY
         && let Some(entry) = committed_entry
     {
-        let record = read_private_file(slot, entry, S::RECORD_BYTES)?
-            .ok_or_else(|| invalid_slot(&slot.path.join(entry), "record disappeared"))?;
-        HandoffRecord::<S>::decode(&record)
-            .map_err(|reason| invalid_slot(&slot.path.join(entry), reason))?;
+        resources.scoped(|r| {
+            r.reserve(std::mem::size_of::<HandoffRecord<S>>() + std::mem::size_of::<Sha256>())?;
+            r.work(4 * S::RECORD_BYTES)?;
+            let record = if S::METERED {
+                let pinned = currentness::pin(slot, entry, S::RECORD_BYTES)?;
+                currentness::read_file(slot, entry, &pinned, S::RECORD_BYTES, S::RECORD_BYTES, r)?
+            } else {
+                read_private_file(slot, entry, S::RECORD_BYTES)?
+                    .ok_or_else(|| invalid_slot(&slot.path.join(entry), "record disappeared"))?
+            };
+            HandoffRecord::<S>::decode(&record)
+                .map_err(|reason| invalid_slot(&slot.path.join(entry), reason))?;
+            Ok(())
+        })?;
     }
     for name in residue {
         let name_bytes = name.as_os_str().as_bytes();
@@ -4316,7 +4332,7 @@ pub(crate) mod semantic_v3 {
         }
     }
 
-    struct HandoffV3Schema;
+    pub(super) struct HandoffV3Schema;
 
     impl currentness::Schema for HandoffV3Schema {
         type Receipt = CompilerModuleHandoffReceiptV3;
@@ -4562,6 +4578,75 @@ pub(crate) mod semantic_v3 {
         )
     }
 
+    impl receipt_transport::Subject for crate::InertCompilerExecutionSubjectV1 {
+        type Schema = HandoffV3Schema;
+        type Postcheck = ();
+        const ENTRY: &'static str = COMPILER_EXECUTION_RECEIPT_ENTRY_V1;
+        const MAX_BYTES: usize = MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1;
+
+        fn coordinates(&self) -> receipt_transport::Coordinates<Self::Schema> {
+            receipt_transport::Coordinates {
+                attempt: self.attempt(),
+                slot: self.slot(),
+                outer: currentness::Binding {
+                    sha256: *self.outer_handoff().sha256(),
+                    byte_len: self.outer_handoff().byte_len(),
+                },
+                transaction: *self.transaction_identity().as_bytes(),
+            }
+        }
+        fn validate_payload(
+            &self,
+            _record: &HandoffRecord<Self::Schema>,
+            _bytes: Vec<u8>,
+            _resources: &mut Resources<'_, '_>,
+        ) -> receipt_transport::Result<()> {
+            // Preserve V1 path policy: native transaction bytes, not a full
+            // reconstructed subject. V1 current-token recovery checks that too.
+            Ok(())
+        }
+        fn prepare_postcheck(
+            &self,
+            _output: &PinnedOutput,
+            _producer: &ProducerIdentity,
+            _slot: &PinnedDirectory,
+            _resources: &mut Resources<'_, '_>,
+        ) -> receipt_transport::Result<()> {
+            Ok(())
+        }
+
+        fn postcheck(
+            &self,
+            output: &PinnedOutput,
+            producer: &ProducerIdentity,
+            slot: &PinnedDirectory,
+            _prepared: (),
+        ) -> receipt_transport::Result<()> {
+            receipt_transport::validate(
+                output,
+                producer,
+                self,
+                slot,
+                false,
+                false,
+                &mut Resources::Legacy,
+            )
+        }
+    }
+
+    impl From<receipt_transport::Failure> for CompilerExecutionReceiptTransportErrorV1 {
+        fn from(error: receipt_transport::Failure) -> Self {
+            use receipt_transport::Failure as E;
+            match error {
+                E::Handoff(e) => Self::Handoff(engine_error_v3(e)),
+                E::InvalidSize { actual, maximum } => Self::InvalidReceiptSize { actual, maximum },
+                E::NotPublished => Self::NotPublished,
+                E::Conflict => Self::ConflictingPublication,
+                E::Mismatch | E::Subject(_) => Self::SubjectBindingMismatch,
+            }
+        }
+    }
+
     fn publish_compiler_execution_receipt_transport_inner_v1(
         output_dir: &Path,
         producer: &ProducerIdentity,
@@ -4569,56 +4654,17 @@ pub(crate) mod semantic_v3 {
         exact_receipt_bytes: &[u8],
     ) -> Result<CompilerExecutionReceiptTransportReceiptV1, CompilerExecutionReceiptTransportErrorV1>
     {
-        validate_compiler_execution_receipt_transport_size_v1(exact_receipt_bytes.len())?;
-        let output = PinnedOutput::open_existing(output_dir)?;
-        let _lock = output.lock()?;
-        let slot = open_subject_bound_slot_v1(&output, producer, subject, false, true)?;
-
-        if let Some(existing) = read_compiler_execution_receipt_bytes_v1(&slot)? {
-            if existing != exact_receipt_bytes {
-                return Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication);
-            }
-            fsync(&slot.fd).map_err(std::io::Error::from)?;
-            validate_subject_bound_slot_v1(&output, producer, subject, &slot, false, false)?;
-            return Ok(compiler_execution_receipt_transport_receipt_v1(
-                subject, &existing,
-            ));
-        }
-
-        let (temporary_name, mut temporary) =
-            create_temp(&slot, COMPILER_EXECUTION_RECEIPT_ENTRY_V1)?;
-        temporary.write_all(exact_receipt_bytes)?;
-        temporary.sync_all()?;
-        let temporary_stat = fstat(&temporary).map_err(std::io::Error::from)?;
-        if !is_private_file(&temporary_stat)
-            || usize::try_from(temporary_stat.st_size).ok() != Some(exact_receipt_bytes.len())
-        {
-            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
-        }
-        validate_subject_bound_slot_v1(&output, producer, subject, &slot, false, false)?;
-        match renameat_with(
-            &slot.fd,
-            &temporary_name,
-            &slot.fd,
-            COMPILER_EXECUTION_RECEIPT_ENTRY_V1,
-            RenameFlags::NOREPLACE,
-        ) {
-            Ok(()) => {}
-            Err(error) if error == rustix::io::Errno::EXIST => {
-                return Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication);
-            }
-            Err(error) => return Err(std::io::Error::from(error).into()),
-        }
-        fsync(&slot.fd).map_err(std::io::Error::from)?;
-        slot.verify()?;
-        let committed = read_compiler_execution_receipt_bytes_v1(&slot)?
-            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
-        if committed != exact_receipt_bytes {
-            return Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication);
-        }
-        validate_subject_bound_slot_v1(&output, producer, subject, &slot, false, false)?;
+        receipt_transport::publish(
+            output_dir,
+            producer,
+            subject,
+            exact_receipt_bytes,
+            &mut Resources::Legacy,
+            &mut NoFaults,
+        )?;
         Ok(compiler_execution_receipt_transport_receipt_v1(
-            subject, &committed,
+            subject,
+            exact_receipt_bytes,
         ))
     }
 
@@ -4630,12 +4676,8 @@ pub(crate) mod semantic_v3 {
         RecoveredCompilerExecutionReceiptTransportV1,
         CompilerExecutionReceiptTransportErrorV1,
     > {
-        let output = PinnedOutput::open_existing(output_dir)?;
-        let _lock = output.lock()?;
-        let slot = open_subject_bound_slot_v1(&output, producer, subject, true, true)?;
-        let exact_bytes = read_compiler_execution_receipt_bytes_v1(&slot)?
-            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
-        validate_subject_bound_slot_v1(&output, producer, subject, &slot, true, false)?;
+        let exact_bytes =
+            receipt_transport::recover(output_dir, producer, subject, &mut Resources::Legacy)?;
         let receipt = compiler_execution_receipt_transport_receipt_v1(subject, &exact_bytes);
         Ok(RecoveredCompilerExecutionReceiptTransportV1 {
             receipt,
@@ -4643,220 +4685,14 @@ pub(crate) mod semantic_v3 {
         })
     }
 
-    fn open_subject_bound_slot_v1(
-        output: &PinnedOutput,
-        producer: &ProducerIdentity,
-        subject: &crate::InertCompilerExecutionSubjectV1,
-        allow_consumed: bool,
-        validate_payload: bool,
-    ) -> Result<PinnedDirectory, CompilerExecutionReceiptTransportErrorV1> {
-        output.verify_path_identity()?;
-        authorize_compiler_execution_receipt_transport_v1(
-            output,
-            producer,
-            subject.attempt(),
-            allow_consumed,
-        )?;
-        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
-        let slot_identity = slot_identity_for::<HandoffV3Schema>(
-            producer_identity,
-            subject.attempt(),
-            subject.slot(),
-        );
-        let parent = open_private_directory(
-            &output.fd,
-            &output.display_path,
-            format!("{PARENT_PREFIX_V3}{}", hex(&producer_identity)),
-        )?
-        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, subject.attempt())
-            .map_err(engine_error_v3)?;
-        let slot = open_private_directory(
-            &parent.fd,
-            &parent.path,
-            format!("{SLOT_PREFIX_V3}{}", hex(&slot_identity)),
-        )?
-        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        recover_slot::<HandoffV3Schema>(&slot).map_err(engine_error_v3)?;
-        validate_subject_bound_slot_v1(
-            output,
-            producer,
-            subject,
-            &slot,
-            allow_consumed,
-            validate_payload,
-        )?;
-        parent.verify()?;
-        Ok(slot)
-    }
-
-    fn validate_subject_bound_slot_v1(
-        output: &PinnedOutput,
-        producer: &ProducerIdentity,
-        subject: &crate::InertCompilerExecutionSubjectV1,
-        slot: &PinnedDirectory,
-        allow_consumed: bool,
-        validate_payload: bool,
-    ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
-        output.verify_path_identity()?;
-        authorize_compiler_execution_receipt_transport_v1(
-            output,
-            producer,
-            subject.attempt(),
-            allow_consumed,
-        )?;
-        slot.verify()?;
-        let entries = slot_entries(slot)?;
-        let has_ready = entries.iter().any(|entry| entry == READY_ENTRY);
-        let has_consumed = entries.iter().any(|entry| entry == CONSUMED_ENTRY);
-        let record_entry = match (has_ready, has_consumed) {
-            (true, false) => READY_ENTRY,
-            (false, true) if allow_consumed => CONSUMED_ENTRY,
-            (false, true) => {
-                return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                    CompilerModuleHandoffErrorV3::AlreadyConsumed,
-                ));
-            }
-            (false, false) => {
-                return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                    CompilerModuleHandoffErrorV3::NotPublished,
-                ));
-            }
-            (true, true) => {
-                return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
-            }
-        };
-        let record_bytes = read_private_file(slot, record_entry, HandoffV3Schema::RECORD_BYTES)?
-            .ok_or(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
-        let record = HandoffRecord::<HandoffV3Schema>::decode(&record_bytes)
-            .map_err(|_| CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
-        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
-        let slot_identity = slot_identity_for::<HandoffV3Schema>(
-            producer_identity,
-            subject.attempt(),
-            subject.slot(),
-        );
-        let outer = subject.outer_handoff();
-        if record.producer != producer_identity
-            || record.slot != slot_identity
-            || record.attempt != subject.attempt()
-            || record.binding.sha256 != *outer.sha256()
-            || record.binding.byte_len != outer.byte_len()
-            || record.identity != *subject.transaction_identity().as_bytes()
-            || u64::try_from(record.length).ok() != Some(outer.byte_len())
-        {
-            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
-        }
-        if validate_payload && record_entry == READY_ENTRY {
-            let payload = read_payload::<HandoffV3Schema>(
-                slot,
-                &record,
-                MAX_V3_DECODE_WORKING_SET_BYTES,
-                &mut Resources::Legacy,
-            )
-            .map_err(engine_error_v3)?;
-            drop(payload);
-        }
-        output.verify_path_identity()?;
-        authorize_compiler_execution_receipt_transport_v1(
-            output,
-            producer,
-            subject.attempt(),
-            allow_consumed,
-        )?;
-        slot.verify()?;
-        Ok(())
-    }
-
-    fn authorize_compiler_execution_receipt_transport_v1(
-        output: &PinnedOutput,
-        producer: &ProducerIdentity,
-        attempt: BuildAttempt,
-        allow_consumed: bool,
-    ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
-        if !allow_consumed {
-            return authorize(output, producer, attempt).map_err(Into::into);
-        }
-        if attempt.session() == BuildSession::DIRECT {
-            return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                CompilerModuleHandoffErrorV3::Attempt {
-                    reason:
-                        "direct compiler attempts cannot own a compiler-execution receipt sidecar"
-                            .to_owned(),
-                },
-            ));
-        }
-        let attempts = read_attempt_registry(output)?;
-        let record = attempts
-            .record_exact(&producer.stable_source, attempt)
-            .map_err(|error| CompilerModuleHandoffErrorV3::Attempt {
-                reason: error.to_string(),
-            })?;
-        if record.crate_name != producer.crate_name {
-            return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                CompilerModuleHandoffErrorV3::Attempt {
-                    reason: "build attempt crate name does not match the receipt producer"
-                        .to_owned(),
-                },
-            ));
-        }
-        let recoverable = matches!(
-            (record.phase, record.backend_receipt),
-            (AttemptPhase::Building, None)
-                | (
-                    AttemptPhase::BackendClaimed | AttemptPhase::Completed,
-                    Some(_)
-                )
-        );
-        if !recoverable {
-            return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                CompilerModuleHandoffErrorV3::Attempt {
-                    reason: "build attempt is not in a receipt-sidecar recovery phase".to_owned(),
-                },
-            ));
-        }
-        Ok(())
-    }
-
     fn read_compiler_execution_receipt_bytes_v1(
         slot: &PinnedDirectory,
     ) -> Result<Option<Vec<u8>>, CompilerExecutionReceiptTransportErrorV1> {
-        let stat = match statat(
-            &slot.fd,
-            COMPILER_EXECUTION_RECEIPT_ENTRY_V1,
-            AtFlags::SYMLINK_NOFOLLOW,
-        ) {
-            Ok(stat) => stat,
-            Err(error) if error == rustix::io::Errno::NOENT => return Ok(None),
-            Err(error) => return Err(std::io::Error::from(error).into()),
-        };
-        if !is_private_file(&stat) {
-            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
-        }
-        let length = usize::try_from(stat.st_size).map_err(|_| {
-            CompilerExecutionReceiptTransportErrorV1::InvalidReceiptSize {
-                actual: usize::MAX,
-                maximum: MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1,
-            }
-        })?;
-        validate_compiler_execution_receipt_transport_size_v1(length)?;
-        let exact = read_private_file(slot, COMPILER_EXECUTION_RECEIPT_ENTRY_V1, length)?
-            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
-        Ok(Some(exact))
-    }
-
-    fn validate_compiler_execution_receipt_transport_size_v1(
-        length: usize,
-    ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
-        if length == 0 || length > MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1 {
-            return Err(
-                CompilerExecutionReceiptTransportErrorV1::InvalidReceiptSize {
-                    actual: length,
-                    maximum: MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1,
-                },
-            );
-        }
-        Ok(())
+        receipt_transport::read::<crate::InertCompilerExecutionSubjectV1>(
+            slot,
+            &mut Resources::Legacy,
+        )
+        .map_err(Into::into)
     }
 
     fn compiler_execution_receipt_transport_receipt_v1(

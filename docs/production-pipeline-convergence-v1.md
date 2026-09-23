@@ -240,9 +240,17 @@ recovery and raw/concrete-verifier consumption reconstruct the same content.
 The V1 wire/API remains frozen through shared codec mechanics and independent
 golden tests; V2 has no legacy fallback.
 
+[Native receipt transport V2](compiler-execution-receipt-transport-v2.md) now
+binds opaque receipt bytes to that complete subject through shared sidecar
+custody. Ready publication/recovery reconstructs the subject from V4; locked
+recovery uses the exact raw token; consumed restart compares all stored subject
+bytes after payload deletion. One move-only buffer retains the body, with actual
+capacity charged and all native postcommit readback work prepaid. This is inert
+transport, not protected issuance or an activated production consumer.
+
 Inventory/preflight receipts remain inert until the compiler custody boundary
-authenticates them. Protected execution policy/attestation/carriage, receipt
-transport, Cargo, Worker, runtime and generated-host V4 consumers are still not
+authenticates them. Protected execution policy/attestation/carriage, Cargo,
+Worker, runtime and generated-host V4 consumers are still not
 connected. The transaction adapter has no executable-artifact publication
 conversion; default production remains unchanged. No tutorial kernel gains
 production or hardware coverage from this library integration alone.

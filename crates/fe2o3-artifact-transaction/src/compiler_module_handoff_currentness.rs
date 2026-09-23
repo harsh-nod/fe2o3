@@ -152,7 +152,7 @@ fn validate_renamed(slot: &PinnedDirectory, pinned: &PinnedFile) -> Result<()> {
     Ok(())
 }
 
-fn read_file(
+pub(super) fn read_file(
     slot: &PinnedDirectory,
     entry: &str,
     pinned: &PinnedFile,
@@ -175,7 +175,20 @@ fn read_file(
     validate_file(slot, entry, pinned)?;
     let mut bytes = resources.buffer(length)?;
     bytes.resize(length, 0);
-    pinned.file.read_exact_at(&mut bytes, 0)?;
+    read_file_into(slot, entry, pinned, &mut bytes)?;
+    Ok(bytes)
+}
+
+/// Caller prepays the exact buffer and bounded read/probe work before entering.
+pub(super) fn read_file_into(
+    slot: &PinnedDirectory,
+    entry: &str,
+    pinned: &PinnedFile,
+    bytes: &mut [u8],
+) -> Result<()> {
+    validate_file(slot, entry, pinned)?;
+    let length = bytes.len();
+    pinned.file.read_exact_at(bytes, 0)?;
     let mut trailing = [0_u8; 1];
     if pinned.file.read_at(&mut trailing, length as u64)? != 0 {
         return Err(invalid_slot(
@@ -185,7 +198,7 @@ fn read_file(
         .into());
     }
     validate_file(slot, entry, pinned)?;
-    Ok(bytes)
+    Ok(())
 }
 
 fn read_record<S: Schema>(
@@ -339,60 +352,75 @@ pub(super) fn stream<S: Schema>(
             PAYLOAD_ENTRY,
             &binding.payload_file,
         )?;
-        resources.reserve(STREAM_BYTES + std::mem::size_of::<Sha256>())?;
-        resources.work(
-            record
-                .length
-                .checked_mul(2)
-                .and_then(|n| n.checked_add(257))
-                .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?,
-        )?;
-        let mut digest = S::transaction_hasher(
-            record.producer,
-            record.slot,
-            record.attempt,
-            record.binding,
-            record.length,
-        );
-        let mut offset = 0_u64;
-        let mut remaining = record.length;
-        let mut buffer = [0_u8; STREAM_BYTES];
-        while remaining != 0 {
-            let requested = remaining.min(buffer.len());
-            let read = binding
-                .payload_file
-                .file
-                .read_at(&mut buffer[..requested], offset)?;
-            if read == 0 {
-                return Err(invalid_slot(
-                    &binding.slot_directory.path.join(PAYLOAD_ENTRY),
-                    "pinned payload ended before its committed length",
-                )
-                .into());
-            }
-            digest.update(&buffer[..read]);
-            remaining -= read;
-            offset += read as u64;
-        }
-        let mut trailing = [0_u8; 1];
-        if binding.payload_file.file.read_at(&mut trailing, offset)? != 0 {
-            return Err(invalid_slot(
-                &binding.slot_directory.path.join(PAYLOAD_ENTRY),
-                "pinned payload grew beyond its committed length",
-            )
-            .into());
-        }
-        validate_file(
-            &binding.slot_directory,
-            PAYLOAD_ENTRY,
-            &binding.payload_file,
-        )?;
-        let identity: [u8; 32] = digest.finalize().into();
-        if identity != record.identity || identity != S::receipt_fields(binding.receipt).identity {
+        prepay_payload_stream(&record, resources)?;
+        stream_payload(&binding.slot_directory, &binding.payload_file, &record)?;
+        if record.identity != S::receipt_fields(binding.receipt).identity {
             return Err(CompilerModuleHandoffErrorV1::DigestMismatch.into());
         }
         metadata(binding, resources)
     })
+}
+
+pub(super) fn prepay_payload_stream<S: Schema>(
+    record: &HandoffRecord<S>,
+    resources: &mut Resources<'_, '_>,
+) -> Result<()> {
+    resources.require::<S>()?;
+    resources.reserve(STREAM_BYTES + std::mem::size_of::<Sha256>())?;
+    resources.work(
+        record
+            .length
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(STREAM_BYTES + 257))
+            .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?,
+    )
+}
+
+/// Caller prepays one bounded stream and retains its scratch reservation.
+/// Rehash content: metadata can remain unchanged within a filesystem clock tick.
+pub(super) fn stream_payload<S: Schema>(
+    slot: &PinnedDirectory,
+    payload: &PinnedFile,
+    record: &HandoffRecord<S>,
+) -> Result<()> {
+    validate_file(slot, PAYLOAD_ENTRY, payload)?;
+    let mut digest = S::transaction_hasher(
+        record.producer,
+        record.slot,
+        record.attempt,
+        record.binding,
+        record.length,
+    );
+    let mut offset = 0_u64;
+    let mut remaining = record.length;
+    let mut buffer = [0_u8; STREAM_BYTES];
+    while remaining != 0 {
+        let requested = remaining.min(buffer.len());
+        let read = payload.file.read_at(&mut buffer[..requested], offset)?;
+        if read == 0 {
+            return Err(invalid_slot(
+                &slot.path.join(PAYLOAD_ENTRY),
+                "pinned payload ended before its committed length",
+            )
+            .into());
+        }
+        digest.update(&buffer[..read]);
+        remaining -= read;
+        offset += read as u64;
+    }
+    let mut trailing = [0_u8; 1];
+    if payload.file.read_at(&mut trailing, offset)? != 0 {
+        return Err(invalid_slot(
+            &slot.path.join(PAYLOAD_ENTRY),
+            "pinned payload grew beyond its committed length",
+        )
+        .into());
+    }
+    validate_file(slot, PAYLOAD_ENTRY, payload)?;
+    if <[u8; 32]>::from(digest.finalize()) != record.identity {
+        return Err(CompilerModuleHandoffErrorV1::DigestMismatch.into());
+    }
+    Ok(())
 }
 
 pub(super) fn mint<S: Schema>(
@@ -425,7 +453,7 @@ pub(super) fn mint<S: Schema>(
         format!("{}{}", S::SLOT_PREFIX, hex(&slot_identity)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-    recover_slot::<S>(&slot_directory)?;
+    recover_slot::<S>(&slot_directory, resources)?;
     shape::<S>(&slot_directory)?;
     let ready_file = pin(&slot_directory, READY_ENTRY, S::RECORD_BYTES)?;
     let payload_file = pin(&slot_directory, PAYLOAD_ENTRY, fields.length)?;
@@ -474,7 +502,7 @@ pub(super) fn recover<S: Schema>(
             format!("{}{}", S::SLOT_PREFIX, hex(&slot_identity)),
         )?
         .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-        recover_slot::<S>(&directory)?;
+        recover_slot::<S>(&directory, resources)?;
         shape::<S>(&directory)?;
         let ready = pin(&directory, READY_ENTRY, S::RECORD_BYTES)?;
         let record_bytes = read_file(

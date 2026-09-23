@@ -5,7 +5,7 @@ use fe2o3_compiler_ffi::{
     inert_semantic_compiler_module_handoff_decode_work_v4,
 };
 
-pub(super) struct Schema;
+pub(in crate::compiler_module_handoff) struct Schema;
 const MAGIC: &[u8] = b"FE2O3-COMPILER-MODULE-HANDOFF-V4\0";
 pub(super) const RECORD_BYTES: usize =
     MAGIC.len() + 2 + 32 + 8 + 16 + 32 + 32 + 40 + 32 + 8 + 7 * 8 + 32;
@@ -68,7 +68,7 @@ impl HandoffSchema for Schema {
     const DECODE_WORKING_SET_FIXED_BYTES: usize = METADATA;
     const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES_V4 + METADATA;
     const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
-    const COMMITTED_SIDECAR_ENTRY: Option<&'static str> = None;
+    const COMMITTED_SIDECAR_ENTRY: Option<&'static str> = Some(receipt_transport_v2::ENTRY);
     const ALL_SLOTS: &'static [Self::Slot] = &[CompilerModuleHandoffSlotV4::Production];
 
     fn default_slot() -> Self::Slot {

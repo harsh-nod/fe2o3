@@ -67,6 +67,16 @@ pub use compiler_execution_subject::native_v2::{
     InertCompilerExecutionSubjectV2,
 };
 mod compiler_module_handoff;
+pub use compiler_module_handoff::native_v4::receipt_transport_v2::{
+    COMPILER_EXECUTION_RECEIPT_TRANSPORT_MAGIC_V2, COMPILER_EXECUTION_RECEIPT_TRANSPORT_VERSION_V2,
+    CompilerExecutionReceiptTransportErrorV2, CompilerExecutionReceiptTransportIdentityV2,
+    CompilerExecutionReceiptTransportReceiptV2, CompilerExecutionReceiptTransportStorageV2,
+    MAX_COMPILER_EXECUTION_RECEIPT_ENVELOPE_BYTES_V2,
+    MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V2,
+    RecoveredCompilerExecutionReceiptTransportV2, publish_compiler_execution_receipt_transport_v2,
+    recover_compiler_execution_receipt_transport_v2,
+    recover_compiler_execution_receipt_transport_with_currentness_v2,
+};
 pub use compiler_module_handoff::native_v4::{
     CompilerModuleHandoffAdmissionErrorV4, CompilerModuleHandoffConsumptionTokenV4,
     CompilerModuleHandoffCurrentnessLeaseV4, CompilerModuleHandoffErrorV4,

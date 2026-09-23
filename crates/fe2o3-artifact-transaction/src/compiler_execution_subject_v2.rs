@@ -32,7 +32,7 @@ const SCHEMA: codec::Schema = codec::Schema {
     outer_label: "outer V4 handoff",
 };
 const SHA256_BYTES: usize = 32;
-const RETAINED: usize = size_of::<InertCompilerExecutionSubjectV2>()
+pub(crate) const RETAINED: usize = size_of::<InertCompilerExecutionSubjectV2>()
     + size_of::<InertCompilerExecutionSubjectStorageV2>();
 /// Conservative fixed logical work for cached-field extraction, closure validation,
 /// two subject hashes, reconstruction and comparison, including entry work.

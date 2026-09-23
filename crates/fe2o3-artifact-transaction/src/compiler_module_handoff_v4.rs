@@ -18,6 +18,8 @@ use std::mem::size_of;
 mod schema;
 pub use schema::CompilerModuleHandoffErrorV4;
 use schema::{Schema, payload_storage};
+#[path = "compiler_execution_receipt_transport_v2.rs"]
+pub(crate) mod receipt_transport_v2;
 type Error = CompilerModuleHandoffErrorV4;
 type Result<T> = std::result::Result<T, Error>;
 
