@@ -1,5 +1,25 @@
 # Assembly authoring implementation status
 
+## Device const builders and logical lifetime view — 2026-09-23
+
+The [device const-data builder qualification](evidence/complete-body-device-const-20260923.md)
+adds bounded no_std packing without a compiler-crate dependency. Ten parity
+tests, 197 device tests and 1,761 backend tests pass; full device strict Clippy
+still reports two unchanged diagnostics.rs argument-count findings. Fresh
+existing-source qualification passes four exports, eight refusals, 120 CPU
+simulations and four diagnostic LLVM lowerer calls with the updated full
+provider closures. No complete-body source marker or new ABI is admitted yet.
+
+The [logical def/use viewer](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/ordered-role-liveness-qualification-20260923.md)
+adds finite-region lifetimes and separate boundary/transient counts. Full site
+validation passes 1,517 unit tests and 186 browser cases; a subsequent mobile
+readability correction passes the same units and both focused browser cases.
+These are logical values, not physical register lifetimes or GPU observations.
+
+Original accepted exits remain **M1/V1/V2/U1/U2/U3 (6/18)**. M2/M5/V3
+advance without claiming completion; the whole-body source/canonical path,
+actual hardware cells and protected publication remain separate work.
+
 ## Historical hardware capture and body packing — 2026-09-23
 
 The [historical capture command and local viewer](evidence/historical-hardware-resource-20260923.md)

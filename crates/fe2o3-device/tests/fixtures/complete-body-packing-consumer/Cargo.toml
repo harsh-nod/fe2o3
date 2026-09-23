@@ -1,0 +1,14 @@
+[package]
+name = "fe2o3-complete-body-packing-consumer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Unpublished normal-dependency device/compiler inert packing parity fixture."
+
+# Both dependencies are ordinary libraries, never path-imported source copies.
+# This does not add a compiler dependency to the no_std device crate.
+[workspace]
+
+[dependencies]
+fe2o3-device = { path = "../../.." }
+fe2o3-kernel-ir = { path = "../../../../fe2o3-kernel-ir" }

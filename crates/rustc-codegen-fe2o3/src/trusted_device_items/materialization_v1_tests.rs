@@ -83,7 +83,7 @@ fn reviewed_materialization_fixture(vendored: bool) -> ProviderPackageFixture {
     let original = Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT);
     let mut files = Vec::new();
     super::collect_reviewed_source_files(&original.join("src"), &mut files).unwrap();
-    assert_eq!(files.len(), 29);
+    assert_eq!(files.len(), 31);
     for file in files {
         let target = fixture.root.join(file.strip_prefix(original).unwrap());
         fs::create_dir_all(target.parent().unwrap()).unwrap();
