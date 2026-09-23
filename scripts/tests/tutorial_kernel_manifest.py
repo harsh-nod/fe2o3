@@ -160,7 +160,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "f82265c0911495708b35f48f0c6de77769eaa2234423767a79780d511e550c61")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "134c10f696ac9aca7b39045c4b61d5ff001de61f2e2b26e96290ffc1fd9fd175")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -498,12 +498,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "534d9b469778b69d0ac49cead0c98c67f4e569bb44f879f4f69ce629c06aacff")
+                         "b3e3b462fbe1af2b956fec32a00e2209009bc7669c00fee4056b7f29977a2452")
         self.assertEqual(len(inventory["kernels"]), 60)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 74, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 31, "source-driver-contract": 13, "fixture-source-contract": 33,
+                         {"pending": 27, "source-driver-contract": 13, "fixture-source-contract": 37,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])

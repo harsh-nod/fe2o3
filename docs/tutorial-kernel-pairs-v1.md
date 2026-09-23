@@ -200,8 +200,9 @@ also bind to their exact selected physical source. Eight FP4/FP8 GEMM and
 attention displays, including their performance-lab excerpts, also bind to the
 registered feature-selected source. The declared runners use non-test
 `cargo check --lib`; test-only declarations are excluded from this selection.
-Together with first-fill and fourteen systems occurrences, these thirty-three
-associations leave 31 pending display bindings and the historical
+Together with first-fill, fourteen systems occurrences and the four whole-file
+displays described below, these thirty-seven associations leave 27 pending
+display bindings and the historical
 GEMM lesson's source gap unresolved. The two attention variants are required
 positive compile obligations with separate pending-design simulation requests;
 neither inherits another variant's retained KIR or execution evidence. These
@@ -212,6 +213,13 @@ gradient staging, Muon update, n-gram gather and speculative verification,
 including repeated performance excerpts. They bind eleven existing
 feature-specific identities, not eleven completed pairs. No source bytes,
 historical performance evidence or execution qualification are changed.
+The full-file flash-attention, GEMM autoresearch winner, tiled GEMM and grouped
+expert MoE displays bind their existing default-feature fixture identities.
+Their exact physical function offsets distinguish the four kernel entries
+from nine displayed helpers, including inactive host tests. All helper rows,
+historical source pins, kernel bytes and pending variant obligations remain
+unchanged. Whole-file byte checks and the registered Cargo/module selection
+establish these display associations, not new compiler or execution results.
 The scalar-GEMM simulation request and independent expectation are checked in and
 registered in generic CI. Their status remains `pending-reconciliation` until
 the required source-produced Bundle V7/KIR V12 simulation and oracle checks run.
