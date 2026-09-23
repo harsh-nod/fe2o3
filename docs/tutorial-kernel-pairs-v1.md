@@ -144,8 +144,12 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   closure, Cargo manifest/lock, selected source member, file/display digests and
   UTF-8 name offset. Package membership alone is insufficient.
   Selection uses the existing lexer/scanner with a restricted check of ordinary
-  sibling modules and literal `feature`/`target_arch` cfg expressions (`all`,
-  `any`, `not`) for AMDGPU. Unknown cfg, item macros, transforming attributes,
+  sibling modules and literal `feature`/`target_arch`/`test` cfg expressions
+  (`all`, `any`, `not`) in the declared non-test AMDGPU library context.
+  Here `test` is false, including for the inner source library selected by a
+  host-side test driver. This is an expected source contract, not authentication
+  of a rustc invocation or inference that every Cargo library build is non-test.
+  Unknown cfg, item macros, transforming attributes,
   build-script cfg, dependency features, nested/inline/path-selected modules,
   duplicate modules or selected symbols reject a claimed binding. Such sources
   retain `pending` until an exact selection can be established. This bounded
@@ -168,8 +172,12 @@ contracts: serial-router, held-fragments, interleaved-stores, and the three
 materialized components, plus pipelined-attention and scalar-attention. Their
 existing source/feature identities remain distinct, including the repeated
 megakernel symbol. The main megakernel and performance-lab tab-zero excerpts
-also bind to their exact selected physical source. These ten associations leave
-54 pending display bindings and the historical
+also bind to their exact selected physical source. Eight FP4/FP8 GEMM and
+attention displays, including their performance-lab excerpts, also bind to the
+registered feature-selected source. The declared runners use non-test
+`cargo check --lib`; test-only declarations are excluded from this selection.
+These eighteen associations leave
+46 pending display bindings and the historical
 GEMM lesson's source gap unresolved. The two attention variants are required
 positive compile obligations with separate pending-design simulation requests;
 neither inherits another variant's retained KIR or execution evidence. These

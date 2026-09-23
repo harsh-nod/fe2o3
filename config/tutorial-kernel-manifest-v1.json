@@ -14128,10 +14128,12 @@
         "functionUtf8Offset": 180,
         "kernelSymbol": "gfx950_fp4_attention_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp4-attention:gfx950_fp4_attention_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp4-attention-performance-lab",
@@ -14139,10 +14141,12 @@
         "functionUtf8Offset": 80,
         "kernelSymbol": "gfx950_fp4_attention_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp4-attention:gfx950_fp4_attention_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp4-gemm",
@@ -14150,10 +14154,12 @@
         "functionUtf8Offset": 169,
         "kernelSymbol": "gfx950_fp4_gemm_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp4-gemm:gfx950_fp4_gemm_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp4-gemm-performance-lab",
@@ -14161,10 +14167,12 @@
         "functionUtf8Offset": 69,
         "kernelSymbol": "gfx950_fp4_gemm_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp4-gemm:gfx950_fp4_gemm_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp8-attention",
@@ -14172,10 +14180,12 @@
         "functionUtf8Offset": 180,
         "kernelSymbol": "gfx950_fp8_attention_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp8-attention:gfx950_fp8_attention_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp8-attention-performance-lab",
@@ -14183,10 +14193,12 @@
         "functionUtf8Offset": 80,
         "kernelSymbol": "gfx950_fp8_attention_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp8-attention:gfx950_fp8_attention_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp8-gemm",
@@ -14194,10 +14206,12 @@
         "functionUtf8Offset": 162,
         "kernelSymbol": "gfx950_fp8_gemm_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp8-gemm:gfx950_fp8_gemm_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp8-gemm-performance-lab",
@@ -14205,10 +14219,12 @@
         "functionUtf8Offset": 62,
         "kernelSymbol": "gfx950_fp8_gemm_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp8-gemm:gfx950_fp8_gemm_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
