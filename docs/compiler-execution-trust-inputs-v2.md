@@ -100,8 +100,9 @@ precedence, and exercise exact/one-short work/storage, inherited reservations,
 cumulative work, unwind cleanup and compile-fail nominal/clone boundaries.
 Existing V1 attestation/publication and sealed-capability tests remain required.
 
-Next work is the SubjectV2-bound challenge/request/signed-receipt family and its
-publication, acknowledgment and carriage, followed by typed sealed trust-input
+The [SubjectV2 challenge/request](compiler-execution-request-v2.md) now retains
+the complete native subject through a same-ledger nested decode. Next work is
+native signed receipts, publication, acknowledgment and carriage, followed by typed sealed trust-input
 admission, broker reconstruction, explicitly versioned durable state and service
 packets, Worker/runtime/finalizer/host admission, and provisioning. Consumers
 must land before activating Cargo and the producer. Existing V1 state must never

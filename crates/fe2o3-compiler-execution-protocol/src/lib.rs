@@ -2,6 +2,9 @@
 #![doc = include_str!("../README.md")]
 
 mod attestation;
+mod attestation_challenge_v2;
+mod attestation_request_codec;
+mod attestation_request_v2;
 mod attestation_resources;
 mod client_profile;
 mod client_profile_codec;
@@ -64,6 +67,21 @@ pub use attestation::{
     CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionSubjectBindingV1, SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1,
     VerifiedCompilerExecutionAttestationV1, sealed_static_issuer_runtime_measurement_v1,
+};
+pub use attestation_challenge_v2::{
+    COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V2,
+    COMPILER_EXECUTION_ATTESTATION_CHALLENGE_STORAGE_V2,
+    COMPILER_EXECUTION_ATTESTATION_CHALLENGE_WORK_V2,
+    CompilerExecutionAttestationChallengeIdentityV2, CompilerExecutionAttestationChallengeV2,
+    CompilerExecutionSubjectBindingV2,
+};
+pub use attestation_request_v2::{
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V2,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_DECODE_STORAGE_V2,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_DECODE_WORK_V2,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_STORAGE_V2,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_WORK_V2, CompilerExecutionAttestationRequestIdentityV2,
+    CompilerExecutionAttestationRequestV2,
 };
 pub use attestation_resources::CompilerExecutionAttestationStorageV2;
 pub use client_profile::{

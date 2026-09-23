@@ -38,6 +38,9 @@ const _: () = {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerExecutionIssuerPolicyIdentityV2([u8; 32]);
 impl CompilerExecutionIssuerPolicyIdentityV2 {
+    pub(crate) const fn from_bytes_for_protocol(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -154,6 +157,7 @@ impl fmt::Debug for CompilerExecutionIssuerPolicyV2 {
 #[derive(Debug)]
 pub enum CompilerExecutionAttestationErrorV2 {
     Framing(CompilerExecutionAttestationErrorV1),
+    Subject(fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV2),
     Resource(Resource),
 }
 type Result<T> = std::result::Result<T, CompilerExecutionAttestationErrorV2>;
@@ -167,10 +171,18 @@ impl From<Resource> for CompilerExecutionAttestationErrorV2 {
         Self::Resource(value)
     }
 }
+impl From<fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV2>
+    for CompilerExecutionAttestationErrorV2
+{
+    fn from(value: fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV2) -> Self {
+        Self::Subject(value)
+    }
+}
 impl fmt::Display for CompilerExecutionAttestationErrorV2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Framing(e) => e.fmt(f),
+            Self::Subject(e) => e.fmt(f),
             Self::Resource(e) => e.fmt(f),
         }
     }
@@ -179,6 +191,7 @@ impl Error for CompilerExecutionAttestationErrorV2 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(match self {
             Self::Framing(e) => e,
+            Self::Subject(e) => e,
             Self::Resource(e) => e,
         })
     }

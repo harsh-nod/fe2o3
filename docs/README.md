@@ -106,6 +106,7 @@ These documents specify the fail-closed protected compiler-execution boundary:
 - [Native compiler execution subject V2](compiler-execution-subject-v2.md)
 - [Native compiler execution receipt transport V2](compiler-execution-receipt-transport-v2.md)
 - [Native compiler execution trust inputs V2](compiler-execution-trust-inputs-v2.md)
+- [Native compiler execution request V2](compiler-execution-request-v2.md)
 - [Compiler execution attestation](compiler-execution-attestation-v1.md)
 - [Compiler execution issuer admission](compiler-execution-issuer-admission-v1.md)
 - [Durable issuer state](compiler-execution-issuer-durable-v2.md)

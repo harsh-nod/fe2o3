@@ -6,6 +6,11 @@ They do not activate a V2 deployment or supply protected execution evidence.
 The attestation/service/durable production path described below still uses V1
 trust inputs. See [the V2 contract](../../docs/compiler-execution-trust-inputs-v2.md)
 for wire, resource, ownership and remaining integration requirements.
+Native SubjectV2 bindings, challenges and requests now share V1 framing mechanics
+while retaining nominal owners and same-ledger nested subject decoding. They are
+inert content records, not signed execution evidence. See the
+[request contract](../../docs/compiler-execution-request-v2.md); production
+issuance, durable state and consumers remain on the previous family.
 
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,

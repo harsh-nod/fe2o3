@@ -2,6 +2,7 @@
 
 use std::{error::Error, fmt};
 
+use crate::attestation_request_codec as request_codec;
 use crate::issuer_policy_codec as policy_codec;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use fe2o3_artifact_transaction::{
@@ -14,8 +15,6 @@ const SIGNATURE_BYTES: usize = 64;
 const HEADER_BYTES: usize = 8 + 2 + 2 + 8 + 4;
 const CONTENT_BINDING_BYTES: usize = SHA256_BYTES + 8;
 
-const CHALLENGE_MAGIC: [u8; 8] = *b"F2O3CEC1";
-const REQUEST_MAGIC: [u8; 8] = *b"F2O3CEQ1";
 const RECEIPT_MAGIC: [u8; 8] = *b"F2O3CER1";
 const VERSION_V1: u16 = 1;
 
@@ -345,62 +344,42 @@ impl CompilerExecutionAttestationChallengeV1 {
         sequence: u64,
         prior_rollback_anchor: [u8; SHA256_BYTES],
     ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_identity(policy_identity.0, "issuer policy")?;
-        require_identity(nonce, "challenge nonce")?;
-        validate_rollback_position(sequence, prior_rollback_anchor)?;
-        let mut bytes = [0_u8; COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1];
-        let mut offset = encode_header(&mut bytes, CHALLENGE_MAGIC);
-        put(&mut bytes, &mut offset, policy_identity.as_bytes());
-        encode_subject_binding(&mut bytes, &mut offset, subject);
-        put(&mut bytes, &mut offset, &nonce);
-        put(&mut bytes, &mut offset, &sequence.to_le_bytes());
-        put(&mut bytes, &mut offset, &prior_rollback_anchor);
-        debug_assert_eq!(offset, CHALLENGE_PREIMAGE_BYTES);
-        let identity = CompilerExecutionAttestationChallengeIdentityV1(derive_identity(
-            CHALLENGE_IDENTITY_DOMAIN,
-            &bytes[..CHALLENGE_PREIMAGE_BYTES],
-        ));
-        put(&mut bytes, &mut offset, identity.as_bytes());
+        let record = request_codec::V1.challenge(request_codec::Fields {
+            policy: policy_identity.0,
+            subject: request_codec::Binding {
+                sha256: subject.sha256,
+                byte_len: subject.byte_len,
+            },
+            nonce,
+            sequence,
+            prior: prior_rollback_anchor,
+        })?;
         Ok(Self {
             policy_identity,
             subject,
             nonce,
             sequence,
             prior_rollback_anchor,
-            identity,
-            canonical_bytes: bytes,
+            identity: CompilerExecutionAttestationChallengeIdentityV1(record.identity),
+            canonical_bytes: record.bytes,
         })
     }
 
     /// Strictly decodes one exact canonical challenge.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_length(
-            bytes,
-            COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
-            "challenge",
-        )?;
-        let mut reader = Reader::new(bytes);
-        decode_header(&mut reader, CHALLENGE_MAGIC, bytes.len(), "challenge")?;
-        let policy_identity = CompilerExecutionIssuerPolicyIdentityV1(reader.fixed::<32>()?);
-        let subject = decode_subject_binding(&mut reader)?;
-        let nonce = reader.fixed::<32>()?;
-        let sequence = reader.u64()?;
-        let prior_rollback_anchor = reader.fixed::<32>()?;
-        let declared_identity = reader.fixed::<32>()?;
-        require_identity(declared_identity, "challenge")?;
-        let decoded = Self::from_fields(
-            policy_identity,
-            subject,
-            nonce,
-            sequence,
-            prior_rollback_anchor,
-        )?;
-        if decoded.identity.0 != declared_identity || decoded.canonical_bytes.as_slice() != bytes {
-            return Err(CompilerExecutionAttestationErrorV1::IdentityMismatch(
-                "challenge",
-            ));
-        }
-        Ok(decoded)
+        let record = request_codec::V1.decode_challenge(bytes)?;
+        Ok(Self {
+            policy_identity: CompilerExecutionIssuerPolicyIdentityV1(record.fields.policy),
+            subject: CompilerExecutionSubjectBindingV1 {
+                sha256: record.fields.subject.sha256,
+                byte_len: record.fields.subject.byte_len,
+            },
+            nonce: record.fields.nonce,
+            sequence: record.fields.sequence,
+            prior_rollback_anchor: record.fields.prior,
+            identity: CompilerExecutionAttestationChallengeIdentityV1(record.identity),
+            canonical_bytes: record.bytes,
+        })
     }
 
     /// Returns the caller-pinned issuer policy identity.
@@ -471,16 +450,9 @@ impl CompilerExecutionAttestationRequestV1 {
         if !challenge.subject.matches_subject(&subject) {
             return Err(CompilerExecutionAttestationErrorV1::SubjectMismatch);
         }
-        let mut bytes = [0_u8; COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1];
-        let mut offset = encode_header(&mut bytes, REQUEST_MAGIC);
-        put(&mut bytes, &mut offset, challenge.canonical_bytes());
-        put(&mut bytes, &mut offset, subject.canonical_bytes());
-        debug_assert_eq!(offset, REQUEST_PREIMAGE_BYTES);
-        let identity = CompilerExecutionAttestationRequestIdentityV1(derive_identity(
-            REQUEST_IDENTITY_DOMAIN,
-            &bytes[..REQUEST_PREIMAGE_BYTES],
-        ));
-        put(&mut bytes, &mut offset, identity.as_bytes());
+        let (bytes, identity) =
+            request_codec::V1.request(challenge.canonical_bytes(), subject.canonical_bytes());
+        let identity = CompilerExecutionAttestationRequestIdentityV1(identity);
         Ok(Self {
             challenge,
             subject,
@@ -491,21 +463,11 @@ impl CompilerExecutionAttestationRequestV1 {
 
     /// Strictly decodes one exact canonical request and its nested records.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_length(
-            bytes,
-            COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
-            "request",
-        )?;
-        let mut reader = Reader::new(bytes);
-        decode_header(&mut reader, REQUEST_MAGIC, bytes.len(), "request")?;
-        let challenge = CompilerExecutionAttestationChallengeV1::decode(
-            reader.take(COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1)?,
-        )?;
-        let subject = InertCompilerExecutionSubjectV1::decode(
-            reader.take(INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1)?,
-        )
-        .map_err(CompilerExecutionAttestationErrorV1::Subject)?;
-        let declared_identity = reader.fixed::<32>()?;
+        let parts = request_codec::V1.request_parts(bytes)?;
+        let challenge = CompilerExecutionAttestationChallengeV1::decode(parts.challenge)?;
+        let subject = InertCompilerExecutionSubjectV1::decode(parts.subject)
+            .map_err(CompilerExecutionAttestationErrorV1::Subject)?;
+        let declared_identity = parts.identity;
         require_identity(declared_identity, "request")?;
         let decoded = Self::new(challenge, subject)?;
         if decoded.identity.0 != declared_identity || decoded.canonical_bytes.as_slice() != bytes {
@@ -1058,7 +1020,7 @@ fn decode_subject_binding(
     CompilerExecutionSubjectBindingV1::new(reader.fixed::<32>()?, reader.u64()?)
 }
 
-fn validate_binding(
+pub(crate) fn validate_binding(
     sha256: [u8; SHA256_BYTES],
     byte_len: u64,
     field: &'static str,
@@ -1081,7 +1043,7 @@ pub(crate) fn validate_verifying_key(
     Ok(key)
 }
 
-fn validate_rollback_position(
+pub(crate) fn validate_rollback_position(
     sequence: u64,
     prior: [u8; SHA256_BYTES],
 ) -> Result<(), CompilerExecutionAttestationErrorV1> {
