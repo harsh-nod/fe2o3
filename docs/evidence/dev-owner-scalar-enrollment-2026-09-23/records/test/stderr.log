@@ -1,0 +1,5 @@
+   Compiling spin v0.12.3
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.24s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-scalar-qualification-20260923-7zbBlLoh/target/debug/deps/fe2o3_runtime_model-b397a1a75deee8ae)
+   Doc-tests fe2o3_runtime_model

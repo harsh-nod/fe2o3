@@ -1,0 +1,3308 @@
+{
+  "positive-before": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 929,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "header_order": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 436,
+            "byte_end": 492,
+            "line_start": 7,
+            "line_end": 7,
+            "column_start": 17,
+            "column_end": 73,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::ForeignContext);",
+                "highlight_start": 17,
+                "highlight_end": 73
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 2679,
+                "byte_end": 3253,
+                "line_start": 54,
+                "line_end": 61,
+                "column_start": 9,
+                "column_end": 15,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                    "highlight_start": 9,
+                    "highlight_end": 81
+                  },
+                  {
+                    "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                    "highlight_start": 1,
+                    "highlight_end": 72
+                  },
+                  {
+                    "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                    "highlight_start": 1,
+                    "highlight_end": 80
+                  },
+                  {
+                    "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                    "highlight_start": 1,
+                    "highlight_end": 110
+                  },
+                  {
+                    "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                    "highlight_start": 1,
+                    "highlight_end": 97
+                  },
+                  {
+                    "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                    "highlight_start": 1,
+                    "highlight_end": 70
+                  },
+                  {
+                    "text": "                decreases self.allocations.len() - index,",
+                    "highlight_start": 1,
+                    "highlight_end": 58
+                  },
+                  {
+                    "text": "            ])",
+                    "highlight_start": 1,
+                    "highlight_end": 15
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 77,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |         ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:7:17\n   |\n 7 |                 return Err(ContextVersionJournalErrorV1::ForeignContext);\n   |                 -------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "replay_order": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 961,
+            "byte_end": 1021,
+            "line_start": 15,
+            "line_end": 15,
+            "column_start": 54,
+            "column_end": 114,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if $journal.allocation_free.len() == 0 { return Err(ContextVersionJournalErrorV1::AllocationCapacity); } let mut $index = 0usize;",
+                "highlight_start": 54,
+                "highlight_end": 114
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 2679,
+                "byte_end": 3253,
+                "line_start": 54,
+                "line_end": 61,
+                "column_start": 9,
+                "column_end": 15,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                    "highlight_start": 9,
+                    "highlight_end": 81
+                  },
+                  {
+                    "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                    "highlight_start": 1,
+                    "highlight_end": 72
+                  },
+                  {
+                    "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                    "highlight_start": 1,
+                    "highlight_end": 80
+                  },
+                  {
+                    "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                    "highlight_start": 1,
+                    "highlight_end": 110
+                  },
+                  {
+                    "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                    "highlight_start": 1,
+                    "highlight_end": 97
+                  },
+                  {
+                    "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                    "highlight_start": 1,
+                    "highlight_end": 70
+                  },
+                  {
+                    "text": "                decreases self.allocations.len() - index,",
+                    "highlight_start": 1,
+                    "highlight_end": 58
+                  },
+                  {
+                    "text": "            ])",
+                    "highlight_start": 1,
+                    "highlight_end": 15
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 77,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |         ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:15:54\n   |\n15 | ...   if $journal.allocation_free.len() == 0 { return Err(ContextVersionJournalErrorV1::AllocationCapacity); } let mut $index = 0usize;\n   |                                                ------------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "replay_bound": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 1568,
+            "byte_end": 1628,
+            "line_start": 29,
+            "line_end": 29,
+            "column_start": 17,
+            "column_end": 77,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::AllocationCapacity);",
+                "highlight_start": 17,
+                "highlight_end": 77
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 2679,
+                "byte_end": 3253,
+                "line_start": 54,
+                "line_end": 61,
+                "column_start": 9,
+                "column_end": 15,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                    "highlight_start": 9,
+                    "highlight_end": 81
+                  },
+                  {
+                    "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                    "highlight_start": 1,
+                    "highlight_end": 72
+                  },
+                  {
+                    "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                    "highlight_start": 1,
+                    "highlight_end": 80
+                  },
+                  {
+                    "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                    "highlight_start": 1,
+                    "highlight_end": 110
+                  },
+                  {
+                    "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                    "highlight_start": 1,
+                    "highlight_end": 97
+                  },
+                  {
+                    "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                    "highlight_start": 1,
+                    "highlight_end": 70
+                  },
+                  {
+                    "text": "                decreases self.allocations.len() - index,",
+                    "highlight_start": 1,
+                    "highlight_end": 58
+                  },
+                  {
+                    "text": "            ])",
+                    "highlight_start": 1,
+                    "highlight_end": 15
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 77,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |         ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:29:17\n   |\n29 |                 return Err(ContextVersionJournalErrorV1::AllocationCapacity);\n   |                 ------------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 1867,
+            "byte_end": 1921,
+            "line_start": 34,
+            "line_end": 34,
+            "column_start": 17,
+            "column_end": 71,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 17,
+                "highlight_end": 71
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 2679,
+                "byte_end": 3253,
+                "line_start": 54,
+                "line_end": 61,
+                "column_start": 9,
+                "column_end": 15,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                    "highlight_start": 9,
+                    "highlight_end": 81
+                  },
+                  {
+                    "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                    "highlight_start": 1,
+                    "highlight_end": 72
+                  },
+                  {
+                    "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                    "highlight_start": 1,
+                    "highlight_end": 80
+                  },
+                  {
+                    "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                    "highlight_start": 1,
+                    "highlight_end": 110
+                  },
+                  {
+                    "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                    "highlight_start": 1,
+                    "highlight_end": 97
+                  },
+                  {
+                    "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                    "highlight_start": 1,
+                    "highlight_end": 70
+                  },
+                  {
+                    "text": "                decreases self.allocations.len() - index,",
+                    "highlight_start": 1,
+                    "highlight_end": 58
+                  },
+                  {
+                    "text": "            ])",
+                    "highlight_start": 1,
+                    "highlight_end": 15
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 77,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |         ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:34:17\n   |\n34 |                 return Err(ContextVersionJournalErrorV1::InvalidState);\n   |                 ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2387,
+            "byte_end": 2556,
+            "line_start": 50,
+            "line_end": 51,
+            "column_start": 5,
+            "column_end": 63,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn enroll_allocation(&mut self, key: AllocationKeyV1, device: ContextJournalDeviceKeyV1, byte_extent: u64)",
+                "highlight_start": 5,
+                "highlight_end": 111
+              },
+              {
+                "text": "        -> (result: Result<AllocationReferenceV1, ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 63
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:50:5\n   |\n50 | /     fn enroll_allocation(&mut self, key: AllocationKeyV1, device: ContextJournalDeviceKeyV1, byte_extent: u64)\n51 | |         -> (result: Result<AllocationReferenceV1, ReadErrorV1>)\n   | |______________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "replay_context": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 1226,
+            "byte_end": 1284,
+            "line_start": 22,
+            "line_end": 22,
+            "column_start": 25,
+            "column_end": 83,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                        return Err(ContextVersionJournalErrorV1::AllocationReplay);",
+                "highlight_start": 25,
+                "highlight_end": 83
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 2679,
+                "byte_end": 3253,
+                "line_start": 54,
+                "line_end": 61,
+                "column_start": 9,
+                "column_end": 15,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                    "highlight_start": 9,
+                    "highlight_end": 81
+                  },
+                  {
+                    "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                    "highlight_start": 1,
+                    "highlight_end": 72
+                  },
+                  {
+                    "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                    "highlight_start": 1,
+                    "highlight_end": 80
+                  },
+                  {
+                    "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                    "highlight_start": 1,
+                    "highlight_end": 110
+                  },
+                  {
+                    "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                    "highlight_start": 1,
+                    "highlight_end": 97
+                  },
+                  {
+                    "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                    "highlight_start": 1,
+                    "highlight_end": 70
+                  },
+                  {
+                    "text": "                decreases self.allocations.len() - index,",
+                    "highlight_start": 1,
+                    "highlight_end": 58
+                  },
+                  {
+                    "text": "            ])",
+                    "highlight_start": 1,
+                    "highlight_end": 15
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 77,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |         ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:22:25\n   |\n22 |                         return Err(ContextVersionJournalErrorV1::AllocationReplay);\n   |                         ---------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "raw_capacity": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 987,
+            "byte_end": 1041,
+            "line_start": 15,
+            "line_end": 15,
+            "column_start": 80,
+            "column_end": 134,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if $journal.allocation_free.len() > $journal.allocation_capacity { return Err(ContextVersionJournalErrorV1::InvalidState); } let mut $index = 0usize;",
+                "highlight_start": 80,
+                "highlight_end": 134
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 2679,
+                "byte_end": 3253,
+                "line_start": 54,
+                "line_end": 61,
+                "column_start": 9,
+                "column_end": 15,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                    "highlight_start": 9,
+                    "highlight_end": 81
+                  },
+                  {
+                    "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                    "highlight_start": 1,
+                    "highlight_end": 72
+                  },
+                  {
+                    "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                    "highlight_start": 1,
+                    "highlight_end": 80
+                  },
+                  {
+                    "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                    "highlight_start": 1,
+                    "highlight_end": 110
+                  },
+                  {
+                    "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                    "highlight_start": 1,
+                    "highlight_end": 97
+                  },
+                  {
+                    "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                    "highlight_start": 1,
+                    "highlight_end": 70
+                  },
+                  {
+                    "text": "                decreases self.allocations.len() - index,",
+                    "highlight_start": 1,
+                    "highlight_end": 58
+                  },
+                  {
+                    "text": "            ])",
+                    "highlight_start": 1,
+                    "highlight_end": 15
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 77,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |         ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:15:80\n   |\n15 | ...$journal.allocation_capacity { return Err(ContextVersionJournalErrorV1::InvalidState); } let mut $index = 0usize;\n   |                                   ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "tail": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2669,
+            "byte_end": 3259,
+            "line_start": 53,
+            "line_end": 62,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 81
+              },
+              {
+                "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "                decreases self.allocations.len() - index,",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            ])",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |           ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n53 | /     {\n54 | |         scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,\n55 | |             owner_writer_issuable_v1, begin_indexed_access_v1, index, [\n56 | |                 invariant index <= self.allocations.len(), *self == *old(self),\n...  |\n61 | |             ])\n62 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 1793,
+            "byte_end": 1847,
+            "line_start": 34,
+            "line_end": 34,
+            "column_start": 17,
+            "column_end": 71,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 17,
+                "highlight_end": 71
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 2679,
+                "byte_end": 3253,
+                "line_start": 54,
+                "line_end": 61,
+                "column_start": 9,
+                "column_end": 15,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                    "highlight_start": 9,
+                    "highlight_end": 81
+                  },
+                  {
+                    "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                    "highlight_start": 1,
+                    "highlight_end": 72
+                  },
+                  {
+                    "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                    "highlight_start": 1,
+                    "highlight_end": 80
+                  },
+                  {
+                    "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                    "highlight_start": 1,
+                    "highlight_end": 110
+                  },
+                  {
+                    "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                    "highlight_start": 1,
+                    "highlight_end": 97
+                  },
+                  {
+                    "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                    "highlight_start": 1,
+                    "highlight_end": 70
+                  },
+                  {
+                    "text": "                decreases self.allocations.len() - index,",
+                    "highlight_start": 1,
+                    "highlight_end": 58
+                  },
+                  {
+                    "text": "            ])",
+                    "highlight_start": 1,
+                    "highlight_end": 15
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 77,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 36,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 36
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |         ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:34:17\n   |\n34 |                 return Err(ContextVersionJournalErrorV1::InvalidState);\n   |                 ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2387,
+            "byte_end": 2556,
+            "line_start": 50,
+            "line_end": 51,
+            "column_start": 5,
+            "column_end": 63,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn enroll_allocation(&mut self, key: AllocationKeyV1, device: ContextJournalDeviceKeyV1, byte_extent: u64)",
+                "highlight_start": 5,
+                "highlight_end": 111
+              },
+              {
+                "text": "        -> (result: Result<AllocationReferenceV1, ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 63
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:50:5\n   |\n50 | /     fn enroll_allocation(&mut self, key: AllocationKeyV1, device: ContextJournalDeviceKeyV1, byte_extent: u64)\n51 | |         -> (result: Result<AllocationReferenceV1, ReadErrorV1>)\n   | |______________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "vacancy": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2669,
+            "byte_end": 3259,
+            "line_start": 53,
+            "line_end": 62,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 81
+              },
+              {
+                "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "                decreases self.allocations.len() - index,",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            ])",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |           ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n53 | /     {\n54 | |         scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,\n55 | |             owner_writer_issuable_v1, begin_indexed_access_v1, index, [\n56 | |                 invariant index <= self.allocations.len(), *self == *old(self),\n...  |\n61 | |             ])\n62 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "pop": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2669,
+            "byte_end": 3259,
+            "line_start": 53,
+            "line_end": 62,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 81
+              },
+              {
+                "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "                decreases self.allocations.len() - index,",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            ])",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |           ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n53 | /     {\n54 | |         scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,\n55 | |             owner_writer_issuable_v1, begin_indexed_access_v1, index, [\n56 | |                 invariant index <= self.allocations.len(), *self == *old(self),\n...  |\n61 | |             ])\n62 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "extent": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2669,
+            "byte_end": 3259,
+            "line_start": 53,
+            "line_end": 62,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 81
+              },
+              {
+                "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "                decreases self.allocations.len() - index,",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            ])",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |           ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n53 | /     {\n54 | |         scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,\n55 | |             owner_writer_issuable_v1, begin_indexed_access_v1, index, [\n56 | |                 invariant index <= self.allocations.len(), *self == *old(self),\n...  |\n61 | |             ])\n62 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "epoch": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2669,
+            "byte_end": 3259,
+            "line_start": 53,
+            "line_end": 62,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 81
+              },
+              {
+                "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "                decreases self.allocations.len() - index,",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            ])",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |           ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n53 | /     {\n54 | |         scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,\n55 | |             owner_writer_issuable_v1, begin_indexed_access_v1, index, [\n56 | |                 invariant index <= self.allocations.len(), *self == *old(self),\n...  |\n61 | |             ])\n62 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "return_key": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2669,
+            "byte_end": 3259,
+            "line_start": 53,
+            "line_end": 62,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 81
+              },
+              {
+                "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "                decreases self.allocations.len() - index,",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            ])",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |           ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n53 | /     {\n54 | |         scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,\n55 | |             owner_writer_issuable_v1, begin_indexed_access_v1, index, [\n56 | |                 invariant index <= self.allocations.len(), *self == *old(self),\n...  |\n61 | |             ])\n62 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "journal_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2669,
+            "byte_end": 3259,
+            "line_start": 53,
+            "line_end": 62,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,",
+                "highlight_start": 1,
+                "highlight_end": 81
+              },
+              {
+                "text": "            owner_writer_issuable_v1, begin_indexed_access_v1, index, [",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "                invariant index <= self.allocations.len(), *self == *old(self),",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "                    scalar_enrollment_header_v1(self.context_generation, key, device, byte_extent).is_none(),",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "                    forall|i: int| 0 <= i < index && (#[trigger] self.allocations@[i]).is_some()",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                        ==> self.allocations@[i].unwrap().key != key,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "                decreases self.allocations.len() - index,",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            ])",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 2574,
+            "byte_end": 2663,
+            "line_start": 52,
+            "line_end": 52,
+            "column_start": 17,
+            "column_end": 106,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 106
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:52:17\n   |\n52 |           ensures scalar_enrollment_relation_v1(*old(self), *final(self), key, device, byte_extent, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n53 | /     {\n54 | |         scalar_enrollment_body!(verus_exec_expr, self, key, device, byte_extent,\n55 | |             owner_writer_issuable_v1, begin_indexed_access_v1, index, [\n56 | |                 invariant index <= self.allocations.len(), *self == *old(self),\n...  |\n61 | |             ])\n62 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 2452,
+            "byte_end": 2540,
+            "line_start": 50,
+            "line_end": 50,
+            "column_start": 9,
+            "column_end": 97,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.enroll_allocation($key, $device, $extent) }",
+                "highlight_start": 9,
+                "highlight_end": 97
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 3725,
+                "byte_end": 3792,
+                "line_start": 72,
+                "line_end": 72,
+                "column_start": 9,
+                "column_end": 76,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_forward_body!(self, journal, key, device, extent)",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 2318,
+                "byte_end": 2361,
+                "line_start": 48,
+                "line_end": 48,
+                "column_start": 1,
+                "column_end": 44,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 44
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 3595,
+            "byte_end": 3649,
+            "line_start": 69,
+            "line_end": 69,
+            "column_start": 13,
+            "column_end": 67,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            owner_writer_stable_frame_v1(*old(self), *final(self)),",
+                "highlight_start": 13,
+                "highlight_end": 67
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:69:13\n   |\n69 |             owner_writer_stable_frame_v1(*old(self), *final(self)),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:50:9\n   |\n50 |         { $owner.next_incarnation = 0; $owner.$field.enroll_allocation($key, $device, $extent) }\n   |         ---------------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 2452,
+            "byte_end": 2540,
+            "line_start": 50,
+            "line_end": 50,
+            "column_start": 9,
+            "column_end": 97,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.enroll_allocation($key, $device, $extent) }",
+                "highlight_start": 9,
+                "highlight_end": 97
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 3725,
+                "byte_end": 3792,
+                "line_start": 72,
+                "line_end": 72,
+                "column_start": 9,
+                "column_end": 76,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_forward_body!(self, journal, key, device, extent)",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 2318,
+                "byte_end": 2361,
+                "line_start": 48,
+                "line_end": 48,
+                "column_start": 1,
+                "column_end": 44,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 44
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 3663,
+            "byte_end": 3709,
+            "line_start": 70,
+            "line_end": 70,
+            "column_start": 13,
+            "column_end": 59,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            result.is_err() ==> *final(self) == *old(self),",
+                "highlight_start": 13,
+                "highlight_end": 59
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:70:13\n   |\n70 |             result.is_err() ==> *final(self) == *old(self),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:50:9\n   |\n50 |         { $owner.next_incarnation = 0; $owner.$field.enroll_allocation($key, $device, $extent) }\n   |         ---------------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 3301,
+            "byte_end": 3465,
+            "line_start": 66,
+            "line_end": 67,
+            "column_start": 5,
+            "column_end": 63,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn enroll_allocation(&mut self, key: AllocationKeyV1, device: ContextJournalDeviceKeyV1, extent: u64)",
+                "highlight_start": 5,
+                "highlight_end": 106
+              },
+              {
+                "text": "        -> (result: Result<AllocationReferenceV1, ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 63
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:66:5\n   |\n66 | /     fn enroll_allocation(&mut self, key: AllocationKeyV1, device: ContextJournalDeviceKeyV1, extent: u64)\n67 | |         -> (result: Result<AllocationReferenceV1, ReadErrorV1>)\n   | |______________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 2452,
+            "byte_end": 2540,
+            "line_start": 50,
+            "line_end": 50,
+            "column_start": 9,
+            "column_end": 97,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.enroll_allocation($key, $device, $extent) }",
+                "highlight_start": 9,
+                "highlight_end": 97
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 4282,
+                "byte_end": 4348,
+                "line_start": 83,
+                "line_end": 83,
+                "column_start": 9,
+                "column_end": 75,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_forward_body!(self, stable, key, device, extent)",
+                    "highlight_start": 9,
+                    "highlight_end": 75
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 2318,
+                "byte_end": 2361,
+                "line_start": 48,
+                "line_end": 48,
+                "column_start": 1,
+                "column_end": 44,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 44
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 4150,
+            "byte_end": 4206,
+            "line_start": 80,
+            "line_end": 80,
+            "column_start": 13,
+            "column_end": 69,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            owner_writer_producer_frame_v1(*old(self), *final(self)),",
+                "highlight_start": 13,
+                "highlight_end": 69
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:80:13\n   |\n80 |             owner_writer_producer_frame_v1(*old(self), *final(self)),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:50:9\n   |\n50 |         { $owner.next_incarnation = 0; $owner.$field.enroll_allocation($key, $device, $extent) }\n   |         ---------------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+            "byte_start": 2452,
+            "byte_end": 2540,
+            "line_start": 50,
+            "line_end": 50,
+            "column_start": 9,
+            "column_end": 97,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.enroll_allocation($key, $device, $extent) }",
+                "highlight_start": 9,
+                "highlight_end": 97
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+                "byte_start": 4282,
+                "byte_end": 4348,
+                "line_start": 83,
+                "line_end": 83,
+                "column_start": 9,
+                "column_end": 75,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        scalar_enrollment_forward_body!(self, stable, key, device, extent)",
+                    "highlight_start": 9,
+                    "highlight_end": 75
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "scalar_enrollment_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs",
+                "byte_start": 2318,
+                "byte_end": 2361,
+                "line_start": 48,
+                "line_end": 48,
+                "column_start": 1,
+                "column_end": 44,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! scalar_enrollment_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 44
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 4220,
+            "byte_end": 4266,
+            "line_start": 81,
+            "line_end": 81,
+            "column_start": 13,
+            "column_end": 59,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            result.is_err() ==> *final(self) == *old(self),",
+                "highlight_start": 13,
+                "highlight_end": 59
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:81:13\n   |\n81 |             result.is_err() ==> *final(self) == *old(self),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/scalar_enrollment_bodies.rs:50:9\n   |\n50 |         { $owner.next_incarnation = 0; $owner.$field.enroll_allocation($key, $device, $extent) }\n   |         ---------------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 3842,
+            "byte_end": 4006,
+            "line_start": 77,
+            "line_end": 78,
+            "column_start": 5,
+            "column_end": 63,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn enroll_allocation(&mut self, key: AllocationKeyV1, device: ContextJournalDeviceKeyV1, extent: u64)",
+                "highlight_start": 5,
+                "highlight_end": 106
+              },
+              {
+                "text": "        -> (result: Result<AllocationReferenceV1, ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 63
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:77:5\n   |\n77 | /     fn enroll_allocation(&mut self, key: AllocationKeyV1, device: ContextJournalDeviceKeyV1, extent: u64)\n78 | |         -> (result: Result<AllocationReferenceV1, ReadErrorV1>)\n   | |______________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable_skip": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 3715,
+            "byte_end": 3798,
+            "line_start": 71,
+            "line_end": 73,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        scalar_enrollment_forward_body!(self, journal, key, device, extent)",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 3483,
+            "byte_end": 3581,
+            "line_start": 68,
+            "line_end": 68,
+            "column_start": 17,
+            "column_end": 115,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(old(self).journal, final(self).journal, key, device, extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 115
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:68:17\n   |\n68 |           ensures scalar_enrollment_relation_v1(old(self).journal, final(self).journal, key, device, extent, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n71 | /     {\n72 | |         scalar_enrollment_forward_body!(self, journal, key, device, extent)\n73 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_skip": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 4272,
+            "byte_end": 4354,
+            "line_start": 82,
+            "line_end": 84,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        scalar_enrollment_forward_body!(self, stable, key, device, extent)",
+                "highlight_start": 1,
+                "highlight_end": 75
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs",
+            "byte_start": 4024,
+            "byte_end": 4136,
+            "line_start": 79,
+            "line_end": 79,
+            "column_start": 17,
+            "column_end": 129,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures scalar_enrollment_relation_v1(old(self).stable.journal, final(self).stable.journal, key, device, extent, result),",
+                "highlight_start": 17,
+                "highlight_end": 129
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_bodies_v1.rs:79:17\n   |\n79 |           ensures scalar_enrollment_relation_v1(old(self).stable.journal, final(self).stable.journal, key, device, extent, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n82 | /     {\n83 | |         scalar_enrollment_forward_body!(self, stable, key, device, extent)\n84 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs",
+            "byte_start": 4111,
+            "byte_end": 4728,
+            "line_start": 60,
+            "line_end": 71,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *actual;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "    let ghost model_before = *model;",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    let result: Result<AllocationReferenceV1, ReadErrorV1> = Err(ReadErrorV1::AllocationCapacity);",
+                "highlight_start": 1,
+                "highlight_end": 99
+              },
+              {
+                "text": "    let model_result = logical::scalar_enrollment_exec_v1(&mut model.stable.journal, model_entry);",
+                "highlight_start": 1,
+                "highlight_end": 99
+              },
+              {
+                "text": "    proof {",
+                "highlight_start": 1,
+                "highlight_end": 12
+              },
+              {
+                "text": "        scalar_enrollment_paired_transition_v1(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 1,
+                "highlight_end": 93
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, entry, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 93
+              },
+              {
+                "text": "        logical::scalar_enrollment_preserves_v1(model_before, *model, model_entry, model_result, storage, history);",
+                "highlight_start": 1,
+                "highlight_end": 116
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              },
+              {
+                "text": "    (result, model_result)",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs",
+            "byte_start": 3049,
+            "byte_end": 3203,
+            "line_start": 50,
+            "line_end": 51,
+            "column_start": 9,
+            "column_end": 67,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        scalar_enrollment_relation_v1(old(actual).stable.journal, final(actual).stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 96
+              },
+              {
+                "text": "            entry.key, entry.device, entry.byte_extent, results.0),",
+                "highlight_start": 1,
+                "highlight_end": 67
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs:50:9\n   |\n50 | /         scalar_enrollment_relation_v1(old(actual).stable.journal, final(actual).stable.journal,\n51 | |             entry.key, entry.device, entry.byte_extent, results.0),\n   | |__________________________________________________________________^ failed this postcondition\n...\n60 | / {\n61 | |     let ghost before = *actual;\n62 | |     let ghost model_before = *model;\n63 | |     let result: Result<AllocationReferenceV1, ReadErrorV1> = Err(ReadErrorV1::AllocationCapacity);\n...  |\n70 | |     (result, model_result)\n71 | | }\n   | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs",
+            "byte_start": 1636,
+            "byte_end": 1732,
+            "line_start": 31,
+            "line_end": 31,
+            "column_start": 9,
+            "column_end": 105,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        scalar_enrollment_relation_v1(before, after, entry.key, entry.device, entry.byte_extent, result),",
+                "highlight_start": 9,
+                "highlight_end": 105
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs",
+            "byte_start": 4400,
+            "byte_end": 4576,
+            "line_start": 66,
+            "line_end": 67,
+            "column_start": 9,
+            "column_end": 92,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        scalar_enrollment_paired_transition_v1(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 93
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, entry, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 92
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs:66:9\n   |\n31 |           scalar_enrollment_relation_v1(before, after, entry.key, entry.device, entry.byte_extent, result),\n   |           ------------------------------------------------------------------------------------------------ failed precondition\n...\n66 | /         scalar_enrollment_paired_transition_v1(before.stable.journal, actual.stable.journal,\n67 | |             model_before.stable.journal, model.stable.journal, entry, result, model_result);\n   | |___________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs",
+            "byte_start": 2384,
+            "byte_end": 2817,
+            "line_start": 44,
+            "line_end": 47,
+            "column_start": 1,
+            "column_end": 130,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn owner_scalar_enrollment_paired_exec_v1(actual: &mut ContextProducerReadJournalV1,",
+                "highlight_start": 1,
+                "highlight_end": 85
+              },
+              {
+                "text": "    model: &mut logical::ProducerReadContentsV1, entry: EnrollmentV1, model_entry: logical::EnrollmentV1,",
+                "highlight_start": 1,
+                "highlight_end": 106
+              },
+              {
+                "text": "    Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 113
+              },
+              {
+                "text": "    -> (results: (Result<AllocationReferenceV1, ReadErrorV1>, Result<logical::AllocationReferenceV1, logical::EnrollmentErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 130
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs:44:1\n   |\n44 | / fn owner_scalar_enrollment_paired_exec_v1(actual: &mut ContextProducerReadJournalV1,\n45 | |     model: &mut logical::ProducerReadContentsV1, entry: EnrollmentV1, model_entry: logical::EnrollmentV1,\n46 | |     Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n47 | |     -> (results: (Result<AllocationReferenceV1, ReadErrorV1>, Result<logical::AllocationReferenceV1, logical::EnrollmentErrorV1>))\n   | |_________________________________________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_model": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs",
+            "byte_start": 1742,
+            "byte_end": 1845,
+            "line_start": 32,
+            "line_end": 32,
+            "column_start": 9,
+            "column_end": 112,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::scalar_enrollment_relation_v1(model_before, model_after, enrollment_view(entry), model_result),",
+                "highlight_start": 9,
+                "highlight_end": 112
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs",
+            "byte_start": 4433,
+            "byte_end": 4609,
+            "line_start": 66,
+            "line_end": 67,
+            "column_start": 9,
+            "column_end": 92,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        scalar_enrollment_paired_transition_v1(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 93
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, entry, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 92
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_scalar_enrollment_correspondence_v1.rs:66:9\n   |\n32 |           logical::scalar_enrollment_relation_v1(model_before, model_after, enrollment_view(entry), model_result),\n   |           ------------------------------------------------------------------------------------------------------- failed precondition\n...\n66 | /         scalar_enrollment_paired_transition_v1(before.stable.journal, actual.stable.journal,\n67 | |             model_before.stable.journal, model.stable.journal, entry, result, model_result);\n   | |___________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "positive-after": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 929,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "raw-regression": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 310,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "settlement-regression": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 916,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}

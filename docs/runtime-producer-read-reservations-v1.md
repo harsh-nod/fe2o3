@@ -515,7 +515,24 @@ Before enabling runtime admission, the remaining work is:
    outcomes, subsequent queries and replay; malformed raw state is covered separately.
    The runner is `verus/check-owner-settlement-historical.py`. Actual construction,
    physical Vec capacity, allocator/unwind behavior and native admission remain open.
-   Remaining bodies include construction, scalar enrollment/retirement and disposal wrappers;
+   The [scalar enrollment packet](evidence/dev-owner-scalar-enrollment-2026-09-23/README.md)
+   now shares complete scalar bodies across the journal, stable-read and
+   producer-read owners, with an independent logical scalar executor. Scalar
+   admission retains its own ordered errors and full physical-arena replay scan;
+   it is not singleton batch admission. Raw correspondence requires represented
+   contents and mapped inputs, without logical-capacity, free-prefix or reader
+   custody premises. Rejection preserves the complete owner; success changes
+   only one allocation slot and the free-stack tail. Initial producer invariants
+   and issued custody are preserved conditionally, while previously valid
+   producer statuses remain unchanged. Arbitrary invalid-request errors are not
+   preserved. Synthetic-start witnesses and same-owner frozen CPU comparisons
+   cover live reads, malformed private metadata, replay, retirement reuse and
+   exact indexed-access counts. The runner is
+   `verus/check-owner-scalar-enrollment.py`; its checked-prefix resume protocol
+   rejects unaccepted records and does not replace full qualification. Physical
+   Vec storage, construction, unwind behavior, native admission and performance
+   are not established by these records.
+   Remaining bodies include construction, allocation retirement and disposal wrappers;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

@@ -1,0 +1,13 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-scalar-enrollment.py",
+    "--selftest"
+  ],
+  "started_ns": 1790174990418540837,
+  "process_group": 589690,
+  "group_absent": true,
+  "finished_ns": 1790174990603692998,
+  "status": 0
+}
