@@ -1,0 +1,3 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (/run/user/1000/fe2o3-owner-settlement-LYj3gSsf/target/debug/deps/fe2o3_runtime_model-b397a1a75deee8ae)
+   Doc-tests fe2o3_runtime_model
