@@ -106,8 +106,9 @@ the complete native subject through a same-ledger nested decode. Native signed
 receipts, publication, acknowledgment and carriage are covered by the
 [publication contract](compiler-execution-publication-v2.md). The native issuer
 launch-input reader checks independently admitted policy and manifest images,
-but does not activate service handlers. Remaining integration includes native
-key custody and native program-to-supervisor binding, broker reconstruction,
+but does not activate service handlers. Native signing-key custody now pins the
+complete typed policy identity. Remaining integration includes native
+program/key-to-supervisor binding, broker reconstruction,
 durable-state and service packets,
 Worker/runtime/finalizer/host admission, and coherent provisioning. Consumers
 must land before activating Cargo and the producer. Existing V1 state must never

@@ -1,7 +1,8 @@
 //! Sealed transport for canonical compiler-execution records and signing-key custody.
 //!
 //! Record descriptors carry coordination evidence only. Signing-key capabilities carry
-//! service-owned secrets and expose no key bytes. Issuer custody has no signing operation; exact
+//! service-owned secrets without a direct seed getter. Their transport Files contain readable
+//! secret material and must remain with trusted custody owners. Issuer custody has no signing operation; exact
 //! external-anchor custody can only be consumed into its key after deployment binding is
 //! revalidated. None of these capabilities grants compiler, publication, linking,
 //! receipt-issuance, loading, launch, or execution authority.
@@ -25,6 +26,7 @@ mod compiler_execution_policy_v2;
 mod compiler_execution_service_launch;
 mod compiler_execution_service_launch_v2;
 mod compiler_execution_signing_key;
+mod compiler_execution_signing_key_v2;
 mod compiler_execution_supervisor_deployment;
 mod native_capability;
 mod rustc_invocation;
@@ -57,6 +59,7 @@ pub use compiler_execution_service_launch_v2::CompilerExecutionServiceLaunchCapa
 pub use compiler_execution_signing_key::{
     COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionSigningKeyCapabilityV1,
 };
+pub use compiler_execution_signing_key_v2::CompilerExecutionSigningKeyCapabilityV2;
 pub use compiler_execution_supervisor_deployment::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1,
     CompilerExecutionSupervisorDeploymentCapabilityV1,

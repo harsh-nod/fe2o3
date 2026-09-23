@@ -14,6 +14,11 @@ remains V1: it contains a policy digest, not a policy or subject encoding. Struc
 decoding therefore accepts either opaque policy binding. A consumer must match an
 independently admitted PolicyV2; structural admission is not a policy upgrade.
 
+`CompilerExecutionSigningKeyCapabilityV2` freshly admits a seed or transferred
+secret image under a pinned PolicyV2. It retains that complete typed policy
+identity and exposes only revalidation and read-only transfer, not signing.
+It cannot be constructed from a V1 key owner.
+
 These APIs do not activate the native producer, service handlers, or launcher.
 No protected proof or GPU execution is credited. M0-M7 and 47/47 remain open.
 See the [native publication contract](compiler-execution-publication-v2.md)
@@ -123,6 +128,52 @@ borrowed policy/manifest inputs stay separately prepaid.
 These logical quotas do not bound syscall latency, kernel allocation, generated
 instructions/stack, allocator behavior, page cache, or process RSS.
 
+## Native Signing-Key Custody
+
+The key image is exactly 32 bytes. In addition to the shared mode, length, seal,
+CLOEXEC and retained-inode checks, it must be anonymous, owned by the current
+effective UID/GID, RDONLY and not O_PATH. Creation seals a writable memfd, then
+reopens that same retained inode read-only using a fixed stack path buffer.
+These secret-specific restrictions do not change the public-record images.
+
+Fresh admission derives one Ed25519 key using pinned Dalek and checks the policy's
+public key. Revalidation compares the guarded image bytes to the retained seed
+with `subtle::ConstantTimeEq`, without deriving a second key, and requires the
+complete retained PolicyIdentityV2. Same-key changes to generation, executable,
+runtime or anchor key therefore reject. Raw seed bytes have no protocol-family
+tag: fresh V2 admission can use the same seed as V1 without upgrading a V1 owner.
+
+The caller seed is borrowed by a wiping guard before entry-work or storage
+admission. Read scratch is guarded before I/O, including partial/error reads and
+post-read refusal. Guards run on ordinary return and unwind; Dalek's owned key
+has `ZeroizeOnDrop`. This covers the explicit owned userspace buffers, not prior
+caller copies, compiler-generated temporaries, abort/termination, or erasure of
+kernel pages when the sealed memfd closes. Debug reveals no seed, fd or path.
+The transferred File contains readable secret material. Its recipient must be
+trusted and must protect any copies it makes; this API is not a secrecy boundary
+against an owner of that File. Read-only transport prevents writes, not reads.
+
+Let `Dkey = 32 + size_of::<(KeyCapabilityV2, StorageV2)>()`, `Dfile` use the same
+formula with `File`, and `P` be the borrowed native policy's retained charge:
+
+| Operation | Prepaid Input | Additional Returned Charge |
+|---|---|---|
+| create_and_zeroize | borrowed 32-byte seed + P | full Dkey |
+| from_file | consumed Dfile + borrowed P | Dkey - Dfile |
+| from_inherited_at | borrowed Dfile + P | full Dkey |
+| revalidate | borrowed Dkey + P | none |
+| try_clone_for_transfer | borrowed Dkey | full Dfile |
+
+Key `IO_WORK` is 66568 logical units, allowing at most 64 descriptor, credential
+and cleanup calls plus fixed byte processing. Fresh admission prepays one named
+65536-unit crypto derivation allowance, for `ADMISSION_WORK = 132104`.
+All methods prepay `IO_STORAGE` for fixed owners, guarded seed buffers, metadata,
+control frames and crypto scratch. These are named logical admission quotas,
+not instruction, generated-stack or physical-memory bounds. Returned deltas
+and consumed inputs follow the same ledger discipline as public capabilities.
+The raw seed wire and destination slot 7 remain unchanged; custody alone does
+not authenticate an issuer service or activate a native launch.
+
 ## Remaining Integration
 
 The issuer's explicit native input reader now independently admits policy and
@@ -148,6 +199,7 @@ and coherent provisioning remain required before producer activation.
 
 Fresh native program custody now consumes the pinned policy with independently
 sealed launcher/issuer images through bounded shared executable mechanics. It
-does not yet bind a native signing key, service authority or a consuming launch.
+does not yet bind the separately admitted native key, service authority or a
+consuming launch.
 See the [program status](../crates/fe2o3-compiler-execution-supervisor/README.md)
 and [image accounting](../crates/fe2o3-protected-static-executable/README.md).

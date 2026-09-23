@@ -40,9 +40,9 @@ The launch manifest retains the identity-only V1 wire; decoding that frame alone
 does not establish a native policy match.
 
 This reader is inert and is not yet called by the serving entrypoint. Native
-program custody now exists in the supervisor, but key custody, supervisor launch,
-service/durable-state admission and
-readiness must be integrated before activation. A subprocess test covers actual
+program custody now exists in the supervisor, with separate native key custody,
+but program/key authority binding, supervisor launch, service/durable-state
+admission and readiness must be integrated before activation. A subprocess test covers actual
 post-exec input readback and refusal cleanup, not the protected static-launcher
 path, proof execution, or GPU qualification. See the
 [native capability contract](../../docs/compiler-execution-capabilities-v2.md).

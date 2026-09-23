@@ -1,6 +1,13 @@
 //! Fixed-size I/O for prepaid native trust records. No retry loops or Vecs.
 use super::*;
 use crate::native_capability::{CompilerExecutionCapabilityErrorV2 as Error, Result};
+use std::ffi::CStr;
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;
+
+const PROC_FD_PATH_BYTES: usize = 32;
 
 const _: () = assert!(std::mem::size_of::<ImageError>() <= std::mem::size_of::<Error>());
 
@@ -81,26 +88,86 @@ impl SealedCapabilityImage {
     }
 
     pub(crate) fn read_fixed<const N: usize>(&self) -> Result<[u8; N]> {
+        let mut bytes = [0; N];
+        self.read_fixed_into(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Reads directly into caller-owned storage, which may remain partially or
+    /// fully populated on failure. Secret callers must install a wipe guard first.
+    pub(crate) fn read_fixed_into<const N: usize>(&self, bytes: &mut [u8; N]) -> Result<()> {
+        self.read_fixed_into_with(bytes, |bytes| {
+            rustix::io::pread(&self.image, bytes.as_mut_slice(), 0)
+        })
+    }
+
+    fn read_fixed_into_with<const N: usize>(
+        &self,
+        bytes: &mut [u8; N],
+        read: impl FnOnce(&mut [u8; N]) -> rustix::io::Result<usize>,
+    ) -> Result<()> {
         self.revalidate_fixed()?;
         if self.length != N {
             return Err(Error::Rejected(
                 "sealed image length disagrees with fixed record",
             ));
         }
-        let mut bytes = [0; N];
-        let read = rustix::io::pread(&self.image, bytes.as_mut_slice(), 0)
-            .map_err(|e| Error::io("read sealed image", e))?;
+        let read = read(bytes).map_err(|e| Error::io("read sealed image", e))?;
         if read != N {
             return Err(Error::Rejected("short sealed image read"));
         }
         self.revalidate_fixed()?;
-        Ok(bytes)
+        Ok(())
     }
 
-    fn revalidate_fixed(&self) -> Result<()> {
+    fn revalidate_fixed(&self) -> Result<fs::Metadata> {
         let (metadata, length) = validate_file_checked(&self.image, self.length_rule)?;
         if metadata.dev() != self.device || metadata.ino() != self.inode || length != self.length {
             return Err(Error::Rejected("sealed image identity or length changed"));
+        }
+        Ok(metadata)
+    }
+
+    /// Keeps the original image pinned until the reopened descriptor has passed
+    /// common admission and the exact retained object comparison.
+    pub(crate) fn into_read_only_fixed<const N: usize>(self) -> Result<Self> {
+        self.into_read_only_fixed_with::<N>(reopen_read_only_fixed)
+    }
+
+    fn into_read_only_fixed_with<const N: usize>(
+        self,
+        reopen: impl FnOnce(&File) -> Result<File>,
+    ) -> Result<Self> {
+        self.revalidate_fixed()?;
+        if self.length != N {
+            return Err(Error::Rejected(
+                "sealed image length disagrees with fixed record",
+            ));
+        }
+        let image = reopen(&self.image)?;
+        let admitted = Self::from_file_fixed::<N>(image, self.role)?;
+        if admitted.device != self.device
+            || admitted.inode != self.inode
+            || admitted.length != self.length
+        {
+            return Err(Error::Rejected("sealed image identity or length changed"));
+        }
+        Ok(admitted)
+    }
+
+    pub(crate) fn validate_secret_fixed(&self) -> Result<()> {
+        let metadata = self.revalidate_fixed()?;
+        let status = rustix::fs::fcntl_getfl(&self.image)
+            .map_err(|e| Error::io("inspect sealed secret image access", e))?;
+        if metadata.nlink() != 0
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.gid() != rustix::process::getegid().as_raw()
+            || status & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY
+            || status.contains(rustix::fs::OFlags::PATH)
+        {
+            return Err(Error::Rejected(
+                "sealed secret image is not an anonymous current-owner read-only image",
+            ));
         }
         Ok(())
     }
@@ -111,4 +178,39 @@ impl SealedCapabilityImage {
             .map(File::from)
             .map_err(|e| Error::io("duplicate sealed image", e))
     }
+}
+
+fn reopen_read_only_fixed(image: &File) -> Result<File> {
+    let mut path = [0; PROC_FD_PATH_BYTES];
+    let path = proc_fd_path(image.as_raw_fd(), &mut path)?;
+    rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map(File::from)
+    .map_err(|e| Error::io("reopen sealed image read-only", e))
+}
+
+fn proc_fd_path(fd: RawFd, path: &mut [u8; PROC_FD_PATH_BYTES]) -> Result<&CStr> {
+    let mut fd =
+        u32::try_from(fd).map_err(|_| Error::Rejected("invalid sealed image descriptor"))?;
+    let prefix = b"/proc/self/fd/";
+    let mut digits = [0; 10];
+    let mut start = digits.len();
+    // A nonnegative RawFd fits in at most ten decimal digits.
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (fd % 10) as u8;
+        fd /= 10;
+        if fd == 0 {
+            break;
+        }
+    }
+    let end = prefix.len() + digits.len() - start;
+    path[..prefix.len()].copy_from_slice(prefix);
+    path[prefix.len()..end].copy_from_slice(&digits[start..]);
+    path[end] = 0;
+    CStr::from_bytes_with_nul(&path[..=end])
+        .map_err(|_| Error::Rejected("invalid sealed image descriptor path"))
 }

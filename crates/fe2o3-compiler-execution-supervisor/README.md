@@ -14,7 +14,8 @@ reject equal bytes in a different inode. Supplied sources may alias because the
 retained images are separate objects. Trusted provisioning must independently
 pin the policy and launcher measurement.
 
-This program owner is inert. Native signing-key custody, authority binding,
+This program owner is inert. Native signing-key custody exists separately in
+`fe2o3-compiler-closure-capability`; native program/key authority binding,
 consuming launch, readiness and service/recovery integration remain required.
 Its controlled File clones grant no process authority and do not meter arbitrary
 subsequent File operations. It is not converted into a V1 supervisor. No protected
