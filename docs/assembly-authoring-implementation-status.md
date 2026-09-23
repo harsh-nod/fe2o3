@@ -1,5 +1,24 @@
 # Assembly authoring implementation status
 
+## Historical hardware capture and body packing — 2026-09-23
+
+The [historical capture command and local viewer](evidence/historical-hardware-resource-20260923.md)
+now share a closed bounded output format. Protocol/CLI validation passes 383 tests
+and strict Clippy; two additional preservation tests pass in a 166-test CLI
+library rerun. Site validation passes 1,480 unit tests and all 182 desktop/mobile
+cases. Counts are separately scoped, not summed.
+
+An actual non-launching MI350/ROCgDB run emits a typed unavailable record and
+cleans up its owned process group. No GPU target is launched or physical register
+value captured; this does not close V4. The original accepted exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
+The [inert complete-body codec and builder](evidence/complete-body-model-20260923.md#fixed-packing-and-transactional-builder)
+pass 1,470 kernel-IR/model tests. Existing unchanged local-frame strict-lint
+failures remain explicit. Source admission, real canonical CFG materialization
+and normal checked emission remain ahead for M2; full protected publication is
+a separate M6 obligation.
+
 ## Complete-body model progress — 2026-09-23
 
 The [bounded control-flow model](evidence/complete-body-model-20260923.md)

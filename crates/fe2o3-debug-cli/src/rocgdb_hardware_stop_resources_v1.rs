@@ -44,6 +44,16 @@ impl RocgdbMiProcessV3 {
             .then_some(&owner.projection)
     }
 
+    /// Move out only the current borrowed projection; the result is inert history.
+    /// Invalid/stale retained state is cleared and never published. No MI is issued.
+    pub(crate) fn take_historical_hardware_stop_resources_v1(
+        &mut self,
+    ) -> Option<RocgdbHardwareStopResourcesV1> {
+        let current = self.native_hardware_stop_resources_v1().is_some();
+        let owner = self.hardware_stop_resources_v1.take()?;
+        current.then_some(owner.projection)
+    }
+
     pub(super) fn clear_hardware_stop_resources_v1(&mut self) {
         self.hardware_stop_resources_v1 = None;
     }

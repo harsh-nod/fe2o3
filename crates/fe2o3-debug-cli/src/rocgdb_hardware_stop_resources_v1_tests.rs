@@ -401,3 +401,33 @@ fn transport_timeout_clears_projection_and_does_not_change_legacy_wire() {
     assert!(!wire.contains("hardware_stop"));
     assert!(!wire.contains("checked_target"));
 }
+
+#[test]
+fn historical_moveout_is_exact_once_without_commands() {
+    let mut process = seeded_process();
+    let expected = process.native_hardware_stop_resources_v1().unwrap().clone();
+    let token = process.next_token;
+    assert_eq!(
+        process.take_historical_hardware_stop_resources_v1(),
+        Some(expected)
+    );
+    assert_eq!(process.next_token, token);
+    assert!(process.native_hardware_stop_resources_v1().is_none());
+    assert!(
+        process
+            .take_historical_hardware_stop_resources_v1()
+            .is_none()
+    );
+}
+
+#[test]
+fn historical_moveout_clears_stale_owner_without_exposure() {
+    let mut process = seeded_process();
+    process.native_stop_v4 = None;
+    assert!(
+        process
+            .take_historical_hardware_stop_resources_v1()
+            .is_none()
+    );
+    assert!(process.hardware_stop_resources_v1.is_none());
+}

@@ -80,11 +80,60 @@ and independently check exact instruction/role/source occurrence preservation.
 A second executable CFG blob or diagnostic-plan-to-production conversion is
 not an acceptable substitute.
 
-The checked output then needs its own supported fixed continuation,
-descriptor/target lowering and common Worker/native/finalizer integration,
-with fresh required obligations and generated ABI checks. Existing V12 owners
-must not be relabeled to admit this new profile. Source materialization and
-whole-body/mixed-source qualification remain required for M2. Schema numbers
+The checked output then needs its own supported fixed continuation, actual-L
+descriptor/target lowering and the common Worker/link/inspection mechanism,
+with fresh applicable obligations and generated ABI checks. The existing
+source-local-order artifact path demonstrates that useful source-derived
+LLVM/descriptor preparation can retain an explicit protected-publication refusal.
+Full protected finalizer, generated-host and hardware qualification belong to
+M6; they are not blanket prerequisites for the ordinary M2 source slice.
+Existing V12 owners must not be relabeled to admit this new profile. Source
+materialization and whole-body/mixed-source qualification remain required for
+M2. Schema numbers
 and shared registration are being coordinated in
 [#271](https://github.com/harsh-nod/fe2o3/issues/271#issuecomment-5803283453);
 that request is not an allocation or approval.
+
+## Fixed packing and transactional builder
+
+A separate inert numeric codec now lives in `fe2o3-kernel-ir`, with the original
+model type paths re-exported for compatibility. It represents up to eight blocks
+and sixteen existing typed instruction descriptors in four block words and four
+instruction words. All reserved bits, unused targets and inactive slots must be
+zero; counts and descriptor grammar are checked without truncation. Numeric
+packing is independent of host byte order.
+
+The append-only fixed-array builder checks every bound before mutation. Failed
+appends leave it unchanged. Empty individual blocks and cross-block role reads
+remain representable: this codec deliberately does not duplicate CFG or
+initialization analysis. The model's packed adapter prepays 64 decode/projection
+work units and then invokes the unchanged 512-unit structural checker.
+Retained storage and a future source/canonical expansion need their own accounting.
+
+Qualification on parent `413ba987b8878f53e13127fdb53f9e1495ab93b3` plus this
+packing change passed **1,470 kernel-IR/model tests**, with 22 ignored, including
+12 new codec/builder tests and six composition tests. Exact literal encodings,
+both endian round trips, padding, transactional errors, maximum sizes, unchanged
+model refusals and nonzero work-budget floors are covered.
+
+Strict all-target Clippy for both packages **failed** with nine existing
+diagnostics in five unchanged local-frame files. Their bytes were compared
+against the parent. No lint suppression was added. A separate all-target
+Clippy run without warnings-denied, selected formatting and whitespace checks
+passed; it does not make the strict gate green.
+
+Retained receipts:
+
+- Tests and strict-lint failure:
+  `logs/phase28-resume-r4-compiler-complete-body-packing-r1/receipt.json`,
+  13,557 bytes, SHA-256
+  `1a86c3411ab69213abbd630a098c87ae48e8b4fd68bb82417d41434695edc788`.
+- Non-strict lint, formatting and whitespace:
+  `logs/phase28-resume-r4-compiler-complete-body-packing-lint-r2/receipt.json`,
+  21,274 bytes, SHA-256
+  `689fa60f503352bca947485af05c54f189426896ddc054a8f71670bdde1392bf`.
+
+Both use 6,765 source files / 102,124,979 bytes, SHA-256
+`a1b14cd491a950bd2ed5be36952f804560fb405a4f8b846f563a67f73735a903`.
+No executable schema, trusted source marker, actual source compilation or GPU
+execution is added by packing. It is not M2 acceptance.
