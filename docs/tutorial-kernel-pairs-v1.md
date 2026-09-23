@@ -104,6 +104,13 @@ are pending, no pair is source-bound, and execution stages are not evaluated.
 Existing historical successes do not
 acquire new source/variant/target bindings from this report.
 
+The first-fill kernel display now retains the exact 308-byte library file at
+`7a536e0a001202ac0bb9d8647c5395661f8fa1ec`, including its whole-file digest.
+Its registered fixture association is checked by the same physical-source
+mapper as other whole-file displays. The tutorial's recorded no-GPU execution
+keeps its historical source pin; this display refresh supplies no new execution
+or tile-pair qualification.
+
 The report is bounded to 4096 charged projection/inventory records, including
 input tabs, references and scanned items, and 16 MiB of encoded JSON. Each Rust
 scan is limited to 4 MiB and 4096 declarations. Exhaustion rejects without partial JSON.

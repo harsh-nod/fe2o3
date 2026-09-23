@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "fae8e0fd2d297f7e1b7603d5a4b90611f15c74ca",
-      "tree": "79cba5abe41395a94dbad17c8841298ffbb38d0c"
+      "commit": "edd94cf7e9f50f46e829125e9c0c117cdd5ca001",
+      "tree": "09c61accfb91686011c2962669c37b9b9103cf21"
     },
     "status": "pending",
     "lessons": [
@@ -196,9 +196,9 @@
             "displayedUtf8Bytes": 308,
             "displayedSha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
             "sourcePath": "examples/fill/src/lib.rs",
-            "sourceCommit": "308d8fa00fa41e098b2a1a47bbfea1bc29735464",
-            "sourceSha256": "e763df1ad98cafe247454bd3e6a40f39d8e0ea557f5d3080f56290476ca53766",
-            "sourceDigestScope": null,
+            "sourceCommit": "7a536e0a001202ac0bb9d8647c5395661f8fa1ec",
+            "sourceSha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -13798,10 +13798,12 @@
         "functionUtf8Offset": 148,
         "kernelSymbol": "fill",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-fill-simulation:fill"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered source selection only; historical simulation results do not qualify the refreshed source."
       },
       {
         "lessonId": "flash-attention",

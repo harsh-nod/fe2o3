@@ -160,7 +160,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "c566804b0bf249f4e7299313940026b82c1ffa25fc1e70e1af3324534e2b4bf3")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "f82265c0911495708b35f48f0c6de77769eaa2234423767a79780d511e550c61")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -498,12 +498,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "7881a963c434dea0520d01cfe0c96b464b36199cd3661c715e93fd2bc12976a1")
+                         "a5e53dfeec261c5831539ddf1de44aba3c7da3086c7ef1ac79231af4141df0cb")
         self.assertEqual(len(inventory["kernels"]), 60)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 74, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 46, "source-driver-contract": 13, "fixture-source-contract": 18,
+                         {"pending": 45, "source-driver-contract": 13, "fixture-source-contract": 19,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
@@ -516,6 +516,9 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertTrue(all(variant["source"] is None for variant in pending))
         display = {(row["lessonId"], row["tabOrdinal"], row["kernelSymbol"]): row
                    for row in inventory["displayItems"]}
+        fill = display[("first-fill", 0, "fill")]
+        self.assertEqual(fill["kernelIds"], ["fixture:gfx942-fill-simulation:fill"])
+        self.assertEqual(fill["bindingStatus"], "fixture-source-contract")
         self.assertEqual(display[("typed-vecadd", 3, "vecadd")]["bindingStatus"], "pending")
         for row in inventory["displayItems"]:
             if row["lessonId"] == "typed-vecadd" and row["classification"] == "kernel":
