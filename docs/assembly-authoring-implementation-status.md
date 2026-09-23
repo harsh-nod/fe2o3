@@ -1,5 +1,14 @@
 # Assembly authoring implementation status
 
+A separate [live local CPU debugger report](evidence/live-cpu-debugger-20260923.md)
+records the new fixed-input loopback bridge and opt-in browser controls. Fresh
+normal-source exports, real HTTP/debugger sessions in both forks, and the
+separate ordinary-Rust vecadd tutorial preparation passed. The dated report
+separates actual browser sessions from routed mock tests and retains failed
+attempts. This is bounded V2 progress, not terminal-fault snapshots, allocation
+reuse, physical GPU state or broad milestone completion. The accepted broad
+exits remain M1/V1/U1 (3/18); historical tables below retain their dated scope.
+
 Earlier bounded increment: [literal-repeat authoring, ordinary LLVM observation
 and source-fault replay](evidence/authoring-repeat-fault-20260922.md), following
 [exact static helper calls and typed parameter correspondence](evidence/authoring-call-targets-20260922.md)
