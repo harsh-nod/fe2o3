@@ -16,12 +16,22 @@ SPEC.loader.exec_module(CHECKER)
 APPROVED = (
     "3abb7b18ebe5e3cbc32002738bed0f7d72d4f745",
     "5ed3840a90db3f03a2cded9becffc0459b737f36",
+    "7dfbe5cc453f12c1b8b32eeb49f08778876bf6ce",
+    "d10f49bfedc26848285d20ec1399c193b3340f47",
+    "3d473f9ffc850a3a762efee8cd4f210d363f3354",
 )
 UNSIGNED = "a" * 40
 SIGNED = "b" * 40
 
 
 class InheritedExceptions(unittest.TestCase):
+    def test_registry_contains_only_the_exact_approved_identities(self):
+        self.assertEqual(CHECKER.INHERITED_EXCEPTION_COMMITS, frozenset(APPROVED))
+        self.assertEqual(
+            CHECKER.INHERITED_EXCEPTION_REPOSITORIES,
+            frozenset({"harsh-nod/fe2o3", "powderluv/fe2o3"}),
+        )
+
     def run_check(self, commits, repo, signed=()):
         def identity(commit):
             body = "Signed-off-by: Test User <test@example.com>" if commit in signed else "unsigned"
@@ -37,7 +47,7 @@ class InheritedExceptions(unittest.TestCase):
 
     def test_exact_approved_commits_in_both_repositories(self):
         for repo in ("harsh-nod/fe2o3", "powderluv/fe2o3"):
-            for commits in ((APPROVED[0],), (APPROVED[1],), APPROVED):
+            for commits in (*((commit,) for commit in APPROVED), APPROVED):
                 with self.subTest(repo=repo, commits=commits):
                     output = self.run_check(commits, repo)
                     self.assertIn(f"0 commit(s); {len(commits)} approved inherited exception(s)", output)
@@ -50,20 +60,20 @@ class InheritedExceptions(unittest.TestCase):
                 with self.subTest(repo=repo, commit=commit), self.assertRaisesRegex(CHECKER.DcoError, commit):
                     self.run_check((commit,), repo)
 
-    def test_changed_identity_and_third_unsigned_commit_reject(self):
+    def test_changed_identity_and_additional_unsigned_commit_reject(self):
         for repo in ("harsh-nod/fe2o3", "powderluv/fe2o3"):
-            for commit in (UNSIGNED, "0" + APPROVED[0][1:], "0" + APPROVED[1][1:]):
+            for commit in (UNSIGNED, *("0" + approved[1:] for approved in APPROVED)):
                 with self.subTest(repo=repo, commit=commit), self.assertRaisesRegex(CHECKER.DcoError, commit):
                     self.run_check((*APPROVED, commit), repo)
 
     def test_signed_and_excepted_counts_are_distinct(self):
         output = self.run_check((*APPROVED, SIGNED), "harsh-nod/fe2o3", (SIGNED,))
-        self.assertIn("1 commit(s); 2 approved inherited exception(s)", output)
-        self.assertEqual(output.count("DCO approved inherited exception:"), 2)
+        self.assertIn(f"1 commit(s); {len(APPROVED)} approved inherited exception(s)", output)
+        self.assertEqual(output.count("DCO approved inherited exception:"), len(APPROVED))
 
     def test_normal_signoff_takes_precedence(self):
         output = self.run_check(APPROVED, "powderluv/fe2o3", APPROVED)
-        self.assertIn("2 commit(s); 0 approved inherited exception(s)", output)
+        self.assertIn(f"{len(APPROVED)} commit(s); 0 approved inherited exception(s)", output)
         self.assertNotIn("DCO approved inherited exception:", output)
 
 

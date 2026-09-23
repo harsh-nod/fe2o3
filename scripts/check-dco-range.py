@@ -17,12 +17,15 @@ DEPENDABOT_NAME = "dependabot[bot]"
 DEPENDABOT_EMAIL = "49699333+dependabot[bot]@users.noreply.github.com"
 DEPENDABOT_SIGNOFF = "Signed-off-by: dependabot[bot] <support@github.com>"
 MAX_COMMITS = 1024
-# Exact inherited exceptions approved by the maintainer on 2026-09-18.
+# Exact inherited exceptions approved by the maintainer on 2026-09-18 and 2026-09-23.
 # See docs/dco-inherited-exceptions.md; no caller-supplied waiver is supported.
 INHERITED_EXCEPTION_REPOSITORIES = frozenset({"harsh-nod/fe2o3", "powderluv/fe2o3"})
 INHERITED_EXCEPTION_COMMITS = frozenset({
     "3abb7b18ebe5e3cbc32002738bed0f7d72d4f745",
     "5ed3840a90db3f03a2cded9becffc0459b737f36",
+    "7dfbe5cc453f12c1b8b32eeb49f08778876bf6ce",
+    "d10f49bfedc26848285d20ec1399c193b3340f47",
+    "3d473f9ffc850a3a762efee8cd4f210d363f3354",
 })
 
 
