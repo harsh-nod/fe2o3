@@ -1,5 +1,9 @@
 use rmpv::{Value, encode::write_value};
 
+#[cfg(test)]
+#[path = "../../runtime_preparation_tests.rs"]
+mod runtime_preparation_tests;
+
 const ELF_HEADER_BYTES: usize = 64;
 const PROGRAM_HEADER_BYTES: usize = 56;
 const PROGRAM_COUNT: usize = 8;
@@ -15,9 +19,19 @@ const SHSTRTAB_OFFSET: usize = 0x40c0;
 const SECTION_OFFSET: usize = 0x4200;
 
 /// Structurally valid loader fixture. Its entry bytes are not executable and
-/// must only be used with the no-device mock backend.
+/// may only be inspected, prepared address-free, or used with the no-device mock backend.
 pub(super) fn module() -> Vec<u8> {
-    let metadata = encode(&metadata_document());
+    module_with_resources(16, None)
+}
+
+pub(super) fn module_with_resources(
+    private_segment_bytes: u32,
+    uniform_work_group_size: Option<bool>,
+) -> Vec<u8> {
+    let metadata = encode(&metadata_document(
+        private_segment_bytes,
+        uniform_work_group_size,
+    ));
     let note = metadata_note(&metadata);
     assert!(NOTE_OFFSET + note.len() <= DESCRIPTOR_OFFSET);
 
@@ -35,11 +49,11 @@ pub(super) fn module() -> Vec<u8> {
     write_dynamic_table(&mut bytes);
     write_symbols(&mut bytes);
     write_sections(&mut bytes, note.len(), strtab.len(), shstrtab.len());
-    write_descriptor(&mut bytes);
+    write_descriptor(&mut bytes, private_segment_bytes);
     bytes
 }
 
-fn metadata_document() -> Value {
+fn metadata_document(private_segment_bytes: u32, uniform_work_group_size: Option<bool>) -> Value {
     Value::Map(vec![
         (
             Value::from("amdhsa.version"),
@@ -51,25 +65,31 @@ fn metadata_document() -> Value {
         ),
         (
             Value::from("amdhsa.kernels"),
-            Value::Array(vec![kernel_metadata()]),
+            Value::Array(vec![kernel_metadata(
+                private_segment_bytes,
+                uniform_work_group_size,
+            )]),
         ),
     ])
 }
 
-fn kernel_metadata() -> Value {
+fn kernel_metadata(private_segment_bytes: u32, uniform_work_group_size: Option<bool>) -> Value {
     let mut arguments = vec![
         argument(Some("a_ptr"), 0, 8, "global_buffer", Some("global")),
         argument(Some("a_len"), 8, 8, "by_value", None),
     ];
     arguments.extend(hidden_arguments(16));
-    map(vec![
+    let mut fields = vec![
         (".name", Value::from("vecadd")),
         (".symbol", Value::from("vecadd.kd")),
         (".args", Value::Array(arguments)),
         (".kernarg_segment_size", Value::from(272)),
         (".kernarg_segment_align", Value::from(8)),
         (".group_segment_fixed_size", Value::from(0)),
-        (".private_segment_fixed_size", Value::from(16)),
+        (
+            ".private_segment_fixed_size",
+            Value::from(private_segment_bytes),
+        ),
         (".wavefront_size", Value::from(64)),
         (".sgpr_count", Value::from(14)),
         (".vgpr_count", Value::from(11)),
@@ -77,7 +97,11 @@ fn kernel_metadata() -> Value {
         (".sgpr_spill_count", Value::from(2)),
         (".vgpr_spill_count", Value::from(4)),
         (".max_flat_workgroup_size", Value::from(1024)),
-    ])
+    ];
+    if let Some(uniform) = uniform_work_group_size {
+        fields.push((".uniform_work_group_size", Value::from(u32::from(uniform))));
+    }
+    map(fields)
 }
 
 fn hidden_arguments(base: u64) -> Vec<Value> {
@@ -359,14 +383,18 @@ fn section(
     write_u64(bytes, base + 56, entry_size);
 }
 
-fn write_descriptor(bytes: &mut [u8]) {
+fn write_descriptor(bytes: &mut [u8], private_segment_bytes: u32) {
     write_u32(bytes, DESCRIPTOR_OFFSET, 0);
-    write_u32(bytes, DESCRIPTOR_OFFSET + 4, 16);
+    write_u32(bytes, DESCRIPTOR_OFFSET + 4, private_segment_bytes);
     write_u32(bytes, DESCRIPTOR_OFFSET + 8, 272);
     write_i64(bytes, DESCRIPTOR_OFFSET + 16, 0x3000);
     write_u32(bytes, DESCRIPTOR_OFFSET + 44, 1);
     write_u32(bytes, DESCRIPTOR_OFFSET + 48, 0x00af_0081);
-    write_u32(bytes, DESCRIPTOR_OFFSET + 52, 0x1391);
+    write_u32(
+        bytes,
+        DESCRIPTOR_OFFSET + 52,
+        0x1390 | u32::from(private_segment_bytes != 0),
+    );
     write_u16(bytes, DESCRIPTOR_OFFSET + 56, 0x001e);
 }
 

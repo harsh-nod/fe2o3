@@ -321,8 +321,9 @@ impl From<Gfx942KfdDispatchRequestErrorV1> for Gfx942RuntimePreparationErrorV1 {
 /// Validates and materializes one exact COV6 kernel into an address-free KFD request.
 ///
 /// The operation checks the complete object and selected descriptor, derives
-/// resource fields from the closure, and initializes every declared hidden
-/// argument. It performs no KFD operation and grants no execution authority.
+/// resource fields from the closure, rejects partial workgroups when required,
+/// and initializes every declared hidden argument. It performs no KFD operation
+/// and grants no execution authority.
 pub fn prepare_gfx942_runtime_dispatch_v1(
     hsaco: &[u8],
     kernel_name: &str,
@@ -337,6 +338,11 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
     )?;
 
     let kernel = closure.selected_kernel();
+    if kernel.uniform_work_group_size()
+        && inputs.geometry.cov6_implicit_dispatch_shape().remainder() != [0; 3]
+    {
+        return Err(Gfx942RuntimePreparationErrorV1::WorkgroupMismatch);
+    }
     let total_kernarg = usize::try_from(resources.kernarg_segment_size())
         .map_err(|_| Gfx942RuntimePreparationErrorV1::KernargLayout)?;
     let explicit_kernarg = inputs.explicit_kernarg.len();
