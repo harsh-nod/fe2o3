@@ -8,6 +8,19 @@ inspection](evidence/authoring-const-watch-native-20260922.md).
 Its dated qualification is separate from the historical results below; the broad
 milestone acceptance remains M1/V1/U1 (3/18).
 
+A separately scoped [bounded-repeat native observation workflow](ordered-repeat-native-observation-v1.md)
+describes an additive developer lane. It consumes the exact original
+source/CPU and LLVM capture paths, revalidates their retained results, and makes
+four fresh native observer calls for MOV plus 1/2/15 ADDs and repeat15, at O0/O3.
+Its separate target and join check complete HSACO identities, exact decoded
+count/order/registers and descriptor coverage of declared high-water 37 through
+the unchanged worker/decoder. The separate
+[dated qualification](evidence/authoring-repeat-native-20260923.md) records fresh
+builds, controls and four native calls/eight complete HSACOs in each fork.
+This is not a new source admission, GPU execution, physical lifetime or
+whole-kernel correctness proof, protected production route, or M2/U2/U3 closure.
+The historical milestone table and receipts below remain separately scoped.
+
 This is a working-implementation handoff for [#280](https://github.com/harsh-nod/fe2o3/issues/280),
 [#281](https://github.com/harsh-nod/fe2o3/issues/281), and
 [#282](https://github.com/harsh-nod/fe2o3/issues/282), inspected on 2026-09-19 UTC.
