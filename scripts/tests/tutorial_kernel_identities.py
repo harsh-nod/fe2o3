@@ -560,9 +560,33 @@ class FixtureDisplayTests(unittest.TestCase):
         attributes = "#[cfg_attr(test, inline)]"
         exact = IDENTITIES._Budget(1000)
         self.selected_attributes(attributes, budget=exact)
+        self.assertEqual(exact.attribute_visits, 2)
         self.selected_attributes(attributes, budget=IDENTITIES._Budget(exact.used))
         with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "record bound"):
             self.selected_attributes(attributes, budget=IDENTITIES._Budget(exact.used - 1))
+
+    def test_record_and_attribute_quotas_are_independent_and_aggregate(self):
+        for reverse in (False, True):
+            budget = IDENTITIES._Budget(2)
+            actions = [lambda: budget.rows([None, None], "records"),
+                       lambda: [budget.visit_attribute() for _ in range(2)]]
+            for action in actions[::(-1 if reverse else 1)]:
+                action()
+            self.assertEqual((budget.used, budget.attribute_visits), (2, 2))
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "record bound"):
+                budget.rows([None], "records")
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate visit bound"):
+                budget.visit_attribute()
+        for predicate in ("test", "not(test)"):
+            attributes = f"#[cfg_attr({predicate}, inline, inline)]"
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate visit bound"):
+                self.selected_attributes(attributes, budget=IDENTITIES._Budget(2))
+            budget = IDENTITIES._Budget(6)
+            for _ in range(2):
+                self.selected_attributes(attributes, budget=budget)
+            self.assertEqual((budget.used, budget.attribute_visits), (4, 6))
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate visit bound"):
+                self.selected_attributes(attributes, budget=budget)
 
     def test_fixture_attributes_reject_qualified_benign_names(self):
         for attribute in ("doc::rewrite", "inline::rewrite", "doc::rewrite(hidden)",
@@ -682,11 +706,16 @@ class FixtureDisplayTests(unittest.TestCase):
                 IDENTITIES._fixture_cfg(cfg, {"left"})
 
     def test_repeated_displays_use_one_fixture_selection_cache(self):
+        with mock.patch.object(IDENTITIES, "_fixture_attribute", wraps=IDENTITIES._fixture_attribute) as visits:
+            self.validate()
+            expected_visits = visits.call_count
         self.manifest["curriculum"]["lessons"][0]["codeTabs"].append(copy.deepcopy(self.tab))
         self.manifest["kernelInventory"]["displayItems"].append({**self.row, "tabOrdinal": 1})
         self.runtime["lessons"][0]["codeTabs"].append(copy.deepcopy(self.runtime["lessons"][0]["codeTabs"][0]))
         loader = mock.Mock(return_value=(self.library, self.sources, ["left"]))
-        self.assertEqual(self.validate(load_fixture_sources=loader)["unresolvedBindings"], [])
+        with mock.patch.object(IDENTITIES, "_fixture_attribute", wraps=IDENTITIES._fixture_attribute) as visits:
+            self.assertEqual(self.validate(load_fixture_sources=loader)["unresolvedBindings"], [])
+            self.assertEqual(visits.call_count, expected_visits)
         loader.assert_called_once_with(self.fixture)
 
     def excerpt(self, parts, explicit=True):

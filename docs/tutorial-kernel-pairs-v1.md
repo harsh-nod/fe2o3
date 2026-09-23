@@ -175,8 +175,10 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   conservative display census; inactive conditional kernels do not bind.
   Multiple active kernel attributes and inner kernel attributes reject.
   Attribute bodies are limited to 8 KiB, nesting to 32 levels and each
-  `cfg_attr` to 64 child attributes; every visited attribute consumes the
-  shared record budget. The existing 256-token cfg limit is unchanged.
+  `cfg_attr` to 64 child attributes. All traversals share one aggregate
+  attribute-visit quota, equal in size to but separate from the existing record
+  quota; inactive attributes are charged too, and cached selections are not
+  revisited. The record, source-byte and 256-token cfg limits are unchanged.
 
 The fill fixture's SIMT variant is associated with the exact current
 `examples/fill/src/lib.rs` function and its registered compiler-input identity.

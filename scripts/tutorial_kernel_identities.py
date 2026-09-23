@@ -90,6 +90,7 @@ class _Budget:
             _fail("record limit must be a nonnegative integer")
         self.maximum = maximum
         self.used = 0
+        self.attribute_visits = 0
         self.identity_bytes = 0
         self.source_bytes = 0
         self.fragment_match_bytes = 0
@@ -106,6 +107,11 @@ class _Budget:
         if amount > MAX_RUNTIME_BYTES - self.fragment_match_bytes:
             _fail("fixture fragment matching exceeds its aggregate byte-span bound")
         self.fragment_match_bytes += amount
+
+    def visit_attribute(self) -> None:
+        if self.attribute_visits >= self.maximum:
+            _fail("fixture selection attributes exceed their aggregate visit bound")
+        self.attribute_visits += 1
 
 
 def _reference(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
@@ -351,7 +357,7 @@ def _fixture_attribute(source: str, code: str, pairs: dict[int, int], start: int
     """Evaluate a bounded attribute subset, separately from the lexical census."""
     if depth > 32:
         _fail("fixture selection attribute exceeds its nesting bound")
-    budget.rows([None], "fixture selection attributes")
+    budget.visit_attribute()
     body = source[start:end]
     if len(body) > 8192 or len(body.encode("utf-8")) > 8192:
         _fail("fixture selection attribute exceeds its byte bound")
