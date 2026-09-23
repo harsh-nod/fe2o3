@@ -86,14 +86,14 @@ fn normalize_test_anchor_descriptor(descriptor: OwnedFd) -> OwnedFd {
     normalized
 }
 
-struct Fixture {
-    root: PathBuf,
+pub(super) struct Fixture {
+    pub(super) root: PathBuf,
     image: PathBuf,
     bytes: Vec<u8>,
 }
 
 impl Fixture {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         Self::with_code(name, &[0xc3])
     }
 
@@ -112,7 +112,7 @@ impl Fixture {
         Self { root, image, bytes }
     }
 
-    fn measurement(&self) -> ProvisionedStaticExecutableMeasurementV1 {
+    pub(super) fn measurement(&self) -> ProvisionedStaticExecutableMeasurementV1 {
         ProvisionedStaticExecutableMeasurementV1::new(
             Sha256::digest(&self.bytes).into(),
             u64::try_from(self.bytes.len()).unwrap(),
@@ -120,7 +120,7 @@ impl Fixture {
         .unwrap()
     }
 
-    fn issuer_measurement(&self) -> CompilerExecutionIssuerMeasurementV1 {
+    pub(super) fn issuer_measurement(&self) -> CompilerExecutionIssuerMeasurementV1 {
         CompilerExecutionIssuerMeasurementV1::new(
             Sha256::digest(&self.bytes).into(),
             u64::try_from(self.bytes.len()).unwrap(),
@@ -128,7 +128,7 @@ impl Fixture {
         .unwrap()
     }
 
-    fn open(&self) -> File {
+    pub(super) fn open(&self) -> File {
         File::open(&self.image).unwrap()
     }
 }

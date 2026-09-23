@@ -101,7 +101,8 @@ bound on generated stack, RSS, instructions, syscall latency or kernel memory.
 
 Custody is a point-in-time transport observation, not authority, protected proof,
 signing-key custody, exclusive endpoint ownership, an independently deployed service,
-monotonic persistence or GPU execution credit. Native supervisor binding and
-the consuming launch path remain to be integrated with the native program,
-policy, signing key, credentials, root and anchor inputs. This owner alone
-does not activate serving, a protected launcher, or downstream native protocols.
+monotonic persistence or GPU execution credit. Native supervisor binding can
+now consume this owner with native program, policy-bound key, credentials and
+root custody. Native handoff admission and the consuming launch path remain
+open. Neither owner activates serving, a protected launcher, or downstream
+native protocols by itself.

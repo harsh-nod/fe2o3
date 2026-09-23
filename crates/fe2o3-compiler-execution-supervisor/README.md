@@ -4,7 +4,7 @@ This package owns the protected process boundary around the static
 compiler-execution issuer. Program admission authenticates the provisioned
 static launcher and issuer before either can enter authority-bearing custody.
 
-## Native Program Status
+## Native Custody Status
 
 `AdmittedIssuerProgramV2` freshly consumes a native policy capability and the
 provisioned launcher/issuer sources. It uses bounded native executable admission,
@@ -14,14 +14,22 @@ reject equal bytes in a different inode. Supplied sources may alias because the
 retained images are separate objects. Trusted provisioning must independently
 pin the policy and launcher measurement.
 
-This program owner is inert. Native signing-key custody exists separately in
-`fe2o3-compiler-closure-capability`, and bounded native anchor transport custody
-exists in `fe2o3-broker-authority-service`. Native program/key/anchor authority
-binding, consuming launch, readiness and service/recovery integration remain
-required. See the [anchor custody contract](../../docs/compiler-execution-anchor-custody-v2.md).
-Its controlled File clones grant no process authority and do not meter arbitrary
-subsequent File operations. It is not converted into a V1 supervisor. No protected
-proof or GPU qualification is credited; M0-M7 and 47/47 remain incomplete.
+`ProtectedIssuerSupervisorV2::bind` consumes that native program, its policy-bound
+native signing key, the strict native anchor transport and a service-owned root.
+It checks current effective UID/GID, program, full-policy key binding, anchor,
+root admission and full revalidation in that order. Root admission requires
+CLOEXEC, read-only non-O_PATH directory custody, exact UID/GID, mode0700, nonzero
+links and no capability or POSIX access/default ACL. V1 and V2 share this root
+predicate; the native owner never converts an admitted V1 owner.
+
+The native supervisor is pre-session custody only. It does not yet authenticate
+a native compiler handoff, validate the full child confinement profile, consume
+a launch, establish readiness or activate serving/recovery. Its getters expose
+only immutable policy and identity facts, not descriptors. Every nested check
+uses the caller's ledger; reserve the returned owner-growth delta while preserving
+all consumed reservations. See the [resource contract](../../docs/compiler-execution-capabilities-v2.md#native-supervisor-binding)
+and [anchor custody contract](../../docs/compiler-execution-anchor-custody-v2.md).
+No protected proof or GPU qualification is credited; M0-M7 and 47/47 remain incomplete.
 
 The existing serving/deployment path described below remains **V1**.
 

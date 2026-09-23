@@ -180,6 +180,44 @@ and consumed inputs follow the same ledger discipline as public capabilities.
 The raw seed wire and destination slot 7 remain unchanged; custody alone does
 not authenticate an issuer service or activate a native launch.
 
+## Native Supervisor Binding
+
+`ProtectedIssuerSupervisorV2` consumes a fresh native program, policy-bound key,
+strict native anchor transport, credential profile and root File. It preserves
+the V1 order: current effective UID/GID, program, exact-policy key, anchor, root
+admission, then full revalidation. The root is inspected twice on admission and
+once in the final chain. Shared root checks retain descriptor/status/stat query
+order, exact mode0700 and UID/GID, directory/link requirements, and one-byte
+capability/access/default-ACL probes. Root snapshots compare every identity and
+security field, not just the path or mode. No new authority is obtained from V1.
+
+Let `P`, `K` and `A` be the complete program, key and anchor retained charges:
+
+```text
+F = size_of::<(File, SupervisorStorageV2)>()
+G = size_of::<(RootSnapshot, Credentials, usize, SupervisorStorageV2)>()
+    + align_of::<SupervisorV2>()
+input_floor = P + K + A + F
+retained = input_floor + G
+```
+
+Binding returns only G; borrowed revalidation requires the complete retained
+charge and returns no storage. Checked arithmetic precedes any inspection.
+The outer work allowance is 65544 units and scratch is
+`4*size_of::<(SupervisorV2, SupervisorStorageV2)>() + 4096`. Nested operations
+charge the same ledger, not fresh budgets. If C is the sum of program, key and
+anchor revalidation work, bind costs `65544 + 2*C` and revalidation `65544 + C`.
+Binding reserves G before final revalidation; this extra retention contributes
+to the composite peak. Unrelated entry storage, consumed charges, sticky work
+and denial history follow the existing scope contract. These logical quotas
+do not bound generated stack, RSS, kernel allocation or syscall latency.
+
+This checks effective identity and pre-session custody, not the full child
+confinement profile, authenticated native handoff, process launch, readiness or
+serving. Successful distinct-UID tests use separate real non-root processes in
+an explicitly opted-in isolated container, never an exported same-UID bypass.
+Synthetic ELF fixture admission is not execution of the production issuer.
+
 ## Remaining Integration
 
 The issuer's explicit native input reader now independently admits policy and
@@ -203,9 +241,9 @@ is exposed here. Service handlers, native durable-state families, broker V4
 observation, anchor/Worker/ACK ordering, Cargo restart paths, runtime/host joins,
 and coherent provisioning remain required before producer activation.
 
-Fresh native program custody now consumes the pinned policy with independently
-sealed launcher/issuer images through bounded shared executable mechanics. It
-does not yet bind the separately admitted native key and anchor transport into
-service authority or a consuming launch.
+Fresh native program custody consumes the pinned policy with independently
+sealed launcher/issuer images through bounded shared executable mechanics.
+Native supervisor binding joins that program to key, anchor, credentials and
+root; accepted/prepared native handoff custody and consuming launch remain open.
 See the [program status](../crates/fe2o3-compiler-execution-supervisor/README.md)
 and [image accounting](../crates/fe2o3-protected-static-executable/README.md).

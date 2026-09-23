@@ -20,6 +20,9 @@ use fe2o3_runtime_protocol::SealedStaticApplicationErrorV1;
 use fe2o3_static_preexec_manifest::StaticPreexecObjectIdentityV1;
 
 mod authority;
+mod authority_v2;
+#[cfg(test)]
+mod authority_v2_test_process;
 #[allow(unsafe_code)]
 mod deployment;
 mod handoff;
@@ -29,6 +32,7 @@ mod listener;
 mod process;
 mod program_v2;
 mod provisioning;
+mod root_checks;
 pub use program_v2::{
     AdmittedIssuerProgramV2, IssuerProgramAdmissionErrorV2, IssuerProgramStorageV2,
 };
@@ -38,6 +42,10 @@ pub use authority::{
     ISSUER_SERVICE_SECUREBITS_V1, IssuerServiceCredentialProfileErrorV1,
     IssuerServiceCredentialProfileV1, ProtectedIssuerSupervisorErrorV1,
     ProtectedIssuerSupervisorV1,
+};
+pub use authority_v2::{
+    ProtectedIssuerSupervisorErrorV2, ProtectedIssuerSupervisorStorageV2,
+    ProtectedIssuerSupervisorV2,
 };
 pub use deployment::{
     COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1,
