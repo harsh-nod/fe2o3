@@ -48,6 +48,51 @@ cursor means an incomplete page, not permission to infer the rest. Memory is
 bounded to 4096 requested bytes. There is no step-over/out, expression evaluator,
 source upload, target change, arbitrary backend operation or launch route.
 
+## Additive bounded checkpoint queries
+
+The bridge-local live-query adapter adds exactly three command spellings without
+changing the existing console grammar, Rust protocol or simulator:
+
+- `allocations`: first global ResourceV1 allocation page.
+- `accesses ORDINAL 0`: first retained global access page for an actual returned
+  allocation, with generation exactly zero.
+- `variables 1`: first SourceVariableV2 page for the supported current frame.
+
+An active, successful, stopped operation-step reply selects the captured
+checkpoint. The three protocol schemas retain their own response envelopes and
+share the same request counter, complete session projection and revision.
+Resource queries use the selected unframed anchor. Source inspection requires
+the current complete one-frame stack with a present `next_operation`, refining
+that anchor with legacy frame 1/occurrence 1, not a dynamic activation.
+Discovery, state replies and uncaptured watch stops do not select a checkpoint.
+
+Inventory and access pages request at most 16 rows and scan at most 64 records.
+The source page requests at most 16 rows. Callers cannot forward a cursor,
+supply another scope/filter, query another generation or request arbitrary
+frame selection. A returned cursor/token remains evidence of a partial page,
+not authority to invent absent records or continue automatically.
+
+The companion [live checkpoint dashboard guide](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/live-checkpoint-dashboard-v1.md)
+uses explicit refreshes: at most three calls for stack/source/inventory or five
+when adding selected accesses/memory. A missing source prerequisite uses two
+or four actual calls, preserving source unavailability without manufacturing a
+SourceVariableV2 refusal. The browser reserves the applicable maximum and
+retains at most 2 MiB of HTTP response text per collection; memory windows stay
+within the existing 4096-byte request bound. No producer limit is relaxed.
+
+Control/filter mutations, uncertainty and connection replacement invalidate the
+selected checkpoint and derived observations. Source bindings and SSA values
+remain separate; generation-zero inventory is not allocation-reuse evidence.
+The table displays retained source identities/spans, not a fetched Rust body
+or authenticated source. Existing recorded viewers remain independent.
+
+The [separate qualification](../../docs/evidence/live-checkpoint-dashboard-20260923.md)
+records the new ten-module runtime selection (six bridge and four console),
+fresh mixed-query HTTP results in both forks, and actual desktop/mobile
+dashboard sessions. Pure/mock tests remain separate; the earlier live-controls
+report is unchanged. No broad V2, terminal-fault, allocation-lifetime or
+protected-proof exit is claimed here.
+
 ## Owner launch
 
 Use a trusted Linux/POSIX launcher and ordinary Python script execution. These
