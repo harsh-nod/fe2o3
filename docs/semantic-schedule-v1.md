@@ -32,13 +32,13 @@ an atomic transaction across schedule and result outputs.
 fe2o3-kir-sim (--kir-v7 KERNEL.kir | --bundle KERNEL.fe2sim) \
   --request REQUEST.json \
   --record-canonical-schedule SCHEDULE.json \
-  --schedule-max-decisions 1048576
+  --schedule-max-decisions 524288
 
 fe2o3-kir-sim (--kir-v7 KERNEL.kir | --bundle KERNEL.fe2sim) \
   --request REQUEST.json \
   --record-seeded-schedule SCHEDULE.json \
   --schedule-seed 42 \
-  --schedule-max-decisions 1048576
+  --schedule-max-decisions 524288
 
 fe2o3-kir-sim (--kir-v7 KERNEL.kir | --bundle KERNEL.fe2sim) \
   --request REQUEST.json --replay-schedule SCHEDULE.json

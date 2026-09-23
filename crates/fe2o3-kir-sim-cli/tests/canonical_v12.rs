@@ -317,6 +317,73 @@ fn canonical_v12_records_and_replays_canonical_and_seeded_schedules() {
 }
 
 #[test]
+fn canonical_v12_default_schedules_record_and_replay_within_resident_limit() {
+    let directory = TestDirectory::new();
+    let (kir, request, owner) = fixture(&directory);
+    for flag in ["--record-canonical-schedule", "--record-seeded-schedule"] {
+        let path = directory.path(&format!("default-{}.json", flag.trim_start_matches("--")));
+        let mut command = run(&kir, &request);
+        command.arg(flag).arg(&path);
+        if flag == "--record-seeded-schedule" {
+            command.args(["--schedule-seed", "42"]);
+        }
+        let recorded = success(command.output().unwrap());
+        assert_result(&recorded, &owner);
+        assert_eq!(
+            recorded["schedule"]["identity"],
+            if flag == "--record-seeded-schedule" {
+                "workgroup_major_seeded_runnable_cooperative_v1"
+            } else {
+                "workgroup_major_local_zyx_cooperative_v1"
+            }
+        );
+        let replayed = success(
+            run(&kir, &request)
+                .arg("--replay-schedule")
+                .arg(&path)
+                .output()
+                .unwrap(),
+        );
+        assert_result(&replayed, &owner);
+        assert_eq!(replayed["arguments"], recorded["arguments"]);
+        assert_eq!(
+            replayed["schedule"]["transcript_sha256"],
+            recorded["schedule"]["transcript_sha256"]
+        );
+    }
+}
+
+#[test]
+fn canonical_v12_explicit_oversized_schedule_keeps_resident_limit() {
+    let directory = TestDirectory::new();
+    let (kir, request, _) = fixture(&directory);
+    for flag in ["--record-canonical-schedule", "--record-seeded-schedule"] {
+        let schedule = directory.path(&format!("oversized-{}.json", flag.trim_start_matches("--")));
+        let result = directory.path(&format!("result-{}.json", flag.trim_start_matches("--")));
+        let mut command = run(&kir, &request);
+        command
+            .arg(flag)
+            .arg(&schedule)
+            .args(["--schedule-max-decisions", "1048576", "--output"])
+            .arg(&result);
+        if flag == "--record-seeded-schedule" {
+            command.args(["--schedule-seed", "42"]);
+        }
+        let error = failure(command.output().unwrap());
+        assert_eq!(error["stage"], "execution");
+        assert_eq!(error["kind"], "execution_schedule_resident_limit");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("limit: 268435456")
+        );
+        assert!(!schedule.exists());
+        assert!(!result.exists());
+    }
+}
+
+#[test]
 fn canonical_v12_exploration_retains_exact_replayable_input() {
     let directory = TestDirectory::new();
     let (kir, request, owner) = fixture(&directory);
@@ -327,8 +394,6 @@ fn canonical_v12_exploration_retains_exact_replayable_input() {
                 "2",
                 "--schedule-seed",
                 "42",
-                "--schedule-max-decisions",
-                "128",
                 "--exploration-max-retained-decisions",
                 "256",
             ])
@@ -348,6 +413,10 @@ fn canonical_v12_exploration_retains_exact_replayable_input() {
         owner.identity().canonical_length()
     );
     assert_eq!(explored["exploration"]["first_seed"], 42);
+    assert_eq!(
+        explored["exploration"]["max_decisions_per_schedule"],
+        524_288
+    );
     assert_eq!(explored["exploration"]["attempted"], 2);
     assert_eq!(explored["exploration"]["completed"], 2);
     assert_eq!(explored["exploration"]["no_races_observed"], 2);

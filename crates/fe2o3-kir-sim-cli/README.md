@@ -52,7 +52,7 @@ deterministic CPU execution of supported exact verified canonical Kernel IR:
       --race-evidence
     fe2o3-kir-sim --bundle kernel.fe2sim --request request.json \
       --explore-seeded-schedules 64 --schedule-seed 42 \
-      --schedule-max-decisions 1048576 \
+      --schedule-max-decisions 524288 \
       --exploration-max-retained-decisions 65536
 
 It does not link or initialize HSA, HIP, KFD, ROCm, or a GPU. Simulation is an
@@ -173,7 +173,10 @@ For schedule-supported inputs (not diagnostic V16),
 `--record-canonical-schedule PATH` and `--record-seeded-schedule PATH
 --schedule-seed U64` publish the existing semantic CPU scheduler's successful
 decision record. `--schedule-max-decisions COUNT` bounds recording and defaults
-to 1,048,576. `--replay-schedule PATH` is mutually exclusive with recording.
+to 524,288. This leaves space for initialization state and the decision buffer
+within the unchanged 256 MiB resident cap. Explicit larger requests remain
+subject to that cap and are rejected before recording if they do not fit.
+`--replay-schedule PATH` is mutually exclusive with recording.
 Schedule input uses the same regular-file snapshot boundary; publication uses
 the same private durable no-replace boundary as result output. The strict
 `fe2o3-simulation-schedule-v1` document is canonical JSON capped at 256 MiB and

@@ -70,7 +70,8 @@ const MAX_ERROR_FUNCTION_BYTES: usize = 16 * 1024;
 const MAX_UNSUPPORTED_JSON_BYTES: usize = MAX_ERROR_BYTES - 128 * 1024;
 const HEX_INPUT_CHUNK_BYTES: usize = 4 * 1024;
 const MAX_UNSUPPORTED_FINDINGS: usize = 128;
-const DEFAULT_MAX_SCHEDULE_DECISIONS: usize = 1 << 20;
+// Leave room for byte-backed initialization state within the unchanged resident cap.
+const DEFAULT_MAX_SCHEDULE_DECISIONS: usize = 1 << 19;
 const DEFAULT_MAX_EXPLORATION_RETAINED_DECISIONS: usize = 65_536;
 const MAX_CLI_EXPLORATION_RETAINED_DECISIONS: usize =
     if 65_536 < MAX_EXPLORATION_RETAINED_DECISIONS_V1 {
