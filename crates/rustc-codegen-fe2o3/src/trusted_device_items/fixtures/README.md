@@ -67,3 +67,29 @@ they are not additional accepted entries. The source roster remains 28,
 terminal/ABI semantics are unchanged, and the historical vendor manifest and
 producer provenance remain unchanged. Fresh matching compiler/source gates
 are required for these final bytes; an old DSO is not a current provider.
+
+## 2026-09-23 concrete conditional source refresh
+
+This snapshot adds one reviewed const-selection helper and the new const_if
+macro arm: 29 regular source leaves, 411206 raw source bytes, the unchanged
+398-byte canonical manifest, and no build.rs. Both complete flat alternatives
+are validated before selection. Five direct const-generic projections avoid
+introducing caller-scope const item names; the existing single terminal134
+marker, five constants and eight runtime arguments are unchanged.
+
+The exact current canonical closure is
+`ffbfcf5fceccdad6f01b4b761502c94845829a26e8ead7496c992122d2ef1dbc`.
+The current Cargo-vendor closure is
+`b543e896235b425e328c53c158c207882b20e5512fcde455066c0573e8d13991`.
+Only these two complete materializations are accepted; earlier entries above
+are historical observations, not compatibility fallbacks. Raw bytes, sorted
+relative paths and length framing remain unchanged. No authentication rule,
+terminal admission, ABI, lowering or production policy is broadened.
+
+The 1922-byte vendor manifest and its producer provenance remain unchanged.
+Selection tests are nested under ordered_program_api, so no new Cargo test
+stanza is expected. Actual target discovery and canonical/vendor positive and
+mutation tests must still pass against this source. Fresh matching compiler
+DSOs and normal-source captures are required; older repeat/native captures do
+not qualify this new kernel or refresh. Qualification results are recorded
+separately from these reviewed source identities.

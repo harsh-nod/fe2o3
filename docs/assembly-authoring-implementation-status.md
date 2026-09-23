@@ -1,6 +1,6 @@
 # Assembly authoring implementation status
 
-Latest bounded increment: [literal-repeat authoring, ordinary LLVM observation
+Earlier bounded increment: [literal-repeat authoring, ordinary LLVM observation
 and source-fault replay](evidence/authoring-repeat-fault-20260922.md), following
 [exact static helper calls and typed parameter correspondence](evidence/authoring-call-targets-20260922.md)
 and [const-specialized helpers, watch/source replay and reproducible native
@@ -20,6 +20,20 @@ builds, controls and four native calls/eight complete HSACOs in each fork.
 This is not a new source admission, GPU execution, physical lifetime or
 whole-kernel correctness proof, protected production route, or M2/U2/U3 closure.
 The historical milestone table and receipts below remain separately scoped.
+
+A separate [concrete-selection source guide](ordered-program-select-source-v1.md)
+describes choosing between two complete flat instruction programs before the
+existing terminal134 marker. Both arms are eagerly checked at 1..16 steps,
+including the inactive arm. The hygienic spelling introduces no caller-scope
+item names and uses five existing-constant projections; it adds no runtime
+branch, helper ABI, nested control flow, executable schema or compiler bypass.
+Fresh normal-source/CPU acceptance passed independently in both forks:
+four exports, four inspections, 120 simulations and eight exact refusals each.
+The [dated report](evidence/authoring-select-source-20260923.md) records the
+actual captures; host-only previews remain separate evidence.
+Earlier repeat/LLVM/native receipts remain unchanged and cannot be relabeled.
+The broad M1/V1/U1 acceptance remains 3/18; no M2/U2/U3 or other exit is closed
+by this documentation or source-spelling increment.
 
 This is a working-implementation handoff for [#280](https://github.com/harsh-nod/fe2o3/issues/280),
 [#281](https://github.com/harsh-nod/fe2o3/issues/281), and
