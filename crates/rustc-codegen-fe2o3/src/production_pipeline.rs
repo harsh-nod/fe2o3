@@ -3940,6 +3940,8 @@ pub(crate) mod ordered_region_diagnostic_v31;
 pub(crate) mod ordered_region_qualification_v31;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod source_candidate_debug_join_v17_tests;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod source_candidate_launch_analysis_v17_tests;
 
 #[cfg(any(test, target_os = "linux"))]
 mod source_bitselect_feasibility_v1_tests;

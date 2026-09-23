@@ -1,5 +1,22 @@
 # Assembly authoring implementation status
 
+## Fresh source-analysis and repeat-native progress — 2026-09-23
+
+The [one-region U2 ledger](evidence/source-launch-analysis-u2-20260923.md)
+records a fresh full backend regression (1,711 passed, 112 ignored) and actual
+source-edit launch-analysis ladder (60 simulation runs). A genuine old launch
+roster rejects before a new owner is returned; fresh analysis succeeds for the
+edited register plan. This is test-only evidence, not protected proof or U2
+closure. The separate actual-source proof-freshness qualifier remains pending.
+
+The companion site's [repeat-native tutorial and qualification](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/repeat-native-qualification-20260923.md)
+add a separately bounded 23-artifact/eight-case local importer with an actual
+manually downloadable example. Fresh desktop/mobile artifact checks and the
+full 174-case browser regression pass. The artifacts themselves are retained
+historical source/LLVM/native observations, not fresh native or GPU execution.
+This advances V3/M5 without claiming physical-register lifetimes or their full
+exits. The accepted combined ledger remains **M1/V1/V2/U1 (4/18)**.
+
 ## Current bounded acceptance — 2026-09-23
 
 The [runtime identity/storage qualification](evidence/runtime-identity-storage-20260923.md)
