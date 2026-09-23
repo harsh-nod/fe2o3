@@ -6,7 +6,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import itertools
 from pathlib import Path
+import tomllib
 import unittest
 
 
@@ -237,6 +239,76 @@ class SystemsFixtureBindingTests(FixtureBindingTests):
             by_symbol.setdefault(symbol, []).append(kernel["selectionSha256"])
         self.assertEqual(sorted(map(len, by_symbol.values())), [1, 1, 1, 2, 2, 2, 2])
         self.assertTrue(all(len(values) == len(set(values)) for values in by_symbol.values()))
+
+
+class AttentionCfgSelectionTests(unittest.TestCase):
+    """Validate real library selection, without claiming its macro-bearing closure."""
+
+    base_features = (
+        "kernel-kda-decode", "kernel-kda-prefill", "kernel-content-sparse-attention",
+        "kernel-deepseek-sparse-attention", "kernel-compressed-hybrid-attention",
+        "kernel-attnres-aggregate", "kernel-four-branch-residual", "kernel-mhc-sinkhorn-mix",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        for name, filename in (("parent", "validate-tutorial-kernel-manifest.py"),
+                               ("identities", "tutorial_kernel_identities.py")):
+            spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            setattr(cls, name, module)
+        package = ROOT / "examples/gfx950_advanced_attention"
+        cls.cargo = tomllib.loads((package / "Cargo.toml").read_text())
+        cls.library = (package / "src/lib.rs").read_text()
+        cls.kernel = (package / "src/kernel.rs").read_text()
+
+    def declarations(self, source, direct):
+        enabled = self.parent.cargo_feature_closure(self.cargo, list(direct), False, "attention cfg test")
+        code = self.parent._rust_code_without_comments_and_literals(source)
+        pairs = self.parent._rust_delimiters(code)
+        return self.identities._fixture_declarations(
+            source, set(enabled), self.parent.ordinary_rust_function_items,
+            lambda _: (code, pairs), self.identities._Budget(4096))
+
+    def test_real_library_selects_each_single_base_feature(self):
+        for feature in self.base_features:
+            with self.subTest(feature=feature):
+                self.assertEqual(self.declarations(self.library, [feature]), ([], ["kernel"]))
+
+    def test_real_library_rejects_zero_and_each_pair_of_base_features(self):
+        cases = [(), *itertools.combinations(self.base_features, 2), self.base_features]
+        for features in cases:
+            with self.subTest(features=features), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "unsupported fixture item or module selection"):
+                self.declarations(self.library, features)
+
+    def test_real_library_uses_transitive_feature_aliases(self):
+        aliases = {
+            "kernel-kda-decode-baseline-v1": "kda_baseline",
+            "kernel-kda-prefill-baseline-v1": "kda_baseline",
+            "kernel-content-sparse-attention-reciprocal-reuse-v1": "ablation",
+            "kernel-deepseek-sparse-attention-leader-exp-v1": None,
+            "kernel-compressed-hybrid-attention-division-baseline-v1": "ablation",
+            "kernel-attnres-aggregate-explicit-reuse-v1": "ablation",
+            "kernel-four-branch-residual-explicit-v1": "ablation",
+            "kernel-mhc-sinkhorn-mix-scalar-v1": "ablation",
+        }
+        for alias, module in aliases.items():
+            expected = [module, "kernel"] if module else ["kernel"]
+            base = self.cargo["features"][alias]
+            for direct in ([alias], [alias, *base]):
+                with self.subTest(direct=direct):
+                    self.assertEqual(self.declarations(self.library, direct), ([], expected))
+        with self.assertRaisesRegex(self.identities.KernelInventoryError, "unsupported fixture item"):
+            self.declarations(self.library, ["kernel-kda-decode-baseline-v1",
+                                             "kernel-kda-prefill-baseline-v1"])
+
+    def test_real_kernel_module_macros_still_prevent_source_binding(self):
+        for feature in self.base_features:
+            with self.subTest(feature=feature), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "unsupported fixture item or module selection"):
+                self.declarations(self.kernel, [feature])
 
 
 if __name__ == "__main__":
