@@ -38,6 +38,14 @@ canonical-byte and non-aliasing checks. The shared `StaticPreexecManifestV1`
 codec has fixed-capacity inert storage: its V1 wire name is not a conversion
 from admitted V1 authority. Native manifest I/O is finite and fixed-size.
 
+Process-profile and namespace observations now have native metered owners in
+`fe2o3-protected-service-profile`. They use the same bounded, allocation-free
+predicates as the existing service path. The supervisor no longer has its own
+profile parser or namespace implementation. Descriptor staging is also one
+shared fixed fourteen-entry table, with deterministic cleanup on partial failure.
+These are launch prerequisites, not a native consuming process-launch API. See
+the [process-observation contract](../../docs/compiler-execution-process-observations-v2.md).
+
 Full child confinement, consuming native process creation, readiness,
 serving/recovery and producer activation remain open. Every nested check uses
 the caller's ledger; reserve returned growth while preserving consumed input

@@ -39,6 +39,7 @@ mod launch_v2;
 mod listener;
 #[allow(unsafe_code)]
 mod process;
+mod process_staging;
 mod program_v2;
 mod provisioning;
 mod root_checks;

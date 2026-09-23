@@ -3,8 +3,7 @@
 use core::ffi::{c_char, c_int, c_long, c_void};
 use std::error::Error;
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Read};
+use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
@@ -16,15 +15,15 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionServiceReadyV1,
 };
 use fe2o3_protected_service_profile::{
-    ProtectedServiceProfileErrorV1, validate_current_protected_service_profile_v1,
-};
-use fe2o3_static_preexec_manifest::{
-    PREEXEC_EXECUTABLE_FD, PREEXEC_MANIFEST_FD, PREEXEC_MAX_DESCRIPTORS, PREEXEC_SOURCE_FD_BASE,
+    ProtectedServiceNamespaceSetV1 as NamespaceSetV1,
+    ProtectedServiceProcessProfileV1 as ExactProcessProfileV1, ProtectedServiceProfileErrorV1,
+    require_owned_sigchld_v1, validate_current_protected_service_profile_v1,
 };
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::net::SendFlags;
 use rustix::pipe::{PipeFlags, pipe_with};
 
+use crate::process_staging::{StagedLaunchErrorV1, StagedLaunchInputV1, StagedLaunchV1};
 use crate::{
     IssuerServiceCredentialProfileV1, PreparedProtectedIssuerLaunchV1,
     ProtectedIssuerLaunchPreparationErrorV1, ProtectedIssuerSupervisorErrorV1,
@@ -66,24 +65,15 @@ const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const PROFILE_READY_V1: u8 = 0xa5;
 const GATE_RELEASE_V1: u8 = 0x5a;
-const MAX_PROC_STATUS_BYTES_V1: u64 = 64 * 1024;
-const MAX_CAPABILITY_NUMBER_V1: u32 = 63;
 const MAX_LAUNCH_WAIT_V1: Duration = Duration::from_secs(120);
 const POLL_INTERVAL_V1: Duration = Duration::from_millis(1);
 const REAPER_POLL_INTERVAL_V1: Duration = Duration::from_millis(10);
 const REAP_SLOT_EMPTY: u8 = 0;
 const REAP_SLOT_RESERVED: u8 = 1;
 const REAP_SLOT_DEFERRED: u8 = 2;
-const FIXED_LAUNCHER_FD_CEILING: i32 = PREEXEC_SOURCE_FD_BASE + PREEXEC_MAX_DESCRIPTORS as i32 - 1;
-const STAGED_DESCRIPTOR_FLOOR: i32 = FIXED_LAUNCHER_FD_CEILING + 1;
 
 /// Maximum number of protected issuer children owned or awaiting deferred reaping.
 pub const MAX_PROTECTED_ISSUER_PROCESSES_V1: usize = 64;
-
-const _: () = assert!(PREEXEC_MANIFEST_FD == 198);
-const _: () = assert!(PREEXEC_EXECUTABLE_FD == 199);
-const _: () = assert!(PREEXEC_SOURCE_FD_BASE == 200);
-const _: () = assert!(STAGED_DESCRIPTOR_FLOOR == 216);
 
 unsafe extern "C" {
     fn close(descriptor: c_int) -> c_int;
@@ -143,20 +133,6 @@ struct ChildProfileV1 {
     gid: u32,
     securebits: u32,
     cap_last_cap: u32,
-}
-
-struct StagedDescriptorV1 {
-    source: OwnedFd,
-    target: i32,
-}
-
-struct StagedLaunchV1 {
-    launcher: OwnedFd,
-    descriptors: Vec<StagedDescriptorV1>,
-    stdio_sources: [i32; 3],
-    profile_ready_writer: OwnedFd,
-    gate_reader: OwnedFd,
-    exec_status_writer: OwnedFd,
 }
 
 /// Stable failure launching, admitting, or terminating one protected issuer process.
@@ -665,12 +641,12 @@ impl ProtectedIssuerSupervisorV1 {
             .map_err(ProtectedIssuerLaunchErrorV1::Preparation)?;
 
         let profile = if ENFORCE_PROFILE {
-            Some(ExactProcessProfileV1::capture(self.credentials())?)
+            Some(ExactProcessProfileV1::capture(self.credentials()).map_err(map_profile_error)?)
         } else {
             None
         };
-        require_owned_sigchld()?;
-        let namespaces = NamespaceSetV1::capture_self()?;
+        require_owned_sigchld_v1().map_err(map_profile_error)?;
+        let namespaces = NamespaceSetV1::capture_self().map_err(map_profile_error)?;
         let reap_slot = deferred_reaper().reserve()?;
 
         let (profile_ready_reader, profile_ready_writer) =
@@ -679,12 +655,28 @@ impl ProtectedIssuerSupervisorV1 {
         let (exec_status_reader, exec_status_writer) =
             protected_pipe(PipeFlags::NONBLOCK, "create exec-status pipe")?;
         let staged = StagedLaunchV1::new(
-            &prepared,
+            StagedLaunchInputV1 {
+                launcher: &prepared.launcher,
+                issuer: &prepared.issuer,
+                manifest: &prepared.static_manifest_file,
+                sources: &prepared.sources,
+            },
             &profile_ready_writer,
             &gate_reader,
             &exec_status_writer,
-        )?;
-        let child_profile = profile.as_ref().map(ExactProcessProfileV1::child_profile);
+        )
+        .map_err(|error| match error {
+            StagedLaunchErrorV1::InvalidProcessState(reason) => {
+                ProtectedIssuerLaunchErrorV1::InvalidProcessState(reason)
+            }
+            StagedLaunchErrorV1::Io { operation, source } => io_error(operation, source.into()),
+        })?;
+        let child_profile = profile.as_ref().map(|profile| ChildProfileV1 {
+            uid: profile.credentials().uid(),
+            gid: profile.credentials().gid(),
+            securebits: profile.credentials().securebits(),
+            cap_last_cap: profile.cap_last_cap(),
+        });
         let expected_parent_pid = prepared.static_manifest().parent_pid();
         let launch_manifest = prepared.service_manifest().clone();
         let policy = self.policy().clone();
@@ -764,11 +756,13 @@ impl ProtectedIssuerSupervisorV1 {
                     &process,
                     deadline,
                 )?;
-                namespaces.revalidate_self()?;
-                namespaces.revalidate_child(pid)?;
+                namespaces.revalidate_self().map_err(map_profile_error)?;
+                namespaces
+                    .revalidate_process(pid)
+                    .map_err(map_profile_error)?;
                 if let Some(profile) = &profile {
-                    profile.revalidate_current()?;
-                    profile.revalidate_child(pid)?;
+                    profile.revalidate_current().map_err(map_profile_error)?;
+                    profile.revalidate_process(pid).map_err(map_profile_error)?;
                 }
                 self.revalidate()
                     .map_err(ProtectedIssuerLaunchErrorV1::Supervisor)?;
@@ -809,77 +803,6 @@ impl ProtectedIssuerSupervisorV1 {
             })
         })
     }
-}
-
-impl StagedLaunchV1 {
-    fn new(
-        prepared: &PreparedProtectedIssuerLaunchV1,
-        profile_ready_writer: &OwnedFd,
-        gate_reader: &OwnedFd,
-        exec_status_writer: &OwnedFd,
-    ) -> Result<Self, ProtectedIssuerLaunchErrorV1> {
-        let mut next = STAGED_DESCRIPTOR_FLOOR;
-        let launcher = duplicate_above(&prepared.launcher, &mut next, "stage static launcher")?;
-        let mut descriptors = Vec::with_capacity(2 + prepared.sources.len());
-        descriptors.push(StagedDescriptorV1 {
-            source: duplicate_above(
-                &prepared.static_manifest_file,
-                &mut next,
-                "stage static launch manifest",
-            )?,
-            target: PREEXEC_MANIFEST_FD,
-        });
-        descriptors.push(StagedDescriptorV1 {
-            source: duplicate_above(&prepared.issuer, &mut next, "stage issuer executable")?,
-            target: PREEXEC_EXECUTABLE_FD,
-        });
-        for (index, source) in prepared.sources.iter().enumerate() {
-            let target = PREEXEC_SOURCE_FD_BASE
-                + i32::try_from(index).map_err(|_| {
-                    ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                        "prepared source index exceeds i32",
-                    )
-                })?;
-            descriptors.push(StagedDescriptorV1 {
-                source: duplicate_above(source, &mut next, "stage issuer source descriptor")?,
-                target,
-            });
-        }
-        let stdio_sources = [
-            descriptors[2].source.as_raw_fd(),
-            descriptors[3].source.as_raw_fd(),
-            descriptors[4].source.as_raw_fd(),
-        ];
-        let profile_ready_writer = duplicate_above(
-            profile_ready_writer,
-            &mut next,
-            "stage child-profile writer",
-        )?;
-        let gate_reader = duplicate_above(gate_reader, &mut next, "stage launch-gate reader")?;
-        let exec_status_writer =
-            duplicate_above(exec_status_writer, &mut next, "stage exec-status writer")?;
-        Ok(Self {
-            launcher,
-            descriptors,
-            stdio_sources,
-            profile_ready_writer,
-            gate_reader,
-            exec_status_writer,
-        })
-    }
-}
-
-fn duplicate_above(
-    source: &impl AsFd,
-    next: &mut i32,
-    operation: &'static str,
-) -> Result<OwnedFd, ProtectedIssuerLaunchErrorV1> {
-    let duplicate = rustix::io::fcntl_dupfd_cloexec(source, *next)
-        .map_err(|source| io_error(operation, source.into()))?;
-    *next = duplicate.as_raw_fd().checked_add(1).ok_or(
-        ProtectedIssuerLaunchErrorV1::InvalidProcessState("staged descriptor range overflowed"),
-    )?;
-    Ok(duplicate)
 }
 
 fn protected_pipe(
@@ -1319,205 +1242,6 @@ fn publish_control_readiness(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProcStatusProfileV1 {
-    uid: [u32; 4],
-    gid: [u32; 4],
-    groups_empty: bool,
-    capabilities_zero: bool,
-    no_new_privs: u32,
-    tracer_pid: u32,
-    umask: u32,
-}
-
-impl ProcStatusProfileV1 {
-    fn parse(bytes: &[u8]) -> Result<Self, ProtectedIssuerLaunchErrorV1> {
-        let text = std::str::from_utf8(bytes).map_err(|_| {
-            ProtectedIssuerLaunchErrorV1::ProcessProfile("proc status is not UTF-8")
-        })?;
-        let mut uid = None;
-        let mut gid = None;
-        let mut groups_empty = None;
-        let mut capabilities = [None; 5];
-        let mut no_new_privs = None;
-        let mut tracer_pid = None;
-        let mut umask = None;
-        for line in text.lines() {
-            let Some((name, value)) = line.split_once(':') else {
-                continue;
-            };
-            let value = value.trim();
-            match name {
-                "Uid" => set_once(&mut uid, parse_four_decimal(value)?)?,
-                "Gid" => set_once(&mut gid, parse_four_decimal(value)?)?,
-                "Groups" => set_once(&mut groups_empty, value.is_empty())?,
-                "CapInh" => set_once(&mut capabilities[0], parse_hex_u64(value)?)?,
-                "CapPrm" => set_once(&mut capabilities[1], parse_hex_u64(value)?)?,
-                "CapEff" => set_once(&mut capabilities[2], parse_hex_u64(value)?)?,
-                "CapBnd" => set_once(&mut capabilities[3], parse_hex_u64(value)?)?,
-                "CapAmb" => set_once(&mut capabilities[4], parse_hex_u64(value)?)?,
-                "NoNewPrivs" => set_once(&mut no_new_privs, parse_decimal(value)?)?,
-                "TracerPid" => set_once(&mut tracer_pid, parse_decimal(value)?)?,
-                "Umask" => set_once(&mut umask, parse_octal(value)?)?,
-                _ => {}
-            }
-        }
-        Ok(Self {
-            uid: uid.ok_or(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "proc status lacks Uid",
-            ))?,
-            gid: gid.ok_or(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "proc status lacks Gid",
-            ))?,
-            groups_empty: groups_empty.ok_or(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "proc status lacks Groups",
-            ))?,
-            capabilities_zero: capabilities
-                .into_iter()
-                .collect::<Option<Vec<_>>>()
-                .ok_or(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                    "proc status lacks a capability set",
-                ))?
-                .into_iter()
-                .all(|value| value == 0),
-            no_new_privs: no_new_privs.ok_or(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "proc status lacks NoNewPrivs",
-            ))?,
-            tracer_pid: tracer_pid.ok_or(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "proc status lacks TracerPid",
-            ))?,
-            umask: umask.ok_or(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "proc status lacks Umask",
-            ))?,
-        })
-    }
-
-    fn require(
-        self,
-        credentials: IssuerServiceCredentialProfileV1,
-    ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        if self.uid != [credentials.uid(); 4] {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "real, effective, saved, or filesystem UID differs",
-            ));
-        }
-        if self.gid != [credentials.gid(); 4] {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "real, effective, saved, or filesystem GID differs",
-            ));
-        }
-        if !self.groups_empty {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "supplementary group set is not empty",
-            ));
-        }
-        if !self.capabilities_zero {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "a capability set is not empty",
-            ));
-        }
-        if self.no_new_privs != 1 {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "no_new_privs is not set",
-            ));
-        }
-        if self.tracer_pid != 0 {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "supervisor or child is traced",
-            ));
-        }
-        if self.umask != 0o077 {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "umask is not 077",
-            ));
-        }
-        Ok(())
-    }
-}
-
-struct ExactProcessProfileV1 {
-    credentials: IssuerServiceCredentialProfileV1,
-    cap_last_cap: u32,
-}
-
-impl ExactProcessProfileV1 {
-    fn capture(
-        credentials: IssuerServiceCredentialProfileV1,
-    ) -> Result<Self, ProtectedIssuerLaunchErrorV1> {
-        let profile = Self {
-            credentials,
-            cap_last_cap: read_cap_last_cap()?,
-        };
-        profile.revalidate_current()?;
-        Ok(profile)
-    }
-
-    fn child_profile(&self) -> ChildProfileV1 {
-        ChildProfileV1 {
-            uid: self.credentials.uid(),
-            gid: self.credentials.gid(),
-            securebits: self.credentials.securebits(),
-            cap_last_cap: self.cap_last_cap,
-        }
-    }
-
-    fn revalidate_current(&self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        read_proc_status("/proc/self/status")?.require(self.credentials)?;
-        let capabilities = rustix::thread::capabilities(None)
-            .map_err(|source| io_error("inspect supervisor capabilities", source.into()))?;
-        if !capabilities.effective.is_empty()
-            || !capabilities.permitted.is_empty()
-            || !capabilities.inheritable.is_empty()
-        {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "effective, permitted, or inheritable capabilities are not empty",
-            ));
-        }
-        let securebits = rustix::thread::capabilities_secure_bits()
-            .map_err(|source| io_error("inspect supervisor securebits", source.into()))?;
-        if securebits.bits() != self.credentials.securebits() {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "securebits are not exact and locked",
-            ));
-        }
-        if !rustix::thread::no_new_privs()
-            .map_err(|source| io_error("inspect supervisor no_new_privs", source.into()))?
-        {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "no_new_privs is not set",
-            ));
-        }
-        if rustix::process::dumpable_behavior()
-            .map_err(|source| io_error("inspect supervisor dumpability", source.into()))?
-            != rustix::process::DumpableBehavior::NotDumpable
-        {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "process is dumpable",
-            ));
-        }
-        let core = rustix::process::getrlimit(rustix::process::Resource::Core);
-        if core.current != Some(0) || core.maximum != Some(0) {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "core limit is not exactly zero",
-            ));
-        }
-        if read_cap_last_cap()? != self.cap_last_cap {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                "kernel capability range changed",
-            ));
-        }
-        Ok(())
-    }
-
-    fn revalidate_child(
-        &self,
-        pid: rustix::process::Pid,
-    ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        let path = format!("/proc/{}/status", pid.as_raw_pid());
-        read_proc_status(&path)?.require(self.credentials)
-    }
-}
-
 /// Validates the complete current locked service profile before listener admission.
 ///
 /// This check grants no process, signing, compiler, publication, load, launch, or GPU authority.
@@ -1546,190 +1270,6 @@ fn map_profile_error(error: ProtectedServiceProfileErrorV1) -> ProtectedIssuerLa
             "unrecognized protected-service profile failure",
         ),
     }
-}
-
-fn read_proc_status(path: &str) -> Result<ProcStatusProfileV1, ProtectedIssuerLaunchErrorV1> {
-    let file = File::open(path).map_err(|source| io_error("open proc process status", source))?;
-    let mut bytes = Vec::new();
-    file.take(MAX_PROC_STATUS_BYTES_V1 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|source| io_error("read proc process status", source))?;
-    if bytes.len() as u64 > MAX_PROC_STATUS_BYTES_V1 {
-        return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-            "proc status exceeds the fixed bound",
-        ));
-    }
-    ProcStatusProfileV1::parse(&bytes)
-}
-
-fn read_cap_last_cap() -> Result<u32, ProtectedIssuerLaunchErrorV1> {
-    let text = std::fs::read_to_string("/proc/sys/kernel/cap_last_cap")
-        .map_err(|source| io_error("read kernel capability ceiling", source))?;
-    let value = text.trim().parse::<u32>().map_err(|_| {
-        ProtectedIssuerLaunchErrorV1::ProcessProfile("kernel capability ceiling is malformed")
-    })?;
-    if value > MAX_CAPABILITY_NUMBER_V1 {
-        return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-            "kernel capability ceiling exceeds the supported 64-bit set",
-        ));
-    }
-    Ok(value)
-}
-
-fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-    if slot.replace(value).is_some() {
-        return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-            "proc status duplicates a security field",
-        ));
-    }
-    Ok(())
-}
-
-fn parse_four_decimal(value: &str) -> Result<[u32; 4], ProtectedIssuerLaunchErrorV1> {
-    let fields = value
-        .split_ascii_whitespace()
-        .map(parse_decimal)
-        .collect::<Result<Vec<_>, _>>()?;
-    fields.try_into().map_err(|_| {
-        ProtectedIssuerLaunchErrorV1::ProcessProfile("proc identity does not have four fields")
-    })
-}
-
-fn parse_decimal(value: &str) -> Result<u32, ProtectedIssuerLaunchErrorV1> {
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-            "proc decimal field is malformed",
-        ));
-    }
-    value
-        .parse()
-        .map_err(|_| ProtectedIssuerLaunchErrorV1::ProcessProfile("proc decimal field overflows"))
-}
-
-fn parse_hex_u64(value: &str) -> Result<u64, ProtectedIssuerLaunchErrorV1> {
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-            "proc capability field is malformed",
-        ));
-    }
-    u64::from_str_radix(value, 16).map_err(|_| {
-        ProtectedIssuerLaunchErrorV1::ProcessProfile("proc capability field overflows")
-    })
-}
-
-fn parse_octal(value: &str) -> Result<u32, ProtectedIssuerLaunchErrorV1> {
-    if value.is_empty() || !value.bytes().all(|byte| (b'0'..=b'7').contains(&byte)) {
-        return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-            "proc umask field is malformed",
-        ));
-    }
-    u32::from_str_radix(value, 8)
-        .map_err(|_| ProtectedIssuerLaunchErrorV1::ProcessProfile("proc umask field overflows"))
-}
-
-const NAMESPACE_NAMES_V1: [&str; 10] = [
-    "user",
-    "mnt",
-    "pid",
-    "pid_for_children",
-    "net",
-    "ipc",
-    "uts",
-    "cgroup",
-    "time",
-    "time_for_children",
-];
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct NamespaceIdentityV1 {
-    device: u64,
-    inode: u64,
-}
-
-struct NamespaceSetV1 {
-    identities: [NamespaceIdentityV1; NAMESPACE_NAMES_V1.len()],
-}
-
-impl NamespaceSetV1 {
-    fn capture_self() -> Result<Self, ProtectedIssuerLaunchErrorV1> {
-        let identities = NAMESPACE_NAMES_V1
-            .map(|name| namespace_identity(&format!("/proc/self/ns/{name}")))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .map_err(|_| {
-                ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                    "namespace identity cardinality changed",
-                )
-            })?;
-        let set = Self { identities };
-        set.require_children_unchanged()?;
-        Ok(set)
-    }
-
-    fn revalidate_self(&self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        for (index, name) in NAMESPACE_NAMES_V1.iter().enumerate() {
-            let observed = namespace_identity(&format!("/proc/self/ns/{name}"))?;
-            if observed != self.identities[index] {
-                return Err(ProtectedIssuerLaunchErrorV1::Namespace(name));
-            }
-        }
-        self.require_children_unchanged()
-    }
-
-    fn revalidate_child(
-        &self,
-        pid: rustix::process::Pid,
-    ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        for (index, name) in NAMESPACE_NAMES_V1.iter().enumerate() {
-            let observed = namespace_identity(&format!("/proc/{}/ns/{name}", pid.as_raw_pid()))?;
-            if observed != self.identities[index] {
-                return Err(ProtectedIssuerLaunchErrorV1::Namespace(name));
-            }
-        }
-        Ok(())
-    }
-
-    fn require_children_unchanged(&self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        if self.identities[2] != self.identities[3] {
-            return Err(ProtectedIssuerLaunchErrorV1::Namespace("pid-for-children"));
-        }
-        if self.identities[8] != self.identities[9] {
-            return Err(ProtectedIssuerLaunchErrorV1::Namespace("time-for-children"));
-        }
-        Ok(())
-    }
-}
-
-fn namespace_identity(path: &str) -> Result<NamespaceIdentityV1, ProtectedIssuerLaunchErrorV1> {
-    let namespace = File::open(path).map_err(|source| io_error("open proc namespace", source))?;
-    let stat = rustix::fs::fstat(&namespace)
-        .map_err(|source| io_error("inspect proc namespace", source.into()))?;
-    Ok(NamespaceIdentityV1 {
-        device: stat.st_dev,
-        inode: stat.st_ino,
-    })
-}
-
-fn require_owned_sigchld() -> Result<(), ProtectedIssuerLaunchErrorV1> {
-    let mut action = std::mem::MaybeUninit::<libc::sigaction>::uninit();
-    // SAFETY: sigaction with a null new action initializes exactly one old-action record.
-    if unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), action.as_mut_ptr()) } != 0 {
-        return Err(io_error(
-            "inspect supervisor SIGCHLD ownership",
-            io::Error::last_os_error(),
-        ));
-    }
-    // SAFETY: successful sigaction initialized the record.
-    let action = unsafe { action.assume_init() };
-    if action.sa_sigaction != libc::SIG_DFL
-        || action.sa_flags & (libc::SA_NOCLDWAIT | libc::SA_NOCLDSTOP) != 0
-    {
-        return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-            "SIGCHLD disposition does not permit exclusive pidfd reaping",
-        ));
-    }
-    Ok(())
 }
 
 struct ProtectedIssuerChildV1 {
@@ -2119,56 +1659,6 @@ fn io_error(operation: &'static str, source: io::Error) -> ProtectedIssuerLaunch
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn strict_proc_profile_parser_accepts_only_the_exact_shape() {
-        let exact = b"Name:\ttest\nUmask:\t0077\nTracerPid:\t0\nUid:\t1000\t1000\t1000\t1000\nGid:\t1001\t1001\t1001\t1001\nGroups:\t\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\n";
-        let credentials = IssuerServiceCredentialProfileV1::new(1000, 1001).unwrap();
-        ProcStatusProfileV1::parse(exact)
-            .unwrap()
-            .require(credentials)
-            .unwrap();
-
-        for hostile in [
-            exact.replace_bytes(b"Umask:\t0077", b"Umask:\t0022"),
-            exact.replace_bytes(b"TracerPid:\t0", b"TracerPid:\t9"),
-            exact.replace_bytes(
-                b"Uid:\t1000\t1000\t1000\t1000",
-                b"Uid:\t1000\t1000\t1000\t1002",
-            ),
-            exact.replace_bytes(
-                b"Gid:\t1001\t1001\t1001\t1001",
-                b"Gid:\t1001\t1001\t1001\t1002",
-            ),
-            exact.replace_bytes(b"Groups:\t\n", b"Groups:\t1001\n"),
-            exact.replace_bytes(b"CapEff:\t0000000000000000", b"CapEff:\t0000000000000001"),
-            exact.replace_bytes(b"NoNewPrivs:\t1", b"NoNewPrivs:\t0"),
-        ] {
-            assert!(
-                ProcStatusProfileV1::parse(&hostile)
-                    .and_then(|value| value.require(credentials))
-                    .is_err()
-            );
-        }
-    }
-
-    trait ReplaceBytesV1 {
-        fn replace_bytes(&self, from: &[u8], to: &[u8]) -> Vec<u8>;
-    }
-
-    impl ReplaceBytesV1 for [u8] {
-        fn replace_bytes(&self, from: &[u8], to: &[u8]) -> Vec<u8> {
-            let offset = self
-                .windows(from.len())
-                .position(|part| part == from)
-                .expect("test field exists");
-            let mut bytes = Vec::with_capacity(self.len() - from.len() + to.len());
-            bytes.extend_from_slice(&self[..offset]);
-            bytes.extend_from_slice(to);
-            bytes.extend_from_slice(&self[offset + from.len()..]);
-            bytes
-        }
-    }
 
     #[test]
     fn current_namespace_snapshot_revalidates_without_drift() {

@@ -9,6 +9,7 @@ description = "Shared exact Linux process-profile admission for protected fe2o3 
 publish = false
 
 [dependencies]
+fe2o3-kernel-ir.workspace = true
 libc.workspace = true
 rustix = { workspace = true, features = ["process", "thread"] }
 
