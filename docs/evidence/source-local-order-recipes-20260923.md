@@ -160,7 +160,7 @@ FE2O3_TEST_SOURCE_LOCAL_ORDER_RELEASE_RECIPE_OUTPUT=/absolute/new/recipe-run \
   -- --exact --ignored --nocapture --test-threads=1
 ```
 
-The actual ladder is not part of the default ignored-test run. Keep the public
+The actual ladder is ignored by the default test run. Keep the public
 example and its dynamically linked backend library together and preserve the
 matching sysroot/dependency closure. No historical native/proof result is
 relabeled as a recipe result.

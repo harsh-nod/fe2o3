@@ -24,8 +24,8 @@ use fe2o3_kfd::{
 use sha2::{Digest, Sha256};
 
 use crate::rocgdb_mi_v3::{
-    RocgdbMiAdapterErrorV3, RocgdbMiAdapterLimitsV3, RocgdbMiNativeSpawnProvisionV4,
-    RocgdbMiProcessV3,
+    RocgdbHardwareStopCaptureInputV1, RocgdbMiAdapterErrorV3, RocgdbMiAdapterLimitsV3,
+    RocgdbMiNativeSpawnProvisionV4, RocgdbMiProcessV3,
 };
 use crate::rocgdb_mi_v4::{
     RocgdbCodeObjectBindingV4, RocgdbDirectKfdDeviceBindingV4, RocgdbInferiorBindingV4,
@@ -433,7 +433,17 @@ fn run_inner(
             }
         };
         let registers = if inspection_probe.register_names && inspection_probe.register_values {
-            match process.inspect_native_registers_v5(&raw_thread, scope, options.timeout) {
+            match process.inspect_native_hardware_registers_v1(
+                RocgdbHardwareStopCaptureInputV1 {
+                    device: &device,
+                    correlation: &correlation,
+                    declaration: &declaration,
+                    publication: &publication,
+                    inferior,
+                    code,
+                },
+                options.timeout,
+            ) {
                 Ok((value, evidence_identity)) => RocgdbMiNativeCapturedV5::Captured {
                     evidence_identity,
                     value,

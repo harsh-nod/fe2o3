@@ -95,8 +95,61 @@ The full companion site gate passed 1,382 unit tests, lint/types/build,
 21 tutorial-lab tests, evidence validation and 180 desktop/mobile browser
 tests with zero retries. Its target transport tests are explicitly synthetic
 correlation/error controls; actual CLI/HTTP readback above is separate evidence.
-It is not yet a claim that those HTTP sessions were operated through a real
-browser. A separate actual-browser qualification will be recorded independently.
+The separate actual-browser gate below creates new sessions and provides its
+own bounded live-backend evidence; it does not relabel those synthetic tests.
+
+## Actual declared-target browser qualification
+
+A separately supervised gate passed on 2026-09-23 using real loopback HTTP and
+the selected debugger above: desktop and mobile each completed 56 POSTs,
+eight collection groups, five explicit target queries and 23 retained DOM
+snapshots. The total was 112 POSTs across two fresh browser/CPU sessions.
+Both newly observed CPU debugger children were reaped by their exact process
+identities. There were no route mocks, replacement replies or hidden target
+requests in the unchanged four/six-call collector.
+
+The gate reused the retained ordinary-source V5 workgroup bundle and request;
+it did not export source again or operate the earlier HTTP sessions. The
+selected allocation/slot/generation was 2/2/1 in WG 0. The first page's committed
+write at event 12 retained activation 1, attempt 6, raw operation site (0,5,2),
+full invocation and logical lane 0. Its 256-byte selected window contained
+little-endian word 2 at offset 0; only those four bytes were marked initialized.
+The other bytes were zero but uninitialized, not treated as valid zero values.
+
+Actual controls visited cursor events 13 → 14 → 13 → 14 with revisions
+3 → 4 → 5 → 6. Each refreshed target reply was joined to that exact owner/full
+cursor and to the original V5 envelope, subject and admitted-module identities.
+The event-12 access remained an explicitly historical row, not an instruction
+claimed to execute at every later stop. Changing the range, rereading the
+target, stepping, reversing, repeating, removing the breakpoint and
+disconnecting cleared the corresponding prior target/selection/model state.
+
+For the explicitly assumed base residue 0, the independent byte-by-byte oracle
+and actual DOM showed only bank 0 touched: one dword / four bytes. Residue 4
+showed only bank 1. Invalid residue 128 removed the grid instead of retaining
+the preceding model. These local arithmetic actions sent no HTTP requests.
+Desktop/mobile layout checks passed; light/dark images were retained after
+the credential field was emptied. No visual pixel review is claimed.
+
+| Retained receipt | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `logs/phase28-declared-target-browser-r1/receipt.json` | 23512 | `98572d7ee89335576b47726600a0cc965c1bbd41396d7a7ad05685cd98167c34` |
+| `logs/phase28-resume-r4-site-declared-target-browser-actual-r1/receipt.json` | 21989 | `ba52da4c883ff8686a6e5879e399da53ac3695daa1105056e25c53b1d4fd010b` |
+
+The outer gate measured the same site source census before and after:
+770 files, 19,735,408 bytes, SHA-256
+`4b442ed35d4fb6930390b664d3cf8543c29d071f638c12c19b4aaa248d833b0d`,
+based on `429d11e4b6e80914ebd822f1ebe005c20f983c28`. These documentation
+updates follow that run and are not included in its source census.
+The [dated site qualification](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/declared-target-bank-qualification-20260923.md)
+records the selected inputs, DOM artifacts and remaining boundaries.
+
+This is CPU one-access readback qualification, not completed-kernel output
+qualification, physical bank placement, hardware issue grouping, conflict or
+multicast detection, timing/performance measurement, source authentication,
+protected proof authority or acceptance of V3/V4. The earlier source, CLI,
+HTTP, synthetic browser and September 20 arithmetic gates retain their
+distinct original scopes.
 
 The [declared-target/bank tutorial](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/declared-target-bank-lab-v1.md)
 documents operation, exact clearing rules, unavailable fields and assumptions.

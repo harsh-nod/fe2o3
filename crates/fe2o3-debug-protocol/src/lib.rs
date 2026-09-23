@@ -5,6 +5,7 @@ mod codec;
 mod declared_target_codec_v1;
 mod declared_target_v1;
 mod diagnosis_v2;
+mod hardware_stop_resources_v1;
 mod hardware_v2;
 mod kfd_checkpoint_qualification_v1;
 mod live_gpu_v3;
@@ -27,6 +28,7 @@ pub use codec::{
 pub use declared_target_codec_v1::*;
 pub use declared_target_v1::*;
 pub use diagnosis_v2::*;
+pub use hardware_stop_resources_v1::*;
 pub use hardware_v2::*;
 pub use kfd_checkpoint_qualification_v1::*;
 pub use live_gpu_v3::*;

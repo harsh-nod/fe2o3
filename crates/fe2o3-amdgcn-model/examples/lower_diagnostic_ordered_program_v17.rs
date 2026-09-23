@@ -254,10 +254,10 @@ mod linux {
                 if values > MAX_SSA {
                     return Err(Failure::Profile);
                 }
-                if let OperationKind::Gfx942OrderedProgram(program) = &operation.kind {
-                    if selected.replace(program).is_some() {
-                        return Err(Failure::Profile);
-                    }
+                if let OperationKind::Gfx942OrderedProgram(program) = &operation.kind
+                    && selected.replace(program).is_some()
+                {
+                    return Err(Failure::Profile);
                 }
             }
         }

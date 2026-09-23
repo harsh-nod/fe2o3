@@ -1,5 +1,20 @@
 # Assembly authoring implementation status
 
+## Complete-body model progress — 2026-09-23
+
+The [bounded control-flow model](evidence/complete-body-model-20260923.md)
+checks eight forward blocks, sixteen typed instructions, exact register/resource
+intent and all-path initialization. Its 97 unit tests, six documentation tests
+and strict Clippy pass. This is inert structural validation, not source
+admission, generated ABI evidence or M2 completion. Accepted exits remain 6/18.
+
+The [native same-stop accessor](evidence/native-stop-resource-accessor-20260923.md)
+retains producer-derived target/stop/register bindings; 358 debugger/protocol
+tests pass, including 20 new synthetic tests. This is not hardware qualification.
+The independent [actual CPU browser gate](evidence/declared-target-debugger-20260923.md)
+also passes desktop/mobile: 112 real requests across two fresh, cleaned-up
+sessions. V3/V4 remain open.
+
 ## Current bounded acceptance — 2026-09-23: saved recipes
 
 Accepted original exits are **M1/V1/V2/U1/U2/U3 (6/18)**. The
