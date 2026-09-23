@@ -20,6 +20,8 @@ use core::marker::PhantomData;
 
 pub mod atomic;
 pub mod collective;
+/// Experimental inert complete-body data; not an executable source marker.
+pub mod complete_body_packing_v1;
 pub mod context;
 pub mod diagnostics;
 pub mod execution;

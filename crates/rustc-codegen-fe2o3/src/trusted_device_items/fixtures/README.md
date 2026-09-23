@@ -103,3 +103,26 @@ mutation tests must still pass against this source. Fresh matching compiler
 DSOs and normal-source captures are required; older repeat/native captures do
 not qualify this new kernel or refresh. Qualification results are recorded
 separately from these reviewed source identities.
+
+## 2026-09-23 inert complete-body const packing refresh
+
+The reviewed source tree now has 31 regular source leaves and 423135 raw source
+bytes. Two no_std const-data modules and their public module registration add
+bounded complete-body numeric packing and transactional building. They do not
+call or register a marker, create executable MIR/KIR, change an ABI or admit a
+source kernel. The canonical 398-byte manifest is unchanged; no build.rs exists.
+
+Current canonical closure:
+`570816af9f221a87dfe87d7be9257da3812835de665707db968e1dd36b56e952`.
+Current Cargo-vendor closure:
+`c90b0fbce11611eaba245ad8d5456f55628600406972f58db6882c8a6f6e6f92`.
+Only these two complete materializations are accepted. Earlier hashes above
+remain historical, not fallback exceptions. Identity derivation, old terminal
+selection and CombinedV4/V5 domain bytes are unchanged.
+
+The separate normal-dependency parity fixture is a nested workspace, not a new
+device test target or device dependency. The exact 1922-byte Cargo-produced
+vendor manifest and its original producer provenance are unchanged. Actual
+Cargo target-roster checks, canonical/vendor materialization controls and fresh
+matching backend/source qualifications are required for these final bytes;
+test results belong in the dated qualification ledger, not in this pin update.
