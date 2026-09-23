@@ -58,6 +58,9 @@ impl CompilerExecutionSubjectBindingV2 {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerExecutionAttestationChallengeIdentityV2([u8; 32]);
 impl CompilerExecutionAttestationChallengeIdentityV2 {
+    pub(crate) const fn from_bytes_for_protocol(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

@@ -2,9 +2,10 @@
 
 use std::{error::Error, fmt};
 
+use crate::attestation_receipt_codec as receipt_codec;
 use crate::attestation_request_codec as request_codec;
 use crate::issuer_policy_codec as policy_codec;
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use fe2o3_artifact_transaction::{
     INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1, InertCompilerExecutionSubjectV1,
 };
@@ -15,15 +16,10 @@ const SIGNATURE_BYTES: usize = 64;
 const HEADER_BYTES: usize = 8 + 2 + 2 + 8 + 4;
 const CONTENT_BINDING_BYTES: usize = SHA256_BYTES + 8;
 
-const RECEIPT_MAGIC: [u8; 8] = *b"F2O3CER1";
-const VERSION_V1: u16 = 1;
-
 const POLICY_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-ISSUER-POLICY/V1\0";
 const CHALLENGE_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-CHALLENGE/V1\0";
 const REQUEST_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-REQUEST/V1\0";
 const RECEIPT_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT/V1\0";
-const RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT-SIGNATURE/V1\0";
-const ROLLBACK_ANCHOR_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-ROLLBACK-ANCHOR/V1\0";
 
 /// Canonical content describing the loader-independent issuer runtime closure.
 pub const SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1: &[u8] =
@@ -275,17 +271,6 @@ impl CompilerExecutionSubjectBindingV1 {
         }
     }
 
-    fn new(
-        sha256: [u8; SHA256_BYTES],
-        byte_len: u64,
-    ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        validate_binding(sha256, byte_len, "compiler-execution subject")?;
-        if byte_len != INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1 as u64 {
-            return Err(CompilerExecutionAttestationErrorV1::SubjectLengthMismatch);
-        }
-        Ok(Self { sha256, byte_len })
-    }
-
     /// Returns the exact canonical subject identity digest.
     pub const fn sha256(self) -> [u8; SHA256_BYTES] {
         self.sha256
@@ -513,19 +498,7 @@ impl fmt::Debug for CompilerExecutionAttestationRequestV1 {
 /// Signed response for one exact challenge, request, policy, and rollback transition.
 #[derive(Clone, Eq, PartialEq)]
 pub struct CompilerExecutionAttestationReceiptV1 {
-    request_sha256: [u8; SHA256_BYTES],
-    request_byte_len: u64,
-    policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
-    subject: CompilerExecutionSubjectBindingV1,
-    challenge_identity: CompilerExecutionAttestationChallengeIdentityV1,
-    nonce: [u8; SHA256_BYTES],
-    sequence: u64,
-    prior_rollback_anchor: [u8; SHA256_BYTES],
-    next_rollback_anchor: [u8; SHA256_BYTES],
-    verifying_key: [u8; SHA256_BYTES],
-    signature: [u8; SIGNATURE_BYTES],
-    identity: CompilerExecutionAttestationReceiptIdentityV1,
-    canonical_bytes: [u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1],
+    record: receipt_codec::Record,
 }
 
 impl CompilerExecutionAttestationReceiptV1 {
@@ -538,64 +511,16 @@ impl CompilerExecutionAttestationReceiptV1 {
         if signing_key.verifying_key().as_bytes() != policy.verifying_key() {
             return Err(CompilerExecutionAttestationErrorV1::SigningKeyMismatch);
         }
-        if request.challenge.policy_identity != policy.identity() {
-            return Err(CompilerExecutionAttestationErrorV1::PolicyMismatch);
-        }
-        let fields = ReceiptFieldsV1::from_request(policy, request)?;
-        let mut bytes = encode_receipt_prefix(&fields);
-        let message = receipt_signature_message(&bytes[..RECEIPT_SIGNED_PREFIX_BYTES]);
-        let signature = signing_key.sign(&message).to_bytes();
-        bytes[RECEIPT_SIGNED_PREFIX_BYTES..RECEIPT_PREIMAGE_BYTES].copy_from_slice(&signature);
-        finish_receipt(fields, signature, bytes)
+        Ok(Self {
+            record: receipt_codec::V1.issue(expected_receipt(policy, request)?, signing_key)?,
+        })
     }
 
     /// Strictly decodes and cryptographically verifies one exact canonical receipt.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_length(
-            bytes,
-            COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1,
-            "receipt",
-        )?;
-        let mut reader = Reader::new(bytes);
-        decode_header(&mut reader, RECEIPT_MAGIC, bytes.len(), "receipt")?;
-        let request_sha256 = reader.fixed::<32>()?;
-        let request_byte_len = reader.u64()?;
-        validate_binding(request_sha256, request_byte_len, "attestation request")?;
-        if request_byte_len != COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1 as u64 {
-            return Err(CompilerExecutionAttestationErrorV1::RequestLengthMismatch);
-        }
-        let policy_identity = CompilerExecutionIssuerPolicyIdentityV1(reader.fixed::<32>()?);
-        let subject = decode_subject_binding(&mut reader)?;
-        let challenge_identity =
-            CompilerExecutionAttestationChallengeIdentityV1(reader.fixed::<32>()?);
-        let nonce = reader.fixed::<32>()?;
-        let sequence = reader.u64()?;
-        let prior_rollback_anchor = reader.fixed::<32>()?;
-        let next_rollback_anchor = reader.fixed::<32>()?;
-        let verifying_key = reader.fixed::<32>()?;
-        let signature = reader.fixed::<64>()?;
-        let declared_identity = reader.fixed::<32>()?;
-        let fields = ReceiptFieldsV1 {
-            request_sha256,
-            request_byte_len,
-            policy_identity,
-            subject,
-            challenge_identity,
-            nonce,
-            sequence,
-            prior_rollback_anchor,
-            next_rollback_anchor,
-            verifying_key,
-        };
-        let mut canonical = encode_receipt_prefix(&fields);
-        canonical[RECEIPT_SIGNED_PREFIX_BYTES..RECEIPT_PREIMAGE_BYTES].copy_from_slice(&signature);
-        let decoded = finish_receipt(fields, signature, canonical)?;
-        if decoded.identity.0 != declared_identity || decoded.canonical_bytes.as_slice() != bytes {
-            return Err(CompilerExecutionAttestationErrorV1::IdentityMismatch(
-                "receipt",
-            ));
-        }
-        Ok(decoded)
+        Ok(Self {
+            record: receipt_codec::V1.decode(bytes)?,
+        })
     }
 
     /// Verifies exact request, policy, and caller-current rollback state.
@@ -605,88 +530,64 @@ impl CompilerExecutionAttestationReceiptV1 {
         request: &CompilerExecutionAttestationRequestV1,
         current_rollback_anchor: [u8; SHA256_BYTES],
     ) -> Result<VerifiedCompilerExecutionAttestationV1, CompilerExecutionAttestationErrorV1> {
-        // Authenticate every field before using any of them for semantic comparison.
-        verify_receipt_signature(&self)?;
-        let expected = ReceiptFieldsV1::from_request(policy, request)?;
-        if self.policy_identity != expected.policy_identity
-            || self.verifying_key != expected.verifying_key
-        {
-            return Err(CompilerExecutionAttestationErrorV1::PolicyMismatch);
-        }
-        if self.subject != expected.subject {
-            return Err(CompilerExecutionAttestationErrorV1::SubjectMismatch);
-        }
-        if self.sequence != expected.sequence {
-            return Err(CompilerExecutionAttestationErrorV1::SequenceMismatch);
-        }
-        if self.challenge_identity != expected.challenge_identity || self.nonce != expected.nonce {
-            return Err(CompilerExecutionAttestationErrorV1::ChallengeMismatch);
-        }
-        if self.prior_rollback_anchor != current_rollback_anchor
-            || self.prior_rollback_anchor != expected.prior_rollback_anchor
-        {
-            return Err(CompilerExecutionAttestationErrorV1::RollbackAnchorMismatch);
-        }
-        if self.next_rollback_anchor != expected.next_rollback_anchor {
-            return Err(CompilerExecutionAttestationErrorV1::RollbackTransitionMismatch);
-        }
-        if self.request_sha256 != expected.request_sha256
-            || self.request_byte_len != expected.request_byte_len
-        {
-            return Err(CompilerExecutionAttestationErrorV1::RequestMismatch);
-        }
+        // Authenticate before expected-field construction or semantic comparison.
+        receipt_codec::V1.verify_signature(&self.record)?;
+        let expected = expected_receipt(policy, request)?;
+        receipt_codec::compare(&self.record.fields, &expected, current_rollback_anchor)?;
         Ok(VerifiedCompilerExecutionAttestationV1 { receipt: self })
     }
 
     /// Returns the domain-separated identity of the exact request.
     pub const fn request_sha256(&self) -> &[u8; SHA256_BYTES] {
-        &self.request_sha256
+        &self.record.fields.request_sha256
     }
 
     /// Returns the caller-pinned issuer policy identity.
     pub const fn policy_identity(&self) -> CompilerExecutionIssuerPolicyIdentityV1 {
-        self.policy_identity
+        CompilerExecutionIssuerPolicyIdentityV1(self.record.fields.policy_identity)
     }
 
     /// Returns the exact compiler-execution subject binding.
     pub const fn subject(&self) -> CompilerExecutionSubjectBindingV1 {
-        self.subject
+        CompilerExecutionSubjectBindingV1 {
+            sha256: self.record.fields.subject.sha256,
+            byte_len: self.record.fields.subject.byte_len,
+        }
     }
 
     /// Returns the issuer challenge identity.
     pub const fn challenge_identity(&self) -> CompilerExecutionAttestationChallengeIdentityV1 {
-        self.challenge_identity
+        CompilerExecutionAttestationChallengeIdentityV1(self.record.fields.challenge_identity)
     }
 
-    /// Returns the issuer nonce needed to reconstruct the exact challenge after an issued-state
-    /// restart. The signed receipt authenticates this value; exposing it grants no authority.
+    /// Returns the authenticated nonce needed to reconstruct the challenge after restart.
     pub const fn challenge_nonce(&self) -> [u8; SHA256_BYTES] {
-        self.nonce
+        self.record.fields.nonce
     }
 
     /// Returns the issuer rollback-ledger sequence.
     pub const fn sequence(&self) -> u64 {
-        self.sequence
+        self.record.fields.sequence
     }
 
     /// Returns the prior rollback anchor consumed by this receipt.
     pub const fn prior_rollback_anchor(&self) -> [u8; SHA256_BYTES] {
-        self.prior_rollback_anchor
+        self.record.fields.prior_rollback_anchor
     }
 
     /// Returns the next rollback anchor that a protected ledger must durably commit.
     pub const fn next_rollback_anchor(&self) -> [u8; SHA256_BYTES] {
-        self.next_rollback_anchor
+        self.record.fields.next_rollback_anchor
     }
 
     /// Returns the complete canonical receipt identity.
     pub const fn identity(&self) -> CompilerExecutionAttestationReceiptIdentityV1 {
-        self.identity
+        CompilerExecutionAttestationReceiptIdentityV1(self.record.identity)
     }
 
     /// Returns the exact canonical signed receipt bytes.
     pub const fn canonical_bytes(&self) -> &[u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1] {
-        &self.canonical_bytes
+        &self.record.bytes
     }
 
     /// Reports that a receipt alone grants no compiler authority.
@@ -709,12 +610,12 @@ impl fmt::Debug for CompilerExecutionAttestationReceiptV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CompilerExecutionAttestationReceiptV1")
-            .field("request_sha256", &self.request_sha256)
-            .field("policy_identity", &self.policy_identity)
-            .field("subject", &self.subject)
-            .field("challenge_identity", &self.challenge_identity)
-            .field("sequence", &self.sequence)
-            .field("identity", &self.identity)
+            .field("request_sha256", &self.request_sha256())
+            .field("policy_identity", &self.policy_identity())
+            .field("subject", &self.subject())
+            .field("challenge_identity", &self.challenge_identity())
+            .field("sequence", &self.sequence())
+            .field("identity", &self.identity())
             .finish_non_exhaustive()
     }
 }
@@ -729,7 +630,7 @@ impl fmt::Debug for CompilerExecutionAttestationReceiptV1 {
 /// rollback anchor before a later authority-bearing type can be constructed.
 ///
 /// ```compile_fail
-/// fn duplicate(value: fe2o3_runtime_protocol::VerifiedCompilerExecutionAttestationV1) {
+/// fn duplicate(value: fe2o3_compiler_execution_protocol::VerifiedCompilerExecutionAttestationV1) {
 ///     let moved = value;
 ///     let _ = (moved, value);
 /// }
@@ -776,160 +677,32 @@ impl VerifiedCompilerExecutionAttestationV1 {
     }
 }
 
-#[derive(Clone, Copy)]
-struct ReceiptFieldsV1 {
-    request_sha256: [u8; SHA256_BYTES],
-    request_byte_len: u64,
-    policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
-    subject: CompilerExecutionSubjectBindingV1,
-    challenge_identity: CompilerExecutionAttestationChallengeIdentityV1,
-    nonce: [u8; SHA256_BYTES],
-    sequence: u64,
-    prior_rollback_anchor: [u8; SHA256_BYTES],
-    next_rollback_anchor: [u8; SHA256_BYTES],
-    verifying_key: [u8; SHA256_BYTES],
-}
-
-impl ReceiptFieldsV1 {
-    fn from_request(
-        policy: &CompilerExecutionIssuerPolicyV1,
-        request: &CompilerExecutionAttestationRequestV1,
-    ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        if request.challenge.policy_identity != policy.identity() {
-            return Err(CompilerExecutionAttestationErrorV1::PolicyMismatch);
-        }
-        let request_sha256 = *request.identity.as_bytes();
-        let subject = CompilerExecutionSubjectBindingV1::from_subject(&request.subject);
-        let challenge = &request.challenge;
-        let next_rollback_anchor = derive_next_rollback_anchor(
-            challenge.sequence,
-            challenge.prior_rollback_anchor,
-            request_sha256,
-            subject,
-            challenge.nonce,
-            policy.identity().0,
-        );
-        require_identity(next_rollback_anchor, "next rollback anchor")?;
-        Ok(Self {
-            request_sha256,
-            request_byte_len: COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1 as u64,
-            policy_identity: policy.identity(),
-            subject,
-            challenge_identity: challenge.identity,
+fn expected_receipt(
+    policy: &CompilerExecutionIssuerPolicyV1,
+    request: &CompilerExecutionAttestationRequestV1,
+) -> Result<receipt_codec::Fields, CompilerExecutionAttestationErrorV1> {
+    let challenge = &request.challenge;
+    let subject = CompilerExecutionSubjectBindingV1::from_subject(&request.subject);
+    receipt_codec::V1.expected(receipt_codec::ExpectedInput {
+        policy_identity: policy.identity().0,
+        verifying_key: *policy.verifying_key(),
+        request_identity: *request.identity.as_bytes(),
+        subject: request_codec::Binding {
+            sha256: subject.sha256,
+            byte_len: subject.byte_len,
+        },
+        challenge: &request_codec::Fields {
+            policy: challenge.policy_identity.0,
+            subject: request_codec::Binding {
+                sha256: challenge.subject.sha256,
+                byte_len: challenge.subject.byte_len,
+            },
             nonce: challenge.nonce,
             sequence: challenge.sequence,
-            prior_rollback_anchor: challenge.prior_rollback_anchor,
-            next_rollback_anchor,
-            verifying_key: *policy.verifying_key(),
-        })
-    }
-}
-
-fn encode_receipt_prefix(
-    fields: &ReceiptFieldsV1,
-) -> [u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1] {
-    let mut bytes = [0_u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1];
-    let mut offset = encode_header(&mut bytes, RECEIPT_MAGIC);
-    put(&mut bytes, &mut offset, &fields.request_sha256);
-    put(
-        &mut bytes,
-        &mut offset,
-        &fields.request_byte_len.to_le_bytes(),
-    );
-    put(&mut bytes, &mut offset, fields.policy_identity.as_bytes());
-    encode_subject_binding(&mut bytes, &mut offset, fields.subject);
-    put(
-        &mut bytes,
-        &mut offset,
-        fields.challenge_identity.as_bytes(),
-    );
-    put(&mut bytes, &mut offset, &fields.nonce);
-    put(&mut bytes, &mut offset, &fields.sequence.to_le_bytes());
-    put(&mut bytes, &mut offset, &fields.prior_rollback_anchor);
-    put(&mut bytes, &mut offset, &fields.next_rollback_anchor);
-    put(&mut bytes, &mut offset, &fields.verifying_key);
-    debug_assert_eq!(offset, RECEIPT_SIGNED_PREFIX_BYTES);
-    bytes
-}
-
-fn finish_receipt(
-    fields: ReceiptFieldsV1,
-    signature: [u8; SIGNATURE_BYTES],
-    mut bytes: [u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1],
-) -> Result<CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationErrorV1> {
-    validate_verifying_key(fields.verifying_key)?;
-    validate_rollback_position(fields.sequence, fields.prior_rollback_anchor)?;
-    let expected_next = derive_next_rollback_anchor(
-        fields.sequence,
-        fields.prior_rollback_anchor,
-        fields.request_sha256,
-        fields.subject,
-        fields.nonce,
-        fields.policy_identity.0,
-    );
-    if fields.next_rollback_anchor != expected_next {
-        return Err(CompilerExecutionAttestationErrorV1::RollbackTransitionMismatch);
-    }
-    let identity = CompilerExecutionAttestationReceiptIdentityV1(derive_identity(
-        RECEIPT_IDENTITY_DOMAIN,
-        &bytes[..RECEIPT_PREIMAGE_BYTES],
-    ));
-    bytes[RECEIPT_PREIMAGE_BYTES..].copy_from_slice(identity.as_bytes());
-    let receipt = CompilerExecutionAttestationReceiptV1 {
-        request_sha256: fields.request_sha256,
-        request_byte_len: fields.request_byte_len,
-        policy_identity: fields.policy_identity,
-        subject: fields.subject,
-        challenge_identity: fields.challenge_identity,
-        nonce: fields.nonce,
-        sequence: fields.sequence,
-        prior_rollback_anchor: fields.prior_rollback_anchor,
-        next_rollback_anchor: fields.next_rollback_anchor,
-        verifying_key: fields.verifying_key,
-        signature,
-        identity,
-        canonical_bytes: bytes,
-    };
-    verify_receipt_signature(&receipt)?;
-    Ok(receipt)
-}
-
-fn verify_receipt_signature(
-    receipt: &CompilerExecutionAttestationReceiptV1,
-) -> Result<(), CompilerExecutionAttestationErrorV1> {
-    let key = validate_verifying_key(receipt.verifying_key)?;
-    let message =
-        receipt_signature_message(&receipt.canonical_bytes[..RECEIPT_SIGNED_PREFIX_BYTES]);
-    key.verify_strict(&message, &Signature::from_bytes(&receipt.signature))
-        .map_err(|_| CompilerExecutionAttestationErrorV1::SignatureRejected)
-}
-
-fn derive_next_rollback_anchor(
-    sequence: u64,
-    prior: [u8; SHA256_BYTES],
-    request: [u8; SHA256_BYTES],
-    subject: CompilerExecutionSubjectBindingV1,
-    nonce: [u8; SHA256_BYTES],
-    policy: [u8; SHA256_BYTES],
-) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(ROLLBACK_ANCHOR_DOMAIN);
-    digest.update(sequence.to_le_bytes());
-    digest.update(prior);
-    digest.update(request);
-    digest.update(subject.sha256);
-    digest.update(subject.byte_len.to_le_bytes());
-    digest.update(nonce);
-    digest.update(policy);
-    digest.finalize().into()
-}
-
-fn receipt_signature_message(prefix: &[u8]) -> [u8; SHA256_BYTES] {
-    derive_identity(RECEIPT_SIGNATURE_DOMAIN, prefix)
-}
-
-fn encode_header(output: &mut [u8], magic: [u8; 8]) -> usize {
-    encode_header_version(output, magic, VERSION_V1)
+            prior: challenge.prior_rollback_anchor,
+        },
+        challenge_identity: challenge.identity.0,
+    })
 }
 
 pub(crate) fn encode_header_version(output: &mut [u8], magic: [u8; 8], version: u16) -> usize {
@@ -941,15 +714,6 @@ pub(crate) fn encode_header_version(output: &mut [u8], magic: [u8; 8], version: 
     put(output, &mut offset, &total_len.to_le_bytes());
     put(output, &mut offset, &0_u32.to_le_bytes());
     offset
-}
-
-fn decode_header(
-    reader: &mut Reader<'_>,
-    expected_magic: [u8; 8],
-    expected_len: usize,
-    field: &'static str,
-) -> Result<(), CompilerExecutionAttestationErrorV1> {
-    decode_header_version(reader, expected_magic, VERSION_V1, expected_len, field)
 }
 
 pub(crate) fn decode_header_version(
@@ -1003,21 +767,6 @@ pub(crate) fn decode_measurement(
     let byte_len = reader.u64()?;
     validate_binding(sha256, byte_len, field)?;
     Ok(CompilerExecutionIssuerMeasurementV1 { sha256, byte_len })
-}
-
-fn encode_subject_binding(
-    output: &mut [u8],
-    offset: &mut usize,
-    value: CompilerExecutionSubjectBindingV1,
-) {
-    put(output, offset, &value.sha256);
-    put(output, offset, &value.byte_len.to_le_bytes());
-}
-
-fn decode_subject_binding(
-    reader: &mut Reader<'_>,
-) -> Result<CompilerExecutionSubjectBindingV1, CompilerExecutionAttestationErrorV1> {
-    CompilerExecutionSubjectBindingV1::new(reader.fixed::<32>()?, reader.u64()?)
 }
 
 pub(crate) fn validate_binding(

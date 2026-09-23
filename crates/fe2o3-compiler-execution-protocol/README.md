@@ -11,6 +11,11 @@ while retaining nominal owners and same-ledger nested subject decoding. They are
 inert content records, not signed execution evidence. See the
 [request contract](../../docs/compiler-execution-request-v2.md); production
 issuance, durable state and consumers remain on the previous family.
+Native move-only signed receipts and pinned-key verification are also available
+with explicit work/storage admission. Signature validity does not establish a
+protected compiler occurrence or advance a durable ledger. See the
+[receipt contract](../../docs/compiler-execution-receipt-v2.md); native publication,
+service transport and production consumer integration remain pending.
 
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,

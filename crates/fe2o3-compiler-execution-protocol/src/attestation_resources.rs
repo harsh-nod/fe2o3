@@ -8,6 +8,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 pub(crate) const ENTRY_WORK: usize = 8;
 pub(crate) const KEY_VALIDATION_WORK: usize = 4096;
+pub(crate) const SIGN_WORK: usize = 65536;
+pub(crate) const STRICT_VERIFY_WORK: usize = 131072;
 
 /// Additional retained storage returned unreserved by a native operation.
 /// Keep consumed inputs' reservations and reserve this delta before retaining

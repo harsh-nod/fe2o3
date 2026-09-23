@@ -3,6 +3,8 @@
 
 mod attestation;
 mod attestation_challenge_v2;
+mod attestation_receipt_codec;
+mod attestation_receipt_v2;
 mod attestation_request_codec;
 mod attestation_request_v2;
 mod attestation_resources;
@@ -74,6 +76,16 @@ pub use attestation_challenge_v2::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_WORK_V2,
     CompilerExecutionAttestationChallengeIdentityV2, CompilerExecutionAttestationChallengeV2,
     CompilerExecutionSubjectBindingV2,
+};
+pub use attestation_receipt_v2::{
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V2,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_DECODE_WORK_V2,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_IDENTITY_WORK_V2,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_ISSUE_WORK_V2,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_STORAGE_V2,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_VERIFY_WORK_V2,
+    CompilerExecutionAttestationReceiptIdentityV2, CompilerExecutionAttestationReceiptV2,
+    VerifiedCompilerExecutionAttestationV2,
 };
 pub use attestation_request_v2::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V2,
