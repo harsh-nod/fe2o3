@@ -6,7 +6,8 @@ use fe2o3_kernel_ir::{
     gfx950_xnack_minus_target_capability,
 };
 use fe2o3_kir_sim::{
-    AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, ScalarBitsV1, SimulationLimitsV1,
+    AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, ScalarBitsV1, SimulationErrorV1,
+    SimulationExecutionErrorKindV1, SimulationLimitsV1,
 };
 use fe2o3_runtime_model::{IdentityDigestV1, TransitionErrorV1};
 use fe2o3_virtual_runtime::{
@@ -255,6 +256,86 @@ fn serial_dependencies_execute_and_copy_back_typed_bytes() {
     assert_eq!(summary.invocations_executed, 4);
     assert!(!runtime.grants_hardware_authority());
     assert!(!runtime.predicts_performance());
+}
+
+#[test]
+fn schedule_recording_respects_the_configured_resident_budget() {
+    for (max_schedule_decisions, max_resident_bytes, succeeds) in [
+        (1 << 19, 256 << 20, true),
+        (1 << 20, 256 << 20, false),
+        (1 << 20, 512 << 20, true),
+    ] {
+        let mut runtime = VirtualRuntimeV1::new(VirtualRuntimeConfigV1 {
+            runtime_identity: IdentityDigestV1::from_untrusted_bytes([33; 32]),
+            target: VirtualTargetProfileV1::Amdgpu64TargetNeutral,
+            runtime_limits: VirtualRuntimeLimitsV1 {
+                max_schedule_decisions,
+                ..VirtualRuntimeLimitsV1::default()
+            },
+            simulation_limits: SimulationLimitsV1 {
+                max_allocation_bytes: 16 << 20,
+                max_total_bytes: 64 << 20,
+                max_resident_bytes,
+                ..SimulationLimitsV1::default()
+            },
+        })
+        .unwrap();
+        let module = runtime.register_module(admitted_fill()).unwrap();
+        let queue = runtime.create_queue(1).unwrap();
+        let buffer = runtime
+            .allocate_buffer(16, VirtualBufferAccessV1::ReadWrite)
+            .unwrap();
+        let initial = [0xA5; 16];
+        runtime.copy_from_host(buffer, 0, &initial).unwrap();
+        let submitted = runtime
+            .submit(queue, module, fill_request(buffer, 4, vec![]))
+            .unwrap();
+        match (succeeds, runtime.run_next()) {
+            (true, Ok(VirtualRunProgressV1::Completed { completion, .. })) => {
+                assert_eq!(completion, submitted);
+                assert_eq!(
+                    runtime.completion_state(submitted).unwrap(),
+                    VirtualCompletionStateV1::Completed
+                );
+                let summary = runtime.completion_summary(submitted).unwrap().unwrap();
+                assert_eq!(summary.invocations_executed, 4);
+            }
+            (false, Err(VirtualRuntimeErrorV1::Simulation { completion, source })) => {
+                assert_eq!(completion, submitted);
+                let SimulationErrorV1::Execution(error) = *source else {
+                    panic!("expected schedule execution refusal");
+                };
+                assert!(matches!(
+                    error.kind,
+                    SimulationExecutionErrorKindV1::ScheduleResidentLimit { actual, limit }
+                        if actual > limit && limit == max_resident_bytes
+                ));
+                assert_eq!(
+                    runtime.completion_state(submitted).unwrap(),
+                    VirtualCompletionStateV1::AbortedSimulation
+                );
+                assert!(runtime.completion_summary(submitted).unwrap().is_none());
+            }
+            result => panic!("unexpected schedule budget result: {result:?}"),
+        }
+        let mut output = [0; 16];
+        runtime.copy_to_host(buffer, 0, &mut output).unwrap();
+        let expected = if succeeds {
+            [17, 0, 0, 0, 17, 0, 0, 0, 17, 0, 0, 0, 17, 0, 0, 0]
+        } else {
+            initial
+        };
+        assert_eq!(output, expected);
+        assert!(!runtime.grants_hardware_authority());
+        assert!(!runtime.predicts_performance());
+        assert!(matches!(
+            runtime.run_next().unwrap(),
+            VirtualRunProgressV1::Idle
+        ));
+        runtime.release_buffer(buffer).unwrap();
+        runtime.release_module(module).unwrap();
+        runtime.release_queue(queue).unwrap();
+    }
 }
 
 #[test]

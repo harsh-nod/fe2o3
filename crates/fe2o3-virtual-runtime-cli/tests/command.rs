@@ -218,6 +218,12 @@ fn semantic_memory_fault_is_a_stable_typed_json_failure() {
     assert_eq!(error["stage"], "virtual_runtime");
     assert_eq!(error["code"], "simulation_failed");
     assert_eq!(error["authority"], "observation_only");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("OutOfBounds"), "{message}");
+    assert!(message.contains("for global [4, 0, 0]"), "{message}");
+    assert!(!message.contains("ScheduleResidentLimit"), "{message}");
+    assert_eq!(error["hardware_observed"], false);
+    assert_eq!(error["performance_prediction"], false);
 }
 
 #[test]
