@@ -2,10 +2,10 @@
 
 use std::{error::Error, fmt};
 
+use crate::issuer_policy_codec as policy_codec;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use fe2o3_artifact_transaction::{
-    INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1, INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1,
-    InertCompilerExecutionSubjectV1,
+    INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1, InertCompilerExecutionSubjectV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -14,7 +14,6 @@ const SIGNATURE_BYTES: usize = 64;
 const HEADER_BYTES: usize = 8 + 2 + 2 + 8 + 4;
 const CONTENT_BINDING_BYTES: usize = SHA256_BYTES + 8;
 
-const POLICY_MAGIC: [u8; 8] = *b"F2O3CEP1";
 const CHALLENGE_MAGIC: [u8; 8] = *b"F2O3CEC1";
 const REQUEST_MAGIC: [u8; 8] = *b"F2O3CEQ1";
 const RECEIPT_MAGIC: [u8; 8] = *b"F2O3CER1";
@@ -179,13 +178,7 @@ impl CompilerExecutionIssuerMeasurementV1 {
 /// Caller-pinned issuer executable, runtime closure, key, and policy generation.
 #[derive(Clone, Eq, PartialEq)]
 pub struct CompilerExecutionIssuerPolicyV1 {
-    generation: u64,
-    executable: CompilerExecutionIssuerMeasurementV1,
-    runtime: CompilerExecutionIssuerMeasurementV1,
-    verifying_key: [u8; SHA256_BYTES],
-    external_anchor_verifying_key: [u8; SHA256_BYTES],
-    identity: CompilerExecutionIssuerPolicyIdentityV1,
-    canonical_bytes: [u8; COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1],
+    record: policy_codec::Record,
 }
 
 impl CompilerExecutionIssuerPolicyV1 {
@@ -197,121 +190,57 @@ impl CompilerExecutionIssuerPolicyV1 {
         verifying_key: [u8; SHA256_BYTES],
         external_anchor_verifying_key: [u8; SHA256_BYTES],
     ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        if generation == 0 {
-            return Err(CompilerExecutionAttestationErrorV1::ZeroValue(
-                "issuer policy generation",
-            ));
-        }
-        validate_verifying_key(verifying_key)?;
-        validate_verifying_key(external_anchor_verifying_key)?;
-        if external_anchor_verifying_key == verifying_key {
-            return Err(CompilerExecutionAttestationErrorV1::NonDistinctVerifyingKeys);
-        }
-
-        let mut bytes = [0_u8; COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1];
-        let mut offset = encode_header(&mut bytes, POLICY_MAGIC);
-        put(&mut bytes, &mut offset, &generation.to_le_bytes());
-        encode_measurement(&mut bytes, &mut offset, executable);
-        encode_measurement(&mut bytes, &mut offset, runtime);
-        put(&mut bytes, &mut offset, &verifying_key);
-        put(&mut bytes, &mut offset, &external_anchor_verifying_key);
-        put(
-            &mut bytes,
-            &mut offset,
-            &INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1.to_le_bytes(),
-        );
-        offset += 6;
-        debug_assert_eq!(offset, POLICY_PREIMAGE_BYTES);
-        let identity = CompilerExecutionIssuerPolicyIdentityV1(derive_identity(
-            POLICY_IDENTITY_DOMAIN,
-            &bytes[..POLICY_PREIMAGE_BYTES],
-        ));
-        put(&mut bytes, &mut offset, identity.as_bytes());
-        debug_assert_eq!(offset, bytes.len());
         Ok(Self {
-            generation,
-            executable,
-            runtime,
-            verifying_key,
-            external_anchor_verifying_key,
-            identity,
-            canonical_bytes: bytes,
+            record: policy_codec::V1.encode(policy_codec::Fields {
+                generation,
+                executable,
+                runtime,
+                verifying_key,
+                external_anchor_verifying_key,
+            })?,
         })
     }
 
     /// Strictly decodes one exact canonical policy.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_length(
-            bytes,
-            COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1,
-            "issuer policy",
-        )?;
-        let mut reader = Reader::new(bytes);
-        decode_header(&mut reader, POLICY_MAGIC, bytes.len(), "issuer policy")?;
-        let generation = reader.u64()?;
-        let executable = decode_measurement(&mut reader, "issuer executable")?;
-        let runtime = decode_measurement(&mut reader, "issuer runtime")?;
-        let verifying_key = reader.fixed::<32>()?;
-        let external_anchor_verifying_key = reader.fixed::<32>()?;
-        let subject_version = reader.u16()?;
-        if subject_version != INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1 {
-            return Err(
-                CompilerExecutionAttestationErrorV1::UnsupportedSubjectVersion(subject_version),
-            );
-        }
-        if reader.fixed::<6>()? != [0; 6] {
-            return Err(CompilerExecutionAttestationErrorV1::NonzeroReserved);
-        }
-        let declared_identity = reader.fixed::<32>()?;
-        require_identity(declared_identity, "issuer policy")?;
-        let decoded = Self::new(
-            generation,
-            executable,
-            runtime,
-            verifying_key,
-            external_anchor_verifying_key,
-        )?;
-        if decoded.identity.0 != declared_identity || decoded.canonical_bytes.as_slice() != bytes {
-            return Err(CompilerExecutionAttestationErrorV1::IdentityMismatch(
-                "issuer policy",
-            ));
-        }
-        Ok(decoded)
+        Ok(Self {
+            record: policy_codec::V1.decode(bytes)?,
+        })
     }
 
     /// Returns the monotonically provisioned caller policy generation.
     pub const fn generation(&self) -> u64 {
-        self.generation
+        self.record.fields.generation
     }
 
     /// Returns the caller-pinned protected issuer executable measurement.
     pub const fn executable(&self) -> CompilerExecutionIssuerMeasurementV1 {
-        self.executable
+        self.record.fields.executable
     }
 
     /// Returns the caller-pinned issuer runtime-closure measurement.
     pub const fn runtime(&self) -> CompilerExecutionIssuerMeasurementV1 {
-        self.runtime
+        self.record.fields.runtime
     }
 
     /// Returns the caller-pinned Ed25519 verifying key.
     pub const fn verifying_key(&self) -> &[u8; SHA256_BYTES] {
-        &self.verifying_key
+        &self.record.fields.verifying_key
     }
 
     /// Returns the policy-pinned external monotonic-anchor verifying key.
     pub const fn external_anchor_verifying_key(&self) -> &[u8; SHA256_BYTES] {
-        &self.external_anchor_verifying_key
+        &self.record.fields.external_anchor_verifying_key
     }
 
     /// Returns the complete canonical policy identity.
     pub const fn identity(&self) -> CompilerExecutionIssuerPolicyIdentityV1 {
-        self.identity
+        CompilerExecutionIssuerPolicyIdentityV1(self.record.identity)
     }
 
     /// Returns the exact canonical policy bytes.
     pub const fn canonical_bytes(&self) -> &[u8; COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1] {
-        &self.canonical_bytes
+        &self.record.bytes
     }
 }
 
@@ -319,15 +248,15 @@ impl fmt::Debug for CompilerExecutionIssuerPolicyV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CompilerExecutionIssuerPolicyV1")
-            .field("generation", &self.generation)
-            .field("executable", &self.executable)
-            .field("runtime", &self.runtime)
-            .field("verifying_key", &self.verifying_key)
+            .field("generation", &self.generation())
+            .field("executable", &self.executable())
+            .field("runtime", &self.runtime())
+            .field("verifying_key", self.verifying_key())
             .field(
                 "external_anchor_verifying_key",
-                &self.external_anchor_verifying_key,
+                self.external_anchor_verifying_key(),
             )
-            .field("identity", &self.identity)
+            .field("identity", &self.identity())
             .finish_non_exhaustive()
     }
 }
@@ -647,7 +576,7 @@ impl CompilerExecutionAttestationReceiptV1 {
         if signing_key.verifying_key().as_bytes() != policy.verifying_key() {
             return Err(CompilerExecutionAttestationErrorV1::SigningKeyMismatch);
         }
-        if request.challenge.policy_identity != policy.identity {
+        if request.challenge.policy_identity != policy.identity() {
             return Err(CompilerExecutionAttestationErrorV1::PolicyMismatch);
         }
         let fields = ReceiptFieldsV1::from_request(policy, request)?;
@@ -904,7 +833,7 @@ impl ReceiptFieldsV1 {
         policy: &CompilerExecutionIssuerPolicyV1,
         request: &CompilerExecutionAttestationRequestV1,
     ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        if request.challenge.policy_identity != policy.identity {
+        if request.challenge.policy_identity != policy.identity() {
             return Err(CompilerExecutionAttestationErrorV1::PolicyMismatch);
         }
         let request_sha256 = *request.identity.as_bytes();
@@ -916,20 +845,20 @@ impl ReceiptFieldsV1 {
             request_sha256,
             subject,
             challenge.nonce,
-            policy.identity.0,
+            policy.identity().0,
         );
         require_identity(next_rollback_anchor, "next rollback anchor")?;
         Ok(Self {
             request_sha256,
             request_byte_len: COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1 as u64,
-            policy_identity: policy.identity,
+            policy_identity: policy.identity(),
             subject,
             challenge_identity: challenge.identity,
             nonce: challenge.nonce,
             sequence: challenge.sequence,
             prior_rollback_anchor: challenge.prior_rollback_anchor,
             next_rollback_anchor,
-            verifying_key: policy.verifying_key,
+            verifying_key: *policy.verifying_key(),
         })
     }
 }
@@ -1038,10 +967,14 @@ fn receipt_signature_message(prefix: &[u8]) -> [u8; SHA256_BYTES] {
 }
 
 fn encode_header(output: &mut [u8], magic: [u8; 8]) -> usize {
+    encode_header_version(output, magic, VERSION_V1)
+}
+
+pub(crate) fn encode_header_version(output: &mut [u8], magic: [u8; 8], version: u16) -> usize {
     let total_len = output.len() as u64;
     let mut offset = 0;
     put(output, &mut offset, &magic);
-    put(output, &mut offset, &VERSION_V1.to_le_bytes());
+    put(output, &mut offset, &version.to_le_bytes());
     put(output, &mut offset, &0_u16.to_le_bytes());
     put(output, &mut offset, &total_len.to_le_bytes());
     put(output, &mut offset, &0_u32.to_le_bytes());
@@ -1054,11 +987,21 @@ fn decode_header(
     expected_len: usize,
     field: &'static str,
 ) -> Result<(), CompilerExecutionAttestationErrorV1> {
+    decode_header_version(reader, expected_magic, VERSION_V1, expected_len, field)
+}
+
+pub(crate) fn decode_header_version(
+    reader: &mut Reader<'_>,
+    expected_magic: [u8; 8],
+    expected_version: u16,
+    expected_len: usize,
+    field: &'static str,
+) -> Result<(), CompilerExecutionAttestationErrorV1> {
     if reader.fixed::<8>()? != expected_magic {
         return Err(CompilerExecutionAttestationErrorV1::InvalidMagic(field));
     }
     let version = reader.u16()?;
-    if version != VERSION_V1 {
+    if version != expected_version {
         return Err(CompilerExecutionAttestationErrorV1::UnsupportedVersion { field, version });
     }
     let flags = reader.u16()?;
@@ -1081,7 +1024,7 @@ fn decode_header(
     Ok(())
 }
 
-fn encode_measurement(
+pub(crate) fn encode_measurement(
     output: &mut [u8],
     offset: &mut usize,
     value: CompilerExecutionIssuerMeasurementV1,
@@ -1090,7 +1033,7 @@ fn encode_measurement(
     put(output, offset, &value.byte_len.to_le_bytes());
 }
 
-fn decode_measurement(
+pub(crate) fn decode_measurement(
     reader: &mut Reader<'_>,
     field: &'static str,
 ) -> Result<CompilerExecutionIssuerMeasurementV1, CompilerExecutionAttestationErrorV1> {
@@ -1127,7 +1070,7 @@ fn validate_binding(
     Ok(())
 }
 
-fn validate_verifying_key(
+pub(crate) fn validate_verifying_key(
     bytes: [u8; SHA256_BYTES],
 ) -> Result<VerifyingKey, CompilerExecutionAttestationErrorV1> {
     let key = VerifyingKey::from_bytes(&bytes)
@@ -1153,7 +1096,7 @@ fn validate_rollback_position(
     Ok(())
 }
 
-fn require_identity(
+pub(crate) fn require_identity(
     value: [u8; SHA256_BYTES],
     field: &'static str,
 ) -> Result<(), CompilerExecutionAttestationErrorV1> {
@@ -1164,7 +1107,7 @@ fn require_identity(
     }
 }
 
-fn require_length(
+pub(crate) fn require_length(
     bytes: &[u8],
     expected: usize,
     field: &'static str,
@@ -1180,7 +1123,7 @@ fn require_length(
     }
 }
 
-fn derive_identity(domain: &[u8], bytes: &[u8]) -> [u8; SHA256_BYTES] {
+pub(crate) fn derive_identity(domain: &[u8], bytes: &[u8]) -> [u8; SHA256_BYTES] {
     let mut digest = Sha256::new();
     digest.update(domain);
     digest.update((bytes.len() as u64).to_le_bytes());
@@ -1188,19 +1131,19 @@ fn derive_identity(domain: &[u8], bytes: &[u8]) -> [u8; SHA256_BYTES] {
     digest.finalize().into()
 }
 
-fn put(output: &mut [u8], offset: &mut usize, value: &[u8]) {
+pub(crate) fn put(output: &mut [u8], offset: &mut usize, value: &[u8]) {
     let end = offset.checked_add(value.len()).expect("fixed codec offset");
     output[*offset..end].copy_from_slice(value);
     *offset = end;
 }
 
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
 impl<'a> Reader<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
 
@@ -1217,13 +1160,15 @@ impl<'a> Reader<'a> {
         Ok(value)
     }
 
-    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], CompilerExecutionAttestationErrorV1> {
+    pub(crate) fn fixed<const N: usize>(
+        &mut self,
+    ) -> Result<[u8; N], CompilerExecutionAttestationErrorV1> {
         self.take(N)?
             .try_into()
             .map_err(|_| CompilerExecutionAttestationErrorV1::Truncated)
     }
 
-    fn u16(&mut self) -> Result<u16, CompilerExecutionAttestationErrorV1> {
+    pub(crate) fn u16(&mut self) -> Result<u16, CompilerExecutionAttestationErrorV1> {
         Ok(u16::from_le_bytes(self.fixed()?))
     }
 
@@ -1231,7 +1176,7 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes(self.fixed()?))
     }
 
-    fn u64(&mut self) -> Result<u64, CompilerExecutionAttestationErrorV1> {
+    pub(crate) fn u64(&mut self) -> Result<u64, CompilerExecutionAttestationErrorV1> {
         Ok(u64::from_le_bytes(self.fixed()?))
     }
 }

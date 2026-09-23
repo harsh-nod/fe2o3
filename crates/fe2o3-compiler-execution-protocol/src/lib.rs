@@ -2,12 +2,17 @@
 #![doc = include_str!("../README.md")]
 
 mod attestation;
+mod attestation_resources;
 mod client_profile;
+mod client_profile_codec;
+mod client_profile_v2;
 mod current_record_verification;
 mod external_anchor_deployment;
 mod external_anchor_provisioning;
 mod external_anchor_service;
 mod external_anchor_transaction;
+mod issuer_policy_codec;
+mod issuer_policy_v2;
 mod launch_manifest;
 mod receipt_publication;
 mod service;
@@ -60,9 +65,15 @@ pub use attestation::{
     CompilerExecutionSubjectBindingV1, SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1,
     VerifiedCompilerExecutionAttestationV1, sealed_static_issuer_runtime_measurement_v1,
 };
+pub use attestation_resources::CompilerExecutionAttestationStorageV2;
 pub use client_profile::{
     COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1, CompilerExecutionClientProfileErrorV1,
     CompilerExecutionClientProfileIdentityV1, CompilerExecutionClientProfileV1,
+};
+pub use client_profile_v2::{
+    COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V2, COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V2,
+    COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V2, CompilerExecutionClientProfileErrorV2,
+    CompilerExecutionClientProfileIdentityV2, CompilerExecutionClientProfileV2,
 };
 pub use current_record_verification::{
     COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V3,
@@ -94,6 +105,11 @@ pub use external_anchor_transaction::{
     CompilerExecutionExternalAnchorTransactionErrorV1,
     CompilerExecutionExternalAnchorTransactionIdentityV1,
     CompilerExecutionExternalAnchorTransactionV1,
+};
+pub use issuer_policy_v2::{
+    COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V2, COMPILER_EXECUTION_ISSUER_POLICY_STORAGE_V2,
+    COMPILER_EXECUTION_ISSUER_POLICY_WORK_V2, CompilerExecutionAttestationErrorV2,
+    CompilerExecutionIssuerPolicyIdentityV2, CompilerExecutionIssuerPolicyV2,
 };
 pub use launch_manifest::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,

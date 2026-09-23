@@ -1,5 +1,12 @@
 # fe2o3 compiler execution protocol
 
+Native `CompilerExecutionIssuerPolicyV2` and `CompilerExecutionClientProfileV2`
+provide move-only, budgeted SubjectV2 trust inputs using shared private codecs.
+They do not activate a V2 deployment or supply protected execution evidence.
+The attestation/service/durable production path described below still uses V1
+trust inputs. See [the V2 contract](../../docs/compiler-execution-trust-inputs-v2.md)
+for wire, resource, ownership and remaining integration requirements.
+
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
 current-record verification, and bounded service packet records. The sole
