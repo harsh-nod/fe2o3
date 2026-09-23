@@ -4,6 +4,7 @@
 Not constructor, physical-allocation, native-admission, or performance qualification.
 """
 import argparse
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -35,6 +36,10 @@ NEW = [ROOT, RAW, BODY, *POLICY_NEW,
        CRATE / 'src/context_producer_reads/tests/scalar_enrollment_shared.rs']
 PROJECTIONS = [(BODY, 'audited-scalar-enrollment.rs', 2)]
 PAIRED_VERIFIED = 929
+VERIFIER_IDENTITY = {'profile': 'release', 'version': '0.2026.08.09.92f466f',
+                     'platform': {'os': 'linux', 'arch': 'x86_64'},
+                     'toolchain': '1.97.1-x86_64-unknown-linux-gnu',
+                     'commit': '92f466f247f45128c630d1c843fd6e27d2115587'}
 MUTATIONS = [
     ('header_order', BODY, 'macro_rules! scalar_enrollment_body {', 'production', 'ContextVersionJournalV1::enroll_allocation',
      'if $key.context_generation != $journal.context_generation',
@@ -100,6 +105,10 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def check_verifier(identity):
+    need(identity == VERIFIER_IDENTITY, 'exact pinned verifier identity')
+
+
 def negative_report(result):
     need(set(result) == {'encountered-error', 'encountered-vir-error', 'verified', 'errors',
                          'is-verifying-entire-crate'}, 'closed negative result schema')
@@ -107,6 +116,268 @@ def negative_report(result):
          and result['is-verifying-entire-crate'] is False, 'typed negative flags')
     need(type(result['verified']) is int and result['verified'] >= 0
          and type(result['errors']) is int and result['errors'] > 0, 'typed negative counts')
+
+
+def completed_record(folder, parse, command=None):
+    need(folder.is_dir() and not folder.is_symlink(), 'normal case directory')
+    need({p.name for p in folder.iterdir()} == {'record.json', 'stdout.log', 'stderr.log'},
+         'incomplete or unexpected existing case; inspect it before retrying')
+    need(all(p.is_file() and not p.is_symlink() for p in folder.iterdir()), 'normal case files')
+    row = parse((folder / 'record.json').read_text())
+    need(set(row) == {'command', 'started_ns', 'finished_ns', 'process_group', 'status', 'group_absent'},
+         'interrupted or malformed receipt cannot be reused')
+    need(type(row['status']) is int and row['status'] in (0, 1) and row['group_absent'] is True,
+         'normal terminal receipt required')
+    need(all(type(row[k]) is int and row[k] > 0 for k in ('started_ns', 'finished_ns', 'process_group'))
+         and row['started_ns'] <= row['finished_ns'], 'receipt integers/order')
+    need(isinstance(row['command'], list) and row['command']
+         and all(isinstance(token, str) and token for token in row['command']), 'command tokens')
+    need(command is None or row['command'] == command, 'exact resumed command')
+    return row, (folder / 'stdout.log').read_text(), (folder / 'stderr.log').read_text()
+
+
+def campaign_lock(output):
+    lock = (output.parent / (output.name + '.lock')).open('a')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        lock.close()
+        raise ValueError('another controller owns this campaign') from error
+    return lock
+
+
+def record_hashes(folder):
+    return {name: digest((folder / name).read_bytes())
+            for name in ('record.json', 'stdout.log', 'stderr.log')}
+
+
+class Campaign:
+    """Only controller-accepted, semantically checked prefixes are reusable."""
+
+    def __init__(self, output, source, names, base, same, validate, resume):
+        self.output, self.names, self.base = output, names, base
+        self.validate, self.rows, self.proofs, self.accepted = validate, {}, {}, []
+        self.last_finished = 0
+        if not resume:
+            output.mkdir()
+            (output / 'source.json').write_text(json.dumps(source, indent=2) + '\n')
+            self.save_acceptance()
+            return
+        need(output.is_dir() and not output.is_symlink(), 'normal resume directory')
+        need(all(p.is_file() and not p.is_symlink() for p in
+                 (output / 'source.json', output / 'accepted.json')), 'normal controller files')
+        need(same(base.unique_json((output / 'source.json').read_text()), source), 'exact resume source identity')
+        self.accepted = base.unique_json((output / 'accepted.json').read_text())
+        need(type(self.accepted) is list and len(self.accepted) <= len(names), 'accepted prefix list')
+        for index, entry in enumerate(self.accepted):
+            need(type(entry) is dict and set(entry) == {'name', 'files'}
+                 and entry['name'] == names[index], 'strict accepted prefix')
+        expected = {'source.json', 'accepted.json'} | set(names[:len(self.accepted)])
+        # Interrupted finalization may leave either summary, but never permits more execution.
+        if len(self.accepted) == len(names):
+            expected |= {p.name for p in output.iterdir() if p.name in ('inputs-after.json', 'results.json')}
+        need({p.name for p in output.iterdir()} == expected, 'unaccepted or missing campaign records')
+        for entry in self.accepted:
+            name = entry['name']
+            row, stdout, stderr = completed_record(output / name, base.unique_json)
+            need(same(entry['files'], record_hashes(output / name)), 'accepted record hashes')
+            self.check(name, row, stdout, stderr)
+        for name, value in (('inputs-after.json', source['inputs']), ('results.json', self.results())):
+            path = output / name
+            if path.exists() or path.is_symlink():
+                need(path.is_file() and not path.is_symlink()
+                     and same(base.unique_json(path.read_text()), value), 'existing final summary')
+
+    def check(self, name, row, stdout, stderr):
+        need(self.last_finished <= row['started_ns'], 'serial receipt order')
+        result = self.validate(name, row, stdout, stderr)
+        if result is not None:
+            self.proofs[name] = result
+        self.last_finished = row['finished_ns']
+        self.rows[name] = (row, stdout, stderr)
+
+    def results(self):
+        return self.proofs
+
+    def save_acceptance(self):
+        temporary = self.output / 'accepted.json.tmp'
+        temporary.write_text(json.dumps(self.accepted, indent=2) + '\n')
+        temporary.replace(self.output / 'accepted.json')
+
+    def run(self, name, command, timeout, env):
+        if name in self.rows:
+            row, stdout, stderr = self.rows[name]
+            need(row['command'] == command, 'exact resumed command')
+            return row['status'], stdout, stderr
+        need(len(self.accepted) < len(self.names) and name == self.names[len(self.accepted)], 'next prefix command')
+        folder = self.output / name
+        # A normal-looking receipt is insufficient: run_owned can reject retained
+        # descendants after recording their cleanup. Never mark that call accepted.
+        self.base.run_owned(command, timeout, folder, env)
+        row, stdout, stderr = completed_record(folder, self.base.unique_json, command)
+        self.check(name, row, stdout, stderr)
+        self.accepted.append({'name': name, 'files': record_hashes(folder)})
+        self.save_acceptance()
+        return row['status'], stdout, stderr
+
+
+def recorder_selftest():
+    import copy
+    base = module(Path(__file__).resolve().parents[3], CRATE / 'verus/check-journal-issuance.py', 'scalar_recorder_test_base')
+    with tempfile.TemporaryDirectory(prefix='fe2o3-scalar-recorder-test-') as temporary:
+        folder = Path(temporary)
+        (folder / 'stdout.log').write_text('stdout\n')
+        (folder / 'stderr.log').write_text('')
+        valid = {'command': ['tool', '--check'], 'started_ns': 10, 'finished_ns': 20,
+                 'process_group': 42, 'status': 0, 'group_absent': True}
+        for status in (0, 1):
+            row = dict(valid, status=status)
+            (folder / 'record.json').write_text(json.dumps(row))
+            observed, stdout, stderr = completed_record(folder, base.unique_json, valid['command'])
+            need(observed == row and stdout == 'stdout\n' and stderr == '', 'valid receipt round trip')
+        faults = [('exception', 'CampaignInterrupted'), ('status', -9), ('status', True),
+                  ('group_absent', 1), ('group_absent', False), ('process_group', 0),
+                  ('started_ns', True), ('finished_ns', 1), ('command', ['different']), ('command', [1])]
+        for key, value in faults:
+            row = copy.deepcopy(valid)
+            row[key] = value
+            (folder / 'record.json').write_text(json.dumps(row))
+            try:
+                completed_record(folder, base.unique_json, valid['command'])
+            except ValueError:
+                continue
+            raise ValueError('accepted malformed resume receipt: ' + key)
+        (folder / 'record.json').unlink()
+        try:
+            completed_record(folder, base.unique_json, valid['command'])
+        except ValueError:
+            pass
+        else:
+            raise ValueError('accepted incomplete case')
+        (folder / 'record.json').write_text(json.dumps(valid)[:-1] + ', "status": 0}')
+        try:
+            completed_record(folder, base.unique_json, valid['command'])
+        except ValueError:
+            pass
+        else:
+            raise ValueError('accepted duplicate receipt key')
+    rejected = 12
+
+    def rejects(action):
+        nonlocal rejected
+        try:
+            action()
+        except ValueError:
+            rejected += 1
+        else:
+            raise ValueError('accepted malformed campaign')
+
+    source = {'commit': 'test', 'probe': True, 'inputs': {'source': 'hash'}}
+    names = ['first', 'second', 'third']
+    calls = []
+
+    def fake_run(command, timeout, folder, env):
+        calls.append(folder.name)
+        folder.mkdir()
+        start = 10 * (names.index(folder.name) + 1)
+        row = dict(valid, command=command, started_ns=start, finished_ns=start + 5)
+        (folder / 'record.json').write_text(json.dumps(row))
+        stdout = json.dumps(VERIFIER_IDENTITY) + '\n'
+        (folder / 'stdout.log').write_text(stdout)
+        (folder / 'stderr.log').write_text('')
+        return 0, stdout, ''
+
+    def validate(name, row, stdout, stderr):
+        check_verifier(base.unique_json(stdout))
+        need(row['command'] == ['tool', name] and row['status'] == 0
+             and stderr == '', 'checked fake command')
+
+    class FakeBase:
+        unique_json = staticmethod(base.unique_json)
+        run_owned = staticmethod(fake_run)
+
+    def controller(folder, resume=True, identity=source):
+        return Campaign(folder, identity, names, FakeBase, lambda a, b: json.dumps(a, sort_keys=True)
+                        == json.dumps(b, sort_keys=True), validate, resume)
+
+    with tempfile.TemporaryDirectory(prefix='fe2o3-scalar-campaign-test-') as temporary:
+        root = Path(temporary)
+        folder = root / 'checkpoints'
+        for count, name in enumerate(names):
+            campaign = controller(folder, resume=count > 0)
+            for previous in names[:count]:
+                campaign.run(previous, ['tool', previous], 1, {})
+            campaign.run(name, ['tool', name], 1, {})
+        need(calls == names, 'checkpoint continuation executes each command once')
+        snapshot = {str(p.relative_to(folder)): p.read_bytes() for p in folder.rglob('*') if p.is_file()}
+        replay = controller(folder)
+        for name in names:
+            replay.run(name, ['tool', name], 1, {})
+        need(calls == names and snapshot == {str(p.relative_to(folder)): p.read_bytes()
+             for p in folder.rglob('*') if p.is_file()}, 'complete replay does not execute or rewrite records')
+        rejects(lambda: controller(folder, identity=dict(source, probe=False)))
+        rejects(lambda: replay.run('first', ['wrong'], 1, {}))
+        with campaign_lock(folder):
+            rejects(lambda: campaign_lock(folder))
+        with campaign_lock(folder):
+            pass
+
+        import shutil
+        for fault in ('hole', 'future', 'missing_marker', 'hash', 'later_semantics', 'later_metadata', 'order',
+                      'reordered_marker', 'extra_stage', 'final_summary', 'summary_symlink'):
+            changed = root / fault
+            shutil.copytree(folder, changed)
+            if fault in ('hole', 'future'):
+                shutil.rmtree(changed / 'first')
+                if fault == 'future':
+                    (changed / 'accepted.json').write_text('[]\n')
+            elif fault == 'missing_marker':
+                (changed / 'accepted.json').unlink()
+            elif fault in ('hash', 'later_semantics', 'later_metadata'):
+                content = json.dumps(dict(VERIFIER_IDENTITY, profile='other')) if fault == 'later_metadata' else 'bad\n'
+                (changed / 'third/stdout.log').write_text(content)
+                if fault != 'hash':
+                    entries = base.unique_json((changed / 'accepted.json').read_text())
+                    entries[-1]['files'] = record_hashes(changed / 'third')
+                    (changed / 'accepted.json').write_text(json.dumps(entries))
+            elif fault == 'order':
+                path = changed / 'third/record.json'
+                row = base.unique_json(path.read_text())
+                row['started_ns'] = 1
+                path.write_text(json.dumps(row))
+                entries = base.unique_json((changed / 'accepted.json').read_text())
+                entries[-1]['files'] = record_hashes(changed / 'third')
+                (changed / 'accepted.json').write_text(json.dumps(entries))
+            elif fault == 'reordered_marker':
+                entries = base.unique_json((changed / 'accepted.json').read_text())
+                entries.reverse()
+                (changed / 'accepted.json').write_text(json.dumps(entries))
+            elif fault == 'extra_stage':
+                (changed / 'sources-interrupted').mkdir()
+            elif fault == 'final_summary':
+                (changed / 'results.json').write_text('{"extra": true}\n')
+            else:
+                (changed / 'results.json').symlink_to(root / 'missing')
+            rejects(lambda: controller(changed))
+            need(calls == names, 'invalid prefix rejected before execution')
+
+        # Reproduce run_owned's post-receipt rejection without creating an orphan.
+        def rejected_cleanup(command, timeout, folder, env):
+            fake_run(command, timeout, folder, env)
+            raise ValueError('command left process-group members')
+
+        changed = root / 'rejected_cleanup'
+        campaign = controller(changed, resume=False)
+        FakeBase.run_owned = staticmethod(rejected_cleanup)
+        rejects(lambda: campaign.run('first', ['tool', 'first'], 1, {}))
+        need(base.unique_json((changed / 'accepted.json').read_text()) == [], 'rejected cleanup not accepted')
+        rejects(lambda: controller(changed))
+        FakeBase.run_owned = staticmethod(fake_run)
+        changed = root / 'out_of_order'
+        campaign = controller(changed, resume=False)
+        rejects(lambda: campaign.run('second', ['tool', 'second'], 1, {}))
+        need(calls == names + ['first'], 'rejected resume never reruns command')
+    print(f'PASS: receipt and checkpoint replay checks; {rejected} malformed or conflicting operations rejected')
 
 
 def source_roster(repo, inherited):
@@ -187,9 +458,12 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--target', type=Path, required=True)
     parser.add_argument('--probe', action='store_true')
+    parser.add_argument('--resume', action='store_true', help='Reuse only fully validated terminal records for this exact source.')
+    parser.add_argument('--stop-after', help='Return at a named checked command; an incomplete campaign is not qualification.')
     args = parser.parse_args()
     repo, output, verus = args.repo.resolve(), args.output.resolve(), args.verus.resolve(strict=True)
     os.chdir(repo)
+    lock = campaign_lock(output)
     history = module(repo, PREVIOUS, 'scalar_history_check')
     settlement = module(repo, history.PREVIOUS, 'scalar_settlement_check')
     writer = module(repo, settlement.PREVIOUS, 'historical_settlement_writer_check')
@@ -213,20 +487,88 @@ def main():
             need(digest(data) == expected, 'source commit mismatch: ' + path)
     for path, pin in legacy.PINS.items():
         need(digest((repo / path).read_bytes()) == pin, 'source pin: ' + str(path))
-    output.mkdir()
-    (output / 'source.json').write_text(json.dumps({'commit': commit, 'probe': args.probe, 'inputs': before}, indent=2) + '\n')
+    source = {'commit': commit, 'probe': args.probe, 'inputs': before}
     env = {'HOME': '/home/harsh', 'PATH': '/home/harsh/.cargo/bin:/usr/bin:/bin',
            'CARGO_HOME': '/home/harsh/.cargo', 'RUSTUP_HOME': '/home/harsh/.rustup',
            'VERUS_Z3_PATH': str(verus.parent / 'z3'), 'CARGO_TARGET_DIR': str(args.target.resolve())}
-    results = {}
+    cases = [('positive-before', None), *[(m[0], m) for m in MUTATIONS], ('positive-after', None), ('raw-regression', None), ('settlement-regression', None)]
+    cpu = [
+        ('recorder-test', ['python3', '-B', str(Path(__file__).resolve()), '--selftest']),
+        ('compiler', ['rustc', '+1.97.1', '-Vv']),
+        ('format', ['cargo', '+1.97.1', 'fmt', '--check', '-p', 'fe2o3-runtime-model']),
+        ('test', ['cargo', '+1.97.1', 'test', '--locked', '-p', 'fe2o3-runtime-model']),
+        ('clippy', ['cargo', '+1.97.1', 'clippy', '--locked', '-p', 'fe2o3-runtime-model', '--all-targets', '--', '-D', 'warnings']),
+        ('release-build', ['cargo', '+1.97.1', 'test', '--locked', '-p', 'fe2o3-runtime-model', '--release', '--no-run']),
+    ]
+    names = ['closure-before', *[name for name, _ in cases], 'closure-after', *[name for name, _ in cpu]]
+    need(args.stop_after is None or args.stop_after in names, 'known checkpoint name')
+    closure_command = ['/bin/sh', str(repo / legacy.CLOSURE), str(verus.parent), str(repo / legacy.MANIFEST)]
+    cpu_commands, mutations = dict(cpu), dict(cases)
+    cpu_parser = module(repo, settlement.CPU_PARSER, 'settlement_cpu_parser').test_results
+
+    def proof_stage(name, row):
+        root = RAW if name == 'raw-regression' else history.ROOT if name == 'settlement-regression' else ROOT
+        recorded_root = Path(row['command'][-1])
+        need(recorded_root.is_absolute() and str(recorded_root).endswith('/' + str(root)), 'resumed proof root')
+        stage = Path(str(recorded_root)[:-len(str(root)) - 1])
+        need(stage.parent == output and stage.name.startswith('sources-'), 'owned recorded source stage')
+        need(row['command'] == legacy.command(verus, stage / root, mutations[name]), 'exact proof command')
+        return stage
+
+    def validate(name, row, stdout, stderr):
+        if name in ('closure-before', 'closure-after'):
+            need(row['command'] == closure_command and row['status'] == 0 and not stderr and stdout ==
+                 'PASS: pinned Verus release closure matched at this measurement (190 files, 129019839 bytes)\n', 'pinned Verus distribution')
+        elif name in cpu_commands:
+            need(row['command'] == cpu_commands[name] and row['status'] == 0, 'CPU check: ' + name)
+            if name == 'test':
+                need(cpu_parser(stdout) == [(966, 0, 18, 0, 0), (27, 0, 0, 0, 0)], 'exact CPU test inventory')
+            if name == 'recorder-test':
+                need(stdout == 'PASS: receipt and checkpoint replay checks; 29 malformed or conflicting operations rejected\n'
+                     and not stderr, 'recorder regression inventory')
+        else:
+            stage, mutation = proof_stage(name, row), mutations[name]
+            observed = legacy.normalized(base, stdout, stderr, stage)
+            check_verifier(observed['verus'])
+            if mutation:
+                negative_report(observed['result'])
+                legacy.check_result(base, row['status'], stdout, stderr, stage, mutation, {name: observed})
+            else:
+                need(row['status'] == 0 and not observed['diagnostics'], 'clean terminal positive')
+                need(legacy.same(observed['result'], {'encountered-error': False, 'encountered-vir-error': False,
+                     'success': True, 'verified': 310 if name == 'raw-regression' else 916 if name == 'settlement-regression' else PAIRED_VERIFIED,
+                     'errors': 0, 'is-verifying-entire-crate': True}), 'exact whole-root positive')
+            return observed
+
+    # Preflight every cached command, result, hash and timestamp before any new work.
+    campaign = Campaign(output, source, names, base, legacy.same, validate, args.resume)
+    results = campaign.results()
+
+    def run(name, command, timeout):
+        return campaign.run(name, command, timeout, env)
+
+    def stop(name):
+        if args.stop_after != name or name == 'release-build':
+            return False
+        source_roster(repo, inherited)
+        need(before == {str(p): digest((repo / p).read_bytes()) for p in sorted(inputs)}, 'checkpoint source drift')
+        state = 'commands complete' if len(campaign.accepted) == len(names) else 'campaign incomplete'
+        print('CHECKPOINT: ' + name + ' checked; ' + state, flush=True)
+        return True
+
     for phase in ['before', 'after']:
-        status, _, _ = base.run_owned(['/bin/sh', str(repo / legacy.CLOSURE), str(verus.parent), str(repo / legacy.MANIFEST)],
-                                      120, output / ('closure-' + phase), env)
-        need(status == 0, 'pinned Verus distribution')
+        run('closure-' + phase, closure_command, 120)
+        if stop('closure-' + phase):
+            return
         if phase == 'after':
             break
-        cases = [('positive-before', None), *[(m[0], m) for m in MUTATIONS], ('positive-after', None), ('raw-regression', None), ('settlement-regression', None)]
         for name, mutation in cases:
+            root = RAW if name == 'raw-regression' else history.ROOT if name == 'settlement-regression' else ROOT
+            if name in campaign.rows:
+                print(name, results[name]['result'], '(reused)', flush=True)
+                if stop(name):
+                    return
+                continue
             with tempfile.TemporaryDirectory(prefix='sources-', dir=output) as temporary:
                 stage = Path(temporary)
                 for path in sources:
@@ -243,36 +585,17 @@ def main():
                     stripped = stage / projection
                     stripped.write_text(data.replace('macro_rules!', ''))
                     policy.scan(stripped)
-                command = legacy.command(verus, stage / (RAW if name == 'raw-regression' else history.ROOT if name == 'settlement-regression' else ROOT), mutation)
-                status, stdout, stderr = base.run_owned(command, 610, output / name, env)
-                observed = legacy.normalized(base, stdout, stderr, stage)
-                if mutation:
-                    # Reuse the scoped logical-failure checks; this developer record
-                    # captures diagnostics, rather than claiming precommitted replay.
-                    negative_report(observed['result'])
-                    legacy.check_result(base, status, stdout, stderr, stage, mutation, {name: observed})
-                else:
-                    need(status == 0 and not observed['diagnostics'], 'clean terminal positive')
-                    report = observed['result']
-                    need(legacy.same(report, {'encountered-error': False, 'encountered-vir-error': False,
-                                    'success': True, 'verified': 310 if name == 'raw-regression' else 916 if name == 'settlement-regression' else PAIRED_VERIFIED,
-                                    'errors': 0, 'is-verifying-entire-crate': True}), 'exact whole-root positive')
-                results[name] = observed
-                print(name, observed['result'], flush=True)
+                command = legacy.command(verus, stage / root, mutation)
+                run(name, command, 610)
+                print(name, results[name]['result'], flush=True)
+                if stop(name):
+                    return
         need(legacy.same(results['positive-before'], results['positive-after']), 'matching whole-root positives')
-    for name, command in [
-        ('compiler', ['rustc', '+1.97.1', '-Vv']),
-        ('format', ['cargo', '+1.97.1', 'fmt', '--check', '-p', 'fe2o3-runtime-model']),
-        ('test', ['cargo', '+1.97.1', 'test', '--locked', '-p', 'fe2o3-runtime-model']),
-        ('clippy', ['cargo', '+1.97.1', 'clippy', '--locked', '-p', 'fe2o3-runtime-model', '--all-targets', '--', '-D', 'warnings']),
-        ('release-build', ['cargo', '+1.97.1', 'test', '--locked', '-p', 'fe2o3-runtime-model', '--release', '--no-run']),
-    ]:
-        status, stdout, _ = base.run_owned(command, 600, output / name, env)
-        need(status == 0, 'CPU check: ' + name)
-        if name == 'test':
-            parse = module(repo, settlement.CPU_PARSER, 'settlement_cpu_parser').test_results
-            need(parse(stdout) == [(966, 0, 18, 0, 0), (27, 0, 0, 0, 0)], 'exact CPU test inventory')
+    for name, command in cpu:
+        run(name, command, 600)
         print(name, 'passed', flush=True)
+        if stop(name):
+            return
     after = {str(p): digest((repo / p).read_bytes()) for p in sorted(inputs)}
     source_roster(repo, inherited)
     need(before == after, 'source drift')
@@ -281,4 +604,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] == ['--selftest']:
+        recorder_selftest()
+    else:
+        main()
