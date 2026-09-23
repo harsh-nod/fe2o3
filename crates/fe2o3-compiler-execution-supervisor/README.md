@@ -46,6 +46,14 @@ shared fixed fourteen-entry table, with deterministic cleanup on partial failure
 These are launch prerequisites, not a native consuming process-launch API. See
 the [process-observation contract](../../docs/compiler-execution-process-observations-v2.md).
 
+`ProtectedIssuerCleanupServiceV2` now funds the existing fixed cleanup pool from
+one persistent owned ledger. Native turns prepay bounded work, retain cumulative
+history, and use the same cleanup engine as V1. Controller Drop/recovery retains
+the account and records; only empty orderly shutdown releases pool storage.
+Native and legacy modes are mutually exclusive. A prepaid launch reservation
+is capacity only, not an enabled native child launch. See the
+[cleanup custody contract](../../docs/compiler-execution-cleanup-custody.md).
+
 Full child confinement, consuming native process creation, readiness,
 serving/recovery and producer activation remain open. Every nested check uses
 the caller's ledger; reserve returned growth while preserving consumed input

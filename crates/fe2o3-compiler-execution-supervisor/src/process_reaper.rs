@@ -1,4 +1,4 @@
-//! Fixed-capacity legacy cleanup custodian; not a native resource account.
+//! One fixed-capacity cleanup pool, with mutually exclusive legacy/native funding.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -6,6 +6,21 @@ use std::time::Duration;
 
 use crate::process_cleanup::{ChildCleanupV1, CleanupPollV1};
 use crate::{MAX_PROTECTED_ISSUER_PROCESSES_V1, ProtectedIssuerLaunchErrorV1};
+
+#[path = "process_reaper_native.rs"]
+mod native;
+pub use native::{
+    ProtectedIssuerCleanupAdmissionErrorV2, ProtectedIssuerCleanupErrorV2,
+    ProtectedIssuerCleanupReportV2, ProtectedIssuerCleanupReservationV2,
+    ProtectedIssuerCleanupServiceV2,
+};
+
+enum ReaperMode {
+    Uninitialized,
+    Legacy,
+    Native(native::NativeAccount),
+    Closed,
+}
 
 const EMPTY: u8 = 0;
 const RESERVED: u8 = 1;
@@ -29,6 +44,7 @@ impl ReapCellV1 {
 pub(crate) struct DeferredReaperV1 {
     cells: [ReapCellV1; MAX_PROTECTED_ISSUER_PROCESSES_V1],
     thread_started: OnceLock<bool>,
+    mode: Mutex<ReaperMode>,
 }
 
 impl DeferredReaperV1 {
@@ -36,12 +52,25 @@ impl DeferredReaperV1 {
         Self {
             cells: [const { ReapCellV1::new() }; MAX_PROTECTED_ISSUER_PROCESSES_V1],
             thread_started: OnceLock::new(),
+            mode: Mutex::new(ReaperMode::Uninitialized),
         }
     }
 
     pub(crate) fn reserve(
         &'static self,
     ) -> Result<ReapSlotV1<'static>, ProtectedIssuerLaunchErrorV1> {
+        {
+            let mut mode = self.mode.lock().unwrap_or_else(|error| error.into_inner());
+            match &*mode {
+                ReaperMode::Uninitialized => *mode = ReaperMode::Legacy,
+                ReaperMode::Legacy => {}
+                ReaperMode::Native(_) | ReaperMode::Closed => {
+                    return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                        "cleanup pool is not in legacy mode",
+                    ));
+                }
+            }
+        }
         if !*self.thread_started.get_or_init(|| {
             std::thread::Builder::new()
                 .name("fe2o3-issuer-reaper-v1".to_owned())
@@ -75,23 +104,27 @@ impl DeferredReaperV1 {
     // and all custody; ownership loss must not look like our successful terminal wait.
     fn pump(&self) {
         for cell in &self.cells {
-            if cell.state.load(Ordering::Acquire) != DEFERRED {
-                continue;
+            Self::pump_cell(cell);
+        }
+    }
+
+    fn pump_cell(cell: &ReapCellV1) {
+        if cell.state.load(Ordering::Acquire) != DEFERRED {
+            return;
+        }
+        let mut child = cell.child.lock().unwrap_or_else(|error| error.into_inner());
+        let next_state = match child.as_mut().map(ChildCleanupV1::step) {
+            Some(CleanupPollV1::Pending) => None,
+            Some(CleanupPollV1::Reaped) => {
+                drop(child.take());
+                Some(EMPTY)
             }
-            let mut child = cell.child.lock().unwrap_or_else(|error| error.into_inner());
-            let next_state = match child.as_mut().map(ChildCleanupV1::step) {
-                Some(CleanupPollV1::Pending) => None,
-                Some(CleanupPollV1::Reaped) => {
-                    drop(child.take());
-                    Some(EMPTY)
-                }
-                Some(CleanupPollV1::Quarantined) | None => Some(QUARANTINED),
-            };
-            drop(child);
-            // The sole worker retires the payload and mutex guard before slot reuse.
-            if let Some(state) = next_state {
-                cell.state.store(state, Ordering::Release);
-            }
+            Some(CleanupPollV1::Quarantined) | None => Some(QUARANTINED),
+        };
+        drop(child);
+        // Both modes serialize pumping; retire the guard before publishing reuse.
+        if let Some(state) = next_state {
+            cell.state.store(state, Ordering::Release);
         }
     }
 }

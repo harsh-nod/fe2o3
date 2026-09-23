@@ -1,8 +1,9 @@
 # Issuer Cleanup Custody
 
-This contract covers the shared cleanup mechanics and their integration into
-the existing V1 supervisor. It does not enable native V2 process launch, finish
-#271/#272, or qualify a kernel for protected proof or safe GPU execution.
+This contract covers the shared cleanup mechanics, the existing V1 supervisor,
+and native V2 persistent pool funding. It does not enable native V2 process
+launch, finish #271/#272, or qualify a kernel for protected proof or safe GPU
+execution.
 
 ## Ownership Before Clone
 
@@ -56,6 +57,59 @@ an unresolved private record preserves its resources rather than asserting
 disposal, but such an unreachable leak is not a substitute for the pool's
 reachable custody or an acceptable native accounting mechanism.
 
+## Native Pool Account
+
+`ProtectedIssuerCleanupServiceV2::admit` consumes an owned resource ledger and
+reserves the full existing 64-slot pool. The ledger shares the canonical work
+and storage implementation; it preserves a supplied work prefix and every
+reached peak or denial. Temporary budget views borrow those same counters.
+Neither the service nor a cleanup turn creates a replacement work meter.
+
+Admission selects native mode permanently. The existing V1 path selects legacy
+mode before starting its periodic worker. Neither can upgrade, replace or use
+the other's mode. Both call the same `pump_cell` and `ChildCleanupV1::step`; native
+mode does not start a second thread or pool.
+
+Each explicit native `pump(visits)` prepays setup plus the complete allowance
+for 1 through 64 cells before inspecting any cell or performing cleanup I/O.
+Its cursor rotates across turns, including empty and quarantined cells. A
+refused work charge leaves the cursor and children untouched and stops new
+admissions. Admission also stops proactively when the remaining service work
+cannot fund even one cell, including at initial admission or after recovery.
+A smaller affordable turn may still drain custody, without clearing
+the original denial or renewing the work limit. Quarantine never returns slot
+capacity or becomes successful reaping evidence.
+
+The move-only controller is a lease over a process-global account. Its Drop
+releases only that lease; storage and deferred records remain charged and
+reachable. `recover` reacquires the same account, at an explicit cumulative
+cost. It accepts no new limits. Exhaustion can prevent recovery; this is a
+retention guarantee, not an eventual-cleanup guarantee. There is no unmetered
+fallback. After controller Drop, even empty teardown requires affordable
+recovery; an unused handle-local shutdown allowance is not reusable by a later
+handle. An outer supervisor remains responsible for service death or an account
+that cannot make further progress.
+
+`reserve_launch` charges the request ledger before reserving capacity and
+prepays one emergency signal/wait/transfer plus finalization. It creates no
+child and grants no execution authority. The capacity reservation may outlive
+that request ledger: it lives in the independently funded service pool.
+Discarding an unused reservation returns its slot without new work charges.
+Having enough service work for one turn does not promise eventual reaping of
+every retained child; later progress still depends on funding and observations.
+Connecting that private reservation to the native consuming launch is still
+required, together with the parent's and child's finite protocol envelopes.
+
+The pool charge includes the fixed table, controller/account metadata, embedded
+records and spawn obligations, plus a logical descriptor charge per slot. It
+persists for free, reserved, deferred and quarantined slots. Only an empty,
+orderly shutdown releases it and returns the original account; the process
+pool then remains closed. Each controller prepays its first shutdown attempt,
+so an empty pool can close at its exact work limit. A busy attempt consumes that
+allowance; further attempts require additional work. No handle may reset or
+replace the account while retained custody exists. An admitted shutdown attempt
+stops new reservations even when it finds the pool busy; pumping remains allowed.
+
 ## Remaining Limits
 
 These are finite syscall-attempt and capacity bounds, not hard elapsed-time
@@ -66,12 +120,13 @@ scheduled without explicit logical work grants and therefore is not native
 prepaid cleanup. A quarantined record requires outer service recovery; no API
 currently certifies its release.
 
-The native consuming API still needs a persistent service storage reservation,
-explicit cumulative cleanup-work grants, pre-clone emergency/finalization
-permits, finite parent/child protocol envelopes and a service shutdown/recovery
-owner. A request-local scratch scope or expired ledger identity cannot pay for
-cleanup that outlives that request. Native V2 launch remains unavailable until
-these obligations are integrated with the existing engine.
+Native consuming launch still needs to transfer the funded reservation into
+the shared foreground child owner, account for all parent/child protocol work,
+and connect funded pumping to the production service lifecycle. A request-local
+scratch scope or expired ledger identity cannot pay for cleanup that outlives
+that request. Native V2 launch remains unavailable until these obligations are
+integrated with the existing engine. The V1 periodic worker remains unmetered
+and is never a fallback for native refusal.
 
 ## Tests
 
@@ -80,4 +135,8 @@ ownership loss, terminal classification, missing pidfd, transfer and exactly-onc
 lease retirement. Coordinator tests cover cross-thread transfer, multiple
 leases, unwind, overflow refusal and origin-PID handling. Pool tests cover
 reservation rollback, pending/quarantined capacity and terminal slot reuse.
+Native account tests cover exact/short quotas, cumulative recovery, exclusive
+modes, rotating funded turns, retained quarantine and empty shutdown. Owned
+ledger tests cover shared accounting across views, scratch rollback/unwind and
+non-escaping borrows.
 These are cleanup tests, not protected-runtime or GPU qualification evidence.

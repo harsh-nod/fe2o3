@@ -89,6 +89,11 @@ pub use process::{
     ProtectedIssuerLaunchErrorV1, ProtectedIssuerTerminationV1, ReadyProtectedIssuerV1,
     ServingProtectedIssuerV1, validate_current_issuer_service_profile_v1,
 };
+pub use process_reaper::{
+    ProtectedIssuerCleanupAdmissionErrorV2, ProtectedIssuerCleanupErrorV2,
+    ProtectedIssuerCleanupReportV2, ProtectedIssuerCleanupReservationV2,
+    ProtectedIssuerCleanupServiceV2,
+};
 pub use provisioning::{
     ProtectedIssuerServiceDeploymentInputsV1, ProtectedIssuerServiceProvisioningErrorV1,
     ProvisionedProtectedIssuerServiceInputsV1,
