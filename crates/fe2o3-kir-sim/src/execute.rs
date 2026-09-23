@@ -2122,8 +2122,8 @@ pub(crate) fn conservative_execution_resident_bytes(
         resident.add_bytes(reserved_bool_vec_bytes(backing.buffer.initialized().len())?)?;
     }
 
-    // Allocation payloads use exact reservation on the pinned toolchain. Rust's
-    // specialized `Vec<bool>` reports capacity in bits, not bytes.
+    // Allocation payloads use exact reservation on the pinned toolchain.
+    // Vec<bool> capacity counts ordinary bool elements, each charged in bytes.
     resident.add_bytes(limits.max_total_bytes)?;
     resident.add_bytes(partitioned_bool_vec_storage_bytes(
         limits.max_total_bytes,
