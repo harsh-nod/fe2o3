@@ -34,6 +34,7 @@ impl AdmittedSimulationModuleV1 {
                 debug_capture: capture,
                 schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
                 resident_offset: 0,
+                allocation_reuse: None,
             },
             event_sink,
             debug_sink,

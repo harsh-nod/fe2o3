@@ -1,5 +1,8 @@
 #![cfg(target_os = "linux")]
 
+#[path = "fixtures/declared_target.rs"]
+mod declared_target;
+
 use std::fmt::Write as _;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};

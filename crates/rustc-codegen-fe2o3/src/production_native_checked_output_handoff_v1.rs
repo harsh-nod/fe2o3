@@ -644,7 +644,29 @@ pub(crate) fn check_output_inputs_v1(
         crate::compiler_descriptor::checked_output_policy3_v1::native_worker_binding_v1::check_native_worker_descriptor_source_v1(
             inputs.owner, typed_roots, profile, budget,
         )?;
-        let (handoff, descriptors, expected_llvm) = inputs.prepared.native_output_parts_v1();
+        check_prepared_output_pair_v1(
+            inputs.owner.output(),
+            inputs.catalog,
+            inputs.prepared,
+            inputs.workgroups,
+            profile,
+            budget,
+        )
+    })
+}
+
+// Read-only actual graph/text/descriptor pair validation. This accepts no proof
+// and creates no OutputOwnerV1 or protected publication owner.
+pub(crate) fn check_prepared_output_pair_v1(
+    output: &Graph,
+    catalog: &Catalog,
+    prepared: &PreparedProductionWorkerHandoff,
+    workgroups: &[(String, WorkgroupSize)],
+    profile: Profile,
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    scoped(budget, |budget| {
+        let (handoff, descriptors, expected_llvm) = prepared.native_output_parts_v1();
         budget.charge_work(
             handoff
                 .module_bytes()
@@ -660,11 +682,10 @@ pub(crate) fn check_output_inputs_v1(
         {
             return Err(E::Mismatch("exact prepared target/LLVM handoff"));
         }
-        let output = inputs.owner.output();
-        if inputs.workgroups.len() != output.module().kernels.len() {
+        if workgroups.len() != output.module().kernels.len() {
             return Err(E::Mismatch("complete actual-O workgroup roster"));
         }
-        for ((name, workgroup), kernel) in inputs.workgroups.iter().zip(&output.module().kernels) {
+        for ((name, workgroup), kernel) in workgroups.iter().zip(&output.module().kernels) {
             budget.charge_work(
                 name.len()
                     .checked_add(kernel.id.as_str().len())
@@ -679,7 +700,7 @@ pub(crate) fn check_output_inputs_v1(
             .map_err(|_| E::Mismatch("prepared LLVM UTF-8"))?;
         let _relation = dialect_amdgcn::check_native_v12_text_descriptor_relation_v1(
             output,
-            inputs.catalog,
+            catalog,
             output.canonical().canonical_bytes(),
             profile,
             descriptors.table(),

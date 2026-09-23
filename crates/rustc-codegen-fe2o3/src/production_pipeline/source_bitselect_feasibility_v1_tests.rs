@@ -1,4 +1,5 @@
-//! Private first feasibility gate, not a replacement/planner admission API.
+//! Compiler-private typed-HIR/semantic/KIR join shared by bounded Linux promotion.
+//! The JSON observation entry remains test-only; no report can construct an owner.
 //! Captures typed HIR before consuming the sealed collected transaction, then
 //! joins it to the unchanged normal semantic/KIR owners in that same callback.
 
@@ -15,12 +16,14 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticFunctionRoleV1, SemanticLocalIdV1, SemanticLocalRoleV1, SemanticOperandV1,
     SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticStatementKindV1, SemanticTypeShapeV1,
 };
+#[cfg(test)]
 use serde_json::{Value, json};
 
 #[cfg(target_os = "linux")]
 #[path = "source_bitselect_candidate_v1_tests.rs"]
 mod candidate;
 
+#[cfg(test)]
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     pub(crate) fn observe_source_bitselect_feasibility(self) -> Result<Value, String> {
         let tcx = self.stage.tcx;
@@ -352,6 +355,7 @@ fn exact_join<'a>(
     })
 }
 
+#[cfg(test)]
 impl JoinedBitselect<'_> {
     fn observation(&self, captured: &CapturedBitselect<'_>) -> Result<Value, String> {
         let Self {

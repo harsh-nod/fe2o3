@@ -4,6 +4,9 @@
 //! The positive currently proves its value relation, then fails TotalView
 //! ownership; the two mutations must fail the real Verus assertion instead.
 
+#[path = "gfx942_reference_stale_proof_v30_tests.rs"]
+mod stale_proof;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

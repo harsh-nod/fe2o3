@@ -10,6 +10,76 @@ const JOIN_CHILD: &str = "production_rustc_driver_v1::source_bitselect_feasibili
 const JOIN_PREFIX: &str = "FE2O3_SOURCE_CANDIDATE_DEBUG_JOIN ";
 const PAIR: [&str; 2] = ["default", "edited"];
 
+// Validate bounded diagnostic observations; no imported value becomes an owner.
+pub(super) fn require_inspection_observation(observation: &Value, edited: bool) {
+    let report = &observation["ordered_program_inspection"];
+    assert_eq!(
+        report["kind"],
+        "actual_source_ordered_program_inspection_join_v1"
+    );
+    assert_eq!(
+        report["consumer"],
+        "ProductionOrderedProgramPreRankedKirOwnerV17::inspect_ordered_program_v1"
+    );
+    assert_eq!(
+        report["canonical_sha256"],
+        observation["fresh"]["kernel_ir_sha256"]
+    );
+    assert_eq!(
+        report["semantic_sha256"],
+        observation["fresh"]["semantic_sha256"]
+    );
+    assert_eq!(report["current_owner_inspections"], 1);
+    assert_eq!(report["exact_stale_identity_refusals"], usize::from(edited));
+    assert_eq!(report["current_identity_rebind_after_stale"], edited);
+    assert_eq!(report["old_identity_used_only_as_negative_input"], edited);
+    for field in [
+        "same_live_v17_owner",
+        "exact_selected_site_checked",
+        "canonical_bytes_unchanged",
+        "incoming_storage_restored",
+        "same_work_ledger",
+    ] {
+        assert_eq!(report[field], true, "{field}");
+    }
+    for field in [
+        "resource_accounting_is_rss",
+        "ranked_checks",
+        "functional_proof",
+        "proof_invalidation_qualified",
+        "source_authentication_claim",
+        "production_resume",
+        "physical_register_observations",
+        "grants_artifact_or_launch_authority",
+    ] {
+        assert_eq!(report[field], false, "{field} remains unavailable");
+    }
+    let bytes = report["canonical_bytes"].as_u64().unwrap();
+    let floor = report["query_storage_floor_bytes"].as_u64().unwrap();
+    let view = report["view_payload_bytes"].as_u64().unwrap();
+    let peak = report["peak_storage_bytes"].as_u64().unwrap();
+    let accepted = report["accepted_work_units"].as_u64().unwrap();
+    let stale_work = if edited { 37 } else { 0 };
+    let work_limit = if edited { 2_097_152 } else { 1_048_576 };
+    assert!(bytes > 0 && bytes <= 64 * 1024);
+    assert_eq!(report["snapshot_byte_limit"], 64 * 1024);
+    assert_eq!(
+        floor,
+        report["input_storage_bytes"]
+            .as_u64()
+            .unwrap()
+            .checked_add(bytes)
+            .unwrap()
+    );
+    assert!(view > 0 && view <= 1024);
+    assert!(peak >= floor.checked_add(view).unwrap() && peak <= 32 * 1024 * 1024);
+    assert_eq!(report["storage_limit"], 32 * 1024 * 1024);
+    assert_eq!(report["local_query_work_limit"], 1_048_576);
+    assert_eq!(report["stale_refusal_work_units"], stale_work);
+    assert_eq!(report["work_limit"], work_limit);
+    assert!(accepted > stale_work && accepted <= work_limit);
+}
+
 struct JoinCallbacks {
     source: Option<RetainedInput>,
     plan: Gfx942OrderedProgramRegistersV1,
@@ -137,6 +207,7 @@ fn actual_source_candidate_debug_join_child() {
             .expect("actual compiler-produced catalog and debugger consumer checks");
         assert_eq!(evidence.report["whole_kernel_simulation"]["runs"], 30);
         assert_eq!(evidence.report["actual_captures"], 1);
+        require_inspection_observation(&evidence.report, selector == "edited");
         assert_eq!(
             evidence.report["exact_source_identity_mismatch_refusals"],
             if selector == "edited" { 3 } else { 0 },
@@ -170,6 +241,9 @@ fn actual_source_candidate_debug_join_child() {
         "positive_whole_kernel_oracle_runs":60,"actual_debug_capture_runs":2,
         "positive_execution_total":62,"total_step_limit":8_500_000,
         "exact_source_identity_mismatch_refusals":3,
+        "current_owner_inspections":2,"exact_stale_inspection_identity_refusals":1,
+        "inspection_queries":3,"inspection_work_limit":3_145_728,
+        "ranked_checks":false,"functional_proof":false,"proof_invalidation_qualified":false,
         "old_evidence_used_only_as_negative_input":true,
         "public_bundle_created":false,"portable_capture_import":false,
         "production_resume":false,"hardware_observed":false,
@@ -180,7 +254,7 @@ fn actual_source_candidate_debug_join_child() {
     println!("\n{JOIN_PREFIX}{}", std::str::from_utf8(&bytes).unwrap());
 }
 
-fn run_pair_child(directory: &Path) -> Value {
+pub(super) fn run_pair_child(directory: &Path) -> Value {
     let records = pair(directory);
     for (record, selector) in records.iter().zip(PAIR) {
         let bytes = serde_json::to_vec_pretty(record).unwrap();
@@ -237,7 +311,12 @@ fn run_pair_child(directory: &Path) -> Value {
     assert!(line.len() <= 64 * 1024 && observations.next().is_none());
     let report: Value = serde_json::from_str(line).unwrap();
     assert_eq!(report["kind"], "private_actual_source_candidate_debug_join");
+    assert_eq!(report["current_owner_inspections"], 2);
+    assert_eq!(report["exact_stale_inspection_identity_refusals"], 1);
+    assert_eq!(report["inspection_queries"], 3);
+    assert_eq!(report["inspection_work_limit"], 3_145_728);
     for (index, record) in records.iter().enumerate() {
+        require_inspection_observation(&report["observations"][index]["observation"], index == 1);
         assert_eq!(
             report["observations"][index]["invocation"],
             serde_json::to_value(record).unwrap()
@@ -278,6 +357,8 @@ fn actual_source_candidate_debug_join_ladder() {
     assert_ne!(candidate_sha, edited_sha);
     let joined = run_pair_child(&directory);
     assert_eq!(joined["actual_rustc_callbacks"], 2);
+    assert_eq!(joined["current_owner_inspections"], 2);
+    assert_eq!(joined["exact_stale_inspection_identity_refusals"], 1);
     assert_eq!(joined["exact_source_identity_mismatch_refusals"], 3);
     assert_eq!(hash(&case.join("original.rs")), original_sha);
     assert_eq!(hash(&case.join("candidate.rs")), candidate_sha);
@@ -289,6 +370,8 @@ fn actual_source_candidate_debug_join_ladder() {
         "baseline":baseline,"edit_publications":edits,"joined":joined,
         "actual_frontend_callbacks_total":3,"baseline_owner_version":"V8",
         "fresh_diagnostic_owner_version":"V17",
+        "current_owner_inspections":2,"exact_stale_inspection_identity_refusals":1,
+        "ranked_checks":false,"functional_proof":false,"proof_invalidation_qualified":false,
         "source_files":source_files,"source_bytes":source_bytes,
         "source_file_limit":10,"source_byte_limit":10*128*1024,
         "source_directory":paths::relative_root(&directory),

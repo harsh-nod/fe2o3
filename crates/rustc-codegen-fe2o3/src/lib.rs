@@ -31,6 +31,7 @@ mod production_inline_assembly_v30;
 mod production_inline_source_occurrences_v30;
 mod production_mir_pliron_verus_join_v1;
 mod production_native_source_lineage_v1;
+mod production_ordered_origin_report_v1;
 mod production_ordered_program_source_occurrences_v32;
 mod production_ordered_program_v32;
 mod production_ordered_region_v31;
@@ -45,6 +46,29 @@ mod production_reference_effect_join_v2;
 #[cfg(test)]
 mod production_rustc_driver_checked_output_source_helpers_v1_tests;
 mod production_rustc_driver_v1;
+#[cfg(target_os = "linux")]
+mod source_bitselect_promotion_v1;
+#[cfg(target_os = "linux")]
+mod source_local_order_recipe_api_v1;
+#[cfg(target_os = "linux")]
+mod source_local_order_recipe_v1;
+#[cfg(target_os = "linux")]
+pub use production_rustc_driver_v1::run_bitselect_source_promotion_driver_v1;
+#[cfg(target_os = "linux")]
+pub use production_rustc_driver_v1::run_source_local_order_recipe_driver_v1;
+#[cfg(target_os = "linux")]
+pub use source_bitselect_promotion_v1::{
+    BitselectPromotionAttemptV1, BitselectPromotionFailureV1, BitselectPromotionRequestV1,
+    CandidatePublicationStateV1, FailurePhaseV1, PublishedBitselectCandidateV1,
+};
+#[cfg(target_os = "linux")]
+pub use source_local_order_recipe_api_v1::{
+    SourceLocalOrderConstraintOutcomeV1, SourceLocalOrderIdentityObservationV1,
+    SourceLocalOrderOrderV1, SourceLocalOrderRecipeAttemptV1, SourceLocalOrderRecipeEvidenceV1,
+    SourceLocalOrderRecipeFailurePhaseV1, SourceLocalOrderRecipeFailureV1,
+    SourceLocalOrderRecipeOutputV1, SourceLocalOrderRecipeRequestV1, SourceLocalOrderRelationV1,
+    SourceLocalOrderSourceBindingModeV1, SourceLocalOrderStrengthV1,
+};
 mod production_rustc_drop_v1;
 mod production_rustc_intrinsic_v1;
 mod production_rustc_slice_metadata_v1;
@@ -100,6 +124,7 @@ pub use production_ranked_projection_v1::ProductionRankedSemanticProjectionRoste
 #[doc(hidden)]
 pub use production_rustc_driver_v1::{
     run_diagnostic_ordered_program_kir_extraction_driver_v17,
+    run_diagnostic_ordered_program_origin_driver_v1,
     run_diagnostic_ordered_region_kir_extraction_driver_v16,
     run_production_amdgpu_compiler_handoff_extraction_driver_v1,
     run_production_amdgpu_llvm_extraction_driver_v1, run_production_extraction_driver_v1,

@@ -301,6 +301,45 @@ pub trait SimulationDebugSinkV1 {
         self.record(record)
     }
 
+    /// Opt in once per run to successful allocator mutations. This stream is
+    /// independent of EventPolicyV1, legacy debug ordinals, and snapshot capture.
+    fn wants_allocation_lifecycle_v1(&self) -> bool {
+        false
+    }
+
+    /// Stop accepts this row, DropAndStop does not; either stops only this stream.
+    /// Subsequent aggregate contexts report ObservationStopped, not completeness.
+    /// Retaining sinks must independently bound row counts and actual byte capacity.
+    fn allocation_lifecycle_v1(
+        &mut self,
+        _transition: crate::SimulationAllocationTransitionV1,
+    ) -> SimulationDebugSinkControlV1 {
+        SimulationDebugSinkControlV1::DropAndStop
+    }
+
+    /// Opt in to exactly one aggregate callback for each legacy record.
+    fn wants_observation_context_v1(&self) -> bool {
+        false
+    }
+
+    /// Requires aggregate delivery and operation identities; sampled once per run.
+    fn wants_checkpoint_frames_v1(&self) -> bool {
+        false
+    }
+
+    fn record_with_observation_context_v1(
+        &mut self,
+        record: SimulationDebugRecordV1,
+        context: crate::SimulationDebugObservationContextV1<'_>,
+    ) -> SimulationDebugSinkControlV1 {
+        match context.operation_origin() {
+            crate::SimulationDebugOriginContextV1::Unavailable(
+                crate::SimulationDebugOriginUnavailableV1::NotRequested,
+            ) => self.record(record),
+            origin => self.record_with_operation_origin_v1(record, origin),
+        }
+    }
+
     /// Retains debugger-only ABI-view evidence without changing the public V1 error shape.
     fn terminal_out_of_bounds_v2(&mut self, _detail: crate::SimulationOutOfBoundsV2) {}
 

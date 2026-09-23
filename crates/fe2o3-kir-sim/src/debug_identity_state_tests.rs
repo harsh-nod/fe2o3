@@ -479,10 +479,62 @@ fn identity_state_has_only_fixed_size_storage_and_no_drop_owned_payloads() {
     );
     assert!(
         size_of::<FrameIdentityState>()
-            <= size_of::<SimulationInvocationV1>() + 12 * size_of::<u64>()
+            <= size_of::<SimulationInvocationV1>()
+                + 12 * size_of::<u64>()
+                + size_of::<Option<ParentCallIdentity>>()
     );
     assert!(
         size_of::<OperationIdentity>()
             <= size_of::<SimulationInvocationV1>() + 5 * size_of::<u64>()
     );
+}
+
+#[test]
+fn parent_call_identity_is_compact_and_rebound_only_on_actual_fresh_activation() {
+    let (mut owner, mut root) = states(32);
+    let first = root.begin(site(7, 0, 0)).unwrap();
+    root.suspend(first).unwrap();
+    let mut child = owner.enter_frame(9).unwrap();
+    child.set_parent(first).unwrap();
+    let parent = child.parent().unwrap();
+    assert_eq!(parent.activation(), first.frame().activation());
+    assert_eq!(parent.attempt(), first.attempt());
+    assert_eq!(parent.site(), first.site());
+    assert!(!needs_drop::<ParentCallIdentity>());
+    assert!(size_of::<ParentCallIdentity>() <= 4 * size_of::<u64>());
+    assert!(size_of::<Option<ParentCallIdentity>>() <= 4 * size_of::<u64>());
+    assert!(
+        child.set_parent(first).is_err(),
+        "parent cannot be replaced in an activation"
+    );
+    assert!(
+        root.set_parent(first).is_err(),
+        "root cannot acquire a caller"
+    );
+    let old_activation = child.identity().activation();
+    child.retire().unwrap();
+    owner.reset_frame(&mut child, 9).unwrap();
+    assert!(child.parent().is_none());
+    assert_ne!(child.identity().activation(), old_activation);
+    root.resume(first).unwrap();
+    root.complete(first).unwrap();
+    let second = root.begin(site(7, 0, 0)).unwrap();
+    root.suspend(second).unwrap();
+    child.set_parent(second).unwrap();
+    assert_eq!(child.parent().unwrap().attempt(), second.attempt());
+    assert_ne!(child.parent().unwrap().attempt(), parent.attempt());
+}
+
+#[test]
+fn wrong_invocation_parent_is_rejected_without_changing_child_custody() {
+    let (mut owner, _) = states(32);
+    let mut child = owner.enter_frame(9).unwrap();
+    let (_, mut other) = InvocationIdentityState::new(invocation(1), 7, limits(32)).unwrap();
+    let call = other.begin(site(7, 0, 0)).unwrap();
+    other.suspend(call).unwrap();
+    assert_eq!(
+        child.set_parent(call),
+        Err(IdentityStateError::WrongInvocation)
+    );
+    assert!(child.parent().is_none());
 }

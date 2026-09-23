@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod bundle_declared_target_v1;
+pub use bundle_declared_target_v1::{AdmittedBundleTargetV1, BundleDeclaredGpuTargetV1};
+
 mod ordered_program_inspection;
 pub use ordered_program_inspection::run_ordered_program_inspector;
 
@@ -34,6 +37,7 @@ pub struct AdmittedSimulationInputV1 {
     /// Complete content identity of the exact admitted canonical bundle bytes.
     simulation_bundle_identity: Option<[u8; 32]>,
     simulation_bundle_evidence: Option<AdmittedSimulationBundleEvidenceV1>,
+    bundle_target_v1: Option<AdmittedBundleTargetV1>,
     pub kir_sha256: [u8; 32],
     pub request_sha256: [u8; 32],
     request_bytes: u64,

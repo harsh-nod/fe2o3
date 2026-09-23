@@ -184,8 +184,12 @@ pub(crate) use checked_output_policy7::*;
 #[path = "production_worker_checked_output_policy8_v1.rs"]
 mod checked_output_policy8;
 pub(crate) use checked_output_policy8::*;
+#[path = "production_worker_source_local_order_v1.rs"]
+mod source_local_order_v1;
+pub(crate) use source_local_order_v1::*;
 
 enum CheckedOutputOwnerRefV1<'a> {
+    SourceLocalOrder(&'a fe2o3_lower_mir_kernel::ProductionOwnedSourceLocalOrderContinuationV1),
     Direct(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1),
     Erased(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1),
     Direct5(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy5V1),
@@ -201,6 +205,7 @@ enum CheckedOutputOwnerRefV1<'a> {
 impl CheckedOutputOwnerRefV1<'_> {
     fn output(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 {
         match self {
+            Self::SourceLocalOrder(owner) => owner.output(),
             Self::Direct(owner) => owner.output(),
             Self::Erased(owner) => owner.output(),
             Self::Direct5(owner) => owner.output(),
@@ -218,6 +223,11 @@ impl CheckedOutputOwnerRefV1<'_> {
         // The Direct6 handoff keeps the established compatibility-source digest
         // convention. It is not the facade's actual pre-ranked V12 N identity.
         match self {
+            Self::SourceLocalOrder(owner) => *owner
+                .prefix()
+                .source_semantic_kir()
+                .canonical_kernel_ir_identity()
+                .digest(),
             Self::Direct8(owner) => *owner
                 .prefix()
                 .prefix()
@@ -287,6 +297,11 @@ impl CheckedOutputOwnerRefV1<'_> {
     {
         use crate::compiler_descriptor::checked_output_policy3_v1 as descriptors;
         match self {
+            Self::SourceLocalOrder(owner) => {
+                descriptors::source_local_order_v1::construct_source_local_order_descriptor_source_v1(
+                    envelope, compiler_module, typed_roots, owner, budget,
+                )
+            }
             Self::Direct8(owner) => {
                 descriptors::policy8::construct_checked_output_policy8_descriptor_source_v1(
                     envelope,

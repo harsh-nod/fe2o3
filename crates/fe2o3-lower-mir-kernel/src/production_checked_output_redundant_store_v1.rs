@@ -354,3 +354,10 @@ pub use commutative::{
 #[cfg(test)]
 #[path = "production_checked_output_redundant_store_scope_v1_tests.rs"]
 mod scope_tests;
+
+#[path = "production_checked_output_local_order_v1.rs"]
+mod local_order;
+pub use local_order::{
+    ProductionOwnedSourceLocalOrderContinuationV1, ProductionSourceLocalOrderErrorV1,
+    ProductionSourceLocalOrderStorageV1, SourceU32LocalOrderRequestV1,
+};

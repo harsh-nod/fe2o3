@@ -21,6 +21,7 @@ SCHEMA = "fe2o3-tutorial-kernel-identities-v1"
 MAX_TEXT_BYTES = 4 * 1024 * 1024
 MAX_RUNTIME_BYTES = 16 * 1024 * 1024
 MAX_IDENTITY_BYTES = 16 * 1024 * 1024
+MAX_CFG_TOKENS = 512
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 KERNEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}")
 ISSUE_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*")
@@ -90,14 +91,28 @@ class _Budget:
             _fail("record limit must be a nonnegative integer")
         self.maximum = maximum
         self.used = 0
+        self.attribute_visits = 0
         self.identity_bytes = 0
         self.source_bytes = 0
+        self.fragment_match_bytes = 0
 
     def rows(self, value: Any, label: str) -> list[Any]:
         if not isinstance(value, list) or len(value) > self.maximum - self.used:
             _fail(f"{label} exceeds the record bound or is not an array")
         self.used += len(value)
         return value
+
+    def fragment_search(self, source_bytes: int) -> None:
+        # Account for both full-source searches, including overlapping matches.
+        amount = 2 * source_bytes
+        if amount > MAX_RUNTIME_BYTES - self.fragment_match_bytes:
+            _fail("fixture fragment matching exceeds its aggregate byte-span bound")
+        self.fragment_match_bytes += amount
+
+    def visit_attribute(self) -> None:
+        if self.attribute_visits >= self.maximum:
+            _fail("fixture selection attributes exceed their aggregate visit bound")
+        self.attribute_visits += 1
 
 
 def _reference(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
@@ -179,15 +194,95 @@ def _fragment_intervals(tab: dict[str, Any], runtime: dict[str, Any], encoded: b
     return intervals
 
 
+def _fixture_display_declaration(tab: dict[str, Any]) -> None:
+    scope = tab["sourceDigestScope"]
+    digests = tab["sourceFragmentsSha256"]
+    if scope == "file":
+        if digests is not None:
+            _fail("whole-file fixture display cannot carry fragment metadata")
+    elif scope == "displayed":
+        if _digest(tab["sourceSha256"], "fixture display source digest") != tab["displayedSha256"]:
+            _fail("fixture display source and displayed digests differ")
+        if digests is not None:
+            if not isinstance(digests, list) or not 0 < len(digests) <= 64:
+                _fail("fixture display fragment metadata exceeds its bound or is empty")
+            for digest in digests:
+                _digest(digest, "fixture display fragment digest")
+    else:
+        _fail("unsupported fixture display digest scope")
+
+
+class _FixtureDisplayIndex:
+    """Exact excerpt/source correspondence, separate from fixture selection."""
+
+    def __init__(self, budget: _Budget):
+        self.budget = budget
+        self.parts = {}
+        self.sources = {}
+        self.mappings = {}
+
+    def match(self, location: tuple[str, int], tab: dict[str, Any], live: dict[str, Any],
+              path: str, source: str, digest: str, offset: int, symbol: str,
+              source_offset: int) -> None:
+        if location not in self.parts:
+            displayed = _utf8(live.get("displayedCode"), "fixture displayed code")
+            if tab["sourceFragmentsSha256"] is None:
+                if live.get("sourceFragments") is not None:
+                    _fail("contiguous fixture display has unexpected fragments")
+                intervals = [(0, len(displayed))]
+            else:
+                intervals = _fragment_intervals(tab, live, displayed)
+            self.budget.rows(intervals, "fixture display fragments")
+            parts = [(start, end, displayed[start:end]) for start, end in intervals]
+            if any(not part for _, _, part in parts):
+                _fail("fixture display fragments must be nonempty")
+            self.parts[location] = parts
+        parts = self.parts[location]
+        source_key = (path, digest)
+        if source_key not in self.sources:
+            self.sources[source_key] = _utf8(source, "fixture matched source")
+        encoded = self.sources[source_key]
+        mapping_key = (location, path, digest)
+        if mapping_key not in self.mappings:
+            self.budget.rows(parts, "fixture physical fragment mappings")
+            starts = []
+            for _, _, part in parts:
+                if len(part) > len(encoded):
+                    _fail("fixture display fragment exceeds its physical source")
+                self.budget.fragment_search(len(encoded))
+                start = encoded.find(part)
+                if start < 0:
+                    _fail("fixture display fragment differs from its physical source")
+                if encoded.find(part, start + 1) >= 0:
+                    _fail("fixture display fragment has ambiguous physical occurrences")
+                starts.append(start)
+            spans = sorted((start, start + len(part))
+                           for start, (_, _, part) in zip(starts, parts, strict=True))
+            if any(right[0] < left[1] for left, right in zip(spans, spans[1:])):
+                _fail("fixture display fragments overlap or repeat in physical source")
+            self.mappings[mapping_key] = starts
+        token = symbol.encode("utf-8")
+        matches = []
+        for index, (start, end, part) in enumerate(parts):
+            relative = offset - start
+            if not start <= offset < end:
+                continue
+            width = len(token) + (2 if part[relative:relative + 2] == b"r#" else 0)
+            if offset + width <= end and _name_token_matches(part, relative, symbol):
+                matches.append(self.mappings[mapping_key][index] + relative)
+        if matches != [source_offset]:
+            _fail("fixture display does not map to the exact selected physical function")
+
+
 def _fixture_cfg(body: str, features: set[str]) -> bool:
-    """Evaluate only literal feature/AMDGPU cfg expressions, without expansion."""
+    """Evaluate the declared non-test AMDGPU library context, without expansion."""
     if len(body) > 8192 or len(body.encode("utf-8")) > 8192:
         _fail("fixture cfg exceeds its byte bound")
     tokens = re.findall(r'\s+|[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z0-9_-]+"|[(),=]', body)
     if "".join(tokens) != body:
         _fail("unsupported fixture cfg syntax")
     tokens = [token for token in tokens if not token.isspace()]
-    if len(tokens) > 256:
+    if len(tokens) > MAX_CFG_TOKENS:
         _fail("fixture cfg exceeds its token bound")
     cursor = 0
 
@@ -216,6 +311,8 @@ def _fixture_cfg(body: str, features: set[str]) -> bool:
             if take() != ")" or (name == "not" and len(values) != 1):
                 _fail("unsupported fixture cfg arity")
             return all(values) if name == "all" else any(values) if name == "any" else not values[0]
+        if name == "test":
+            return False
         if name not in {"feature", "target_arch"} or take() != "=":
             _fail("unsupported fixture cfg predicate")
         value = take()
@@ -228,6 +325,104 @@ def _fixture_cfg(body: str, features: set[str]) -> bool:
     if cursor != len(tokens):
         _fail("trailing fixture cfg syntax")
     return result
+
+
+def _fixture_trivia_end(source: str, start: int, end: int) -> int:
+    """Skip only comments/whitespace, never literals hidden by the census lexer."""
+    cursor = start
+    while cursor < end:
+        if source[cursor].isspace():
+            cursor += 1
+        elif source.startswith("//", cursor):
+            newline = source.find("\n", cursor, end)
+            cursor = end if newline < 0 else newline + 1
+        elif source.startswith("/*", cursor):
+            depth = 1
+            cursor += 2
+            while cursor < end and depth:
+                if source.startswith(("/*", "*/"), cursor):
+                    depth += 1 if source.startswith("/*", cursor) else -1
+                    cursor += 2
+                else:
+                    cursor += 1
+            if depth:
+                _fail("unterminated fixture attribute comment")
+        else:
+            break
+    return cursor
+
+
+def _fixture_attribute(source: str, code: str, pairs: dict[int, int], start: int, end: int,
+                       features: set[str], budget: _Budget, inner: bool,
+                       depth: int = 0) -> tuple[bool, int]:
+    """Evaluate a bounded attribute subset, separately from the lexical census."""
+    if depth > 32:
+        _fail("fixture selection attribute exceeds its nesting bound")
+    budget.visit_attribute()
+    body = source[start:end]
+    if len(body) > 8192 or len(body.encode("utf-8")) > 8192:
+        _fail("fixture selection attribute exceeds its byte bound")
+    match = IDENTIFIER.match(source, _fixture_trivia_end(source, start, end), end)
+    if match is None:
+        _fail("unsupported fixture selection attribute")
+    name = match[0]
+    cursor = _fixture_trivia_end(source, match.end(), end)
+    arguments = None
+    if cursor < end:
+        if source[cursor] != "(" or pairs.get(cursor, end + 1) > end:
+            _fail("unsupported fixture selection attribute")
+        closing = pairs[cursor] - 1
+        if _fixture_trivia_end(source, closing + 1, end) != end:
+            _fail("unsupported fixture selection attribute")
+        arguments = (cursor + 1, closing)
+    if name == "cfg" and arguments is not None:
+        return _fixture_cfg(source[arguments[0]:arguments[1]], features), 0
+    if name == "cfg_attr" and arguments is not None:
+        # Preserve the existing crate-level no_std spelling; other no_std
+        # transformations remain outside this restricted source selector.
+        if inner and depth == 0 and re.fullmatch(
+                r'\s*cfg_attr\s*\(\s*target_arch\s*=\s*"amdgpu"\s*,\s*no_std\s*\)\s*', body):
+            return True, 0
+        spans = []
+        first = cursor = arguments[0]
+        while cursor < arguments[1]:
+            if code[cursor] in "([{":
+                cursor = pairs[cursor]
+                continue
+            if code[cursor] == ",":
+                spans.append((first, cursor))
+                first = cursor + 1
+            cursor += 1
+        if not spans:
+            _fail("fixture cfg_attr requires a predicate and comma")
+        if _fixture_trivia_end(source, first, arguments[1]) != arguments[1]:
+            spans.append((first, arguments[1]))
+        if len(spans) > 65:
+            _fail("fixture cfg_attr exceeds its child bound")
+        active = _fixture_cfg(source[spans[0][0]:spans[0][1]], features)
+        enabled, kernels = True, 0
+        for first, last in spans[1:]:
+            # Validate inactive branches too. Unsupported transformations must
+            # not disappear simply because this particular feature is absent.
+            child_enabled, child_kernels = _fixture_attribute(
+                source, code, pairs, first, last, features, budget, inner, depth + 1)
+            enabled = enabled and child_enabled
+            kernels += child_kernels
+        return (enabled, kernels) if active else (True, 0)
+    if name == "no_std" and inner and depth == 0 and arguments is None:
+        return True, 0
+    if name not in {"allow", "deny", "forbid", "warn", "doc", "inline", "kernel"}:
+        _fail("unsupported fixture selection attribute")
+    if arguments is None and name not in {"inline", "kernel"}:
+        _fail("unsupported fixture selection attribute")
+    if name == "inline" and arguments is not None:
+        inline = IDENTIFIER.match(source, _fixture_trivia_end(source, *arguments), arguments[1])
+        if (inline is None or inline[0] not in {"always", "never"}
+                or _fixture_trivia_end(source, inline.end(), arguments[1]) != arguments[1]):
+            _fail("unsupported fixture selection attribute")
+    if name == "kernel" and inner:
+        _fail("unsupported fixture selection attribute")
+    return True, int(name == "kernel")
 
 
 def _fixture_declarations(
@@ -249,26 +444,14 @@ def _fixture_declarations(
             continue
         budget.rows([None], "fixture source items")
         enabled = True
+        kernels = 0
         while match := attribute.match(code, cursor):
             opening = match.end() - 1
             end = pairs[opening]
-            body = source[opening + 1:end - 1].strip()
-            masked = code[opening + 1:end - 1].strip()
-            cfg = re.fullmatch(r"cfg\s*\((.*)\)", body, re.DOTALL)
-            if cfg is not None:
-                enabled = _fixture_cfg(cfg[1], features) and enabled
-            elif re.fullmatch(r'cfg_attr\s*\(\s*target_arch\s*=\s*"amdgpu"\s*,\s*no_std\s*\)', body) and match[1]:
-                pass
-            else:
-                benign = re.fullmatch(r"(allow|deny|forbid|warn|doc|inline|kernel)(?:\s*(\(.*\)))?", masked, re.DOTALL)
-                if benign is None or (benign[2] is None and benign[1] not in {"inline", "kernel"}):
-                    _fail("unsupported fixture selection attribute")
-                if benign[2] is not None:
-                    arguments = code.find("(", opening + 1, end - 1)
-                    if code[pairs[arguments]:end - 1].strip():
-                        _fail("unsupported fixture selection attribute")
-                    if benign[1] == "inline" and re.fullmatch(r"inline\s*\(\s*(?:always|never)\s*\)", masked) is None:
-                        _fail("unsupported fixture selection attribute")
+            attr_enabled, attr_kernels = _fixture_attribute(
+                source, code, pairs, opening + 1, end - 1, features, budget, bool(match[1]))
+            enabled = enabled and attr_enabled
+            kernels += attr_kernels
             if match[1] and not enabled:
                 _fail("conditional fixture crate/module is unsupported")
             cursor = end
@@ -301,6 +484,8 @@ def _fixture_declarations(
                 item_functions.append(function)
         if not enabled:
             continue
+        if kernels > 1:
+            _fail("duplicate active fixture kernel attributes")
         module = re.fullmatch(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*", head)
         if module is not None:
             if code[boundary] != ";":
@@ -310,7 +495,8 @@ def _fixture_declarations(
         if (re.search(r"\b(?:macro_rules|include)\b|!", head)
                 or re.match(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:use|const|static|type|fn)\b", head) is None):
             _fail("unsupported fixture item or module selection")
-        selected.extend(item_functions)
+        if kernels:
+            selected.extend(item_functions)
     return selected, modules
 
 
@@ -586,6 +772,7 @@ def validate_kernel_inventory(
     negative_display_keys = set()
     bound_positive = set()
     unresolved = []
+    fixture_displays = _FixtureDisplayIndex(budget)
     for row in budget.rows(inventory["displayItems"], "display items"):
         _object(row, DISPLAY_FIELDS, "display item")
         lesson = _text(row["lessonId"], "lessonId")
@@ -649,9 +836,9 @@ def validate_kernel_inventory(
                 negative_display_keys.update(refs_keys)
             if status == "fixture-source-contract":
                 if (classification != "kernel" or not ids or refs or matching_cases
-                        or tab["kind"] != "kernel" or tab["sourceItem"] is not None
-                        or tab["sourceDigestScope"] != "file" or tab["sourceFragmentsSha256"] is not None):
-                    _fail("fixture display requires an exclusive whole-file positive binding")
+                        or tab["kind"] != "kernel" or tab["sourceItem"] is not None):
+                    _fail("fixture display requires an exclusive positive binding")
+                _fixture_display_declaration(tab)
                 if load_fixture_sources is None or rust_syntax is None:
                     _fail("fixture display requires current physical source validation")
                 for kernel_id in ids:
@@ -663,15 +850,22 @@ def validate_kernel_inventory(
                         if tab["sourcePath"] not in fixture["compilerInput"]["sourcePaths"]:
                             _fail("fixture display path is not an exact selected source")
                         path, source_offset, source, digest = selected_source(key)
-                        encoded = _utf8(source, "fixture source")
-                        if (path != tab["sourcePath"] or source_offset != offset
-                                or len(encoded) != tab["displayedUtf8Bytes"]
-                                or digest != tab["sourceSha256"] or digest != tab["displayedSha256"]):
+                        if path != tab["sourcePath"]:
                             _fail("fixture display differs from the exact current source occurrence")
+                        if tab["sourceDigestScope"] == "file":
+                            encoded = _utf8(source, "fixture source")
+                            if (source_offset != offset or len(encoded) != tab["displayedUtf8Bytes"]
+                                    or digest != tab["sourceSha256"] or digest != tab["displayedSha256"]):
+                                _fail("fixture display differs from the exact current source occurrence")
                         if runtime_inventory is not None:
                             live = runtime_tabs[location]
-                            if live.get("sourceFragments") is not None or live["displayedCode"] != source or not candidates[coordinate]:
-                                _fail("fixture display differs from the live whole-file occurrence")
+                            if tab["sourceDigestScope"] == "file":
+                                if (live.get("sourceFragments") is not None
+                                        or live["displayedCode"] != source or not candidates[coordinate]):
+                                    _fail("fixture display differs from the live whole-file occurrence")
+                            else:
+                                fixture_displays.match(location, tab, live, path, source, digest,
+                                                       offset, symbol, source_offset)
                             bound_positive.add(key)
             elif status == "pending":
                 unresolved.append({"lessonId": lesson, "tabOrdinal": ordinal,

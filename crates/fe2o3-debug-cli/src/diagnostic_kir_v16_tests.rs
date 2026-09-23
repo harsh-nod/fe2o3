@@ -3,9 +3,10 @@
 use super::*;
 use fe2o3_kir_sim::{BufferArgumentV1, EventPolicyV1};
 use fe2o3_kir_sim_cli::load_debug_simulation_input_bytes_v16;
+use std::path::Path;
 
 #[path = "../../fe2o3-kir-sim-cli/tests/fixtures/diagnostic_kir_v16.rs"]
-mod fixture;
+pub(crate) mod fixture;
 
 fn input(used: bool, arguments: [u32; 3]) -> AdmittedSimulationInputV1 {
     let owner = fixture::owner(&fixture::module(used));
@@ -48,10 +49,10 @@ fn diagnostic_options_select_only_explicit_v16_path_and_wave64() {
     )
     .unwrap();
     assert!(
-        matches!(options.program, ProgramInputV1::DiagnosticKirV16(path) if path == PathBuf::from("/missing/region.kir"))
+        matches!(options.program, ProgramInputV1::DiagnosticKirV16(path) if path == Path::new("/missing/region.kir"))
     );
     assert!(
-        matches!(options.request, RequestInputV1::Path(path) if path == PathBuf::from("/missing/request.json"))
+        matches!(options.request, RequestInputV1::Path(path) if path == Path::new("/missing/request.json"))
     );
     assert_eq!(options.wave_width, DebugWaveWidthV1::Wave64);
     assert!(options.source_map.is_none());

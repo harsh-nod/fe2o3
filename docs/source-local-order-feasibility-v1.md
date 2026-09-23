@@ -1,5 +1,9 @@
 # Actual-source local-order feasibility
 
+The later [current-source fixed-prefix continuation](evidence/source-local-order-continuation-20260923.md)
+emits actual checked L LLVM/descriptors. Its qualification and remaining
+recipe-workflow gaps are separate from the historical experiment below.
+
 This private, test-only experiment connects ordinary Rust source to the
 existing checked local-order service. It is not a persistent recipe API,
 public continuation or completion of U3. The fixed production policy and

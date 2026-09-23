@@ -107,6 +107,9 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core
       CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core
+      CARGO_PROFILE_DEV_DEBUG: '1'
+      CARGO_PROFILE_TEST_DEBUG: '1'
+      CARGO_INCREMENTAL: '0'
 
     steps:
       - name: Check out repository
@@ -129,6 +132,44 @@ jobs:
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+
+      - name: Prepare external private temporary directory
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          resource_fail() {
+            printf 'generic CI temporary directory: %s\n' "$1" >&2
+            exit 2
+          }
+          : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
+          : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+          : "${GITHUB_ENV:?GITHUB_ENV is required}"
+          resource_parent="$(realpath --canonicalize-existing -- "${RUNNER_TEMP}")" ||
+            resource_fail 'RUNNER_TEMP cannot be canonicalized'
+          resource_workspace="$(realpath --canonicalize-existing -- "${GITHUB_WORKSPACE}")" ||
+            resource_fail 'GITHUB_WORKSPACE cannot be canonicalized'
+          [[ -d "${resource_parent}" && -d "${resource_workspace}" &&
+             "${resource_workspace}" != / ]] ||
+            resource_fail 'runner temporary root and checkout must be directories'
+          [[ "${resource_parent}" != "${resource_workspace}" &&
+             "${resource_parent}" != "${resource_workspace}/"* ]] ||
+            resource_fail 'RUNNER_TEMP must be outside the checkout'
+          resource_tmp="$(mktemp -d -- "${resource_parent}/fe2o3-generic-core.XXXXXXXXXX")" ||
+            resource_fail 'cannot create fresh temporary directory'
+          [[ -d "${resource_tmp}" && ! -L "${resource_tmp}" &&
+             "${resource_tmp}" != *$'\n'* && "${resource_tmp}" != *$'\r'* ]] ||
+            resource_fail 'created temporary directory is not a real single-line path'
+          resource_canonical="$(realpath --canonicalize-existing -- "${resource_tmp}")" ||
+            resource_fail 'created temporary directory cannot be canonicalized'
+          [[ "${resource_canonical}" == "${resource_tmp}" &&
+             "$(dirname -- "${resource_tmp}")" == "${resource_parent}" &&
+             "${resource_tmp}" != "${resource_workspace}" &&
+             "${resource_tmp}" != "${resource_workspace}/"* &&
+             "$(stat -c '%u' -- "${resource_tmp}")" == "$(id -u)" &&
+             "$(stat -c '%a' -- "${resource_tmp}")" == 700 ]] ||
+            resource_fail 'created temporary directory lost private external custody'
+          printf 'TMPDIR=%s\n' "${resource_tmp}" >> "${GITHUB_ENV}"
 
       - name: Run generic core validation
         run: scripts/ci-local.sh generic-core

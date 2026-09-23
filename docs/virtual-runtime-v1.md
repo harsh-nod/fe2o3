@@ -80,7 +80,11 @@ closed.
 dispatch N-1 and reuses the same persistent virtual allocations. The command
 caps aggregate snapshots at 16 MiB and the encoded response at 48 MiB before
 hex construction. Runtime configuration also caps arguments per dispatch and
-aggregate retained dispatch-request storage. Success uses
+aggregate retained dispatch-request storage. Per dispatch, the CLI allows
+524,288 recorded schedule decisions with a 256 MiB simulator resident-memory
+cap. Both limits apply independently; a request that exceeds either fails
+closed. The caller-configurable library defaults remain 1,048,576 decisions
+and 4 GiB of simulator resident memory. Success uses
 `fe2o3-virtual-runtime-result-v1`; admission,
 misuse, semantic, and response-bound failures use
 `fe2o3-virtual-runtime-error-v1`. The lifecycle block identifies the runtime,

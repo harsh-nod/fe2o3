@@ -131,10 +131,19 @@ contracts before producing any stdout; it cannot be combined with `--emit-matrix
 Do not add these collections to obtain a kernel count. They can overlap, repeat
 symbols under different features, and omit still-unbound kernel identities.
 For the current incomplete inventory, `requiredPairCount` is null,
-`qualifiedPairCount` is zero, `inventoryComplete` and `qualified` are false, variant bindings are pending,
-and stages are not evaluated unless a diagnostic source report is bound.
+`qualifiedPairCount` is zero, and `inventoryComplete` and `qualified` are false.
+One SIMT variant has an exact source association; the remaining 119 variants
+are pending and no pair is source-bound. Stages are not evaluated unless a
+diagnostic source report is bound; binding that report does not qualify a pair.
 Existing historical successes do not
 acquire new source/variant/target bindings from this report.
+
+The first-fill kernel display now retains the exact 308-byte library file at
+`7a536e0a001202ac0bb9d8647c5395661f8fa1ec`, including its whole-file digest.
+Its registered fixture association is checked by the same physical-source
+mapper as other whole-file displays. The tutorial's recorded no-GPU execution
+keeps its historical source pin; this display refresh supplies no new execution
+or tile-pair qualification.
 
 The report is bounded to 4096 charged projection/inventory records, including
 input tabs, references and scanned items, and 16 MiB of encoded JSON. Each Rust
@@ -149,7 +158,7 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
 
 - `kernels` assigns stable IDs to exact positive fixture/symbol selections or
   source-driver cases. Each ID has SIMT and tile variant records with a blocker
-  owner, issue and reason; the current checked-in records remain pending.
+  owner, issue and reason. Source associations do not qualify execution.
   Matching names, source paths or historical displayed
   bytes alone cannot establish identity.
 - `negativeCases` retains the exact required-refusal source-driver cases outside
@@ -169,31 +178,86 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
 - A `fixture-source-contract` is an expected fixture/source contract, not
   rustc-selected execution or semantic admission. It joins an existing
   feature-specific fixture identity to one attributed function occurrence in an
-  exact whole-file kernel display. The validator rechecks the physical package
+  exact whole-file or excerpted kernel display. Every excerpt must have a unique
+  complete-byte occurrence in the selected physical source, and fragments cannot
+  overlap or repeat. Each displayed name maps to its own physical UTF-8 offset;
+  matching a symbol name alone is insufficient. The validator rechecks the physical package
   closure, Cargo manifest/lock, selected source member, file/display digests and
   UTF-8 name offset. Package membership alone is insufficient.
   Selection uses the existing lexer/scanner with a restricted check of ordinary
-  sibling modules and literal `feature`/`target_arch` cfg expressions (`all`,
-  `any`, `not`) for AMDGPU. Unknown cfg, item macros, transforming attributes,
+  sibling modules and literal `feature`/`target_arch`/`test` cfg expressions
+  (`all`, `any`, `not`) in the declared non-test AMDGPU library context.
+  Here `test` is false, including for the inner source library selected by a
+  host-side test driver. This is an expected source contract, not authentication
+  of a rustc invocation or inference that every Cargo library build is non-test.
+  Unknown cfg, item macros, transforming attributes,
   build-script cfg, dependency features, nested/inline/path-selected modules,
   duplicate modules or selected symbols reject a claimed binding. Such sources
   retain `pending` until an exact selection can be established. This bounded
   check does not replace rustc or qualify kernel implementations.
   Supported non-cfg forms are bare `kernel`/`inline`, parenthesized
   `allow`/`deny`/`forbid`/`warn`/`doc`/`kernel`, and `inline(always)`/`inline(never)`.
+  The literal inner attribute `#![no_std]` and the existing
+  `#![cfg_attr(target_arch = "amdgpu", no_std)]` form preserve source selection.
+  Outer or argument-bearing `no_std` forms remain unsupported.
   Qualified attribute paths and name-value forms such as `#[doc = "..."]` are
   unsupported and reject claimed bindings.
+  Conditional `cfg_attr` may apply supported attributes, including nested
+  `cfg_attr` and conjunctive `cfg`, with zero or multiple attributes and a
+  trailing comma. Predicates and attributes are validated even in inactive
+  branches. Effective kernel attribution is evaluated separately from the
+  conservative display census; inactive conditional kernels do not bind.
+  Multiple active kernel attributes and inner kernel attributes reject.
+  Attribute bodies are limited to 8 KiB, nesting to 32 levels and each
+  `cfg_attr` to 64 child attributes. All traversals share one aggregate
+  attribute-visit quota, equal in size to but separate from the existing record
+  quota; inactive attributes are charged too, and cached selections are not
+  revisited. Each cfg predicate admits at most 512 tokens, including punctuation;
+  its byte and nesting limits remain independent. This accommodates ordinary
+  mutual-exclusion feature predicates, including the existing 318-token
+  advanced-attention predicate, without changing the record, source-byte or
+  aggregate attribute limits. Unsupported predicates and active item macros
+  still reject; accepting a library's cfg does not bind its kernel source or
+  qualify a variant.
 
-Eight GPT-OSS occurrences in tabs 1-6 now retain these expected fixture/source
+The fill fixture's SIMT variant is associated with the exact current
+`examples/fill/src/lib.rs` function and its registered compiler-input identity.
+Its tile variant and execution evidence remain
+pending. This association does not complete a pair or the curriculum census.
+
+Eight GPT-OSS occurrences in tabs 1-6 retain these expected fixture/source
 contracts: serial-router, held-fragments, interleaved-stores, and the three
 materialized components, plus pipelined-attention and scalar-attention. Their
 existing source/feature identities remain distinct, including the repeated
-megakernel symbol. This leaves 56 pending display bindings and the historical
+megakernel symbol. The main megakernel and performance-lab tab-zero excerpts
+also bind to their exact selected physical source. Eight FP4/FP8 GEMM and
+attention displays, including their performance-lab excerpts, also bind to the
+registered feature-selected source. The declared runners use non-test
+`cargo check --lib`; test-only declarations are excluded from this selection.
+Together with first-fill, fourteen systems occurrences and the four whole-file
+displays described below, these thirty-seven associations leave 27 pending
+display bindings and the historical
 GEMM lesson's source gap unresolved. The two attention variants are required
 positive compile obligations with separate pending-design simulation requests;
 neither inherits another variant's retained KIR or execution evidence. These
 registrations bring known kernel identities to 60, not completed pairs or a
 proven final curriculum denominator.
+The systems occurrences cover routing, expert computation, expert combination,
+gradient staging, Muon update, n-gram gather and speculative verification,
+including repeated performance excerpts. They bind eleven existing
+feature-specific identities, not eleven completed pairs. No source bytes,
+historical performance evidence or execution qualification are changed.
+The full-file flash-attention, GEMM autoresearch winner, tiled GEMM and grouped
+expert MoE displays bind their existing default-feature fixture identities.
+Their exact physical function offsets distinguish the four kernel entries
+from nine displayed helpers, including inactive host tests. All helper rows,
+historical source pins, kernel bytes and pending variant obligations remain
+unchanged. Whole-file byte checks and the registered Cargo/module selection
+establish these display associations, not new compiler or execution results.
+The scalar-GEMM simulation request and independent expectation are checked in and
+registered in generic CI. Their status remains `pending-reconciliation` until
+the required source-produced Bundle V7/KIR V12 simulation and oracle checks run.
+Comparator tests alone do not execute or qualify either kernel variant.
 Other source/display joins remain `pending`; a fixture's lesson scope is not
 an exact displayed-source binding.
 

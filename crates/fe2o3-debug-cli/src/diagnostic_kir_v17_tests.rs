@@ -3,6 +3,7 @@
 use super::*;
 use fe2o3_kir_sim::{BufferArgumentV1, EventPolicyV1};
 use fe2o3_kir_sim_cli::load_debug_simulation_input_bytes_v17;
+use std::path::Path;
 
 #[test]
 fn all_program_lengths_and_instruction_forms_have_one_logical_before_after_pair_per_lane() {
@@ -83,8 +84,7 @@ fn all_program_lengths_and_instruction_forms_have_one_logical_before_after_pair_
     }
 }
 
-#[path = "../../fe2o3-kir-sim-cli/tests/fixtures/diagnostic_kir_v16.rs"]
-mod legacy_fixture;
+use crate::diagnostic_kir_v16::tests::fixture as legacy_fixture;
 
 #[test]
 fn configuration_requires_exact_v17_owner_and_binds_declared_program_source_and_registers() {
@@ -279,10 +279,10 @@ fn diagnostic_options_select_only_explicit_v17_path_and_wave64() {
     )
     .unwrap();
     assert!(
-        matches!(options.program, ProgramInputV1::DiagnosticKirV17(path) if path == PathBuf::from("/missing/program.kir"))
+        matches!(options.program, ProgramInputV1::DiagnosticKirV17(path) if path == Path::new("/missing/program.kir"))
     );
     assert!(
-        matches!(options.request, RequestInputV1::Path(path) if path == PathBuf::from("/missing/request.json"))
+        matches!(options.request, RequestInputV1::Path(path) if path == Path::new("/missing/request.json"))
     );
     assert_eq!(options.wave_width, DebugWaveWidthV1::Wave64);
     assert!(options.source_map.is_none());

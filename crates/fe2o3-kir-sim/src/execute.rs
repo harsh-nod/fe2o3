@@ -49,6 +49,21 @@ use crate::{
     SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
+#[path = "allocation_reuse_v1.rs"]
+mod allocation_reuse_v1;
+use allocation_reuse_v1::{AllocationCreationV1, AllocationReusePool};
+pub use allocation_reuse_v1::{
+    MAX_ALLOCATION_REUSE_CACHED_PAYLOAD_BYTES_V1, SimulationAllocationReuseErrorV1,
+    SimulationAllocationReuseV1,
+};
+#[path = "execute_observed_storage.rs"]
+mod observed_storage;
+pub use observed_storage::ObservationExecutionOptionsV1;
+
+#[path = "execute_alloca_v1.rs"]
+mod alloca_v1;
+#[path = "execute_debug_frames.rs"]
+mod debug_frames;
 #[path = "execute_debug_identity.rs"]
 mod debug_identity;
 #[path = "execute_observed_debug.rs"]
@@ -840,6 +855,7 @@ impl AdmittedSimulationModuleV1 {
                 debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
                 schedule: None,
                 resident_offset: 0,
+                allocation_reuse: None,
             },
             &mut event_sink,
             &mut debug_sink,
@@ -927,6 +943,7 @@ impl AdmittedSimulationModuleV1 {
                 debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
                 schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
                 resident_offset,
+                allocation_reuse: None,
             },
             &mut event_sink,
             &mut debug_sink,
@@ -973,6 +990,7 @@ impl AdmittedSimulationModuleV1 {
                     decisions,
                 }),
                 resident_offset,
+                allocation_reuse: None,
             },
             &mut event_sink,
             &mut debug_sink,
@@ -1028,6 +1046,7 @@ impl AdmittedSimulationModuleV1 {
                 debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
                 schedule: None,
                 resident_offset: 0,
+                allocation_reuse: None,
             },
             sink,
             &mut debug_sink,
@@ -1063,6 +1082,7 @@ impl AdmittedSimulationModuleV1 {
                 debug_capture: capture,
                 schedule: None,
                 resident_offset: 0,
+                allocation_reuse: None,
             },
             &mut event_sink,
             debug_sink,
@@ -1095,6 +1115,7 @@ impl AdmittedSimulationModuleV1 {
                 debug_capture: capture,
                 schedule: None,
                 resident_offset: 0,
+                allocation_reuse: None,
             },
             &mut event_sink,
             debug_sink,
@@ -1127,6 +1148,7 @@ impl AdmittedSimulationModuleV1 {
                 debug_capture: capture,
                 schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
                 resident_offset: 0,
+                allocation_reuse: None,
             },
             &mut event_sink,
             debug_sink,
@@ -1161,6 +1183,7 @@ impl AdmittedSimulationModuleV1 {
                 debug_capture: capture,
                 schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
                 resident_offset: 0,
+                allocation_reuse: None,
             },
             &mut event_sink,
             debug_sink,
@@ -1191,6 +1214,7 @@ impl AdmittedSimulationModuleV1 {
                 debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
                 schedule: None,
                 resident_offset: 0,
+                allocation_reuse: None,
             },
             sink,
             &mut debug_sink,
@@ -1238,6 +1262,8 @@ struct Allocation {
     initialized: Vec<bool>,
     workgroup_published: Vec<bool>,
     workgroup_writer: Vec<u64>,
+    // Empty in the default profile; one separately charged descriptor when observed.
+    observation_descriptor: Vec<crate::SimulationAllocationDescriptorV1>,
 }
 
 struct WorkgroupAllocation {
@@ -1268,6 +1294,7 @@ struct Memory {
     next_allocation: u64,
     allocations_created: usize,
     live_bytes: usize,
+    reuse: Option<AllocationReusePool>,
 }
 
 impl Memory {
@@ -1275,6 +1302,7 @@ impl Memory {
         argument_count: usize,
         shared_count: usize,
         limits: SimulationLimitsV1,
+        allocation_reuse: Option<SimulationAllocationReuseV1>,
     ) -> Result<Self, SimulationExecutionErrorKindV1> {
         let mut allocations = HashMap::new();
         allocations
@@ -1291,59 +1319,8 @@ impl Memory {
             next_allocation: 1,
             allocations_created: 0,
             live_bytes: 0,
+            reuse: allocation_reuse.map(AllocationReusePool::new),
         })
-    }
-
-    fn allocate(
-        &mut self,
-        address_space: AddressSpace,
-        access: AccessMode,
-        alignment: u32,
-        bytes: Vec<u8>,
-        initialized: Vec<bool>,
-        limits: SimulationLimitsV1,
-    ) -> Result<u64, SimulationExecutionErrorKindV1> {
-        if bytes.len() != initialized.len() {
-            return Err(SimulationExecutionErrorKindV1::InternalInvariant(
-                "allocation initialization length",
-            ));
-        }
-        self.validate_allocation(bytes.len(), limits)?;
-        let (workgroup_published, workgroup_writer) = if address_space == AddressSpace::Workgroup {
-            (
-                try_filled(bytes.len(), false)?,
-                try_filled(bytes.len(), 0_u64)?,
-            )
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let total = self.live_bytes.checked_add(bytes.len()).ok_or(
-            SimulationExecutionErrorKindV1::TotalBytesLimit {
-                actual: usize::MAX,
-                limit: limits.max_total_bytes,
-            },
-        )?;
-        let id = self.next_allocation;
-        self.next_allocation = self.next_allocation.checked_add(1).ok_or(
-            SimulationExecutionErrorKindV1::AllocationLimit {
-                limit: limits.max_allocations,
-            },
-        )?;
-        self.allocations_created += 1;
-        self.live_bytes = total;
-        self.allocations.insert(
-            id,
-            Allocation {
-                address_space,
-                access,
-                alignment,
-                bytes,
-                initialized,
-                workgroup_published,
-                workgroup_writer,
-            },
-        );
-        Ok(id)
     }
 
     fn validate_allocation(
@@ -1351,7 +1328,7 @@ impl Memory {
         bytes: usize,
         limits: SimulationLimitsV1,
     ) -> Result<(), SimulationExecutionErrorKindV1> {
-        if self.allocations_created == limits.max_allocations {
+        if self.allocations_created >= limits.max_allocations {
             return Err(SimulationExecutionErrorKindV1::AllocationLimit {
                 limit: limits.max_allocations,
             });
@@ -1375,18 +1352,6 @@ impl Memory {
             });
         }
         Ok(())
-    }
-
-    fn release_one(&mut self, id: u64) -> Result<bool, SimulationExecutionErrorKindV1> {
-        let Some(allocation) = self.allocations.remove(&id) else {
-            return Ok(false);
-        };
-        self.live_bytes = self.live_bytes.checked_sub(allocation.bytes.len()).ok_or(
-            SimulationExecutionErrorKindV1::InternalInvariant(
-                "released allocation live-byte accounting",
-            ),
-        )?;
-        Ok(true)
     }
 
     fn load(
@@ -1804,10 +1769,14 @@ struct Engine<'a, S> {
     debug_capture: SimulationDebugCaptureLimitsV1,
     debug_sink: &'a mut dyn SimulationDebugSinkV1,
     debug_origin_requested: bool,
+    debug_observation_requested: bool,
+    debug_frames_requested: bool,
     debug_identity_failed: bool,
     debug_origin: Option<OperationIdentity>,
     debug_records: u64,
     debug_delivery_stopped: bool,
+    allocation_lifecycle_requested: bool,
+    allocation_lifecycle_stopped: bool,
     schedule_identity: SimulationScheduleIdentityV1,
     schedule_decision: u64,
     steps: u64,
@@ -2122,8 +2091,8 @@ pub(crate) fn conservative_execution_resident_bytes(
         resident.add_bytes(reserved_bool_vec_bytes(backing.buffer.initialized().len())?)?;
     }
 
-    // Allocation payloads use exact reservation on the pinned toolchain. Rust's
-    // specialized `Vec<bool>` reports capacity in bits, not bytes.
+    // Allocation payloads use exact reservation on the pinned toolchain.
+    // Vec<bool> capacity counts ordinary bool elements, each charged in bytes.
     resident.add_bytes(limits.max_total_bytes)?;
     resident.add_bytes(partitioned_bool_vec_storage_bytes(
         limits.max_total_bytes,
@@ -2286,8 +2255,9 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         }
         let stack = capture_debug_stack(frames, &self.function_module_indices, self.debug_capture);
         let memory = capture_debug_memory(&self.memory, self.debug_capture);
-        self.deliver_debug(
+        self.deliver_debug_with_frames(
             site,
+            Some(frames),
             SimulationDebugRecordKindV1::Checkpoint {
                 phase,
                 stack,
@@ -2346,6 +2316,15 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
     }
 
     fn deliver_debug(&mut self, site: CompactSite, kind: SimulationDebugRecordKindV1) {
+        self.deliver_debug_with_frames(site, None, kind);
+    }
+
+    fn deliver_debug_with_frames(
+        &mut self,
+        site: CompactSite,
+        frames: Option<&[RuntimeFrame<'_>]>,
+        kind: SimulationDebugRecordKindV1,
+    ) {
         if self.debug_delivery_stopped {
             return;
         }
@@ -2367,7 +2346,25 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             },
             kind,
         };
-        let control = if self.debug_origin_requested {
+        let control = if self.debug_observation_requested {
+            let origin = self.operation_origin_context(&record);
+            let watermark = self.allocation_lifecycle_watermark_v1();
+            let source = debug_frames::RuntimeFrameOrigins {
+                frames: frames.unwrap_or(&[]),
+                function_module_indices: &self.function_module_indices,
+                invocation,
+            };
+            let frame_context = debug_frames::context(
+                &record,
+                &source,
+                self.debug_frames_requested,
+                self.debug_identity_failed,
+            );
+            self.debug_sink.record_with_observation_context_v1(
+                record,
+                crate::SimulationDebugObservationContextV1::new(origin, frame_context, watermark),
+            )
+        } else if self.debug_origin_requested {
             let origin = self.operation_origin_context(&record);
             self.debug_sink
                 .record_with_operation_origin_v1(record, origin)
@@ -2682,21 +2679,25 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         }
         let allocation_bytes = try_filled(bytes, 0_u8).map_err(|kind| self.at(site, kind))?;
         let initialized = try_filled(bytes, false).map_err(|kind| self.at(site, kind))?;
+        let creation = self.allocation_creation_v1(site, AddressSpace::Workgroup)?;
         let reserved = self.reserve_event_closure(&site)?;
-        let id = match self.memory.allocate(
-            AddressSpace::Workgroup,
-            AccessMode::ReadWrite,
-            memory.alignment,
-            allocation_bytes,
-            initialized,
+        let commit = match self.memory.allocate(
+            (
+                AddressSpace::Workgroup,
+                AccessMode::ReadWrite,
+                memory.alignment,
+            ),
+            (allocation_bytes, initialized),
+            creation,
             self.limits,
         ) {
-            Ok(id) => id,
+            Ok(commit) => commit,
             Err(kind) => {
                 self.cancel_event_closure(reserved);
                 return Err(self.at(site, kind));
             }
         };
+        let id = commit.id;
         self.workgroup_allocations.push(WorkgroupAllocation {
             site,
             id,
@@ -2704,6 +2705,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             bytes,
             lifecycle_observed: reserved,
         });
+        self.deliver_allocation_lifecycle_v1(commit.transition);
         self.emit_reserved_begin(
             &site,
             SimulationEventKindV1::AllocationCreated {
@@ -2753,7 +2755,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 .memory
                 .release_one(allocation.id)
                 .map_err(|kind| self.at(allocation.site, kind))?;
-            if !released {
+            if !released.removed {
                 return Err(self.at(
                     allocation.site,
                     SimulationExecutionErrorKindV1::InternalInvariant(
@@ -2761,6 +2763,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                     ),
                 ));
             }
+            self.deliver_allocation_lifecycle_v1(released.transition);
             if allocation.lifecycle_observed
                 && let Err(secondary) = self.end_lifecycle(
                     &allocation.site,
@@ -3323,6 +3326,7 @@ struct ExecutionConfiguration<'a> {
     debug_capture: SimulationDebugCaptureLimitsV1,
     schedule: Option<ExecutionScheduleRequestV1<'a>>,
     resident_offset: usize,
+    allocation_reuse: Option<SimulationAllocationReuseV1>,
 }
 
 fn execute(
@@ -3340,6 +3344,7 @@ fn execute(
         debug_capture,
         schedule,
         resident_offset,
+        allocation_reuse,
     } = configuration;
     let workgroup_participants = usize::try_from(plan.workgroup[0])
         .ok()
@@ -3401,6 +3406,7 @@ fn execute(
         request.arguments.len(),
         request.shared_buffers.len(),
         limits,
+        allocation_reuse,
     )
     .map_err(top_level_error)?;
     let mut accesses = HashMap::new();
@@ -3411,8 +3417,13 @@ fn execute(
     workgroup_allocations
         .try_reserve_exact(plan.workgroup_allocation_sites)
         .map_err(|_| top_level_error(SimulationExecutionErrorKindV1::AllocationFailure))?;
-    let debug_origin_requested =
-        debug_capture.is_enabled() && debug_sink.wants_operation_origin_v1();
+    let allocation_lifecycle_requested = debug_sink.wants_allocation_lifecycle_v1();
+    let debug_observation_requested =
+        debug_capture.is_enabled() && debug_sink.wants_observation_context_v1();
+    let debug_frames_requested =
+        debug_observation_requested && debug_sink.wants_checkpoint_frames_v1();
+    let debug_origin_requested = debug_capture.is_enabled()
+        && (debug_sink.wants_operation_origin_v1() || debug_frames_requested);
     let mut engine = Engine {
         module: &admitted.module,
         function_module_indices,
@@ -3429,10 +3440,14 @@ fn execute(
         debug_capture,
         debug_sink,
         debug_origin_requested,
+        debug_observation_requested,
+        debug_frames_requested,
         debug_identity_failed: false,
         debug_origin: None,
         debug_records: 0,
         debug_delivery_stopped: !debug_capture.is_enabled(),
+        allocation_lifecycle_requested,
+        allocation_lifecycle_stopped: false,
         schedule_identity: schedule.identity(),
         schedule_decision: 0,
         steps: 0,
@@ -4722,17 +4737,21 @@ fn initialize_shared_buffers(
         let bytes = try_clone_slice(shared.buffer.bytes()).map_err(|kind| engine.fail(kind))?;
         let initialized =
             try_clone_slice(shared.buffer.initialized()).map_err(|kind| engine.fail(kind))?;
-        let allocation = engine
+        let commit = engine
             .memory
             .allocate(
-                AddressSpace::Global,
-                shared.buffer.access(),
-                shared.buffer.alignment(),
-                bytes,
-                initialized,
+                (
+                    AddressSpace::Global,
+                    shared.buffer.access(),
+                    shared.buffer.alignment(),
+                ),
+                (bytes, initialized),
+                AllocationCreationV1::dispatch(),
                 engine.limits,
             )
             .map_err(|kind| engine.fail(kind))?;
+        let allocation = commit.id;
+        engine.deliver_allocation_lifecycle_v1(commit.transition);
         if engine
             .memory
             .shared_allocations
@@ -4761,17 +4780,17 @@ fn allocate_argument(
         .map_err(|kind| engine.fail(kind))?;
     let bytes = try_clone_slice(buffer.bytes()).map_err(|kind| engine.fail(kind))?;
     let initialized = try_clone_slice(buffer.initialized()).map_err(|kind| engine.fail(kind))?;
-    let id = engine
+    let commit = engine
         .memory
         .allocate(
-            address_space,
-            buffer.access(),
-            buffer.alignment(),
-            bytes,
-            initialized,
+            (address_space, buffer.access(), buffer.alignment()),
+            (bytes, initialized),
+            AllocationCreationV1::dispatch(),
             engine.limits,
         )
         .map_err(|kind| engine.fail(kind))?;
+    let id = commit.id;
+    engine.deliver_allocation_lifecycle_v1(commit.transition);
     engine.memory.argument_allocations[index] = Some(id);
     Ok(id)
 }
@@ -6262,7 +6281,7 @@ fn release_frame_allocations_observed(
             .memory
             .release_one(allocation.id)
             .map_err(|kind| engine.at(*site, kind))?;
-        if !released {
+        if !released.removed {
             return Err(engine.at(
                 *site,
                 SimulationExecutionErrorKindV1::InternalInvariant(
@@ -6270,6 +6289,7 @@ fn release_frame_allocations_observed(
                 ),
             ));
         }
+        engine.deliver_allocation_lifecycle_v1(released.transition);
         if allocation.lifecycle_observed {
             engine.end_lifecycle(
                 site,
@@ -6418,6 +6438,9 @@ fn execute_operation(
     } else if matches!(&operation.kind, OperationKind::Gfx942OrderedProgram(_)) {
         let site = operation_site(function_index, block, ordinal);
         ordered_program_v17::execute(engine, values, operation, &site)
+    } else if matches!(&operation.kind, OperationKind::Alloca { .. }) {
+        let site = operation_site(function_index, block, ordinal);
+        alloca_v1::execute(engine, values, operation, site, frame_allocations)
     } else {
         execute_non_assembly_operation(
             engine,
@@ -6440,7 +6463,7 @@ fn execute_non_assembly_operation(
     ordinal: usize,
     operation: &Operation,
     values: &HashMap<ValueId, RuntimeValue>,
-    frame_allocations: &mut Vec<FrameAllocation>,
+    _frame_allocations: &mut Vec<FrameAllocation>,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
     let site = operation_site(function_index, block, ordinal);
     let one = |value| Ok(SmallResults::One(value));
@@ -6574,101 +6597,12 @@ fn execute_non_assembly_operation(
                 )),
             }
         }
-        OperationKind::Alloca {
-            element,
-            count,
-            address_space,
-            alignment,
-        } => {
-            let Type::Scalar(element) = element else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::InternalInvariant(
-                        "preflighted scalar allocation",
-                    ),
-                ));
-            };
-            if *address_space != AddressSpace::Private {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::InternalInvariant(
-                        "preflighted private allocation",
-                    ),
-                ));
-            }
-            let count = match count {
-                Some(count) => scalar_nonnegative_usize(
-                    scalar_value(engine, values, *count, &site)?,
-                    engine.target,
-                )
-                .map_err(|kind| engine.at(site, kind))?,
-                None => 1,
-            };
-            let element_bytes = engine.target.scalar_bytes(*element).ok_or_else(|| {
-                engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::InternalInvariant(
-                        "preflighted allocation element",
-                    ),
-                )
-            })?;
-            let bytes = count.checked_mul(element_bytes).ok_or_else(|| {
-                engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::AllocationBytesLimit {
-                        actual: usize::MAX,
-                        limit: engine.limits.max_allocation_bytes,
-                    },
-                )
-            })?;
-            engine
-                .memory
-                .validate_allocation(bytes, engine.limits)
-                .map_err(|kind| engine.at(site, kind))?;
-            let allocation_bytes = try_filled(bytes, 0_u8).map_err(|kind| engine.at(site, kind))?;
-            let initialized = try_filled(bytes, false).map_err(|kind| engine.at(site, kind))?;
-            frame_allocations
-                .try_reserve(1)
-                .map_err(|_| engine.at(site, SimulationExecutionErrorKindV1::AllocationFailure))?;
-            let reserved = engine.reserve_event_closure(&site)?;
-            let id = match engine.memory.allocate(
-                AddressSpace::Private,
-                AccessMode::ReadWrite,
-                *alignment,
-                allocation_bytes,
-                initialized,
-                engine.limits,
-            ) {
-                Ok(id) => id,
-                Err(kind) => {
-                    engine.cancel_event_closure(reserved);
-                    return Err(engine.at(site, kind));
-                }
-            };
-            frame_allocations.push(FrameAllocation {
-                id,
-                lifecycle_observed: reserved,
-            });
-            engine.emit_reserved_begin(
-                &site,
-                SimulationEventKindV1::AllocationCreated {
-                    allocation: id,
-                    address_space: AddressSpace::Private,
-                    bytes,
-                },
-                reserved,
-            )?;
-            one(RuntimeValue::Pointer(PointerValue {
-                allocation: id,
-                byte_offset: 0,
-                element: *element,
-                address_space: AddressSpace::Private,
-                access: AccessMode::ReadWrite,
-                lower_bound: 0,
-                upper_bound: bytes,
-                abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
-            }))
-        }
+        OperationKind::Alloca { .. } => Err(engine.at(
+            site,
+            SimulationExecutionErrorKindV1::InternalInvariant(
+                "outlined private allocation dispatch",
+            ),
+        )),
         OperationKind::SliceLength { slice } => {
             let RuntimeValue::Slice(slice) = runtime_value(engine, values, *slice, &site)? else {
                 return Err(engine.at(
@@ -8700,6 +8634,7 @@ mod tests {
             initialized: vec![true; 4],
             workgroup_published: vec![],
             workgroup_writer: vec![],
+            observation_descriptor: Vec::new(),
         };
         let values = HashMap::from([
             (
@@ -8744,15 +8679,20 @@ mod tests {
                 next_allocation: 8,
                 allocations_created: 1,
                 live_bytes: 4,
+                reuse: None,
             },
             sink: &mut sink,
             debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
             debug_sink: &mut debug_sink,
             debug_origin_requested: false,
+            debug_observation_requested: false,
+            debug_frames_requested: false,
             debug_identity_failed: false,
             debug_origin: None,
             debug_records: 0,
             debug_delivery_stopped: true,
+            allocation_lifecycle_requested: false,
+            allocation_lifecycle_stopped: false,
             schedule_identity: SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
             schedule_decision: 0,
             steps: 0,
@@ -8865,6 +8805,7 @@ mod tests {
             initialized: vec![true; 4],
             workgroup_published: vec![],
             workgroup_writer: vec![],
+            observation_descriptor: Vec::new(),
         };
         let pointer = PointerValue {
             allocation: 7,
@@ -8891,6 +8832,7 @@ mod tests {
             next_allocation: 8,
             allocations_created: 1,
             live_bytes: 4,
+            reuse: None,
         };
         let width = memory
             .validate_store(

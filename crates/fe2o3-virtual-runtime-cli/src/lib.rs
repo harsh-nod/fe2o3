@@ -220,7 +220,7 @@ fn execute(
         max_arguments_per_dispatch: 65_536,
         max_dependencies_per_dispatch: 1,
         max_retained_dispatch_bytes: 64 << 20,
-        max_schedule_decisions: 1 << 20,
+        max_schedule_decisions: 1 << 19,
     };
     let runtime_identity = derive_runtime_identity(
         &input,

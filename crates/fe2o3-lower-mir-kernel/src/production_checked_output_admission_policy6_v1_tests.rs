@@ -330,3 +330,6 @@ fn direct_policy6_genuine_identity_removal_moves_trap_inventory_ordinal_not_sour
         assert_eq!(private_counts(owner.output().module()), (1, 1, 0));
     }
 }
+
+#[path = "production_checked_output_local_order_direct_v1_tests.rs"]
+mod local_order_tests;

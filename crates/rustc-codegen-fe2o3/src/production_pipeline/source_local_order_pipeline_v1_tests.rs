@@ -1,12 +1,9 @@
 //! Genuine source-owned connected V12 -> target-bound V12 -> diagnostic order.
 //! Intended child of source_bitselect_candidate_v1_tests; no policy hook.
 use super::*;
-use crate::collector::source_census_v1::bitselect_feasibility::retained::local_order::{
-    CapturedLocalOrder, capture_local_order,
-};
+use crate::collector::source_census_v1::bitselect_feasibility::retained::local_order::capture_local_order;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work,
-    CanonicalKirBlockCoordinateV1, CanonicalKirFunctionCoordinateV1,
     VerifiedCanonicalKernelIrModuleV12 as Owner,
 };
 use fe2o3_kernel_opt::{
@@ -14,13 +11,15 @@ use fe2o3_kernel_opt::{
     U32LocalOrderRegionV1 as Region, schedule_checked_u32_local_order_v1 as schedule,
 };
 
-#[path = "source_local_order_join_v1_tests.rs"]
-mod join;
+use super::local_order_join as join;
 #[path = "source_local_order_simulation_v1_tests.rs"]
 mod simulation;
 
 #[path = "source_local_order_recipe_pipeline_v1_tests.rs"]
 mod recipes;
+
+#[path = "source_local_order_continuation_v1_tests.rs"]
+mod continuation;
 
 const CANONICAL_WORK: usize = 20_000_000;
 const CANONICAL_STORAGE: usize = 32 * 1024 * 1024;

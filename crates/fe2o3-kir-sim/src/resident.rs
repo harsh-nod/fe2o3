@@ -70,16 +70,19 @@ pub(crate) fn reserved_vec_bytes<T>(elements: usize) -> Option<usize> {
     values.capacity().checked_mul(size_of::<T>())
 }
 
-pub(crate) fn bool_vec_storage_bytes(capacity_bits: usize) -> Option<usize> {
-    capacity_bits.checked_add(7)?.checked_div(8)
+pub(crate) fn bool_vec_storage_bytes(capacity_elements: usize) -> Option<usize> {
+    // Rust Vec<bool> stores ordinary bool elements; it is not a packed bitset.
+    capacity_elements.checked_mul(size_of::<bool>())
 }
 
 pub(crate) fn partitioned_bool_vec_storage_bytes(
-    total_bits: usize,
+    total_elements: usize,
     partitions: usize,
 ) -> Option<usize> {
-    let nonempty = total_bits.min(partitions);
-    bool_vec_storage_bytes(total_bits)?.checked_add(nonempty.checked_mul(size_of::<usize>())?)
+    // Preserve the conservative per-vector reservation slack in addition to
+    // charging every element of the exact-reserved initialization payload.
+    let nonempty = total_elements.min(partitions);
+    bool_vec_storage_bytes(total_elements)?.checked_add(nonempty.checked_mul(size_of::<usize>())?)
 }
 
 pub(crate) fn reserved_bool_vec_bytes(elements: usize) -> Option<usize> {
@@ -507,16 +510,37 @@ mod tests {
     }
 
     #[test]
-    fn boolean_vector_capacity_is_charged_as_packed_bits() {
-        let bytes = reserved_bool_vec_bytes(1_025).unwrap();
-        assert!(bytes >= 1_025_usize.div_ceil(8));
-        assert!(bytes < 1_025);
-        let partitioned = partitioned_bool_vec_storage_bytes(17, 17).unwrap();
-        let mut actual = 0usize;
-        for _ in 0..17 {
-            actual += reserved_bool_vec_bytes(1).unwrap();
+    fn boolean_vector_capacity_is_charged_as_actual_elements() {
+        for requested in [0, 1, 7, 8, 9, 1_025, 4_096] {
+            let mut actual = Vec::<bool>::new();
+            actual.try_reserve_exact(requested).unwrap();
+            let expected = actual.capacity().checked_mul(size_of::<bool>()).unwrap();
+            assert_eq!(bool_vec_storage_bytes(actual.capacity()), Some(expected));
+            assert_eq!(reserved_bool_vec_bytes(requested), Some(expected));
         }
-        assert!(partitioned >= actual);
+        assert_eq!(bool_vec_storage_bytes(usize::MAX), Some(usize::MAX));
+    }
+
+    #[test]
+    fn partitioned_boolean_vectors_cover_actual_reserved_capacity() {
+        for (total, partitions) in [(0, 0), (1, 1), (17, 17), (1_025, 1), (1_025, 17)] {
+            let mut remaining: usize = total;
+            let mut actual_bytes = 0usize;
+            for index in 0..partitions {
+                let count = remaining.div_ceil(partitions - index);
+                let mut actual = Vec::<bool>::new();
+                actual.try_reserve_exact(count).unwrap();
+                actual_bytes += actual.capacity() * size_of::<bool>();
+                remaining -= count;
+            }
+            assert_eq!(remaining, 0);
+            let charged = partitioned_bool_vec_storage_bytes(total, partitions).unwrap();
+            assert!(
+                charged >= actual_bytes,
+                "{total} elements in {partitions} vectors"
+            );
+        }
+        assert_eq!(partitioned_bool_vec_storage_bytes(usize::MAX, 1), None);
     }
 
     #[test]

@@ -57,6 +57,8 @@ mod nominal_policy4_v3;
 mod pre_ranked_observation_v1;
 #[path = "production_pipeline_private_cell_native_v1.rs"]
 pub(crate) mod private_cell_native_v1;
+#[path = "production_pipeline_source_local_order_v1.rs"]
+pub(crate) mod source_local_order_v1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {
@@ -115,6 +117,7 @@ pub(crate) enum ProductionPipelineError {
     CheckedOutputPolicy6Stage(checked_output_policy6_v1::CheckedOutputPolicy6StageErrorV1),
     CheckedOutputPolicy7Stage(checked_output_policy7_v1::CheckedOutputPolicy7StageErrorV1),
     CheckedOutputPolicy8Stage(checked_output_policy8_v1::CheckedOutputPolicy8StageErrorV1),
+    SourceLocalOrderStage(source_local_order_v1::SourceLocalOrderStageErrorV1),
     PrivateCellNativeStage(private_cell_native_v1::PrivateCellNativeStageErrorV1),
     LoopPreheadersNativeStage(private_cell_native_v1::LoopPreheadersNativeStageErrorV1),
     LicmNativeStage(private_cell_native_v1::LicmNativeStageErrorV1),
@@ -156,6 +159,7 @@ impl fmt::Display for ProductionPipelineError {
             Self::CheckedOutputPolicy6Stage(error) => write!(formatter, "checked Policy6 production stage failed: {error}"),
             Self::CheckedOutputPolicy7Stage(error) => write!(formatter, "checked Policy7 production stage failed: {error}"),
             Self::CheckedOutputPolicy8Stage(error) => write!(formatter, "checked Policy8 production stage failed: {error}"),
+            Self::SourceLocalOrderStage(error) => write!(formatter, "source local-order stage failed: {error}"),
             Self::PrivateCellNativeStage(error) => write!(formatter, "private-cell native stage failed: {error}"),
             Self::LoopPreheadersNativeStage(error) => write!(formatter, "loop-preheaders native stage failed: {error}"),
             Self::LicmNativeStage(error) => write!(formatter, "LICM native stage failed: {error}"),
@@ -369,6 +373,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CheckedOutputPolicy6Stage(error) => Some(error),
             Self::CheckedOutputPolicy7Stage(error) => Some(error),
             Self::CheckedOutputPolicy8Stage(error) => Some(error),
+            Self::SourceLocalOrderStage(error) => Some(error),
             Self::PrivateCellNativeStage(error) => Some(error),
             Self::LoopPreheadersNativeStage(error) => Some(error),
             Self::LicmNativeStage(error) => Some(error),
@@ -3956,13 +3961,16 @@ pub(crate) mod guarded_loop_source_v1;
 #[path = "production_pipeline_loop_capture_v1.rs"]
 pub(crate) mod loop_capture_v1;
 pub(crate) mod ordered_program_diagnostic_v32;
+pub(crate) mod ordered_program_origin_v1;
 pub(crate) mod ordered_region_diagnostic_v31;
 #[cfg(test)]
 pub(crate) mod ordered_region_qualification_v31;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod source_candidate_debug_join_v17_tests;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod source_candidate_launch_analysis_v17_tests;
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "linux"))]
 mod source_bitselect_feasibility_v1_tests;
 
 #[cfg(test)]

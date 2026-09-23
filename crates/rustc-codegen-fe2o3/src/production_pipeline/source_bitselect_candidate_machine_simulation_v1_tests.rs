@@ -107,6 +107,24 @@ fn backing(
 }
 
 pub(super) fn observe(owner: &VerifiedCanonicalKernelIrModuleV17) -> Result<Value, String> {
+    observe_with_output(owner, OutputOracle::Bitselect)
+}
+
+#[derive(Clone, Copy)]
+enum OutputOracle {
+    Bitselect,
+    BitselectWithOrPrefix,
+}
+
+// A closed test-only second oracle, never a source-controlled callback.
+pub(super) fn observe_prefix(owner: &VerifiedCanonicalKernelIrModuleV17) -> Result<Value, String> {
+    observe_with_output(owner, OutputOracle::BitselectWithOrPrefix)
+}
+
+fn observe_with_output(
+    owner: &VerifiedCanonicalKernelIrModuleV17,
+    oracle: OutputOracle,
+) -> Result<Value, String> {
     let mut ledger = OracleLedger::default();
     let bytes = owner.canonical().canonical_bytes();
     if bytes.len() > BYTE_CAP {
@@ -170,7 +188,11 @@ pub(super) fn observe(owner: &VerifiedCanonicalKernelIrModuleV17) -> Result<Valu
             // internal allocation is separately controlled by SimulationLimits.
             ledger.charge(4096 + 16 * (len + 2) * 4)?;
             let (output, initial) = backing(len, 0x3141_5926, false)?;
-            let expected = backing(len, (a & mask) | (b & !mask), true)?.1;
+            let mut expected_value = (a & mask) | (b & !mask);
+            if matches!(oracle, OutputOracle::BitselectWithOrPrefix) {
+                expected_value ^= a | mask;
+            }
+            let expected = backing(len, expected_value, true)?.1;
             let mut arguments = vec![output];
             arguments.extend(
                 [a, b, mask].map(|value| SimulationArgumentV1::Scalar(ScalarBitsV1::u32(value))),
@@ -235,7 +257,8 @@ pub(super) fn observe(owner: &VerifiedCanonicalKernelIrModuleV17) -> Result<Valu
     Ok(
         json!({"scenarios":15,"runs":ledger.runs-before_runs,"steps":ledger.steps-before_steps,
         "output_and_canaries_checked":true,"immutable_inputs":true,"incomplete_assessments":incomplete,
-        "oracle":"host_u32_masked_or_exact","simulator_version":"V17",
+        "oracle":if matches!(oracle, OutputOracle::BitselectWithOrPrefix) {"host_u32_masked_or_xor_or_prefix_exact"} else {"host_u32_masked_or_exact"},
+        "simulator_version":"V17",
         "cumulative_step_limit":MAX_STEPS,"host_payload_limit":2*1024*1024,
         "prepaid_host_payload":ledger.prepaid_host_payload,
         "simulation_is_proof":false,"hardware_observed":false}),

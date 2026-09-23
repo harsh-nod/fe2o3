@@ -30,8 +30,8 @@ use crate::rocgdb_mi_parser_v3::{
     MiResultsV3, MiValueV3, parse_mi_record_v3,
 };
 
-pub(crate) use process::RocgdbMiNativeSpawnProvisionV4;
 pub use process::RocgdbMiProcessV3;
+pub(crate) use process::{RocgdbHardwareStopCaptureInputV1, RocgdbMiNativeSpawnProvisionV4};
 
 const MAX_RECORDS_PER_COMMAND_V3: usize = 4_096;
 const MAX_PENDING_EVENTS_V3: usize = 256;

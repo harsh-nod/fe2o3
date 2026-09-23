@@ -4,6 +4,10 @@
 
 use super::*;
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "ordered_program_launch_freshness_v17_tests.rs"]
+mod launch_freshness_tests;
+
 pub(crate) struct OrderedProgramObservationOwnerV32 {
     materialized: fe2o3_lower_mir_kernel::ProductionOrderedProgramPreRankedKirOwnerV17,
     // Keep actual source, target, descriptor and transaction bindings alive for

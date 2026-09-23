@@ -10,6 +10,89 @@ const ORDERED_KERNARG: usize = CWSR + 1;
 const ORDERED_KERNARG_BYTES: usize =
     MAX_ORDERED_BATCH_DISPATCHES_V1 * MAX_KERNARG_BYTES_V1 as usize;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OrderedMode {
+    V1,
+    Batch64,
+}
+
+impl OrderedMode {
+    fn maximum(self) -> usize {
+        match self {
+            Self::V1 => MAX_ORDERED_BATCH_DISPATCHES_V1,
+            Self::Batch64 => MAX_ORDERED_BATCH64_DISPATCHES_V1,
+        }
+    }
+
+    fn arena_bytes(self) -> usize {
+        match self {
+            Self::V1 => ORDERED_KERNARG_BYTES,
+            Self::Batch64 => self.maximum() * MAX_KERNARG_BYTES_V1 as usize,
+        }
+    }
+
+    fn require_arena(self, bytes: usize) -> Result<()> {
+        if bytes != self.arena_bytes() {
+            return Err("ordered arena mode changed before queue rollover".into());
+        }
+        Ok(())
+    }
+
+    fn slot_offsets(self, index: usize, payload_bytes: usize) -> Result<(usize, usize)> {
+        if index >= self.maximum() || payload_bytes > MAX_KERNARG_BYTES_V1 as usize {
+            return Err("ordered slot count or payload extent".into());
+        }
+        let kernarg = index
+            .checked_mul(MAX_KERNARG_BYTES_V1 as usize)
+            .ok_or("ordered kernarg slot overflow")?;
+        let signal = index
+            .checked_mul(AMD_SIGNAL_BYTES_V1)
+            .ok_or("ordered signal slot overflow")?;
+        if kernarg
+            .checked_add(MAX_KERNARG_BYTES_V1 as usize)
+            .is_none_or(|end| end > self.arena_bytes())
+            || signal
+                .checked_add(AMD_SIGNAL_BYTES_V1)
+                .is_none_or(|end| end > PAGE_BYTES)
+        {
+            return Err("ordered slot exceeds retained storage".into());
+        }
+        Ok((kernarg, signal))
+    }
+
+    fn require_capacity(self, write: u64, read: u64, count: usize) -> Result<()> {
+        match self {
+            Self::V1 => require_sequence_capacity(write, read, count),
+            Self::Batch64 => require_ordered64_capacity(write, read, count),
+        }
+    }
+
+    fn payload_bytes(
+        self,
+        dispatches: &[OrderedBatchDispatchV1],
+        timeout_ms: u32,
+    ) -> Result<usize> {
+        match self {
+            Self::V1 => ordered_batch_payload_bytes(dispatches, timeout_ms),
+            Self::Batch64 => ordered_batch64_payload_bytes(dispatches, timeout_ms),
+        }
+        .map_err(explain)
+    }
+}
+
+fn require_ordered64_capacity(write: u64, read: u64, dispatches: usize) -> Result<()> {
+    if !(1..=MAX_ORDERED_BATCH64_DISPATCHES_V1).contains(&dispatches)
+        || read > write
+        || write
+            .checked_add(dispatches as u64)
+            .and_then(|next| next.checked_sub(read))
+            .is_none_or(|outstanding| outstanding > MAX_UNRETIRED_RING_PACKETS_V1)
+    {
+        return Err("ordered64 exceeds retained ring capacity; rollover required".into());
+    }
+    Ok(())
+}
+
 trait OrderedBackend {
     type Prepared;
     type Staged;
@@ -38,10 +121,17 @@ fn run_ordered_batch(
     count: usize,
     timeout_ms: u32,
 ) -> Result<u64> {
+    run_ordered_batch_mode(backend, count, timeout_ms, OrderedMode::V1)
+}
+
+fn run_ordered_batch_mode(
+    backend: &mut impl OrderedBackend,
+    count: usize,
+    timeout_ms: u32,
+    mode: OrderedMode,
+) -> Result<u64> {
     let result = (|| {
-        if !(1..=MAX_ORDERED_BATCH_DISPATCHES_V1).contains(&count)
-            || !(1..=600_000).contains(&timeout_ms)
-        {
+        if !(1..=mode.maximum()).contains(&count) || !(1..=600_000).contains(&timeout_ms) {
             return Err("ordered batch count or aggregate timeout".into());
         }
         backend.dispatch_fence()?;
@@ -76,6 +166,7 @@ fn run_ordered_batch(
 
 struct NativeOrdered<'a> {
     context: &'a mut Context,
+    mode: OrderedMode,
     commands: Vec<Option<OrderedBatchDispatchV1>>,
     payload: Vec<u8>,
     offset: usize,
@@ -106,28 +197,35 @@ fn require_signals_complete(
 impl NativeOrdered<'_> {
     fn retain_storage(&mut self) -> Result<()> {
         self.context.check_idle()?;
+        if self.mode.maximum() * AMD_SIGNAL_BYTES_V1 > PAGE_BYTES {
+            return Err("ordered signal page capacity".into());
+        }
         match self.context.internal.len() {
             ORDERED_KERNARG => {
                 let allocation = self.context.allocate_resource(
-                    ORDERED_KERNARG_BYTES,
+                    self.mode.arena_bytes(),
                     KfdAllocMemoryFlags::KERNARG,
                     |_| Ok(()),
                 )?;
                 // Retain the allocation before the next fallible operation.
                 self.context.internal.push(allocation);
-                Backend::initialize_engineering_signal_slots(
-                    &mut self.context.internal[SIGNAL].mapping,
-                    MAX_ORDERED_BATCH_DISPATCHES_V1,
-                )
+                match self.mode {
+                    OrderedMode::V1 => Backend::initialize_engineering_signal_slots(
+                        &mut self.context.internal[SIGNAL].mapping,
+                        MAX_ORDERED_BATCH_DISPATCHES_V1,
+                    ),
+                    OrderedMode::Batch64 => Backend::initialize_engineering_signal_slots64(
+                        &mut self.context.internal[SIGNAL].mapping,
+                        MAX_ORDERED_BATCH64_DISPATCHES_V1,
+                    ),
+                }
                 .map_err(explain)?;
             }
             count if count == ORDERED_KERNARG + 1 => {}
             _ => return Err("ordered batch private storage identity".into()),
         }
-        if self.context.internal[ORDERED_KERNARG].requested != ORDERED_KERNARG_BYTES {
-            return Err("ordered batch kernarg arena extent".into());
-        }
-        Ok(())
+        self.mode
+            .require_arena(self.context.internal[ORDERED_KERNARG].requested)
     }
 
     fn publish_fixed<const N: usize>(
@@ -135,13 +233,16 @@ impl NativeOrdered<'_> {
         packets: Vec<AqlPreparedKernelDispatchV1>,
         deadline: Instant,
     ) -> Result<OrderedPending> {
-        let count = batch_count::<N>()?;
+        let count = match self.mode {
+            OrderedMode::V1 => batch_count::<N>()?,
+            OrderedMode::Batch64 => batch64_count::<N>()?,
+        };
         let packets: [AqlPreparedKernelDispatchV1; N] = packets
             .try_into()
             .map_err(|_| "ordered batch packet cardinality")?;
         let batch = AqlPreparedKernelDispatchBatchV2::try_from_packets(packets).map_err(explain)?;
         self.context.check_idle()?;
-        require_sequence_capacity(
+        self.mode.require_capacity(
             self.context.ring.write(),
             self.context.last_observed_read,
             N,
@@ -183,6 +284,13 @@ impl NativeOrdered<'_> {
 fn batch_count<const N: usize>() -> Result<u32> {
     if !(1..=MAX_ORDERED_BATCH_DISPATCHES_V1).contains(&N) {
         return Err("ordered batch fixed cardinality".into());
+    }
+    u32::try_from(N).map_err(explain)
+}
+
+fn batch64_count<const N: usize>() -> Result<u32> {
+    if !(1..=MAX_ORDERED_BATCH64_DISPATCHES_V1).contains(&N) {
+        return Err("ordered64 fixed cardinality".into());
     }
     u32::try_from(N).map_err(explain)
 }
@@ -247,19 +355,14 @@ impl OrderedBackend for NativeOrdered<'_> {
         self.retain_storage()?;
         let mut packets = Vec::with_capacity(prepared.len());
         for (index, prepared) in prepared.into_iter().enumerate() {
-            let offset = index
-                .checked_mul(MAX_KERNARG_BYTES_V1 as usize)
-                .ok_or("ordered kernarg slot overflow")?;
-            if prepared.bytes.len() > MAX_KERNARG_BYTES_V1 as usize {
-                return Err("ordered kernarg slot extent".into());
-            }
+            let (offset, signal_offset) = self.mode.slot_offsets(index, prepared.bytes.len())?;
             let kernarg_address = self.context.internal[ORDERED_KERNARG]
                 .va
                 .checked_add(offset as u64)
                 .ok_or("ordered kernarg address")?;
             let signal_address = self.context.internal[SIGNAL]
                 .va
-                .checked_add((index * AMD_SIGNAL_BYTES_V1) as u64)
+                .checked_add(signal_offset as u64)
                 .ok_or("ordered signal address")?;
             packets.push(
                 AqlKernelDispatchPacketV1::new_unpublished_with_ordering(
@@ -276,7 +379,7 @@ impl OrderedBackend for NativeOrdered<'_> {
             );
             Backend::with_bytes_mut(
                 &mut self.context.internal[ORDERED_KERNARG].mapping,
-                ORDERED_KERNARG_BYTES,
+                self.mode.arena_bytes(),
                 |mapped| {
                     let slot = &mut mapped[offset..offset + MAX_KERNARG_BYTES_V1 as usize];
                     slot.fill(0);
@@ -302,7 +405,14 @@ impl OrderedBackend for NativeOrdered<'_> {
                 }
             };
         }
-        fixed!(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+        match self.mode {
+            OrderedMode::V1 => fixed!(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+            OrderedMode::Batch64 => fixed!(
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+                45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64
+            ),
+        }
     }
 
     fn poll_final(&mut self, pending: &mut OrderedPending) -> Result<bool> {
@@ -514,24 +624,62 @@ impl Context {
         payload: Vec<u8>,
         timeout_ms: u32,
     ) -> Result<ResponseV1> {
+        // SAFETY: preserve the dedicated-process trusted-code caller contract.
+        unsafe {
+            self.dispatch_ordered_batch_mode(dispatches, payload, timeout_ms, OrderedMode::V1)
+        }
+    }
+
+    /// Separate engineering route; no default, sequence or peer limit changes.
+    pub(super) unsafe fn dispatch_ordered_batch64(
+        &mut self,
+        dispatches: Vec<OrderedBatchDispatchV1>,
+        payload: Vec<u8>,
+        timeout_ms: u32,
+    ) -> Result<ResponseV1> {
+        // SAFETY: identical trusted-code/lifetime obligations to the V1 route.
+        unsafe {
+            self.dispatch_ordered_batch_mode(dispatches, payload, timeout_ms, OrderedMode::Batch64)
+        }
+    }
+
+    unsafe fn dispatch_ordered_batch_mode(
+        &mut self,
+        dispatches: Vec<OrderedBatchDispatchV1>,
+        payload: Vec<u8>,
+        timeout_ms: u32,
+        mode: OrderedMode,
+    ) -> Result<ResponseV1> {
         let result = (|| {
-            let expected = ordered_batch_payload_bytes(&dispatches, timeout_ms).map_err(explain)?;
+            let expected = mode.payload_bytes(&dispatches, timeout_ms)?;
             if expected != payload.len() {
                 return Err("ordered batch payload length".into());
             }
             let count = dispatches.len();
-            require_sequence_capacity(self.ring.write(), self.last_observed_read, count)?;
+            mode.require_capacity(self.ring.write(), self.last_observed_read, count)?;
             let mut native = NativeOrdered {
                 context: self,
+                mode,
                 commands: dispatches.into_iter().map(Some).collect(),
                 payload,
                 offset: 0,
                 count: u32::try_from(count).map_err(explain)?,
             };
-            let elapsed_ns = run_ordered_batch(&mut native, count, timeout_ms)?;
-            Ok(ResponseV1::DispatchOrderedBatchCompleted {
-                completed_dispatches: native.count,
-                elapsed_ns,
+            let elapsed_ns = match mode {
+                OrderedMode::V1 => run_ordered_batch(&mut native, count, timeout_ms)?,
+                OrderedMode::Batch64 => {
+                    run_ordered_batch_mode(&mut native, count, timeout_ms, mode)?
+                }
+            };
+            Ok(match mode {
+                OrderedMode::V1 => ResponseV1::DispatchOrderedBatchCompleted {
+                    completed_dispatches: native.count,
+                    elapsed_ns,
+                },
+                OrderedMode::Batch64 => ResponseV1::DispatchOrderedBatch64Completed {
+                    completed_dispatches: native.count,
+                    elapsed_ns,
+                },
             })
         })();
         if result.is_err() {

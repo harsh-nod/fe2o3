@@ -684,11 +684,16 @@
     "block": 4
   },
   "crates/fe2o3-kfd/src/engineering_gfx950.rs": {
-    "block": 6,
+    "block": 8,
     "function": 5
   },
-  "crates/fe2o3-kfd/src/engineering_gfx950_ordered_batch.rs": {
+  "crates/fe2o3-kfd/src/engineering_gfx950_dispatch_timestamps.rs": {
+    "block": 5,
     "function": 1
+  },
+  "crates/fe2o3-kfd/src/engineering_gfx950_ordered_batch.rs": {
+    "block": 2,
+    "function": 3
   },
   "crates/fe2o3-kfd/src/engineering_gfx950_peer.rs": {
     "block": 1,
@@ -711,6 +716,13 @@
   "crates/fe2o3-kfd/src/memory_linux.rs": {
     "block": 38,
     "extern_block": 1
+  },
+  "crates/fe2o3-kfd/src/memory_linux_dispatch_timestamps.rs": {
+    "block": 7,
+    "function": 4
+  },
+  "crates/fe2o3-kfd/src/memory_linux_dispatch_timestamps_tests.rs": {
+    "block": 10
   },
   "crates/fe2o3-kfd/src/queue_completion.rs": {
     "block": 1

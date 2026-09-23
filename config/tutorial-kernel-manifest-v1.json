@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "fae8e0fd2d297f7e1b7603d5a4b90611f15c74ca",
-      "tree": "79cba5abe41395a94dbad17c8841298ffbb38d0c"
+      "commit": "edd94cf7e9f50f46e829125e9c0c117cdd5ca001",
+      "tree": "09c61accfb91686011c2962669c37b9b9103cf21"
     },
     "status": "pending",
     "lessons": [
@@ -196,9 +196,9 @@
             "displayedUtf8Bytes": 308,
             "displayedSha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
             "sourcePath": "examples/fill/src/lib.rs",
-            "sourceCommit": "308d8fa00fa41e098b2a1a47bbfea1bc29735464",
-            "sourceSha256": "e763df1ad98cafe247454bd3e6a40f39d8e0ea557f5d3080f56290476ca53766",
-            "sourceDigestScope": null,
+            "sourceCommit": "7a536e0a001202ac0bb9d8647c5395661f8fa1ec",
+            "sourceSha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -434,7 +434,7 @@
                 "packageManifest": "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/Cargo.toml",
                 "packageManifestSha256": "1bfb8a9e35d4013f3376bf456ed4ad62fe333833e5a40847774fdb5e6cb5f13f",
                 "cargoLockPath": "Cargo.lock",
-                "cargoLockSha256": "0996a0df8293a298a6abc5aff6f39532ab5445a50fc8567be4938c9cbdc81f70",
+                "cargoLockSha256": "2df93cc7fd042709089860007ed3ea01c5ea137abae80e002fe41bf5e2dde679",
                 "sourcePaths": [
                   "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs"
                 ],
@@ -650,7 +650,7 @@
                   }
                 }
               ],
-              "contractSha256": "fa9d5efea229b082e74e6b5c8cbefc9103447a60a1935099ec1c751839c34aa5"
+              "contractSha256": "51946fa5b2984dc2ef6ba1d07b4a2da7c3f5dcfc0a8fd1df7bd9743e8230e5ff"
             },
             "sourceItemStatus": "contract-bound"
           },
@@ -1257,7 +1257,7 @@
             "sourcePath": "examples/tiled_gemm_general_v1/src/kernel.rs",
             "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
             "sourceSha256": "a898a078ac411b17764d87c0b06681045ddccc83ea8d4314fd2a48b59e8462cd",
-            "sourceDigestScope": null,
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": "workgroup-pipeline-source-v1",
             "sourceFragmentsSha256": null,
@@ -1511,7 +1511,7 @@
             "sourcePath": "examples/gemm_autoresearch_v1/src/kernel.rs",
             "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
             "sourceSha256": "3199202452896fa59e0e3f7f5e7f6e656636af039d4bf5b0718febc5edf8f9d0",
-            "sourceDigestScope": null,
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -1771,7 +1771,7 @@
             "sourcePath": "examples/flash_attention_general_v1/src/kernel.rs",
             "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
             "sourceSha256": "f160e1391e1b354657049b5b11d745428fbbfb8fb6e5e2fceb4143ac93e7b00b",
-            "sourceDigestScope": null,
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -2008,7 +2008,7 @@
             "sourcePath": "examples/moe_grouped_expert_general_v1/src/kernel.rs",
             "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
             "sourceSha256": "a4af47e5ab3cad6a16d4b0cd2fc9028d0660469a75914474a7fc0d984934bd0a",
-            "sourceDigestScope": null,
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -8553,8 +8553,8 @@
           "fill"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "0996a0df8293a298a6abc5aff6f39532ab5445a50fc8567be4938c9cbdc81f70",
-        "contractSha256": "e36addca5a1a05fe361f7d88802e5a6da9ad1bdbb0142496c853f224e5567427"
+        "cargoLockSha256": "2df93cc7fd042709089860007ed3ea01c5ea137abae80e002fe41bf5e2dde679",
+        "contractSha256": "d3e042c1f129647d684147caf7ad9e9ebb000f428c0ef5200a6c9a19b52b5df4"
       },
       "simulation": {
         "requestPath": "scripts/quickstart/fill-request.json",
@@ -8823,19 +8823,19 @@
           "scalar_gemm_v1"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "0996a0df8293a298a6abc5aff6f39532ab5445a50fc8567be4938c9cbdc81f70",
-        "contractSha256": "d902e1b8b2ed7e927d8f7db2311fa733c0d3db7f302f091475a15bc7e069528b"
+        "cargoLockSha256": "2df93cc7fd042709089860007ed3ea01c5ea137abae80e002fe41bf5e2dde679",
+        "contractSha256": "6595011672218b779ee5d97acabee62318c984e7069540b8a007c78a1c514f58"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-scalar-gemm.request.json",
-        "requestSha256": null,
-        "requestBytes": null,
+        "requestSha256": "75edfdc1a03c1545a3cab89c2474fde70a7d5fe5bd8a8538fdb1c07479a6b9cc",
+        "requestBytes": 1170,
         "expectationPath": "config/tutorial-simulation-v1/gfx942-scalar-gemm.expectation.json",
-        "expectationSha256": null,
-        "expectationBytes": null,
+        "expectationSha256": "e4c3461dea759f54c42a739f7bb33333aa14369eb166f8fb2f52336a8da6f31b",
+        "expectationBytes": 1199,
         "bundleVersion": 7,
         "canonicalKirVersion": 12,
-        "status": "pending-design"
+        "status": "pending-reconciliation"
       }
     },
     {
@@ -8913,8 +8913,8 @@
           "vecadd"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "0996a0df8293a298a6abc5aff6f39532ab5445a50fc8567be4938c9cbdc81f70",
-        "contractSha256": "b48d9c2c5e874dc0b9a1a2f403920cf8e5d2a14fed266db7b8273cb2de15bd27"
+        "cargoLockSha256": "2df93cc7fd042709089860007ed3ea01c5ea137abae80e002fe41bf5e2dde679",
+        "contractSha256": "473d0c37d51490c68054e610a1f336542eded1d08c357d4c3ce89f3866666942"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-typed-vecadd-source.request.json",
@@ -11382,12 +11382,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-fill-simulation:fill",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-fill-simulation",
+                "kernelSymbol": "fill"
+              },
+              "selectionSha256": "f9f06a628b996e63d4c191a587e4097071fca85c387f1584ecd516d6a98c2de5",
+              "sourcePath": "examples/fill/src/lib.rs",
+              "sourceSha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+              "functionUtf8Offset": 148
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -13787,10 +13798,12 @@
         "functionUtf8Offset": 148,
         "kernelSymbol": "fill",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-fill-simulation:fill"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered source selection only; historical simulation results do not qualify the refreshed source."
       },
       {
         "lessonId": "flash-attention",
@@ -13809,10 +13822,12 @@
         "functionUtf8Offset": 1688,
         "kernelSymbol": "flash_attention_general_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-flash-attention:flash_attention_general_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
       },
       {
         "lessonId": "flash-attention",
@@ -13853,10 +13868,12 @@
         "functionUtf8Offset": 1380,
         "kernelSymbol": "gemm_autoresearch_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-gemm-autoresearch:gemm_autoresearch_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
       },
       {
         "lessonId": "gemm-autoresearch",
@@ -13908,10 +13925,12 @@
         "functionUtf8Offset": 1530,
         "kernelSymbol": "tiled_gemm_general_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-tiled-gemm:tiled_gemm_general_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
       },
       {
         "lessonId": "gemm-tiling",
@@ -13930,10 +13949,12 @@
         "functionUtf8Offset": 212,
         "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-moe-route:gfx950_moe_route_fp4_t16_e4_k2_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-advanced-moe",
@@ -13941,10 +13962,13 @@
         "functionUtf8Offset": 13227,
         "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-moe-expert-rank-expert-serial:gfx950_moe_expert_rank_fp4_fp8_v1",
+          "fixture:gfx950-moe-expert-rank:gfx950_moe_expert_rank_fp4_fp8_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-advanced-moe",
@@ -13952,10 +13976,12 @@
         "functionUtf8Offset": 26722,
         "kernelSymbol": "gfx950_combine_expert_ranks_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-combine-expert-ranks:gfx950_combine_expert_ranks_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-attnres-gr-mhc",
@@ -14095,10 +14121,12 @@
         "functionUtf8Offset": 495,
         "kernelSymbol": "gfx950_combine_expert_ranks_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-combine-expert-ranks:gfx950_combine_expert_ranks_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-four-branch-residual-performance-lab",
@@ -14117,10 +14145,12 @@
         "functionUtf8Offset": 180,
         "kernelSymbol": "gfx950_fp4_attention_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp4-attention:gfx950_fp4_attention_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp4-attention-performance-lab",
@@ -14128,10 +14158,12 @@
         "functionUtf8Offset": 80,
         "kernelSymbol": "gfx950_fp4_attention_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp4-attention:gfx950_fp4_attention_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp4-gemm",
@@ -14139,10 +14171,12 @@
         "functionUtf8Offset": 169,
         "kernelSymbol": "gfx950_fp4_gemm_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp4-gemm:gfx950_fp4_gemm_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp4-gemm-performance-lab",
@@ -14150,10 +14184,12 @@
         "functionUtf8Offset": 69,
         "kernelSymbol": "gfx950_fp4_gemm_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp4-gemm:gfx950_fp4_gemm_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp8-attention",
@@ -14161,10 +14197,12 @@
         "functionUtf8Offset": 180,
         "kernelSymbol": "gfx950_fp8_attention_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp8-attention:gfx950_fp8_attention_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp8-attention-performance-lab",
@@ -14172,10 +14210,12 @@
         "functionUtf8Offset": 80,
         "kernelSymbol": "gfx950_fp8_attention_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp8-attention:gfx950_fp8_attention_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp8-gemm",
@@ -14183,10 +14223,12 @@
         "functionUtf8Offset": 162,
         "kernelSymbol": "gfx950_fp8_gemm_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp8-gemm:gfx950_fp8_gemm_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-fp8-gemm-performance-lab",
@@ -14194,10 +14236,12 @@
         "functionUtf8Offset": 62,
         "kernelSymbol": "gfx950_fp8_gemm_rust",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-fp8-gemm:gfx950_fp8_gemm_rust"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact excerpt/source association under the registered non-test library feature selection; compiler execution and both variant qualifications remain pending."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -14205,10 +14249,12 @@
         "functionUtf8Offset": 221,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-decode:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: the exact displayed excerpt maps uniquely to the selected physical kernel and feature closure; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -14331,10 +14377,12 @@
         "functionUtf8Offset": 221,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-decode:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: the exact displayed excerpt maps uniquely to the selected physical kernel and feature closure; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gradient-stage-performance-lab",
@@ -14342,10 +14390,12 @@
         "functionUtf8Offset": 494,
         "kernelSymbol": "gfx950_stage_gradient_shard_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-stage-gradient-shard:gfx950_stage_gradient_shard_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-indexed-sparse-attention",
@@ -14419,10 +14469,13 @@
         "functionUtf8Offset": 542,
         "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-moe-expert-rank-expert-serial:gfx950_moe_expert_rank_fp4_fp8_v1",
+          "fixture:gfx950-moe-expert-rank:gfx950_moe_expert_rank_fp4_fp8_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-moe-route-performance-lab",
@@ -14430,10 +14483,12 @@
         "functionUtf8Offset": 212,
         "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-moe-route:gfx950_moe_route_fp4_t16_e4_k2_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-muon-optimizer",
@@ -14441,10 +14496,12 @@
         "functionUtf8Offset": 494,
         "kernelSymbol": "gfx950_stage_gradient_shard_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-stage-gradient-shard:gfx950_stage_gradient_shard_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-muon-optimizer",
@@ -14452,10 +14509,13 @@
         "functionUtf8Offset": 3305,
         "kernelSymbol": "gfx950_muon_update_4x4_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-muon-update-broadcast16:gfx950_muon_update_4x4_v1",
+          "fixture:gfx950-muon-update:gfx950_muon_update_4x4_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-muon-performance-lab",
@@ -14463,10 +14523,13 @@
         "functionUtf8Offset": 499,
         "kernelSymbol": "gfx950_muon_update_4x4_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-muon-update-broadcast16:gfx950_muon_update_4x4_v1",
+          "fixture:gfx950-muon-update:gfx950_muon_update_4x4_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-ngram-embedding-gather",
@@ -14474,10 +14537,13 @@
         "functionUtf8Offset": 517,
         "kernelSymbol": "gfx950_qwen_ngram_gather_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-qwen-ngram-gather-reverse-probe:gfx950_qwen_ngram_gather_v1",
+          "fixture:gfx950-qwen-ngram-gather:gfx950_qwen_ngram_gather_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-ngram-performance-lab",
@@ -14485,10 +14551,13 @@
         "functionUtf8Offset": 517,
         "kernelSymbol": "gfx950_qwen_ngram_gather_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-qwen-ngram-gather-reverse-probe:gfx950_qwen_ngram_gather_v1",
+          "fixture:gfx950-qwen-ngram-gather:gfx950_qwen_ngram_gather_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-speculative-mtp-verification",
@@ -14496,10 +14565,13 @@
         "functionUtf8Offset": 585,
         "kernelSymbol": "gfx950_speculative_transaction_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-speculative-transaction-recompute-prefix:gfx950_speculative_transaction_v1",
+          "fixture:gfx950-speculative-transaction:gfx950_speculative_transaction_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "gfx950-speculative-performance-lab",
@@ -14507,10 +14579,13 @@
         "functionUtf8Offset": 585,
         "kernelSymbol": "gfx950_speculative_transaction_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-speculative-transaction-recompute-prefix:gfx950_speculative_transaction_v1",
+          "fixture:gfx950-speculative-transaction:gfx950_speculative_transaction_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
         "lessonId": "lds-barriers-atomics",
@@ -14562,10 +14637,12 @@
         "functionUtf8Offset": 1209,
         "kernelSymbol": "moe_grouped_expert_general_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-grouped-expert-moe:moe_grouped_expert_general_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
       },
       {
         "lessonId": "moe-expert-compute",

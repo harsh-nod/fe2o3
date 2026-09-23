@@ -256,6 +256,10 @@ pub struct RocgdbMiNativeCorrelationAdapterV4 {
 }
 
 impl RocgdbMiNativeCorrelationAdapterV4 {
+    pub(crate) const fn session_identity_v4(&self) -> OpaqueIdentityV1 {
+        self.session
+    }
+
     pub fn new(session: OpaqueIdentityV1) -> Self {
         Self {
             session,

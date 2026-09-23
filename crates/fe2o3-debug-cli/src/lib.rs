@@ -1,6 +1,8 @@
 #![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 
+#[cfg(all(test, target_os = "linux"))]
+mod declared_target_owner_tests;
 mod diagnostic_kir_v16;
 mod diagnostic_kir_v17;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -28,6 +30,11 @@ mod rocgdb_mi_parser_v3;
 pub mod rocgdb_mi_v3;
 #[cfg(target_os = "linux")]
 pub mod rocgdb_mi_v4;
+mod runtime_capture_v1;
+#[cfg(all(test, target_os = "linux"))]
+mod runtime_fault_owner_tests;
+mod runtime_queries_v1;
+mod runtime_session_owner_v1;
 mod typed_layout_v1;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -82,7 +89,7 @@ use fe2o3_kir_sim_cli::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--runtime-observations v1] [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 #[cfg(target_os = "linux")]
 const MAX_SEALED_DEBUG_INPUT_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -97,6 +104,7 @@ struct OptionsV1 {
     source_map: Option<PathBuf>,
     source_bundle_subject: Option<OpaqueIdentityV1>,
     replay_schedule: Option<PathBuf>,
+    runtime_observations: bool,
     wave_width: DebugWaveWidthV1,
 }
 
@@ -1139,7 +1147,7 @@ fn page_next(
     }))
 }
 
-fn restore_cursor(session: &mut DebugSessionV1, cursor: Option<usize>) {
+fn restore_cursor(session: &mut runtime_session_owner_v1::SessionOwnerV1, cursor: Option<usize>) {
     match cursor {
         Some(index) => {
             let _ = session.seek_record_index(index);
@@ -2240,6 +2248,40 @@ pub fn main() -> ExitCode {
         },
         None => None,
     };
+    if options.runtime_observations {
+        let embedded = bundle_v2
+            .as_ref()
+            .map(|bundle| {
+                (
+                    bundle.debug_map(),
+                    nonzero_identity(bundle.subject_identity()),
+                    nonzero_identity(bundle.debug_map_identity()),
+                    true,
+                )
+            })
+            .or_else(|| {
+                bundle.as_ref().and_then(|bundle| {
+                    bundle.debug_map().map(|bytes| {
+                        (
+                            bytes,
+                            nonzero_identity(*bundle.subject_identity()),
+                            nonzero_identity(
+                                bundle.debug_map_identity().expect("present verified map"),
+                            ),
+                            false,
+                        )
+                    })
+                })
+            });
+        return runtime_capture_v1::run_cli(
+            admitted,
+            options.wave_width,
+            source_map,
+            caller_source_map_v2,
+            embedded,
+            replay_schedule.as_ref().map(|schedule| schedule.record()),
+        );
+    }
     if let Some(bundle) = bundle_v2.as_ref() {
         let subject = nonzero_identity(bundle.subject_identity());
         let map_identity = nonzero_identity(bundle.debug_map_identity());
@@ -2491,6 +2533,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
     let mut source_map = None;
     let mut source_bundle_subject = None;
     let mut replay_schedule = None;
+    let mut runtime_observations = false;
     let mut protocol_seen = false;
     let mut wave_width = DebugWaveWidthV1::Wave64;
     while let Some(option) = arguments.next() {
@@ -2539,6 +2582,13 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             )?;
         } else if option == OsStr::new("--source-map") {
             set_once(&mut source_map, PathBuf::from(value), "--source-map")?;
+        } else if option == OsStr::new("--runtime-observations") {
+            if runtime_observations || value != OsStr::new("v1") {
+                return Err(format!(
+                    "--runtime-observations must appear at most once and equal v1; {USAGE}"
+                ));
+            }
+            runtime_observations = true;
         } else if option == OsStr::new("--replay-schedule") {
             set_once(
                 &mut replay_schedule,
@@ -2575,6 +2625,9 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
         } else {
             return Err(format!("unknown option {option:?}; {USAGE}"));
         }
+    }
+    if runtime_observations && (diagnostic_kir_v16.is_some() || diagnostic_kir_v17.is_some()) {
+        return Err("runtime observations v1 are unavailable for diagnostic KIR V16/V17".into());
     }
     if source_map.is_some() != source_bundle_subject.is_some() {
         return Err(format!(
@@ -2682,6 +2735,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
         }
     };
     Ok(OptionsV1 {
+        runtime_observations,
         program,
         request,
         source_map,
@@ -2995,7 +3049,7 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
 ) -> Result<(), String> {
     let limits = backend.protocol_limits;
     loop {
-        let request = match read_request_line_any_v2(reader, limits) {
+        let request = match read_request_line_any_v4(reader, limits) {
             Ok(Some(request)) => request,
             Ok(None) => break,
             Err(error) => {
@@ -3004,8 +3058,24 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
                 break;
             }
         };
+        let request = match request {
+            DebugRequestAnyV4::DeclaredTargetV1(request) => {
+                let response = backend.handle_declared_target_v1(request);
+                runtime_queries_v1::write_declared_target_v1(writer, &response, limits)?;
+                continue;
+            }
+            DebugRequestAnyV4::Legacy(request) => request,
+        };
         match request {
-            DebugRequestAnyV2::V1(request) => {
+            DebugRequestAnyV3::RuntimeObservationV1(request) => {
+                let response = backend.handle_runtime_observation_v1(request);
+                runtime_capture_v1::write_runtime(writer, &response, limits)?;
+            }
+            DebugRequestAnyV3::ResourceV2(request) => {
+                let response = backend.handle_resource_queries_v2(request);
+                runtime_capture_v1::write_resource(writer, &response, limits)?;
+            }
+            DebugRequestAnyV3::Legacy(DebugRequestAnyV2::V1(request)) => {
                 let terminate = matches!(request, DebugRequestV1::Terminate { .. });
                 let response = backend.handle(request);
                 write_response(writer, &response, limits)?;
@@ -3013,15 +3083,15 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
                     break;
                 }
             }
-            DebugRequestAnyV2::SourceVariablesV2(request) => {
+            DebugRequestAnyV3::Legacy(DebugRequestAnyV2::SourceVariablesV2(request)) => {
                 let response = backend.handle_source_variables_v2(request);
                 write_source_variable_response_v2(writer, &response, limits)?;
             }
-            DebugRequestAnyV2::DiagnosisV2(request) => {
+            DebugRequestAnyV3::Legacy(DebugRequestAnyV2::DiagnosisV2(request)) => {
                 let response = backend.handle_diagnosis_v2(request);
                 write_diagnosis_response_v2(writer, &response, limits)?;
             }
-            DebugRequestAnyV2::ResourceV1(request) => {
+            DebugRequestAnyV3::Legacy(DebugRequestAnyV2::ResourceV1(request)) => {
                 let response = backend.handle_resource_queries_v1(request);
                 resource_queries_v1::write_resource_response_v1(writer, &response, limits)?;
             }
@@ -3210,11 +3280,13 @@ fn response_session(response: &DebugResponseV1) -> Option<SessionViewV1> {
 
 struct SimulatorBackendV1 {
     module: AdmittedSimulationModuleV1,
-    session: DebugSessionV1,
+    declared_target_v1: Option<fe2o3_kir_sim_cli::AdmittedBundleTargetV1>,
+    session: runtime_session_owner_v1::SessionOwnerV1,
     wave_width: DebugWaveWidthV1,
     configuration_identity: OpaqueIdentityV1,
     diagnosis_dispatch: DiagnosisDispatchV2,
     resource_queries: resource_queries_v1::ResourceQueryStateV1,
+    runtime_queries: runtime_queries_v1::RuntimeQueryStateV1,
     diagnosis_input: Option<DiagnosisInputEvidenceV2>,
     diagnosis_allocations: BTreeMap<u64, Option<DiagnosisAllocationContractV2>>,
     diagnosis_source_members: Vec<AdmittedDiagnosisSourceMemberV2>,
@@ -3271,6 +3343,27 @@ impl SimulatorBackendV1 {
         source_map_v2: Option<AdmittedSourceMapV2>,
         replay_schedule: Option<&SimulationScheduleRecordV1>,
     ) -> Result<Self, String> {
+        Self::new_with_maps_schedule_and_observations(
+            input,
+            wave_width,
+            source_map,
+            source_map_v2,
+            replay_schedule,
+            false,
+        )
+    }
+
+    fn new_with_maps_schedule_and_observations(
+        input: AdmittedSimulationInputV1,
+        wave_width: DebugWaveWidthV1,
+        source_map: Option<AdmittedSourceMapV1>,
+        source_map_v2: Option<AdmittedSourceMapV2>,
+        replay_schedule: Option<&SimulationScheduleRecordV1>,
+        runtime_observations: bool,
+    ) -> Result<Self, String> {
+        let declared_target_v1 = input
+            .retained_bundle_target_v1()
+            .map_err(|error| error.to_string())?;
         let diagnostic_v16 = input.module.identity().wire_version() == 16;
         let diagnostic_v17 = input.module.identity().wire_version() == 17;
         if diagnostic_v16 {
@@ -3318,32 +3411,19 @@ impl SimulatorBackendV1 {
         } else {
             configuration_identity_for_input(&input, wave_width)
         };
-        let run = match replay_schedule {
-            Some(schedule) => capture_debugger_replayed_run_v1(
-                &input.module,
-                &input.request,
-                input.simulation_target(),
-                input.simulation_limits,
-                capture_limits,
-                debugger_limits,
-                wave_width,
-                schedule,
-            ),
-            None => capture_debugger_run_v1(
-                &input.module,
-                &input.request,
-                input.simulation_target(),
-                input.simulation_limits,
-                capture_limits,
-                debugger_limits,
-                wave_width,
-            ),
-        };
-        if let Err(SimulationErrorV1::Preflight(error)) = &run.execution {
+        let (execution, mut session) = runtime_capture_v1::capture(
+            &input,
+            wave_width,
+            capture_limits,
+            debugger_limits,
+            replay_schedule,
+            runtime_observations,
+        )?;
+        if let Err(SimulationErrorV1::Preflight(error)) = &execution {
             return Err(error.to_string());
         }
         if replay_schedule.is_some()
-            && let Err(SimulationErrorV1::Execution(error)) = &run.execution
+            && let Err(SimulationErrorV1::Execution(error)) = &execution
             && matches!(
                 &error.kind,
                 fe2o3_kir_sim::SimulationExecutionErrorKindV1::ScheduleDecisionLimit { .. }
@@ -3355,7 +3435,7 @@ impl SimulatorBackendV1 {
                 "persisted semantic schedule replay failed: {error}"
             ));
         }
-        let failed_execution = matches!(run.execution, Err(SimulationErrorV1::Execution(_)));
+        let failed_execution = matches!(execution, Err(SimulationErrorV1::Execution(_)));
         let configuration_identity = replay_schedule
             .map_or(base_configuration_identity, |schedule| {
                 configuration_identity_for_replay(base_configuration_identity, schedule)
@@ -3372,6 +3452,8 @@ impl SimulatorBackendV1 {
                         source_map.diagnosis_operation_count,
                     )
                 });
+        let configuration_identity =
+            runtime_capture_v1::configuration(configuration_identity, runtime_observations);
         let request_reference = DiagnosisContentReferenceV2 {
             sha256: nonzero_identity(input.request_sha256),
             canonical_bytes: input.request_bytes(),
@@ -3492,7 +3574,6 @@ impl SimulatorBackendV1 {
                 },
             })
         };
-        let mut session = DebugSessionV1::new(run.transcript);
         let mut source_map_provenance = None;
         let source_map_identity = if let Some(source_map) = source_map {
             if source_map.configuration_identity != base_configuration_identity {
@@ -3525,11 +3606,13 @@ impl SimulatorBackendV1 {
         };
         Ok(Self {
             module: input.module,
+            declared_target_v1,
             session,
             wave_width,
             configuration_identity,
             diagnosis_dispatch,
             resource_queries: resource_queries_v1::ResourceQueryStateV1::new()?,
+            runtime_queries: runtime_queries_v1::RuntimeQueryStateV1::new()?,
             diagnosis_input,
             diagnosis_allocations,
             diagnosis_source_members,
@@ -3629,7 +3712,11 @@ impl SimulatorBackendV1 {
             );
         }
         self.command_count += 1;
-        self.handle_admitted(request)
+        self.session.begin_command();
+        let before_cursor = self.cursor_sequence();
+        let before_revision = self.revision;
+        let response = self.handle_admitted(request);
+        self.finish_observed_command(id, operation, before_cursor, before_revision, response)
     }
 
     fn handle_source_variables_v2(
@@ -4823,7 +4910,8 @@ impl SimulatorBackendV1 {
                 "source stepping requires an exact-KIR bound source map",
             );
         }
-        if direction == StepDirectionV1::Reverse
+        if self.session.observed().is_none()
+            && direction == StepDirectionV1::Reverse
             && matches!(
                 granularity,
                 StepGranularityV1::Over | StepGranularityV1::Out
@@ -4856,6 +4944,15 @@ impl SimulatorBackendV1 {
                         );
                     }
                 },
+                (_, StepGranularityV1::Over | StepGranularityV1::Out)
+                    if self.session.observed().is_some() =>
+                {
+                    self.session.frame_step(
+                        direction,
+                        granularity == StepGranularityV1::Out,
+                        &scope,
+                    )
+                }
                 (StepDirectionV1::Forward, StepGranularityV1::Over) => {
                     self.session.step_over(&scope)
                 }
@@ -4887,6 +4984,15 @@ impl SimulatorBackendV1 {
         direction: StepDirectionV1,
         scope: &DebugScopeSelectorV1,
     ) -> Result<DebugNavigationV1, (CapabilityUnavailableReasonV1, &'static str)> {
+        if !self
+            .session
+            .charge_scan(self.session.transcript().records().len())
+        {
+            return Err((
+                CapabilityUnavailableReasonV1::NotCaptured,
+                "observed source scan work limit",
+            ));
+        }
         let baseline = self
             .session
             .current()
@@ -4949,6 +5055,12 @@ impl SimulatorBackendV1 {
         granularity: StepGranularityV1,
         scope: &DebugScopeSelectorV1,
     ) -> DebugNavigationV1 {
+        if !self
+            .session
+            .charge_scan(self.session.transcript().records().len())
+        {
+            return DebugNavigationV1::Unavailable(DebugInspectionUnavailableV1::NoCurrentRecord);
+        }
         let records = self.session.transcript().records();
         let cursor = self.session.cursor_record_index();
         let baseline = self.session.current_hierarchy();
@@ -5035,6 +5147,15 @@ impl SimulatorBackendV1 {
         before: u64,
         navigation: DebugNavigationV1,
     ) -> DebugResponseV1 {
+        if self.session.has_control_failure() {
+            return self.error(
+                Some(request_id),
+                Some(operation),
+                DebugErrorStageV1::Backend,
+                DebugErrorCodeV1::BackendFailure,
+                "observed control failed before stop projection",
+            );
+        }
         let after = self.cursor_sequence();
         let stop = navigation_stop(navigation, self.failed_execution);
         let visible_stop_changed = self.last_stop.as_ref() != Some(&stop);

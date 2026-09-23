@@ -1,5 +1,10 @@
 use super::*;
 
+#[path = "../rocgdb_hardware_stop_resources_v1.rs"]
+mod hardware_stop_resources_v1;
+pub(crate) use hardware_stop_resources_v1::RocgdbHardwareStopCaptureInputV1;
+use hardware_stop_resources_v1::RocgdbHardwareStopResourceOwnerV1;
+
 use std::collections::{BTreeSet, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -66,6 +71,7 @@ pub struct RocgdbMiProcessV3 {
     inferior_process: Option<OwnedFd>,
     inferior_pid: Option<u32>,
     native_stop_v4: Option<RocgdbMiNativeStopPinV4>,
+    hardware_stop_resources_v1: Option<RocgdbHardwareStopResourceOwnerV1>,
     inferior_ownership: InferiorOwnershipV3,
 }
 
@@ -140,6 +146,7 @@ impl RocgdbMiProcessV3 {
             inferior_process: None,
             inferior_pid: None,
             native_stop_v4: None,
+            hardware_stop_resources_v1: None,
             inferior_ownership: InferiorOwnershipV3::Unknown,
         })
     }
@@ -227,6 +234,7 @@ impl RocgdbMiProcessV3 {
             inferior_process: None,
             inferior_pid: None,
             native_stop_v4: None,
+            hardware_stop_resources_v1: None,
             inferior_ownership: InferiorOwnershipV3::Unknown,
         })
     }
@@ -235,6 +243,7 @@ impl RocgdbMiProcessV3 {
         &mut self,
         timeout: Duration,
     ) -> Result<bool, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         let deadline = deadline(timeout)?;
         for command in [
             "-agent-info",
@@ -263,6 +272,7 @@ impl RocgdbMiProcessV3 {
         &mut self,
         timeout: Duration,
     ) -> Result<fe2o3_debug_protocol::RocgdbMiNativeInspectionProbeV5, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         let deadline = deadline(timeout)?;
         let mut probe = fe2o3_debug_protocol::RocgdbMiNativeInspectionProbeV5::default();
         for (command, slot) in [
@@ -296,6 +306,7 @@ impl RocgdbMiProcessV3 {
         kernel_breakpoint: &[u8],
         timeout: Duration,
     ) -> Result<u32, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         if kernel_breakpoint.is_empty()
             || kernel_breakpoint.len() > 4_096
             || kernel_breakpoint.contains(&b'\n')
@@ -326,6 +337,7 @@ impl RocgdbMiProcessV3 {
     }
 
     pub fn adapter_mut(&mut self) -> &mut RocgdbMiObservationAdapterV3 {
+        self.clear_hardware_stop_resources_v1();
         &mut self.adapter
     }
 
@@ -333,6 +345,7 @@ impl RocgdbMiProcessV3 {
         &mut self,
         timeout: Duration,
     ) -> Result<RocgdbMiCapabilitiesV3, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         let deadline = deadline(timeout)?;
         let asynchronous = self
             .send_command(b"-gdb-set mi-async on", deadline)
@@ -572,6 +585,7 @@ impl RocgdbMiProcessV3 {
         arguments: &[OsString],
         timeout: Duration,
     ) -> Result<RocgdbMiControlResultV3, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         if !matches!(request, RocgdbMiControlRequestV3::Launch { .. }) {
             return Err(RocgdbMiAdapterErrorV3::InvalidCommand);
         }
@@ -640,6 +654,7 @@ impl RocgdbMiProcessV3 {
         process: u32,
         timeout: Duration,
     ) -> Result<RocgdbMiControlResultV3, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         if !matches!(request, RocgdbMiControlRequestV3::Attach { .. }) {
             return Err(RocgdbMiAdapterErrorV3::InvalidCommand);
         }
@@ -720,6 +735,7 @@ impl RocgdbMiProcessV3 {
         &mut self,
         timeout: Duration,
     ) -> Result<RocgdbMiExecutionEventV3, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         if let Some(event) = self.pending_events.pop_front() {
             return Ok(event);
         }
@@ -750,6 +766,7 @@ impl RocgdbMiProcessV3 {
         ordinals: &[u16],
         timeout: Duration,
     ) -> Result<Vec<RocgdbMiThreadAdmissionV3>, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         let (class, results) = self.send_command(b"-thread-info", deadline(timeout)?)?;
         if class != "done" {
             return Err(RocgdbMiAdapterErrorV3::BackendRejected);
@@ -767,6 +784,7 @@ impl RocgdbMiProcessV3 {
         adapter: &mut crate::rocgdb_mi_v4::RocgdbMiNativeCorrelationAdapterV4,
         timeout: Duration,
     ) -> Result<(), crate::rocgdb_mi_v4::RocgdbMiNativeQueryErrorV4> {
+        self.clear_hardware_stop_resources_v1();
         let deadline = deadline(timeout)?;
         let stop = native_stop_pin_v4(&self.adapter, self.native_stop_v4)?;
         adapter.bind_stop_identity_v4(stop.identity)?;
@@ -793,6 +811,7 @@ impl RocgdbMiProcessV3 {
         scope: RocgdbMiStoppedScopeV3,
         timeout: Duration,
     ) -> Result<RocgdbMiRegisterSnapshotV3, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         self.require_scope(scope)?;
         let raw_thread = self.raw_thread(scope.thread)?.to_vec();
         let deadline = deadline(timeout)?;
@@ -860,6 +879,7 @@ impl RocgdbMiProcessV3 {
         scope: RocgdbMiStoppedScopeV3,
         timeout: Duration,
     ) -> Result<(RocgdbMiRegisterSnapshotV3, OpaqueIdentityV1), RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         scope
             .validate()
             .map_err(|_| RocgdbMiAdapterErrorV3::ProtocolRecordRejected)?;
@@ -948,6 +968,7 @@ impl RocgdbMiProcessV3 {
         scope: RocgdbMiStoppedScopeV3,
         timeout: Duration,
     ) -> Result<RocgdbMiValueSnapshotV3, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         self.require_scope(scope)?;
         let raw_thread = self.raw_thread(scope.thread)?.to_vec();
         let deadline = deadline(timeout)?;
@@ -996,6 +1017,19 @@ impl RocgdbMiProcessV3 {
         scope: RocgdbMiStoppedScopeV3,
         timeout: Duration,
     ) -> Result<(RocgdbMiValueSnapshotV3, OpaqueIdentityV1), RocgdbMiAdapterErrorV3> {
+        let result = self.inspect_native_locals_inner_v5(raw_thread, scope, timeout);
+        if result.is_err() {
+            self.clear_hardware_stop_resources_v1();
+        }
+        result
+    }
+
+    fn inspect_native_locals_inner_v5(
+        &mut self,
+        raw_thread: &[u8],
+        scope: RocgdbMiStoppedScopeV3,
+        timeout: Duration,
+    ) -> Result<(RocgdbMiValueSnapshotV3, OpaqueIdentityV1), RocgdbMiAdapterErrorV3> {
         scope
             .validate()
             .map_err(|_| RocgdbMiAdapterErrorV3::ProtocolRecordRejected)?;
@@ -1006,7 +1040,7 @@ impl RocgdbMiProcessV3 {
         }
         let mut command = command_with_thread(b"-stack-list-variables", raw_thread)?;
         command.extend_from_slice(b" --simple-values");
-        let (class, results) = self.send_command(&command, deadline)?;
+        let (class, results) = self.send_native_projection_inspection_v1(&command, deadline)?;
         validate_native_stop_pin_v4(&self.adapter, self.native_stop_v4, stop)?;
         if class != "done" {
             return Err(RocgdbMiAdapterErrorV3::BackendRejected);
@@ -1069,6 +1103,7 @@ impl RocgdbMiProcessV3 {
         expression: &str,
         timeout: Duration,
     ) -> Result<LiveGpuSemanticValueV3, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         self.require_scope(scope)?;
         let name = bounded_text(name.as_bytes(), "value name")?;
         if expression.is_empty()
@@ -1106,6 +1141,7 @@ impl RocgdbMiProcessV3 {
         request: RocgdbMiMemoryReadRequestV3,
         timeout: Duration,
     ) -> Result<RocgdbMiMemoryReadResultV3, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         request
             .validate()
             .map_err(|_| RocgdbMiAdapterErrorV3::ProtocolRecordRejected)?;
@@ -1203,6 +1239,7 @@ impl RocgdbMiProcessV3 {
         request: RocgdbMiControlRequestV3,
         timeout: Duration,
     ) -> Result<RocgdbMiControlResultV3, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         if matches!(
             request,
             RocgdbMiControlRequestV3::Launch { .. } | RocgdbMiControlRequestV3::Attach { .. }
@@ -1324,6 +1361,7 @@ impl RocgdbMiProcessV3 {
     /// Requests bounded debugger shutdown. `Drop` remains the final cleanup
     /// authority if ROCgdb disconnects or does not acknowledge `-gdb-exit`.
     pub fn shutdown(&mut self, timeout: Duration) -> Result<u64, RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
         if self.adapter.state == ExecutionStateV3::Exited {
             return Ok(self.adapter.revision);
         }
@@ -1522,6 +1560,15 @@ impl RocgdbMiProcessV3 {
         command: &[u8],
         deadline: Instant,
     ) -> Result<(String, MiResultsV3), RocgdbMiAdapterErrorV3> {
+        self.clear_hardware_stop_resources_v1();
+        self.send_command_inner_v1(command, deadline)
+    }
+
+    fn send_command_inner_v1(
+        &mut self,
+        command: &[u8],
+        deadline: Instant,
+    ) -> Result<(String, MiResultsV3), RocgdbMiAdapterErrorV3> {
         if command.is_empty()
             || command.len() > MAX_COMMAND_BYTES_V3
             || command.contains(&b'\n')
@@ -1659,6 +1706,7 @@ impl RocgdbMiProcessV3 {
             return Ok(());
         };
         if class == "thread-group-exited" {
+            self.clear_hardware_stop_resources_v1();
             self.inferior_process = None;
             self.inferior_pid = None;
             return Ok(());
@@ -1666,6 +1714,7 @@ impl RocgdbMiProcessV3 {
         if class != "thread-group-started" {
             return Ok(());
         }
+        self.clear_hardware_stop_resources_v1();
         if self.inferior_process.is_some() {
             return Err(RocgdbMiAdapterErrorV3::UnexpectedMiRecord);
         }
@@ -1690,6 +1739,9 @@ impl RocgdbMiProcessV3 {
         transition: RocgdbMiNativeStopTransitionV4,
         evidence: &[u8],
     ) -> Result<(), RocgdbMiAdapterErrorV3> {
+        if transition != RocgdbMiNativeStopTransitionV4::None {
+            self.clear_hardware_stop_resources_v1();
+        }
         match transition {
             RocgdbMiNativeStopTransitionV4::None => {}
             RocgdbMiNativeStopTransitionV4::Clear => self.native_stop_v4 = None,

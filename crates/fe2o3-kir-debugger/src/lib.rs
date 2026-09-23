@@ -5,6 +5,24 @@
 #[cfg(test)]
 mod runtime_origin_retention;
 
+mod runtime_observation_v1;
+pub use runtime_observation_v1::{
+    DebugObservedRunV1, DebugObservedSessionV1, DebugObservedTranscriptV1,
+    MAX_RUNTIME_ALLOCATION_METADATA_BYTES_V1, MAX_RUNTIME_ALLOCATION_TRANSITIONS_V1,
+    MAX_RUNTIME_ALLOCATION_VALIDATION_WORK_V1, RuntimeAllocationCaptureLimitsV1,
+    RuntimeAllocationCaptureModeV1, RuntimeAllocationCoverageV1, RuntimeAllocationMissingV1,
+    RuntimeAllocationObservationV1, RuntimeAllocationUsageV1, RuntimeFrameCaptureLimitsV1,
+    RuntimeFrameCaptureModeV1, RuntimeFrameCoverageV1, RuntimeFrameMissingV1,
+    RuntimeFrameObservationV1, RuntimeFrameUsageV1, RuntimeFrameViewV1,
+    RuntimeNavigationDirectionV1, RuntimeObservationConfigErrorV1, RuntimeObservationCoverageV1,
+    RuntimeObservationCutoffV1, RuntimeObservationOptionsV1, RuntimeOriginCaptureLimitsV1,
+    RuntimeOriginCaptureModeV1, RuntimeOriginCoverageV1, RuntimeOriginMissingV1,
+    RuntimeOriginObservationV1, RuntimeOriginPairErrorV1, RuntimeOriginScanWorkV1,
+    RuntimeOriginUsageV1, RuntimeRejectedBreakpointV1, RuntimeRejectedBreakpointsV1,
+    RuntimeReplayWorkV1, RuntimeSessionErrorV1, capture_debugger_observed_run_v1,
+    capture_debugger_observed_scheduled_run_v1,
+};
+
 use std::error::Error;
 use std::fmt;
 

@@ -1,7 +1,8 @@
-//! Private source witness for the diagnostic local-order gate, not a recipe API.
+//! Compiler-private live source witness shared by the bounded recipe entry and tests.
 //! Intended child of bitselect_feasibility::retained; reuses its bounded I/O.
 use super::*;
 
+#[cfg(test)]
 #[path = "source_local_order_recipe_codec_v1_tests.rs"]
 pub(crate) mod recipes;
 

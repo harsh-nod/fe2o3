@@ -43,6 +43,9 @@ const ROOT_NAME_V2: &str = "semantic_safety_module";
 #[cfg(test)]
 #[path = "production_reference_prepared_observation_v1_tests.rs"]
 pub(crate) mod prepared_observation_v1;
+#[cfg(test)]
+#[path = "production_reference_source_proof_freshness_v1_tests.rs"]
+pub(crate) mod source_proof_freshness_v1;
 const LOCAL_PROOF_TIMEOUT_SECONDS_V2: u32 = 60;
 const WHOLE_COMPILE_PROOF_TIMEOUT_SECONDS_V2: u32 = 120;
 const RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
@@ -184,6 +187,8 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                 detail: error.to_string(),
             }
         })?;
+        #[cfg(test)]
+        source_proof_freshness_v1::observe_request(&self, &runtime);
         // Staging retains requests in block/operation order, which can differ
         // from reference-output order for a multi-block or multi-output source.
         let mut requests = self.requests;
@@ -207,6 +212,8 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                     ProductionReferenceEffectJoinErrorV2::ProofExecution(error.to_string())
                 })?;
             let (imported, signed) = retained.into_parts();
+            #[cfg(test)]
+            source_proof_freshness_v1::observe_import(binding, &imported, &signed);
             if toolchain.is_some_and(|expected| expected != imported.toolchain()) {
                 return Err(ProductionReferenceEffectJoinErrorV2::ProofExecution(
                     "per-output receipts were imported under different Verus toolchains".to_owned(),

@@ -16,6 +16,11 @@ stable `fe2o3-virtual-runtime-result-v1` JSON on stdout. Admission, misuse, and
 semantic faults are stable `fe2o3-virtual-runtime-error-v1` JSON on stderr.
 The reported runtime identity binds the selected target, optional bundle
 identity, command mode, and all runtime and simulation limits.
+The CLI allows at most 524,288 recorded schedule decisions per dispatch within
+its 256 MiB simulator resident-memory cap. These are independent bounds:
+larger requests can still fail with typed decision or resident-limit errors.
+The library's caller-configurable defaults remain 1,048,576 decisions and
+4 GiB of simulator resident memory.
 `--fault early-release` attempts to release a dispatch-retained allocation and
 must fail with the canonical model's typed `resource_in_use` result.
 

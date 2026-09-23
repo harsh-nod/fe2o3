@@ -22,6 +22,10 @@ use std::{fmt, mem::size_of};
 #[path = "checked_u32_local_order_v1_rows.rs"]
 mod rows;
 
+#[path = "checked_u32_local_order_owned_v1.rs"]
+mod owned;
+pub use owned::{OwnedU32LocalOrderContinuationV1, prepare_owned_u32_local_order_continuation_v1};
+
 /// Two reviewed local preferences, never caller-selected passes or callbacks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum U32LocalOrderPreferenceV1 {
@@ -118,19 +122,39 @@ impl<'input> CheckedU32LocalOrderOutputV1<'input> {
     /// then independently replay the existing receipt against both actual owners.
     /// Caller reserves this output and its borrowed input. No ledger is reset.
     pub fn replay(&self, budget: &mut Budget<'_>) -> Result<()> {
-        scoped(budget, |budget| {
-            let (input, input_storage) =
-                Inventory::derive(self.input, budget).map_err(Error::Inventory)?;
-            budget.reserve_storage(input_storage.retained_storage())?;
-            budget.reserve_storage(size_of::<Permutation>())?;
-            let permutation = plan(&input, self.region, self.preference, budget)?;
-            check_exact_output(self.input, &self.output, self.region, &permutation, budget)?;
-            let (output, output_storage) =
-                Inventory::derive(&self.output, budget).map_err(Error::Inventory)?;
-            budget.reserve_storage(output_storage.retained_storage())?;
-            check_receipt(&input, &output, &self.receipt, budget)
-        })
+        replay_pair(
+            self.input,
+            &self.output,
+            &self.receipt,
+            self.region,
+            self.preference,
+            budget,
+        )
     }
+}
+
+// Shared complete replay; the legacy borrowed API retains its exact charge
+// schedule. The owned API adds its bounded input re-admission before this call.
+fn replay_pair(
+    input_owner: &Owner,
+    output_owner: &Owner,
+    receipt: &InertCanonicalKirTransitionReceiptV1,
+    region: U32LocalOrderRegionV1,
+    preference: U32LocalOrderPreferenceV1,
+    budget: &mut Budget<'_>,
+) -> Result<()> {
+    scoped(budget, |budget| {
+        let (input, input_storage) =
+            Inventory::derive(input_owner, budget).map_err(Error::Inventory)?;
+        budget.reserve_storage(input_storage.retained_storage())?;
+        budget.reserve_storage(size_of::<Permutation>())?;
+        let permutation = plan(&input, region, preference, budget)?;
+        check_exact_output(input_owner, output_owner, region, &permutation, budget)?;
+        let (output, output_storage) =
+            Inventory::derive(output_owner, budget).map_err(Error::Inventory)?;
+        budget.reserve_storage(output_storage.retained_storage())?;
+        check_receipt(&input, &output, receipt, budget)
+    })
 }
 
 /// Execute one of the two closed local preferences and independently replay it.

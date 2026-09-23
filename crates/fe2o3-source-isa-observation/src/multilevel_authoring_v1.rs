@@ -11,6 +11,21 @@ use std::io;
 #[path = "ordered_program_materialization_v1.rs"]
 pub mod ordered_program_materialization_v1;
 
+#[path = "multilevel_authoring_const_u32_v1.rs"]
+mod const_u32_helper_v1;
+pub use const_u32_helper_v1::{
+    AuthoringConstU32CandidateV1, AuthoringConstU32ParameterV1,
+    MAX_CONST_U32_HELPER_SOURCE_BYTES_V1,
+};
+
+#[path = "multilevel_authoring_call_target_v1.rs"]
+mod call_target_v1;
+pub use call_target_v1::{
+    AuthoringCallArgumentV1, AuthoringCallKernelRegistrationV1, AuthoringCallResultV1,
+    AuthoringCallTargetErrorV1, AuthoringCallTargetV1, AuthoringCalleeV1, AuthoringCallerV1,
+    MAX_AUTHORING_CALL_KERNELS_V1, MAX_AUTHORING_CALL_VALUES_V1,
+};
+
 use fe2o3_kernel_ir::{
     AssemblyOption, BinaryOp, DebugSourceMapDocumentV2, DebugSourceMapSpanV1, Function, Module,
     Operation, OperationKind, ScalarType, Terminator, Type, ValueId, VerifiedSimulationBundleV6,

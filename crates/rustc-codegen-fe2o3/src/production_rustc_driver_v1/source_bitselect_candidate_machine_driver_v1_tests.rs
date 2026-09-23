@@ -6,8 +6,12 @@ use fe2o3_kernel_ir::Gfx942OrderedProgramRegistersV1;
 mod debug_join;
 #[path = "source_bitselect_candidate_machine_fixture_v1_tests.rs"]
 mod fixture_cases;
+#[path = "source_bitselect_headless_machine_v1_tests.rs"]
+mod headless_machine;
 #[path = "source_bitselect_candidate_machine_ladder_v1_tests.rs"]
 mod ladder;
+#[path = "source_candidate_launch_analysis_driver_v17_tests.rs"]
+mod launch_analysis;
 
 const OUTPUT: &str = "FE2O3_TEST_SOURCE_CANDIDATE_MACHINE_OUTPUT";
 const INPUT: &str = "FE2O3_TEST_SOURCE_CANDIDATE_MACHINE_INPUT";

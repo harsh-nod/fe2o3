@@ -1,13 +1,89 @@
 const CARGO_VENDOR_DEVICE_MANIFEST_V1: &[u8] =
     include_bytes!("fixtures/fe2o3-device-cargo-vendor-v1.toml");
 
+#[test]
+fn cargo_vendor_fixture_matches_actual_sdk_cargo_test_target_roster() {
+    let package_root = Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT)
+        .canonicalize()
+        .unwrap();
+    // Auto-discovered targets can change the vendor manifest without changing Cargo.toml.
+    let output =
+        std::process::Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+            .args([
+                "metadata",
+                "--locked",
+                "--offline",
+                "--no-deps",
+                "--format-version=1",
+            ])
+            .arg("--manifest-path")
+            .arg(package_root.join("Cargo.toml"))
+            .output()
+            .unwrap();
+    assert!(
+        output.status.success(),
+        "Cargo target discovery failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let package = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|package| package["name"] == "fe2o3-device")
+        .unwrap();
+    assert_eq!(
+        Path::new(package["manifest_path"].as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        package_root.join("Cargo.toml")
+    );
+    let mut stanzas = Vec::new();
+    for target in package["targets"].as_array().unwrap() {
+        if !target["kind"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kind| kind == "test")
+        {
+            continue;
+        }
+        let path = Path::new(target["src_path"].as_str().unwrap())
+            .strip_prefix(&package_root)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        stanzas.push(format!(
+            "[[test]]\nname = {}\npath = {}\n",
+            serde_json::to_string(target["name"].as_str().unwrap()).unwrap(),
+            serde_json::to_string(path).unwrap()
+        ));
+    }
+    assert!(!stanzas.is_empty());
+    let matches_roster = |manifest: &str| {
+        manifest.lines().filter(|line| *line == "[[test]]").count() == stanzas.len()
+            && stanzas
+                .iter()
+                .all(|stanza| manifest.matches(stanza.as_str()).count() == 1)
+    };
+    let manifest = std::str::from_utf8(CARGO_VENDOR_DEVICE_MANIFEST_V1).unwrap();
+    assert!(
+        matches_roster(manifest),
+        "review the exact Cargo-vendored manifest and source closure after SDK target changes"
+    );
+    for stanza in &stanzas {
+        assert!(!matches_roster(&manifest.replacen(stanza.as_str(), "", 1)));
+    }
+    assert!(!matches_roster(&format!("{manifest}\n{}", stanzas[0])));
+}
+
 fn reviewed_materialization_fixture(vendored: bool) -> ProviderPackageFixture {
     let fixture = ProviderPackageFixture::new();
     fs::remove_dir_all(fixture.source_root()).unwrap();
     let original = Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT);
     let mut files = Vec::new();
     super::collect_reviewed_source_files(&original.join("src"), &mut files).unwrap();
-    assert_eq!(files.len(), 27);
+    assert_eq!(files.len(), 29);
     for file in files {
         let target = fixture.root.join(file.strip_prefix(original).unwrap());
         fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -39,7 +115,7 @@ fn canonical_and_cargo_vendor_materializations_preserve_actual_identities() {
     let manifest_sha: [u8; 32] = Sha256::digest(CARGO_VENDOR_DEVICE_MANIFEST_V1).into();
     assert_eq!(
         manifest_sha,
-        digest("8ffc8a52272ff0866b3f68d78d0365f50af2da1be2e305891175539d5cde65b3")
+        digest("a5505445b6b63f1e46b7fca58aa25450de19f3cec1c8d44ce444e64d441a22b4")
     );
     let item = TrustedDeviceItem::WriteOnlyDisjointSliceLen;
     let path = exact_provider_compiler_definition_path_v1(item)

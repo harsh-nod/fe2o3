@@ -1,4 +1,5 @@
-//! Test-only same-session replacement. No public source admission or resume.
+//! Compiler-private replacement eligibility shared by bounded source promotion.
+//! Adversarial callbacks and diagnostic observers remain test-only. No resume.
 
 use super::*;
 use crate::collector::source_census_v1::bitselect_feasibility::retained::{
@@ -10,17 +11,28 @@ use fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1;
 use fe2o3_source_isa_observation::multilevel_authoring_v1::ordered_program_materialization_v1::render_bitselect_expression_v1;
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
 #[path = "source_bitselect_candidate_fresh_v1_tests.rs"]
 mod fresh;
+#[path = "source_bitselect_promotion_pipeline_v1.rs"]
+mod headless;
+#[cfg(test)]
 #[path = "source_local_order_pipeline_v1_tests.rs"]
 mod local_order;
+#[path = "source_local_order_join_v1.rs"]
+mod local_order_join;
+#[path = "source_local_order_recipe_adapter_v1.rs"]
+mod local_order_recipe;
+#[cfg(test)]
 #[path = "source_bitselect_candidate_checks_v1_tests.rs"]
 mod tests;
 
+#[cfg(test)]
 pub(super) fn registers() -> Gfx942OrderedProgramRegistersV1 {
     Gfx942OrderedProgramRegistersV1::new(4, 5, [0, 1, 2]).expect("fixed distinct fixture registers")
 }
 
+#[cfg(test)]
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     pub(crate) fn publish_source_bitselect_candidate(
         self,
@@ -233,8 +245,20 @@ fn require_escape(
     results: [ValueId; 3],
     meter: &mut ScanMeter,
 ) -> Result<(), String> {
-    if body.blocks.first().map(|b| b.id) != Some(block_id) || operations != [0, 1, 2] {
-        return Err("source-candidate boundary is not the first entry operations".into());
+    // Indices come from the live source/semantic/KIR join, never a recipe or
+    // caller coordinate. A supported pure source prefix may precede them.
+    meter.scan(12)?;
+    let boundary_error = "source-candidate boundary is not three contiguous entry operations";
+    let entry = body.blocks.first().ok_or(boundary_error)?;
+    let first = usize::try_from(operations[0]).map_err(|_| boundary_error)?;
+    let end = operations[2].checked_add(1).ok_or(boundary_error)?;
+    let end = usize::try_from(end).map_err(|_| boundary_error)?;
+    if entry.id != block_id
+        || operations[0].checked_add(1) != Some(operations[1])
+        || operations[1].checked_add(1) != Some(operations[2])
+        || end > entry.operations.len()
+    {
+        return Err(boundary_error.into());
     }
     let mut live_inputs = [false; 3];
     let mut live_output = false;
@@ -251,7 +275,8 @@ fn require_escape(
     for block in &body.blocks {
         meter.rows(block.operations.len())?;
         for (ordinal, operation) in block.operations.iter().enumerate() {
-            if block.id == block_id && ordinal < 3 {
+            if block.id == block_id && (first..end).contains(&ordinal) {
+                let relative = ordinal - first;
                 if !operation.has_complete_effect_summary() {
                     return Err("source-candidate selected effects are incomplete".into());
                 }
@@ -263,15 +288,21 @@ fn require_escape(
                     meter.scan(1)?;
                     if let Some(index) = inputs.iter().position(|input| *input == value) {
                         live_inputs[index] = true;
-                    } else if !results[..ordinal].contains(&value) {
+                    } else if !results[..relative].contains(&value) {
                         return Err("source-candidate selected graph has an unbound live-in".into());
                     }
                     Ok::<(), String>(())
                 })?;
             } else {
-                operation
-                    .kind
-                    .try_visit_operands(|value| external(value, meter, &mut live_output))?;
+                operation.kind.try_visit_operands(|value| {
+                    // A pre-boundary use cannot establish the selected live-out.
+                    // The admitted owner also rejects this SSA use-before-definition.
+                    if block.id == block_id && ordinal < first && value == results[2] {
+                        meter.scan(1)?;
+                        return Err("source-candidate output used before selected boundary".into());
+                    }
+                    external(value, meter, &mut live_output)
+                })?;
             }
         }
         block

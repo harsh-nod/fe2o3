@@ -1,5 +1,171 @@
 # Assembly authoring implementation status
 
+## Complete-body model progress — 2026-09-23
+
+The [bounded control-flow model](evidence/complete-body-model-20260923.md)
+checks eight forward blocks, sixteen typed instructions, exact register/resource
+intent and all-path initialization. Its 97 unit tests, six documentation tests
+and strict Clippy pass. This is inert structural validation, not source
+admission, generated ABI evidence or M2 completion. Accepted exits remain 6/18.
+
+The [native same-stop accessor](evidence/native-stop-resource-accessor-20260923.md)
+retains producer-derived target/stop/register bindings; 358 debugger/protocol
+tests pass, including 20 new synthetic tests. This is not hardware qualification.
+The independent [actual CPU browser gate](evidence/declared-target-debugger-20260923.md)
+also passes desktop/mobile: 112 real requests across two fresh, cleaned-up
+sessions. V3/V4 remain open.
+
+## Current bounded acceptance — 2026-09-23: saved recipes
+
+Accepted original exits are **M1/V1/V2/U1/U2/U3 (6/18)**. The
+[saved-recipe acceptance ledger](evidence/source-local-order-recipes-20260923.md)
+qualifies two persisted canonical local orders, fresh source binding,
+exact/advisory constraints, deterministic replay, real-edit refusal/rebind and
+explicit regeneration through the unchanged fixed production policy.
+Twenty-eight actual compiler callbacks passed (15 successes, 13 refusals),
+with 450 whole-kernel CPU simulations; eight separate ordinary public-example
+processes passed (five successes, three refusals). These are different gates.
+
+The [exact declared-target debugger readback](evidence/declared-target-debugger-20260923.md)
+adds sealed bundle identity and same-owner/full-cursor target queries, real
+70-request CLI and 81/87-request HTTP qualifications, and a bounded one-access
+LDS arithmetic view. This is CPU evidence, not a hardware adapter or V4 closure.
+The companion [same-export source/native view](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/same-export-origin-native-qualification-20260923.md)
+joins fresh origin/LLVM/native captures and passes all 180 desktop/mobile
+browser tests. Its whole-region origins and static resources advance V3/M5;
+physical register values/lifetimes and full milestone acceptance are not inferred.
+
+Final optimizer/lowerer/backend suites passed 335/1,478/1,761 tests
+(3/0/117 ignored), with affected debugger/protocol/simulator-CLI regressions.
+Site gates passed 1,382 unit tests, lint/types/build, evidence and 21 lab tests.
+All three umbrella issues remain open. M2 whole-body source admission,
+M3 authored memory/synchronization, broader targets, protected finalization,
+hardware adapters and complete curriculum/scale qualification remain separate.
+
+## Earlier bounded acceptance — 2026-09-23
+
+Accepted exits are **M1/V1/V2/U1/U2 (5/18)**. The
+[actual-source proof freshness and U2 acceptance ledger](evidence/source-proof-freshness-u2-20260923.md)
+completes the original one-supported-region promote/edit/recompile exit.
+A genuine signed receipt rejects under each edited source binding, reimports
+under its original binding, and each incorrect fresh reference fails a real
+Verus assertion. The distinct source-promotion, launch-analysis, simulation and
+native chains retain their own identities; no V17 proof route, protected final
+artifact, complete production admission or GPU execution is inferred.
+
+The [new region-origin exporter](ordered-program-origin-v1.md) and its
+[fresh qualification](evidence/ordered-program-origin-20260923.md) add opt-in
+whole-region call-site/expansion metadata beside unchanged diagnostic KIR V17.
+One/two/fifteen/repeated source captures passed exact inspector joins. This is
+V3/M5 progress, not per-instruction ancestry or an identity join to historical
+native captures. The companion site has a
+[source-origin lab](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/ordered-program-origin-lab-v1.md).
+
+The shared fresh backend regression passed 1,726 tests (113 ignored);
+exporter/extractor suites passed 11/24 and verifier 143 (13 ignored).
+All three umbrella issues remain open. The earlier sections below preserve
+their dated evidence and acceptance counts; they are not the current ledger.
+
+## Actual source-to-L continuation progress — 2026-09-23
+
+The [new fixed-prefix local-order qualification](evidence/source-local-order-continuation-20260923.md)
+consumes the unchanged source-owned Policy6 prefix and emits LLVM/descriptors
+from actual checked L. Thirteen ordinary-source callbacks pass: five positives
+with two legal local orders and eight exact refusals. Whole-kernel CPU checks
+pass 150 simulations; repeat LLVM agrees. Full optimizer/lowerer/backend gates
+pass 335/1,478/1,734 tests, respectively (3/0/115 ignored).
+
+This closes a continuation implementation gap, not original U3. Persisted
+recipes, normal Create/Replay use, exact/advisory constraints and edited-source
+rebind/regeneration still need their own qualification. The accepted original
+exits remain **M1/V1/V2/U1/U2 (5/18)**; protected artifact and hardware authority
+remain unavailable on this route.
+
+## Earlier source-analysis and repeat-native progress — 2026-09-23
+
+The [one-region U2 ledger](evidence/source-launch-analysis-u2-20260923.md)
+records a fresh full backend regression (1,711 passed, 112 ignored) and actual
+source-edit launch-analysis ladder (60 simulation runs). A genuine old launch
+roster rejects before a new owner is returned; fresh analysis succeeds for the
+edited register plan. This is test-only evidence, not protected proof or U2
+closure. The separate actual-source proof-freshness qualifier remains pending.
+
+The companion site's [repeat-native tutorial and qualification](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/repeat-native-qualification-20260923.md)
+add a separately bounded 23-artifact/eight-case local importer with an actual
+manually downloadable example. Fresh desktop/mobile artifact checks and the
+full 174-case browser regression pass. The artifacts themselves are retained
+historical source/LLVM/native observations, not fresh native or GPU execution.
+This advances V3/M5 without claiming physical-register lifetimes or their full
+exits. The accepted combined ledger remains **M1/V1/V2/U1 (4/18)**.
+
+## Earlier runtime bounded acceptance — 2026-09-23
+
+The [runtime identity/storage qualification](evidence/runtime-identity-storage-20260923.md)
+completes V2 for the documented bounded CPU profile: real repeated helpers,
+allocation reuse, snapshot/source/SSA views, reverse/repeat, break/watch,
+stale-owner/cursor refusal and a genuine simulator fault. Actual loop and
+workgroup desktop/mobile sessions pass. Accepted exits are **M1/V1/V2/U1 (4/18)**;
+all three umbrella issues remain open. The static native role/use grid is
+V3/M5 progress, not physical lifetimes or hardware capture. U2 remains a
+one-supported-region acceptance task, not whole-kernel M2.
+
+## Earlier September 23 progress, before this qualification
+
+A separate [live local CPU debugger report](evidence/live-cpu-debugger-20260923.md)
+records the new fixed-input loopback bridge and opt-in browser controls. Fresh
+normal-source exports, real HTTP/debugger sessions in both forks, and the
+separate ordinary-Rust vecadd tutorial preparation passed. The dated report
+separates actual browser sessions from routed mock tests and retains failed
+attempts. This is bounded V2 progress, not terminal-fault snapshots, allocation
+reuse, physical GPU state or broad milestone completion. The accepted broad
+exits remain M1/V1/U1 (3/18); historical tables below retain their dated scope.
+
+An additive [live checkpoint query dashboard](../scripts/debug-session-bridge/README.md#additive-bounded-checkpoint-queries)
+consumes existing ResourceV1 and SourceVariableV2 replies beside separate SSA
+values and initialized bytes, with one live session ledger and explicit bounded
+refreshes. Its ordinary-source walkthrough keeps uncaptured watch stops,
+source-unavailable post-store checkpoints and reverse/repeat revisions distinct.
+The [separate dated qualification](evidence/live-checkpoint-dashboard-20260923.md)
+records fresh ten-module HTTP and actual desktop/mobile dashboard results;
+the earlier live-controls report is not relabeled. This adds no terminal
+snapshot, dynamic activation, allocation reuse, source authentication, GPU
+execution or broad milestone closure.
+
+Earlier bounded increment: [literal-repeat authoring, ordinary LLVM observation
+and source-fault replay](evidence/authoring-repeat-fault-20260922.md), following
+[exact static helper calls and typed parameter correspondence](evidence/authoring-call-targets-20260922.md)
+and [const-specialized helpers, watch/source replay and reproducible native
+inspection](evidence/authoring-const-watch-native-20260922.md).
+Its dated qualification is separate from the historical results below; the broad
+milestone acceptance remains M1/V1/U1 (3/18).
+
+A separately scoped [bounded-repeat native observation workflow](ordered-repeat-native-observation-v1.md)
+describes an additive developer lane. It consumes the exact original
+source/CPU and LLVM capture paths, revalidates their retained results, and makes
+four fresh native observer calls for MOV plus 1/2/15 ADDs and repeat15, at O0/O3.
+Its separate target and join check complete HSACO identities, exact decoded
+count/order/registers and descriptor coverage of declared high-water 37 through
+the unchanged worker/decoder. The separate
+[dated qualification](evidence/authoring-repeat-native-20260923.md) records fresh
+builds, controls and four native calls/eight complete HSACOs in each fork.
+This is not a new source admission, GPU execution, physical lifetime or
+whole-kernel correctness proof, protected production route, or M2/U2/U3 closure.
+The historical milestone table and receipts below remain separately scoped.
+
+A separate [concrete-selection source guide](ordered-program-select-source-v1.md)
+describes choosing between two complete flat instruction programs before the
+existing terminal134 marker. Both arms are eagerly checked at 1..16 steps,
+including the inactive arm. The hygienic spelling introduces no caller-scope
+item names and uses five existing-constant projections; it adds no runtime
+branch, helper ABI, nested control flow, executable schema or compiler bypass.
+Fresh normal-source/CPU acceptance passed independently in both forks:
+four exports, four inspections, 120 simulations and eight exact refusals each.
+The [dated report](evidence/authoring-select-source-20260923.md) records the
+actual captures; host-only previews remain separate evidence.
+Earlier repeat/LLVM/native receipts remain unchanged and cannot be relabeled.
+The broad M1/V1/U1 acceptance remains 3/18; no M2/U2/U3 or other exit is closed
+by this documentation or source-spelling increment.
+
 This is a working-implementation handoff for [#280](https://github.com/harsh-nod/fe2o3/issues/280),
 [#281](https://github.com/harsh-nod/fe2o3/issues/281), and
 [#282](https://github.com/harsh-nod/fe2o3/issues/282), inspected on 2026-09-19 UTC.
@@ -392,7 +558,7 @@ No new strict-Clippy, final native, protected proof or hardware result is claime
 | M2: complete basic assembly kernels | Actual generated helpers and explicit concrete source variants re-enter the frontend (E2/E3); E16/E17 qualify one actual closed XOR/ADD region and inspect final fixed-register/e32 retention; E22 adds ordinary diagnostic source/edit/export/simulation. | General ordered regions, physical allocation/lifetime ownership, labels/branches, full ABI metadata, broader helpers/specialization, whole bounded assembly kernels, source materialization and intended machine-contract roundtrips. Ordinary raw diagnostic V16 is not protected production V16 admission. |
 | M3: memory and synchronization | Existing ordinary-KIR checks remain in force around the marker slice. | Authored ISA memory/LDS/atomic/wave operations, address provenance, wait/scoreboard hazards, barrier/convergence/race obligations, descriptors, and applicable hardware checks. Ordinary surrounding loads/stores do not satisfy this milestone. |
 | M4: matrix and second architecture | No new matrix or gfx950 authoring qualification in this slice. | Reviewed matrix/low-precision semantics/layouts, exact gfx950 profile/catalog/lowering and independently qualified target cases. gfx942 integer success does not narrow the original target matrix. |
-| M5: debug and resource integration | Exact per-variant source references, logical instructions and stopped global/LDS CPU resource observations (E2/E5/E6/E9); E20/E21 join one retained source-region plan to actual logical before/after CPU observations. | Allocator trace/lifetime replay, expansion and cross-stage transformation lineage, final-machine mappings and exact artifact association; ambiguous or absent mappings must stay unavailable. |
+| M5: debug and resource integration | Exact source references, logical instructions and stopped global/LDS CPU observations (E2/E5/E6/E9/E20/E21); the [V2 runtime integration](evidence/runtime-identity-storage-20260923.md) adds actual CPU activation/allocation lifecycle and storage-generation observations. | Broader compiler allocator/lifetime replay, expansion and cross-stage transformation lineage, final-machine mappings and exact artifact association; ambiguous or absent mappings remain unavailable. |
 | M6: production and curriculum | Reproduction scripts, negative tests, draft lessons and independent small integer cases (E1–E9). | Full preceding interfaces, clean-checkout release gates, generated host, protected proof/artifact admission, target-matched hardware claims, complete planned lessons and publication coverage. |
 
 ## #281: resource visualization
@@ -401,8 +567,8 @@ No new strict-Clippy, final native, protected proof or hardware result is claime
 | --- | --- | --- |
 | V0: contract and inventory | Exact stopped-state/query bindings, bounded pages, availability labels and measured CPU/browser budgets (E5/E6). | Complete backend/capture capability matrix and shared compiler/physical-resource handoff; these are not inferred from a rendered page. |
 | V1: recorded memory visualization | Real source-produced global and LDS allocation/access pages, bytes/initialization, captured-page logical-scope filtering (E5/E6/E9); E18/E19 add recorded lane/event/checkpoint navigation and exact historical-range overlays. [Site main 55bd450 qualification](https://github.com/harsh-nod/fe2o3-kernels/blob/55bd4500af7308c96ea6c2158ffb31a2a4e5b236/docs/recorded-authoring-qualification-20260919.md) passes 384 unit and 68 desktop/mobile tests plus evidence/import controls, completing the bounded V1 exit. | Additional capture profiles, allocation reuse and live producer paging are later work, not extra V1 exit requirements. Navigation covers retained records only; generation 0 is not a lifetime reconstruction. The umbrella visualization/curriculum issues remain open. |
-| V2: debugger integration | First-write watchpoint, forward/reverse stopped queries, no-future-access and stale cursor/token checks; E14 adds exact two-workgroup inventory isolation and historical-access separation. Separate interactive raw-KIR capture remains available. | Same-source loops/helpers/reuse lifecycle qualification, faults, linked source/SSA navigation and UI watchpoint/breakpoint editing/live query transport. Workgroup inventory restoration is not a lifecycle trace; the generated-helper CPU smoke is not a resource-history test. |
-| V3: compiler resource views | Exact original/edited source comparisons and independently retained logical observations (E2/E6); E17 separately measures a bounded final descriptor against an authored register high-water; E20/E21 retain the source-owned register plan and selected CPU values with their exact logical site. | Complete joined compiler resource views, allocation lifetimes, physical registers and checked cross-level lineage. A separate descriptor observation is not yet a viewer resource handoff. Call rows currently lack a callee target; the viewer does not infer call edges or cross-variant SSA correspondence. |
+| V2: debugger integration | The [September 23 bounded CPU qualification](evidence/runtime-identity-storage-20260923.md) completes the declared exit: repeated loops/helpers and activation parents, allocation/storage-generation reuse, source/SSA and initialized memory, reverse/repeat, break/watch controls, stale owner/full-cursor refusal, actual loop/workgroup desktop/mobile sessions, and a separate genuine raw-KIR CPU fault test. The fixed backend has fresh source/HTTP/browser qualification. | No further implementation is required for this bounded V2 exit. Terminal-fault memory snapshots, ordinary-source fault qualification, physical-register state, GPU capture, source authentication and V3–V5 completion are not granted. |
+| V3: compiler resource views | Original/edited source comparisons and retained logical observations (E2/E6/E17/E20/E21), plus an exact 14-artifact static authored-register-role/decoded-use grid. This is a bounded viewer handoff, not physical state. | Broader joined compiler resource views, physical allocation lifetimes, exact variant and cross-stage lineage, and supported call/transform mappings. Static declared roles and decoded uses are not register contents or general SSA correspondence. |
 | V4: target analysis and live adapters | No new hardware-session or bank-conflict model qualification. | Target-bound bank/transaction models, independent references and actual same-stop hardware adapters; unavailable physical state remains unavailable. |
 | V5: tutorials and qualification | Draft tutorials, source/variant-bound observations, focused UI tests and separated actual/synthetic scale measurements. | All planned lessons, complete linked-selection/accessibility/scale coverage, import/export/service documentation, aggregate desktop/mobile and evidence gates, and publication. Browser responsiveness is not GPU performance or capture-overhead qualification. |
 
