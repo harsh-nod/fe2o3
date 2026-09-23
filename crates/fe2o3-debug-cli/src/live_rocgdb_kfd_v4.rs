@@ -1,5 +1,8 @@
 //! One-shot agent-facing launcher for exact ROCgdb/KFD native correlation.
 
+#[path = "live_rocgdb_hardware_capture_v1.rs"]
+mod historical_resources_v1;
+
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -9,10 +12,10 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use fe2o3_debug_protocol::{
-    LiveGpuContentIdentityV3, OpaqueIdentityV1, RocgdbMiExecutionEventV3, RocgdbMiNativeCapturedV5,
-    RocgdbMiNativeCliResponseSchemaV4, RocgdbMiNativeCliResponseSchemaV5,
-    RocgdbMiNativeCliResponseV4, RocgdbMiNativeCliResponseV5, RocgdbMiNativeCliResultV4,
-    RocgdbMiNativeCliResultV5, RocgdbMiNativeInspectionProbeV5,
+    LiveGpuContentIdentityV3, OpaqueIdentityV1, RocgdbHardwareStopResourcesV1,
+    RocgdbMiExecutionEventV3, RocgdbMiNativeCapturedV5, RocgdbMiNativeCliResponseSchemaV4,
+    RocgdbMiNativeCliResponseSchemaV5, RocgdbMiNativeCliResponseV4, RocgdbMiNativeCliResponseV5,
+    RocgdbMiNativeCliResultV4, RocgdbMiNativeCliResultV5, RocgdbMiNativeInspectionProbeV5,
     RocgdbMiNativeInspectionUnavailableReasonV5, RocgdbMiNativeInspectionV5, RocgdbMiNativeProbeV4,
     RocgdbMiNativeUnavailableFieldV5, RocgdbMiNativeUnavailableReasonV4,
 };
@@ -32,7 +35,7 @@ use crate::rocgdb_mi_v4::{
     RocgdbMiNativeCorrelationAdapterV4,
 };
 
-const USAGE: &str = "fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]";
+const USAGE: &str = "fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5 | capture-rocgdb-kfd-resources-v1) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]";
 const MAX_PATH_BYTES_V4: usize = 4_096;
 const MAX_ARGUMENTS_V4: usize = 256;
 const MAX_ARGUMENT_BYTES_V4: usize = 32 * 1_024;
@@ -57,6 +60,7 @@ struct OptionsV4 {
 enum OutputVersion {
     V4,
     V5,
+    HistoricalResourcesV1,
 }
 
 pub(crate) fn run(arguments: Vec<OsString>) -> ExitCode {
@@ -70,7 +74,13 @@ pub(crate) fn run(arguments: Vec<OsString>) -> ExitCode {
     let output = options.output;
     let mut inspection_probe = RocgdbMiNativeInspectionProbeV5::default();
     let mut inspection = None;
-    let response = match run_inner(options, &mut inspection_probe, &mut inspection) {
+    let mut historical_projection = None;
+    let response = match run_inner(
+        options,
+        &mut inspection_probe,
+        &mut inspection,
+        &mut historical_projection,
+    ) {
         Ok(response) => response,
         Err(reason) => unavailable(
             RocgdbMiNativeProbeV4 {
@@ -85,6 +95,12 @@ pub(crate) fn run(arguments: Vec<OsString>) -> ExitCode {
     match output {
         OutputVersion::V4 => write_response(response),
         OutputVersion::V5 => write_response_v5(response_v5(response, inspection_probe, inspection)),
+        OutputVersion::HistoricalResourcesV1 => historical_resources_v1::write_historical(
+            response,
+            inspection_probe,
+            inspection,
+            historical_projection,
+        ),
     }
 }
 
@@ -92,10 +108,15 @@ fn run_inner(
     options: OptionsV4,
     inspection_probe: &mut RocgdbMiNativeInspectionProbeV5,
     inspection: &mut Option<RocgdbMiNativeInspectionV5>,
+    historical_projection: &mut Option<RocgdbHardwareStopResourcesV1>,
 ) -> Result<RocgdbMiNativeCliResponseV4, RocgdbMiNativeUnavailableReasonV4> {
+    *historical_projection = None;
     let session_domain = match options.output {
         OutputVersion::V4 => b"fe2o3-live-rocgdb-kfd-v4\0".as_slice(),
         OutputVersion::V5 => b"fe2o3-live-rocgdb-kfd-v5\0".as_slice(),
+        OutputVersion::HistoricalResourcesV1 => {
+            b"fe2o3-capture-rocgdb-kfd-resources-v1\0".as_slice()
+        }
     };
     let session = random_identity(session_domain, options.authorization)
         .ok_or(RocgdbMiNativeUnavailableReasonV4::RocgdbSpawnFailed)?;
@@ -139,7 +160,10 @@ fn run_inner(
             RocgdbMiNativeUnavailableReasonV4::StructuredCommandsUnavailable,
         ));
     }
-    if options.output == OutputVersion::V5 {
+    if matches!(
+        options.output,
+        OutputVersion::V5 | OutputVersion::HistoricalResourcesV1
+    ) {
         *inspection_probe = match process.native_v5_inspection_commands(options.timeout) {
             Ok(probe) => probe,
             Err(_) => {
@@ -422,7 +446,10 @@ fn run_inner(
             ));
         }
     };
-    if options.output == OutputVersion::V5 {
+    if matches!(
+        options.output,
+        OutputVersion::V5 | OutputVersion::HistoricalResourcesV1
+    ) {
         let (raw_thread, scope) = match correlation.inspection_scope_v5(&stopped_state) {
             Ok(authority) => authority,
             Err(_) => {
@@ -483,6 +510,13 @@ fn run_inner(
                 probe,
                 RocgdbMiNativeUnavailableReasonV4::GpuStoppedStateUnavailable,
             ));
+        }
+        if options.output == OutputVersion::HistoricalResourcesV1 {
+            *historical_projection = historical_resources_v1::take_after_final_inspection(
+                &mut process,
+                *inspection_probe,
+                &locals,
+            );
         }
         *inspection = Some(RocgdbMiNativeInspectionV5 {
             association_identity: stopped_state.association_identity,
@@ -663,6 +697,9 @@ fn parse_options(arguments: Vec<OsString>) -> Result<OptionsV4, String> {
     let output = match arguments.next().as_deref() {
         Some(value) if value == OsStr::new("live-rocgdb-kfd-v4") => OutputVersion::V4,
         Some(value) if value == OsStr::new("live-rocgdb-kfd-v5") => OutputVersion::V5,
+        Some(value) if value == OsStr::new("capture-rocgdb-kfd-resources-v1") => {
+            OutputVersion::HistoricalResourcesV1
+        }
         _ => return Err(USAGE.to_owned()),
     };
     let mut rocgdb = None;

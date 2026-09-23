@@ -22,38 +22,20 @@ use std::fmt;
 mod contract;
 pub use contract::*;
 
+#[path = "gfx942_complete_body_packing_v1.rs"]
+mod packing;
+pub use packing::*;
+
 #[cfg(test)]
 #[path = "gfx942_complete_body_v1_tests.rs"]
 mod tests;
 
-pub const GFX942_COMPLETE_BODY_MAX_BLOCKS_V1: usize = 8;
-pub const GFX942_COMPLETE_BODY_MAX_STEPS_V1: usize = 16;
+// Same public primitive names, now dependency-neutral for bounded source packing.
+pub use fe2o3_kernel_ir::{
+    GFX942_COMPLETE_BODY_MAX_BLOCKS_V1, GFX942_COMPLETE_BODY_MAX_STEPS_V1,
+    Gfx942CompleteBodyBlockV1, Gfx942CompleteBodyLabelV1, Gfx942CompleteBodyTerminatorV1,
+};
 pub const GFX942_COMPLETE_BODY_VALIDATION_WORK_V1: usize = 512;
-
-/// Numeric, body-local label only; it is not a source/CFG/canonical identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Gfx942CompleteBodyLabelV1(pub u8);
-
-/// Uniform control comes ONLY from the separate kernel-argument selector.
-/// A VGPR result cannot be substituted as a branch predicate. Structural
-/// control-flow checking is conservative even when repeated tests correlate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Gfx942CompleteBodyTerminatorV1 {
-    Jump(Gfx942CompleteBodyLabelV1),
-    BranchSelectorZero {
-        zero: Gfx942CompleteBodyLabelV1,
-        nonzero: Gfx942CompleteBodyLabelV1,
-    },
-    GuardedStoreOutputAndEnd,
-}
-
-/// Borrowed untrusted intent; check() copies all admitted content.
-#[derive(Clone, Copy, Debug)]
-pub struct Gfx942CompleteBodyBlockV1<'a> {
-    pub label: Gfx942CompleteBodyLabelV1,
-    pub instructions: &'a [Instruction],
-    pub terminator: Gfx942CompleteBodyTerminatorV1,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Gfx942CompleteBodyErrorV1 {
