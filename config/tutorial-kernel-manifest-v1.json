@@ -1257,7 +1257,7 @@
             "sourcePath": "examples/tiled_gemm_general_v1/src/kernel.rs",
             "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
             "sourceSha256": "a898a078ac411b17764d87c0b06681045ddccc83ea8d4314fd2a48b59e8462cd",
-            "sourceDigestScope": null,
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": "workgroup-pipeline-source-v1",
             "sourceFragmentsSha256": null,
@@ -1511,7 +1511,7 @@
             "sourcePath": "examples/gemm_autoresearch_v1/src/kernel.rs",
             "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
             "sourceSha256": "3199202452896fa59e0e3f7f5e7f6e656636af039d4bf5b0718febc5edf8f9d0",
-            "sourceDigestScope": null,
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -1771,7 +1771,7 @@
             "sourcePath": "examples/flash_attention_general_v1/src/kernel.rs",
             "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
             "sourceSha256": "f160e1391e1b354657049b5b11d745428fbbfb8fb6e5e2fceb4143ac93e7b00b",
-            "sourceDigestScope": null,
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -2008,7 +2008,7 @@
             "sourcePath": "examples/moe_grouped_expert_general_v1/src/kernel.rs",
             "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
             "sourceSha256": "a4af47e5ab3cad6a16d4b0cd2fc9028d0660469a75914474a7fc0d984934bd0a",
-            "sourceDigestScope": null,
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -13822,10 +13822,12 @@
         "functionUtf8Offset": 1688,
         "kernelSymbol": "flash_attention_general_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-flash-attention:flash_attention_general_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
       },
       {
         "lessonId": "flash-attention",
@@ -13866,10 +13868,12 @@
         "functionUtf8Offset": 1380,
         "kernelSymbol": "gemm_autoresearch_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-gemm-autoresearch:gemm_autoresearch_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
       },
       {
         "lessonId": "gemm-autoresearch",
@@ -13921,10 +13925,12 @@
         "functionUtf8Offset": 1530,
         "kernelSymbol": "tiled_gemm_general_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-tiled-gemm:tiled_gemm_general_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
       },
       {
         "lessonId": "gemm-tiling",
@@ -14631,10 +14637,12 @@
         "functionUtf8Offset": 1209,
         "kernelSymbol": "moe_grouped_expert_general_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-grouped-expert-moe:moe_grouped_expert_general_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
       },
       {
         "lessonId": "moe-expert-compute",

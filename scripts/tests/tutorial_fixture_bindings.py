@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise registered fixture excerpts through the real source-binding parent."""
+"""Exercise registered fixture displays through the real source-binding parent."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ SOURCE_SHA256 = "feebb7e80801c6b5323d19bcdb7908b93a5159c26fe2aa8181fb2de623bf6a5
 class FixtureBindingTests(unittest.TestCase):
     expected_displays = 8
     expected_identities = 4
+    changed_source_error = "differs from its physical source"
 
     @classmethod
     def setUpClass(cls):
@@ -101,7 +102,8 @@ class FixtureBindingTests(unittest.TestCase):
 
     def test_wrong_registered_kernel_identity_rejects(self):
         document, runtime = self.document()
-        row = document["kernelInventory"]["displayItems"][0]
+        row = next(row for row in document["kernelInventory"]["displayItems"]
+                   if row["classification"] == "kernel")
         row["kernelIds"] = [next(kernel["kernelId"] for kernel in document["kernelInventory"]["kernels"]
                                  if kernel["kernelId"] not in row["kernelIds"])]
         with self.assertRaisesRegex(SystemExit, "different selection"):
@@ -140,8 +142,91 @@ class FixtureBindingTests(unittest.TestCase):
         if live["sourceFragments"] is not None:
             live["sourceFragments"] = [live["displayedCode"]]
         self.parent.validate_site_inventory(document["curriculum"], runtime)
-        with self.assertRaisesRegex(SystemExit, "differs from its physical source"):
+        with self.assertRaisesRegex(SystemExit, self.changed_source_error):
             self.parent.validate_kernel_inventory(document, runtime, repo_root=ROOT)
+
+
+class WholeFileFixtureBindingTests(FixtureBindingTests):
+    expected_displays = 13
+    changed_source_error = "exact current source occurrence"
+    # Independent whole-file sizes, digests and every displayed function offset.
+    sources = {
+        "flash-attention": (
+            "gfx942-flash-attention", "flash_attention_general_v1", 16061,
+            "f160e1391e1b354657049b5b11d745428fbbfb8fb6e5e2fceb4143ac93e7b00b",
+            [885, 1688, 15154, 15319]),
+        "gemm-autoresearch": (
+            "gfx942-gemm-autoresearch", "gemm_autoresearch_v1", 4842,
+            "3199202452896fa59e0e3f7f5e7f6e656636af039d4bf5b0718febc5edf8f9d0",
+            [712, 1380, 4491]),
+        "gemm-tiling": (
+            "gfx942-tiled-gemm", "tiled_gemm_general_v1", 6703,
+            "a898a078ac411b17764d87c0b06681045ddccc83ea8d4314fd2a48b59e8462cd",
+            [797, 1530, 6352]),
+        "moe-expert-compute": (
+            "gfx942-grouped-expert-moe", "moe_grouped_expert_general_v1", 6578,
+            "a4af47e5ab3cad6a16d4b0cd2fc9028d0660469a75914474a7fc0d984934bd0a",
+            [548, 1209, 6431]),
+    }
+
+    def document(self):
+        document = copy.deepcopy(self.original)
+        fixtures = {source[0] for source in self.sources.values()}
+        ids = {f"fixture:{source[0]}:{source[1]}" for source in self.sources.values()}
+        document["compilerFixtures"] = [
+            row for row in document["compilerFixtures"] if row["fixtureId"] in fixtures
+        ]
+        self.assertEqual(len(document["compilerFixtures"]), 4)
+        for fixture in document["compilerFixtures"]:
+            self.assertIs(fixture["compilerInput"]["defaultFeatures"], True)
+            self.assertEqual(fixture["compilerInput"]["features"], [])
+        inventory = document["kernelInventory"]
+        inventory["kernels"] = [row for row in inventory["kernels"] if row["kernelId"] in ids]
+        inventory["negativeCases"] = []
+        inventory["displayItems"] = [
+            row for row in inventory["displayItems"]
+            if row["lessonId"] in self.sources and row["tabOrdinal"] == 0
+        ]
+        self.assertEqual(len(inventory["kernels"]), self.expected_identities)
+        self.assertEqual(len(inventory["displayItems"]), self.expected_displays)
+        helpers = [row for row in inventory["displayItems"] if row["classification"] == "helper"]
+        self.assertEqual(len(helpers), 9)
+        self.assertTrue(all(row["bindingStatus"] == "not-applicable" and row["kernelIds"] == []
+                            for row in helpers))
+        document["curriculum"]["lessons"] = [
+            row for row in document["curriculum"]["lessons"] if row["lessonId"] in self.sources
+        ]
+        runtime = {"schema": self.parent.SITE_INVENTORY_SCHEMA,
+                   "site": document["curriculum"]["site"], "lessons": []}
+        for lesson in document["curriculum"]["lessons"]:
+            fixture, symbol, size, digest, offsets = self.sources[lesson["lessonId"]]
+            lesson["codeTabs"] = lesson["codeTabs"][:1]
+            tab = lesson["codeTabs"][0]
+            self.assertEqual(tab["sourcePath"], f"examples/{symbol}/src/kernel.rs")
+            self.assertEqual(tab["sourceDigestScope"], "file")
+            self.assertIsNone(tab["sourceFragmentsSha256"])
+            physical = (ROOT / tab["sourcePath"]).read_bytes()
+            self.assertEqual(len(physical), size)
+            self.assertEqual(hashlib.sha256(physical).hexdigest(), digest)
+            rows = [row for row in inventory["displayItems"] if row["lessonId"] == lesson["lessonId"]]
+            self.assertEqual([row["functionUtf8Offset"] for row in rows], offsets)
+            kernels = [row for row in rows if row["classification"] == "kernel"]
+            self.assertEqual(len(kernels), 1)
+            self.assertEqual(kernels[0]["kernelIds"], [f"fixture:{fixture}:{symbol}"])
+            self.assertEqual(kernels[0]["bindingStatus"], "fixture-source-contract")
+            runtime["lessons"].append({"id": lesson["lessonId"], "codeTabs": [
+                {**tab, "displayedCode": physical.decode("utf-8"), "sourceFragments": None},
+            ]})
+        return document, runtime
+
+    def test_different_compilation_feature_rejects(self):
+        document, runtime = self.document()
+        fixture = next(row for row in document["compilerFixtures"]
+                       if row["fixtureId"] == "gfx942-tiled-gemm")
+        fixture["compilerInput"]["features"] = ["kernel-simt-gemm-general"]
+        fixture["compilerInput"]["contractSha256"] = self.parent.fixture_input_contract_sha256(fixture)
+        with self.assertRaisesRegex(SystemExit, "feature-selected fixture kernel roster differs"):
+            self.check(document, runtime)
 
 
 class SystemsFixtureBindingTests(FixtureBindingTests):
