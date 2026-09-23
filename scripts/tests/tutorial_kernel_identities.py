@@ -432,6 +432,46 @@ class FixtureDisplayTests(unittest.TestCase):
         with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "ambiguous"):
             self.validate(False)
 
+    def test_non_test_cfg_literal_and_compositions(self):
+        for predicate, expected in (
+            ("test", False), ("not(test)", True),
+            ('any(test, feature = "left")', True),
+            ('all(not(test), target_arch = "amdgpu")', True),
+            ('all(test, feature = "left")', False),
+            ("any(test,)", False), ("not(test,)", True),
+        ):
+            with self.subTest(predicate=predicate):
+                self.assertIs(IDENTITIES._fixture_cfg(predicate, {"left"}), expected)
+
+    def test_non_test_cfg_still_rejects_unknown_and_malformed_predicates(self):
+        for predicate in (
+            "all(test, unknown)", "any(not(test), unknown)", "not(test, test)",
+            'test = "false"', "test()", "test extra", "not(test", "Test",
+        ):
+            with self.subTest(predicate=predicate), self.assertRaises(IDENTITIES.KernelInventoryError):
+                IDENTITIES._fixture_cfg(predicate, {"left"})
+
+    def test_non_test_library_skips_test_only_modules_and_declarations(self):
+        self.sources[self.library] = (
+            '#[cfg(not(test))] mod left;\n'
+            '#[cfg(any(test, feature = "right"))] mod absent;\n'
+            '#[cfg(test)] mod tests { #[kernel] fn same() {} }\n'
+            '#[cfg(test)] #[kernel] fn same() {}\n'
+        )
+        result = self.validate()
+        self.assertEqual(result["unresolvedBindings"], [])
+        self.assertEqual(result["sourceBoundPairCount"], 0)
+
+    def test_test_cfg_does_not_admit_conditional_crates_or_transforming_attributes(self):
+        for source, error in (
+            ("#![cfg(test)]\nmod left;", "conditional fixture crate/module"),
+            ("#[cfg_attr(test, kernel)] fn same() {}", "selection attribute"),
+            ("#[cfg_attr(not(test), kernel)] fn same() {}", "selection attribute"),
+        ):
+            self.sources[self.library] = source
+            with self.subTest(source=source), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, error):
+                self.validate(False)
+
     def test_fixture_attributes_reject_qualified_benign_names(self):
         for attribute in ("doc::rewrite", "inline::rewrite", "doc::rewrite(hidden)",
                           "inline :: rewrite(always)", "allow::rewrite(dead_code)",
@@ -923,6 +963,10 @@ class FixtureDisplayTests(unittest.TestCase):
                 self.validate(False)
 
     def test_source_driver_implementation_uses_its_own_physical_selection_loader(self):
+        # The selected inner library is not the host driver's test harness.
+        self.sources[self.library] += (
+            '#[cfg(test)] mod tests { #[kernel] fn same() {} }\n'
+        )
         binding = self.bind()
         inputs = self.fixture["compilerInput"]
         reference = case_ref(0)

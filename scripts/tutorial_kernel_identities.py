@@ -268,7 +268,7 @@ class _FixtureDisplayIndex:
 
 
 def _fixture_cfg(body: str, features: set[str]) -> bool:
-    """Evaluate only literal feature/AMDGPU cfg expressions, without expansion."""
+    """Evaluate the declared non-test AMDGPU library context, without expansion."""
     if len(body) > 8192 or len(body.encode("utf-8")) > 8192:
         _fail("fixture cfg exceeds its byte bound")
     tokens = re.findall(r'\s+|[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z0-9_-]+"|[(),=]', body)
@@ -304,6 +304,8 @@ def _fixture_cfg(body: str, features: set[str]) -> bool:
             if take() != ")" or (name == "not" and len(values) != 1):
                 _fail("unsupported fixture cfg arity")
             return all(values) if name == "all" else any(values) if name == "any" else not values[0]
+        if name == "test":
+            return False
         if name not in {"feature", "target_arch"} or take() != "=":
             _fail("unsupported fixture cfg predicate")
         value = take()
