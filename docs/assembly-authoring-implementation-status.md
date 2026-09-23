@@ -1,5 +1,19 @@
 # Assembly authoring implementation status
 
+## Actual checked gfx950 artifact observations — 2026-09-23
+
+The [read-only companion qualification](evidence/gfx950-checked-artifact-20260923.md)
+adds immutable artifact/name binding and full checked-device fences. Debugger
+CLI/protocol gates pass 392 tests (3 ignored) and strict Clippy. The separate
+example passes 12 tests after correcting a retained-file error phase.
+
+A fresh diagnostic gfx950 artifact passed the unchanged pinned LLVM/LLD worker.
+One actual MI350 device/artifact observation and six exact refusals passed,
+without queue creation, dispatch, debugger attach or physical-register capture.
+The [companion walkthrough](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/gfx950-checked-artifact-v1.md)
+keeps those limits explicit. M4/V4 advance; original accepted exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Device const builders and logical lifetime view — 2026-09-23
 
 The [device const-data builder qualification](evidence/complete-body-device-const-20260923.md)

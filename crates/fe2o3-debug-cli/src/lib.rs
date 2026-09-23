@@ -24,6 +24,8 @@ mod qualification_v1;
 pub mod reference_archive_v1;
 mod resource_queries_v1;
 #[cfg(target_os = "linux")]
+pub mod rocgdb_checked_gfx950_target_v1;
+#[cfg(target_os = "linux")]
 mod rocgdb_mi_parser_v3;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
