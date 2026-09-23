@@ -34,7 +34,7 @@ include!("enrollment_declarations.rs");
 
 impl ContextVersionJournalV1 {
     pub fn remaining_allocation_slots(&self) -> usize {
-        self.allocation_free.len()
+        owner_inspection_length_body!(self, allocation_free)
     }
 
     /// Enrolls a canonical batch atomically, using initially empty caller storage.

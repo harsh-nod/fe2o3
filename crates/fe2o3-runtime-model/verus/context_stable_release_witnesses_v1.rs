@@ -57,6 +57,13 @@ fn stable_release_live_witness_v1() -> (result: bool)
     let consumer = WriterKeyV1 { context_generation: 7, local: 20, kind: WriterKindV1::Synchronous };
     let model_consumer = logical::WriterKeyV1 { context_generation: 7, local: 20, kind: logical::WriterKindV1::Synchronous };
     let evidence = ContextReadQuiescenceEvidenceV1 { consumer };
+    assert(actual.leases@ =~= seq![
+        Some(ReadLeaseV1 { reference: ContextReadLeaseReferenceV1 { slot: 0, incarnation: 1, consumer }, request }),
+        Some(ReadLeaseV1 { reference: ContextReadLeaseReferenceV1 { slot: 1, incarnation: 2, consumer },
+            request: ContextAllocationReadV1 { byte_len: 8, ..request } }),
+        Some(ReadLeaseV1 { reference: ContextReadLeaseReferenceV1 { slot: 2, incarnation: 3, consumer }, request }),
+        None,
+    ]);
     let first = actual.leases[0].unwrap().reference;
     let model_first = model.leases[0].unwrap().reference;
     let second = actual.leases[2].unwrap().reference;

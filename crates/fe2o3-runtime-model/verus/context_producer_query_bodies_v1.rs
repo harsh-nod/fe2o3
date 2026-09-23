@@ -24,8 +24,8 @@ impl ContextProducerReadJournalV1 {
     fn status(&self, request: &ContextProducerReadV1) -> (result: Result<ContextProducerReadStatusV1, ReadErrorV1>)
         ensures result == producer_status_decision_v1(self.stable.journal, *request),
     {
-        // Production's immutable Deref projection is source-authenticated separately.
-        producer_status_body!(&self.stable.journal, request, producer_writer_same_exec_v1)
+        proof { reveal(inspection_stable_projection_v1); }
+        producer_status_body!(&self.stable, request, producer_writer_same_exec_v1)
     }
 
     fn validate_producer_read(&self, request: &ContextProducerReadV1) -> (result: Result<(), ReadErrorV1>)

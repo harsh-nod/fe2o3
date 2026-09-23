@@ -1,11 +1,5 @@
 verus! {
 
-impl ContextVersionJournalV1 {
-    fn context_generation(&self) -> (result: u64)
-        ensures result == self.context_generation,
-    { self.context_generation }
-}
-
 impl ContextReadLeasedJournalV1 {
     fn validate_read_capacity(&self, count: usize) -> (result: Result<(), ReadErrorV1>)
         requires count <= u64::MAX,

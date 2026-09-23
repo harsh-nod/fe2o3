@@ -6,6 +6,7 @@ type Error = ContextVersionJournalErrorV1;
 
 mod acquire_shared;
 mod construction_shared;
+mod inspection_shared;
 mod release_shared;
 
 mod begin_guards {

@@ -3,6 +3,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 
 mod construction_shared;
+mod inspection_shared;
 
 type Journal = ContextVersionJournalV1;
 type Key = ContextWriterKeyV1;

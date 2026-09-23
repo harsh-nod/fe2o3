@@ -574,7 +574,7 @@ Before enabling runtime admission, the remaining work is:
    receipts; complete replay preserved all 151 record files byte-for-byte. This
    checkpoint does not close Gate 1 or establish native disposal authority,
    physical Vec storage, constructor/unwind refinement, or HIP/HSA performance.
-   The constructor source candidate now shares the public forwarding entries,
+   The constructor checkpoint now shares the public forwarding entries,
    validation, reservation calls and initialization loops across the journal,
    stable-read and producer-read owners. An independent logical executor observes
    the same ordered reservation outcomes. Paired execution establishes exact
@@ -595,13 +595,32 @@ Before enabling runtime admission, the remaining work is:
    authority or native backend admission. Eighteen frozen-baseline CPU tests
    compare typed reservation order, every failure site, validation and initialized
    contents, with separate buffer-stability checks. The dedicated qualification
-   runner is `verus/check-owner-constructor.py`.
-   Other wrapper operations, general reachability and physical storage refinement
-   remain separate; this constructor checkpoint does not close Gate 1.
+   runner is `verus/check-owner-constructor.py`. The
+   [constructor packet](evidence/dev-owner-constructor-2026-09-23/README.md)
+   records 422 authenticated inputs, two 1,134/0 paired whole-root proofs, 74
+   logical mutation failures, raw and disposal regressions, and 1,014 unit tests
+   plus 27 doctests. All 86 commands have terminal receipts; replay preserved all
+   262 record files byte-for-byte. These constructor-derived finite witnesses
+   are not a general constructor-origin lifecycle theorem.
+   The inspection source candidate shares the remaining eight scalar/length
+   getters and both immutable `core::ops::Deref` bodies between ordinary Rust
+   and actual-owner Verus execution. The four public const getters remain const.
+   An independent logical executor supplies matching observations; paired
+   execution covers journal inspection and explicit/automatic stable and producer
+   dereferencing, preserving complete modeled owner contents without a validity
+   precondition. The producer's combined read-budget method still shadows the
+   stable owner's free-list getter; the proof and CPU tests distinguish them.
+   This checks the actual trait implementations, not substituted field access.
+   It does not prove pointer identity, all derived traits or mutable extraction.
+   Seven frozen-baseline CPU tests cover const evaluation, malformed contents,
+   live reader statuses, budget shadowing, buffer stability and unchanged indexed
+   access counts. The dedicated runner is `verus/check-owner-inspection.py`.
+   General lifecycle reachability and physical storage refinement remain separate;
+   neither the constructor nor inspection checkpoint closes Gate 1.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement
    return/scratch/commit bodies now have actual-typed operation correspondence.
-   Remaining type/trait/wrapper correspondence, physical storage and fallible-allocation
+   Remaining wrapper/lifecycle correspondence, physical storage and fallible-allocation
    contracts, and explicit normal/unwind semantics remain open before treating
    the logical lifecycle as full-wrapper refinement.
 2. Retain an exact Context event-to-producer writer/member binding and a distinct

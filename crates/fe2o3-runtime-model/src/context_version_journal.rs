@@ -9,6 +9,12 @@ use alloc::vec::Vec;
 #[cfg(test)]
 use core::cell::Cell;
 
+#[allow(unused_macros)]
+#[macro_use]
+mod inspection_templates {
+    include!("context_version_journal/inspection_bodies.rs");
+}
+
 mod allocation_lifecycle;
 mod begin;
 pub(crate) mod construction;
@@ -47,6 +53,9 @@ mod scalar_enrollment_baseline;
 
 #[cfg(test)]
 mod construction_baseline;
+
+#[cfg(test)]
+mod inspection_baseline;
 
 #[cfg(test)]
 #[path = "context_version_journal/tests/construction_probe.rs"]
@@ -116,28 +125,28 @@ impl ContextVersionJournalV1 {
     }
 
     pub const fn context_generation(&self) -> u64 {
-        self.context_generation
+        owner_inspection_scalar_body!(self, context_generation)
     }
 
     pub const fn allocation_capacity(&self) -> usize {
-        self.allocation_capacity
+        owner_inspection_scalar_body!(self, allocation_capacity)
     }
 
     pub const fn writer_capacity(&self) -> usize {
-        self.writer_capacity
+        owner_inspection_scalar_body!(self, writer_capacity)
     }
 
     pub const fn registration_watermark(&self) -> u64 {
-        self.registration_watermark
+        owner_inspection_scalar_body!(self, registration_watermark)
     }
 
     /// The future exclusive Context owner checks this before minting an ID.
     pub fn remaining_writer_slots(&self) -> usize {
-        self.free.len()
+        owner_inspection_length_body!(self, free)
     }
 
     pub fn reserved_writer_count(&self) -> usize {
-        self.reserved_count
+        owner_inspection_scalar_body!(self, reserved_count)
     }
 
     /// Registers an already-issued key. Gaps are legal; rejected keys do not

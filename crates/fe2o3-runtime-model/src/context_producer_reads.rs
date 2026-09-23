@@ -71,6 +71,15 @@ mod scalar_enrollment_baseline;
 #[cfg(test)]
 mod construction_baseline;
 
+#[cfg(test)]
+mod inspection_baseline;
+
+#[allow(unused_macros)]
+#[macro_use]
+mod inspection_templates {
+    include!("context_version_journal/inspection_bodies.rs");
+}
+
 #[allow(unused_macros)]
 #[macro_use]
 mod constructor_templates {
@@ -105,7 +114,7 @@ impl Deref for ContextProducerReadJournalV1 {
     type Target = ContextReadLeasedJournalV1;
 
     fn deref(&self) -> &Self::Target {
-        &self.stable
+        owner_inspection_deref_body!(self, stable)
     }
 }
 

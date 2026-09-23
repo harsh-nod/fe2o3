@@ -16,6 +16,38 @@ fn owner_disposal_roster_fixture_v1() -> (result: (Vec<AllocationWriteV1>, Vec<l
     (roster, model_roster)
 }
 
+#[verifier::spinoff_prover]
+fn owner_disposal_mark_fixture_unknown_v1(actual: &mut ContextProducerReadJournalV1,
+    model: &mut logical::ProducerReadContentsV1, writer: WriterReferenceV1,
+    model_writer: logical::WriterReferenceV1)
+    -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))
+    requires producer_represents(*old(actual), *old(model)),
+        writer_reference_view(writer) == model_writer,
+        owner_settlement_pending_fixture_contents_v1(*old(actual), writer),
+        logical::producer_invariant_v1(*old(model)),
+    ensures results.0 == Ok(()), results.1 == Ok(()),
+        producer_represents(*final(actual), *final(model)),
+        logical::producer_invariant_v1(*final(model)),
+        final(actual).stable.journal.writers@ == seq![Some(WriterEntryV1::Unknown {
+            key: writer.key, head: Some(0usize), count: 1usize })],
+        owner_unknown_frame_v1(old(actual).stable.journal, final(actual).stable.journal),
+        final(actual).stable.leases == old(actual).stable.leases,
+        final(actual).stable.free_reads == old(actual).stable.free_reads,
+        final(actual).stable.readers == old(actual).stable.readers,
+        final(actual).stable.next_incarnation == old(actual).stable.next_incarnation,
+        final(actual).reservations == old(actual).reservations,
+        final(actual).free == old(actual).free,
+        final(actual).counts == old(actual).counts,
+        final(actual).next_incarnation == old(actual).next_incarnation,
+{
+    proof { reveal_with_fuel(owner_retained_scan_v1, 3); }
+    let marked = producer_unknown_historical_exec_v1(actual, model, writer, model_writer);
+    assert(marked.0 == Ok(()));
+    assert(actual.stable.journal.writers@ =~= seq![Some(WriterEntryV1::Unknown {
+        key: writer.key, head: Some(0usize), count: 1usize })]);
+    marked
+}
+
 // The fixture starts from synthetic storage; lifecycle calls on both sides are executable.
 #[verifier::spinoff_prover]
 fn owner_disposal_live_witness_v1() -> (result: bool)
@@ -35,8 +67,10 @@ fn owner_disposal_live_witness_v1() -> (result: bool)
         reveal_with_fuel(producer_unread_writes_v1, 3);
         reveal_with_fuel(stable_unread_writes_v1, 3);
     }
-    let marked = producer_unknown_historical_exec_v1(&mut actual, &mut model, writer, model_writer);
+    let marked = owner_disposal_mark_fixture_unknown_v1(&mut actual, &mut model, writer, model_writer);
     assert(marked.0 == Ok(()));
+    assert(actual.stable.journal.writers@ =~= seq![Some(WriterEntryV1::Unknown {
+        key: writer.key, head: Some(0usize), count: 1usize })]);
     let ghost before = actual;
     let disposed = owner_disposal_paired_exec_v1(&mut actual, &mut model, writer, model_writer, writer, model_writer,
         &roster, &model_roster, 1, 3, 3, Ghost(storage), Ghost(history));
