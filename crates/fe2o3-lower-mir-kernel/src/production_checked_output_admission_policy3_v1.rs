@@ -19,6 +19,10 @@ pub use general::redundant_store::{
     ProductionLoopInductionQueryErrorV1, ProductionLoopInductionQueryStorageV1,
     ProductionLoopInductionQueryV1,
 };
+pub use general::redundant_store::{
+    ProductionOwnedSourceLocalOrderContinuationV1, ProductionSourceLocalOrderErrorV1,
+    ProductionSourceLocalOrderStorageV1, SourceU32LocalOrderRequestV1,
+};
 
 #[path = "production_checked_output_general_policy3_v1.rs"]
 mod general;

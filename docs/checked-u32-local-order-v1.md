@@ -1,5 +1,9 @@
 # Checked local ordering of u32 computations
 
+The later [current-source fixed-prefix continuation](evidence/source-local-order-continuation-20260923.md)
+emits actual checked L LLVM/descriptors. Its qualification and remaining
+recipe-workflow gaps are separate from the historical experiment below.
+
 The `fe2o3-kernel-opt` service `schedule_checked_u32_local_order_v1` executes a
 small, dependency-preserving permutation on an actual immutable canonical V12
 owner. It returns a new immutable owner together with the existing independently

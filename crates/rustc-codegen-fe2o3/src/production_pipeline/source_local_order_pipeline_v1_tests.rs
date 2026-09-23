@@ -22,6 +22,9 @@ mod simulation;
 #[path = "source_local_order_recipe_pipeline_v1_tests.rs"]
 mod recipes;
 
+#[path = "source_local_order_continuation_v1_tests.rs"]
+mod continuation;
+
 const CANONICAL_WORK: usize = 20_000_000;
 const CANONICAL_STORAGE: usize = 32 * 1024 * 1024;
 

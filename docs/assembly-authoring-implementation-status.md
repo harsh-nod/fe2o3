@@ -24,6 +24,21 @@ exporter/extractor suites passed 11/24 and verifier 143 (13 ignored).
 All three umbrella issues remain open. The earlier sections below preserve
 their dated evidence and acceptance counts; they are not the current ledger.
 
+## Actual source-to-L continuation progress — 2026-09-23
+
+The [new fixed-prefix local-order qualification](evidence/source-local-order-continuation-20260923.md)
+consumes the unchanged source-owned Policy6 prefix and emits LLVM/descriptors
+from actual checked L. Thirteen ordinary-source callbacks pass: five positives
+with two legal local orders and eight exact refusals. Whole-kernel CPU checks
+pass 150 simulations; repeat LLVM agrees. Full optimizer/lowerer/backend gates
+pass 335/1,478/1,734 tests, respectively (3/0/115 ignored).
+
+This closes a continuation implementation gap, not original U3. Persisted
+recipes, normal Create/Replay use, exact/advisory constraints and edited-source
+rebind/regeneration still need their own qualification. The accepted original
+exits remain **M1/V1/V2/U1/U2 (5/18)**; protected artifact and hardware authority
+remain unavailable on this route.
+
 ## Earlier source-analysis and repeat-native progress — 2026-09-23
 
 The [one-region U2 ledger](evidence/source-launch-analysis-u2-20260923.md)

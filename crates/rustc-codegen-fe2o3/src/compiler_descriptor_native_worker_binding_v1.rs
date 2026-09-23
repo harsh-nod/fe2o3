@@ -63,6 +63,17 @@ fn check_native_worker_descriptor_source_inner_v1(
             kernels: owner.kernels(),
         },
     };
+    check_descriptor_view_v1(view, typed_roots, profile, budget)
+}
+
+// A read-only geometry/target check; not a new native publication owner.
+pub(super) fn check_descriptor_view_v1(
+    view: CheckedDescriptorViewV1<'_>,
+    typed_roots: &[TypedDescriptorRootV1],
+    profile: ProductionAmdTargetProfileV1,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<(), BindingError> {
+    let descriptor = |error| BindingError::Descriptor(Box::new(error));
     {
         let _relation = dialect_amdgcn::check_production_target_coordinate_preservation_v1(
             view.neutral,

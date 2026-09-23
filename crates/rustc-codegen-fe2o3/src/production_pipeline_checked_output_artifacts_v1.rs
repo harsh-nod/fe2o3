@@ -13,6 +13,7 @@ use fe2o3_kernel_ir::{
 };
 
 pub(super) enum CheckedArtifactsOwnerRefV1<'a> {
+    SourceLocalOrder(&'a fe2o3_lower_mir_kernel::ProductionOwnedSourceLocalOrderContinuationV1),
     Direct(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1),
     Erased(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1),
     Direct5(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy5V1),
@@ -28,6 +29,7 @@ pub(super) enum CheckedArtifactsOwnerRefV1<'a> {
 impl CheckedArtifactsOwnerRefV1<'_> {
     fn output(&self) -> &Owner {
         match self {
+            Self::SourceLocalOrder(owner) => owner.output(),
             Self::Direct(owner) => owner.output(),
             Self::Erased(owner) => owner.output(),
             Self::Direct5(owner) => owner.output(),
@@ -43,6 +45,13 @@ impl CheckedArtifactsOwnerRefV1<'_> {
 
     fn semantic_identity(&self) -> [u8; 32] {
         match self {
+            Self::SourceLocalOrder(owner) => *owner
+                .prefix()
+                .source_semantic_kir()
+                .semantic()
+                .semantic()
+                .semantic_sha256()
+                .as_bytes(),
             Self::Direct8(owner) => *owner
                 .prefix()
                 .prefix()
@@ -114,6 +123,11 @@ impl CheckedArtifactsOwnerRefV1<'_> {
 
     fn retained_floor(&self) -> Result<usize, ProductionPipelineError> {
         let result = match self {
+            Self::SourceLocalOrder(owner) => {
+                return owner
+                    .retained_input_storage_floor_v1()
+                    .map_err(super::source_local_order_v1::admission);
+            }
             Self::Direct8(owner) => {
                 return owner
                     .retained_input_storage_floor_v1()
@@ -177,6 +191,7 @@ impl CheckedArtifactsOwnerRefV1<'_> {
         ProductionPipelineError,
     > {
         let result = match self {
+            Self::SourceLocalOrder(owner) => crate::production_worker_handoff::prepare_source_local_order_worker_handoff_v1(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
             Self::Direct8(owner) => crate::production_worker_handoff::prepare_checked_output_policy8_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
             Self::Erased8(owner) => crate::production_worker_handoff::prepare_erased_checked_output_policy8_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
             Self::Direct7(owner) => crate::production_worker_handoff::prepare_checked_output_policy7_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
@@ -216,7 +231,8 @@ pub(super) fn prepare_checked_artifact_parts_v1(
     #[cfg(test)]
     let phase = timing::begin(
         match &admitted {
-            CheckedArtifactsOwnerRefV1::Direct(_)
+            CheckedArtifactsOwnerRefV1::SourceLocalOrder(_)
+            | CheckedArtifactsOwnerRefV1::Direct(_)
             | CheckedArtifactsOwnerRefV1::Direct5(_)
             | CheckedArtifactsOwnerRefV1::Direct6(_)
             | CheckedArtifactsOwnerRefV1::Direct7(_)
