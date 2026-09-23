@@ -103,6 +103,7 @@ def authenticate(repo):
     unchanged = [CRATE / ('src/context_version_journal/' + name + '.rs') for name in (
         'enrollment_bodies', 'enrollment_ordering_bodies', 'enrollment_adaptive_bodies', 'enrollment_declarations', 'declarations')]
     unchanged += [CRATE / 'src/context_version_journal/allocation_lifecycle/enrollment.rs',
+        CRATE / 'src/context_version_journal/allocation_lifecycle/ordering.rs',
         CRATE / 'verus/context_version_journal_enrollment_v1.rs']
     unchanged += [p.relative_to(repo) for p in (repo / CRATE / 'src/context_version_journal/allocation_lifecycle/ordering').rglob('*.rs')]
     for path in unchanged:
@@ -205,4 +206,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
