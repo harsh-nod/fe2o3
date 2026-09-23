@@ -1,6 +1,22 @@
 use super::*;
 
 impl ContextVersionJournalV1 {
+    // Retirement changes only selected slots and an appended free-stack suffix.
+    pub(crate) fn restore_retirement_for_test_v1(
+        &mut self,
+        before: &Self,
+        references: &[ContextAllocationReferenceV1],
+    ) {
+        for reference in references {
+            if let Some(entry) = before.allocations.get(reference.slot) {
+                self.allocations[reference.slot] = *entry;
+            }
+        }
+        assert!(self.allocation_free.len() >= before.allocation_free.len());
+        self.allocation_free.truncate(before.allocation_free.len());
+        self.reset_access_count_for_test_v1();
+    }
+
     // Use only after successful settlement of this saved, validated chain.
     pub(crate) fn restore_settlement_for_test_v1(
         &mut self,

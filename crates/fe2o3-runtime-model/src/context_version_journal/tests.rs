@@ -784,3 +784,6 @@ mod settlement;
 
 #[path = "allocation_lifecycle_tests.rs"]
 mod allocation_lifecycle;
+
+#[path = "retirement_shared_tests.rs"]
+mod retirement_shared;

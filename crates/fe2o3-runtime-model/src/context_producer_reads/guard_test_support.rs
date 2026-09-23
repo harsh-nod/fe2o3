@@ -1,6 +1,15 @@
 use super::*;
 
 impl ContextProducerReadJournalV1 {
+    pub(crate) fn restore_retirement_for_test_v1(
+        &mut self,
+        before: &ContextVersionJournalV1,
+        references: &[ContextAllocationReferenceV1],
+    ) {
+        self.stable
+            .restore_retirement_for_test_v1(before, references);
+    }
+
     pub(crate) fn restore_settlement_for_test_v1(
         &mut self,
         before: &ContextVersionJournalV1,

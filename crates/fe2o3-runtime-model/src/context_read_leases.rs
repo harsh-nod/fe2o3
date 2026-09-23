@@ -68,6 +68,15 @@ mod scalar_enrollment_templates {
 #[cfg(test)]
 mod scalar_enrollment_baseline;
 
+#[allow(unused_macros)]
+#[macro_use]
+mod retirement_templates {
+    include!("context_version_journal/retirement_bodies.rs");
+}
+
+#[cfg(test)]
+mod retirement_baseline;
+
 #[cfg(test)]
 mod writer_lifecycle_baseline;
 
@@ -240,20 +249,45 @@ impl ContextReadLeasedJournalV1 {
         stable_begin_body!(self, writer, members)
     }
 
+    #[allow(clippy::question_mark)]
+    fn require_unread_allocations(
+        &self,
+        references: &[ContextAllocationReferenceV1],
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        retirement_unread_body!(reader_rust_expr, self, references, index, [])
+    }
+
+    #[allow(clippy::question_mark)]
     pub fn validate_allocation_retirement(
         &self,
         references: &[ContextAllocationReferenceV1],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.require_unread(references.iter().copied())?;
-        self.journal.validate_allocation_retirement(references)
+        retirement_owner_validate_body!(
+            reader_rust_expr,
+            self,
+            journal,
+            references,
+            validate_allocation_retirement,
+            [],
+            []
+        )
     }
 
+    #[allow(clippy::question_mark)]
     pub fn retire_allocations(
         &mut self,
         references: &[ContextAllocationReferenceV1],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.validate_allocation_retirement(references)?;
-        self.journal.retire_allocations(references)
+        retirement_owner_execute_body!(
+            reader_rust_expr,
+            self,
+            journal,
+            references,
+            validate_allocation_retirement,
+            retire_allocations,
+            [],
+            []
+        )
     }
 
     pub fn validate_unknown_disposal(

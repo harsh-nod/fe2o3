@@ -8,6 +8,7 @@ mod acquire_shared;
 mod enrollment_shared;
 mod query_shared;
 mod release_shared;
+mod retirement_shared;
 mod scalar_enrollment_shared;
 mod settlement_shared;
 mod stable_wrappers_shared;

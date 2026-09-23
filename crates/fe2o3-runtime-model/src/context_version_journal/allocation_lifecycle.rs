@@ -15,6 +15,18 @@ mod enrollment_templates {
     include!("enrollment_wrapper_bodies.rs");
 }
 
+#[allow(unused_macros)]
+#[macro_use]
+mod retirement_templates {
+    include!("retirement_bodies.rs");
+}
+
+macro_rules! retirement_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
+
 macro_rules! enrollment_declarations_v1 {
     ($($declaration:tt)*) => { $($declaration)* };
 }
@@ -49,47 +61,41 @@ impl ContextVersionJournalV1 {
     /// Pending and Unknown writer membership both prevent retirement.
     /// Partition preservation assumes a valid prestate; unrelated arena
     /// corruption is not comprehensively detected by these local checks.
+    #[allow(clippy::question_mark)]
     pub fn validate_allocation_retirement(
         &self,
         canonical: &[ContextAllocationReferenceV1],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        if canonical.len() > self.allocation_capacity {
-            return Err(E::RosterCapacity);
-        }
-        let mut previous = None;
-        for &reference in canonical {
-            let entry = self.exact_allocation(reference)?;
-            if previous.is_some_and(|key| key >= reference.key) {
-                return Err(E::NonCanonicalRoster);
-            }
-            if entry.pending_member.is_some() {
-                return Err(E::AllocationBusy);
-            }
-            previous = Some(reference.key);
-        }
-        let returned = self
-            .allocation_free
-            .len()
-            .checked_add(canonical.len())
-            .ok_or(E::InvalidState)?;
-        if returned > self.allocation_capacity || returned > self.allocation_free.capacity() {
-            return Err(E::InvalidState);
-        }
-        Ok(())
+        retirement_preflight_body!(
+            retirement_rust_expr,
+            self,
+            canonical,
+            retained::shared_retained_allocation_v1,
+            retained::shared_retained_allocation_less_v1,
+            self.allocation_free.capacity(),
+            previous,
+            index,
+            []
+        )
     }
 
     /// Removes metadata after externally authenticated disposal (or no owner).
     /// This model call is not disposal authority and cannot recover Unknown.
+    #[allow(clippy::question_mark)]
     pub fn retire_allocations(
         &mut self,
         canonical: &[ContextAllocationReferenceV1],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.validate_allocation_retirement(canonical)?;
-        for reference in canonical {
-            self.allocations[reference.slot] = None;
-            self.allocation_free.push(reference.slot);
-        }
-        Ok(())
+        retirement_execute_body!(
+            retirement_rust_expr,
+            self,
+            canonical,
+            validate_allocation_retirement,
+            [],
+            index,
+            [],
+            [],
+            []
+        )
     }
 }

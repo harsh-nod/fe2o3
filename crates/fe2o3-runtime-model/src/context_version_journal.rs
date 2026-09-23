@@ -44,6 +44,9 @@ mod scalar_enrollment_templates {
 #[cfg(test)]
 mod scalar_enrollment_baseline;
 
+#[cfg(test)]
+mod retirement_baseline;
+
 macro_rules! writer_rust_expr {
     ($body:expr) => {
         $body
