@@ -163,6 +163,7 @@ def main():
                     target = stage / path
                     target.parent.mkdir(parents=True, exist_ok=True)
                     data = (repo / path).read_bytes()
+                    need(digest(data) == before[str(path)], 'staging source drift: ' + str(path))
                     target.write_bytes(legacy.mutated(data, mutation) if mutation and path == mutation[1] else data)
                 for path in set(legacy.POLICY_SOURCES) | (set(previous.NEW) - {previous.ROOT, previous.RAW, previous.BODY}) | set(POLICY_NEW):
                     policy.scan(stage / path)
