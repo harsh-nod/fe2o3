@@ -12,9 +12,10 @@ from bridge_live_queries import LiveQuerySession
 from bridge_runtime_values import (RESOURCE_REQUEST, RUNTIME_REQUEST, positive, triple,
                                    validate_runtime)
 from bridge_storage_values import memory_range, validate_resource
+from bridge_target_values import TARGET_REQUEST, validate_target
 
-SCHEMAS = frozenset((RUNTIME_REQUEST, RESOURCE_REQUEST))
-COMMANDS = frozenset(("runtime", "storage", "lifecycle", "storageaccess", "storagememory"))
+SCHEMAS = frozenset((RUNTIME_REQUEST, RESOURCE_REQUEST, TARGET_REQUEST))
+COMMANDS = frozenset(("runtime", "storage", "lifecycle", "storageaccess", "storagememory", "target"))
 DECIMAL = r"(0|[1-9][0-9]{0,19})"
 
 
@@ -71,6 +72,13 @@ class ObservedQuerySession(LiveQuerySession):
             if self._observation_owner is not None:
                 body["expected_owner"] = copy.deepcopy(self._observation_owner)
             return body
+        if command == "target":
+            require(self._runtime_binding is not None and self._observation_owner is not None and
+                    exact(self._runtime_binding["cursor"], view["cursor"]) and
+                    exact(self._runtime_binding["owner"], self._observation_owner),
+                    "target requires current accepted observation owner")
+            return {"schema": TARGET_REQUEST, "operation": "inspect_declared_target",
+                    "expected_binding": copy.deepcopy(self._runtime_binding)}
         binding = self._resources()
         operations = {"storage": "query_allocations", "lifecycle": "query_allocation_lifecycle",
                       "storageaccess": "query_memory_accesses", "storagememory": "read_allocation_memory"}
@@ -95,7 +103,7 @@ class ObservedQuerySession(LiveQuerySession):
         if not isinstance(line, str) or not line.split() or line.split()[0] not in COMMANDS:
             return super().parse_command(line)
         try:
-            if line in ("runtime", "storage", "lifecycle"):
+            if line in ("runtime", "storage", "lifecycle", "target"):
                 return self._body_observed(line)
             match = re.fullmatch(r"storageaccess "+DECIMAL+" "+DECIMAL+" "+DECIMAL, line)
             if match:
@@ -118,6 +126,9 @@ class ObservedQuerySession(LiveQuerySession):
         if body["schema"] == RUNTIME_REQUEST:
             require(operation == "inspect_current_record", "closed runtime operation")
             expected = self._body_observed("runtime")
+        elif body["schema"] == TARGET_REQUEST:
+            require(operation == "inspect_declared_target", "closed target operation")
+            expected = self._body_observed("target")
         else:
             command = {"query_allocations": "storage", "query_allocation_lifecycle": "lifecycle",
                        "query_memory_accesses": "storageaccess", "read_allocation_memory": "storagememory"}.get(operation)
@@ -156,6 +167,8 @@ class ObservedQuerySession(LiveQuerySession):
                     self._runtime_binding = copy.deepcopy(observed)
                 if response["status"] == "ok":
                     self._runtime_record = copy.deepcopy(response)
+            elif request["schema"] == TARGET_REQUEST:
+                validate_target(response, request, self.view)
             else:
                 require(self._runtime_record is not None and self._runtime_binding is not None,
                         "resource response lost runtime selection")

@@ -10,6 +10,8 @@ import { parseBoundedJson } from './ordered-program-source-native.mjs';
 import { parseExport, replaceOnce } from './source-promotion-instruction-edit-smoke.mjs';
 import { requireDiskReserve } from './assembly-region-worker-prototype.mjs';
 import { runNavigationCommand } from './authoring-navigation-v1-process.mjs';
+import { ORIGIN_BYTES_V1, originOutputPathV1, repeatExportArgumentsV1,
+  validateRepeatOriginV1, validateRepeatExportProfileV1 } from './ordered-repeat-origin-v1.mjs';
 
 const KiB = 1024, MiB = KiB * KiB;
 export const LIMITS = Object.freeze({ source_bytes: 64 * KiB, json_bytes: MiB,
@@ -258,11 +260,15 @@ export function validateRefusal(result, label, sourceFile, outputExists) {
     cargo_exit: 101, exporter_exit: 1, kir_absent: true };
 }
 export function options(argv) {
-  const keys = ['repo', 'bin-dir', 'cargo', 'rustc', 'output']; assert.equal(argv.length, keys.length * 2); const result = {};
+  const keys = ['repo', 'bin-dir', 'cargo', 'rustc', 'output'];
+  assert.ok(argv.length === keys.length * 2 || argv.length === (keys.length + 1) * 2); const result = {};
   for (let at = 0; at < argv.length; at += 2) {
     assert.ok(argv[at].startsWith('--')); const key = argv[at].slice(2);
-    assert.ok(keys.includes(key) && !Object.hasOwn(result, key)); result[key] = absolute(argv[at + 1]);
+    assert.ok([...keys, 'ordered-origin'].includes(key) && !Object.hasOwn(result, key));
+    if (key === 'ordered-origin') { assert.equal(argv[at + 1], 'v1'); result[key] = 'v1'; }
+    else result[key] = absolute(argv[at + 1]);
   }
+  assert.ok(keys.every(key => Object.hasOwn(result, key)));
   for (const input of [result.repo, result['bin-dir'], result.cargo, result.rustc]) {
     assert.notEqual(input, result.output); assert.ok(!within(input, result.output) && !within(result.output, input));
   }
@@ -346,7 +352,7 @@ async function run(opt) {
       tool('fe2o3-rustc-extract'), tool('fe2o3-export-sim'), tool('fe2o3-program-inspect'), tool('fe2o3-kir-sim')]) pin(file, LIMITS.selected_file_bytes);
     const here = path.dirname(fileURLToPath(import.meta.url));
     for (const name of [path.basename(fileURLToPath(import.meta.url)), 'authoring-navigation-v1-process.mjs',
-      'source-promotion-instruction-edit-smoke.mjs', 'ordered-program-source-native.mjs',
+      'source-promotion-instruction-edit-smoke.mjs', 'ordered-repeat-origin-v1.mjs', 'ordered-program-source-native.mjs',
       'ordered-program-worker-prototype.mjs', 'assembly-region-worker-prototype.mjs']) pin(path.join(here, name), LIMITS.json_bytes);
     for (const name of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/fe2o3-device/Cargo.toml',
       'crates/fe2o3-device/src/lib.rs', 'crates/fe2o3-device/src/ordered_program.rs',
@@ -366,10 +372,9 @@ async function run(opt) {
       return { manifest: path.join(directory, 'Cargo.toml'), source: path.join(directory, 'src/lib.rs') };
     };
     const sources = originals.map((source, index) => sourceDirectory(LABELS[index], source));
-    const exportArgs = (label, current, negative = false) => ['--diagnostic-kir-v17', '--crate', CRATE,
-      '--output', path.join(output, label + '.kir'), '--target', 'gfx942',
-      '--target-dir', path.join(output, label + '-extraction'), '--', '--manifest-path', current.manifest,
-      '--lib', '--offline', ...(negative ? ['--message-format=json'] : [])];
+    const exportProfile = opt['ordered-origin'] === 'v1' ? 'origin-v1' : 'legacy';
+    const exportArgs = (label, current, negative = false) =>
+      repeatExportArgumentsV1(exportProfile, output, label, current.source, negative);
     saveJson('matrix.json', { labels: LABELS, repetitions: REPETITIONS, inputs: INPUTS, lengths: LENGTHS,
       replays: 2, successful_exports: 4, intended_refusals: REFUSALS.map(item => item.label), simulations: 120, stages: LIMITS.stages });
     for (let index = 0; index < LABELS.length; index++) {
@@ -381,6 +386,10 @@ async function run(opt) {
       const inspectionRequest = saveJson(label + '-inspect-request.json', request(INPUTS[0], 1));
       const inspected = await command(label + '-inspect', tool('fe2o3-program-inspect'), [kirPath, inspectionRequest]);
       const inspection = parseJson(inspected.stdout); validateInspection(inspection, exported, count);
+      const originPath = originOutputPathV1(output, label);
+      if (exportProfile === 'origin-v1') validateRepeatOriginV1(
+        pin(originPath, ORIGIN_BYTES_V1, true).bytes, exported, inspection, kir);
+      else assert.equal(exists(originPath), false, 'legacy export does not publish origins');
       const simulations = [];
       for (let input = 0; input < INPUTS.length; input++) for (const elements of LENGTHS) {
         const query = request(INPUTS[input], elements), name = label + '-case-' + input + '-length-' + elements;
@@ -402,8 +411,10 @@ async function run(opt) {
       assert.equal(exists(kirPath), false);
       const captured = await command(label + '-export', tool('fe2o3-export-sim'), exportArgs(label, current, true), 1);
       refusals.push({ ...validateRefusal(captured, expected.label, current.source, exists(kirPath)), source_sha256: sha256(source) });
+      assert.equal(exists(originOutputPathV1(output, label)), false, 'negative exports never request or publish origins');
     }
     assert.equal(stages.length, LIMITS.stages); assert.equal(refusals.length, 8);
+    assert.equal(validateRepeatExportProfileV1({ stages, variants, refusals, retained_file_pins: [...pins.values()] }, output), exportProfile);
     for (const [file, expected] of pins) {
       guard(); assert.deepEqual(observe(file, Math.max(expected.bytes, 1), false, expected.bytes === 0).pin, expected, 'final selected input/output custody');
     }

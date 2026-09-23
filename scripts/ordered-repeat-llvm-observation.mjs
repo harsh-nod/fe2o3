@@ -7,6 +7,8 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { runNavigationCommand } from './authoring-navigation-v1-process.mjs';
 import { parseExport } from './source-promotion-instruction-edit-smoke.mjs';
+import { ORIGIN_BYTES_V1, originOutputPathV1, repeatExportArgumentsV1,
+  validateRepeatExportProfileV1, validateRepeatOriginV1 } from './ordered-repeat-origin-v1.mjs';
 import {
   LIMITS as SOURCE_LIMITS, LABELS, REPETITIONS, INPUTS, LENGTHS, REFUSALS,
   parseJson, validateSources, validateMatrix, validateSimulation, validateRefusal,
@@ -320,13 +322,9 @@ async function run(opt) {
       return { ...stage, stdout: retained(path.join(directory, label + '.stdout')),
         stderr: retained(path.join(directory, label + '.stderr')) };
     };
-    const exportArguments = (label, source, negative) => [
-      '--diagnostic-kir-v17', '--crate', 'fe2o3_assembly_authoring_v30_fixture',
-      '--output', path.join(directory, label + '.kir'), '--target', 'gfx942',
-      '--target-dir', path.join(directory, label + '-extraction'), '--', '--manifest-path',
-      path.join(path.dirname(path.dirname(source)), 'Cargo.toml'), '--lib', '--offline',
-      ...(negative ? ['--message-format=json'] : []),
-    ];
+    const exportProfile = validateRepeatExportProfileV1(capture, directory);
+    const exportArguments = (label, source, negative) =>
+      repeatExportArgumentsV1(exportProfile, directory, label, source, negative);
     for (let index = 0; index < LABELS.length; index++) {
       const variant = capture.variants[index], label = variant.label;
       const exported = outputOf(label + '-export');
@@ -336,6 +334,9 @@ async function run(opt) {
       const inspected = outputOf(label + '-inspect');
       assert.equal(path.basename(inspected.executable), 'fe2o3-program-inspect');
       assert.deepEqual(parseJson(inspected.stdout), variant.inspection);
+      if (exportProfile === 'origin-v1') validateRepeatOriginV1(
+        retained(originOutputPathV1(directory, label), ORIGIN_BYTES_V1), variant.exported,
+        variant.inspection, retained(variant.kir_path, SOURCE_LIMITS.kir_bytes));
       assert.deepEqual(inspected.args, [variant.kir_path, path.join(directory, label + '-inspect-request.json')]);
       assert.deepEqual(parseJson(retained(inspected.args[1])), request(INPUTS[0], 1));
       for (let input = 0; input < INPUTS.length; input++) for (const elements of LENGTHS) {
@@ -359,6 +360,7 @@ async function run(opt) {
       assert.deepEqual(exported.args, exportArguments(label, refusal.source_path, true));
       assert.deepEqual(validateRefusal(exported, refusal.label, refusal.source_path,
         !absent(path.join(directory, label + '.kir'))), expected);
+      assert.ok(absent(originOutputPathV1(directory, label)), 'negative origin remains absent');
     }
     const lowerer = pin(opt.lowerer, LIMITS.selected_file_bytes);
     assert.equal(lowerer.pin.bytes, opt['lowerer-bytes']); assert.equal(lowerer.pin.sha256, opt['lowerer-sha256']);
@@ -367,7 +369,7 @@ async function run(opt) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     assert.equal(here, path.join(opt.repo, 'scripts'), 'one current checkout owns imported validators and lowerer sources');
     for (const name of [path.basename(fileURLToPath(import.meta.url)), 'ordered-repeat-source-smoke.mjs',
-      'authoring-navigation-v1-process.mjs', 'source-promotion-instruction-edit-smoke.mjs',
+      'authoring-navigation-v1-process.mjs', 'source-promotion-instruction-edit-smoke.mjs', 'ordered-repeat-origin-v1.mjs',
       'ordered-program-source-native.mjs', 'ordered-program-worker-prototype.mjs', 'assembly-region-worker-prototype.mjs']) {
       pin(path.join(here, name), MiB);
     }
@@ -377,6 +379,7 @@ async function run(opt) {
       'crates/fe2o3-amdgcn-model/examples/lower_diagnostic_ordered_program_v17.rs']) pin(path.join(opt.repo, name), 8 * MiB);
     // The imported R2 producer must be one of the actually retained capture inputs.
     assert.ok(historical.has(path.join(here, 'ordered-repeat-source-smoke.mjs')));
+    if (exportProfile === 'origin-v1') assert.ok(historical.has(path.join(here, 'ordered-repeat-origin-v1.mjs')));
     assert.ok(absent(opt.output)); fs.mkdirSync(opt.output, { mode: 0o700 }); outputCreated = true;
     const env = { ...process.env }; delete env.LD_PRELOAD;
     for (const key of Object.keys(env)) if (key.startsWith('FE2O3_')) delete env[key];

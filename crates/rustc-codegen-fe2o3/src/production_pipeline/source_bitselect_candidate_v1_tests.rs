@@ -19,6 +19,10 @@ mod headless;
 #[cfg(test)]
 #[path = "source_local_order_pipeline_v1_tests.rs"]
 mod local_order;
+#[path = "source_local_order_join_v1.rs"]
+mod local_order_join;
+#[path = "source_local_order_recipe_adapter_v1.rs"]
+mod local_order_recipe;
 #[cfg(test)]
 #[path = "source_bitselect_candidate_checks_v1_tests.rs"]
 mod tests;

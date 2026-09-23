@@ -10,8 +10,7 @@ use fe2o3_source_isa_observation::source_edit_v1::{
 
 use super::*;
 
-#[cfg(test)]
-#[path = "source_local_order_capture_v1_tests.rs"]
+#[path = "source_local_order_capture_v1.rs"]
 pub(crate) mod local_order;
 
 pub(crate) const CANDIDATE_CAP: usize = SOURCE_CAP + 64 * 1024;

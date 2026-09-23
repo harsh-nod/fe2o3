@@ -1,5 +1,9 @@
 # Current-source fixed-prefix local-order continuation — 2026-09-23
 
+This earlier qualification is superseded for U3 acceptance by the
+[saved-recipe and public-example report](source-local-order-recipes-20260923.md).
+The results below retain their original scope and counts.
+
 This is a bounded implementation and qualification increment for issue #282 U3.
 The accepted original exits remain **M1/V1/V2/U1/U2 (5/18)**. It is not yet a
 saved-recipe author workflow, protected artifact, native object or hardware run.

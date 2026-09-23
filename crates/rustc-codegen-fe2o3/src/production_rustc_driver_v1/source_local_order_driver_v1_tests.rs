@@ -11,6 +11,9 @@ mod recipes;
 #[path = "source_local_order_continuation_driver_v1_tests.rs"]
 mod continuation;
 
+#[path = "source_local_order_release_recipe_driver_v1_tests.rs"]
+mod release_recipe;
+
 const OUTPUT: &str = "FE2O3_TEST_SOURCE_LOCAL_ORDER_OUTPUT";
 const INPUT: &str = "FE2O3_TEST_SOURCE_LOCAL_ORDER_INPUT";
 const CASE: &str = "FE2O3_TEST_SOURCE_LOCAL_ORDER_CASE";

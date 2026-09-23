@@ -85,5 +85,7 @@ fn extract(tcx: TyCtxt<'_>, kir_output: &Path, origin_output: &Path) -> Result<(
         &report_bytes,
         crate::production_ordered_origin_report_v1::MAX_ORIGIN_REPORT_BYTES_V1,
         "diagnostic ordered-program origin V1",
-    )
+    )?;
+    super::ordered_program_diagnostic_export_v17::report_source_identities_v17(&owner);
+    Ok(())
 }

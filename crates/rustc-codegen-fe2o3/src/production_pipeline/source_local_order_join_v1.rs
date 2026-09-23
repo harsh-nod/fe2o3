@@ -1,10 +1,17 @@
 //! Exact live-HIR -> semantic locals/statements -> retained KIR correspondence.
 use super::*;
+use crate::collector::source_census_v1::bitselect_feasibility::retained::local_order::CapturedLocalOrder;
+use fe2o3_kernel_ir::{
+    CanonicalKirBlockCoordinateV1, CanonicalKirFunctionCoordinateV1,
+    VerifiedCanonicalKernelIrModuleV12 as Owner,
+};
+use fe2o3_kernel_opt::U32LocalOrderRegionV1 as Region;
 
 pub(super) struct JoinedLocalOrder<'a> {
     kir: &'a Function,
     block: &'a BasicBlock,
     operations: [u32; 3],
+    #[cfg(test)]
     pub(super) results: [ValueId; 3],
 }
 
@@ -164,7 +171,7 @@ pub(super) fn exact_join<'a>(
             1 => (SemanticBinaryOpV1::BitOr, locals[2], locals[3]),
             _ => (SemanticBinaryOpV1::BitAnd, destinations[0], destinations[1]),
         };
-        let (opcode, left, right, destination) = binary(&assignment)?;
+        let (opcode, left, right, destination) = binary(assignment)?;
         if (opcode, left, right) != expected {
             return Err("local-order semantic operand graph mismatch".into());
         }
@@ -266,6 +273,7 @@ pub(super) fn exact_join<'a>(
         kir,
         block,
         operations,
+        #[cfg(test)]
         results,
     })
 }
@@ -314,6 +322,7 @@ impl JoinedLocalOrder<'_> {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn result_order(
         &self,
         owner: &Owner,

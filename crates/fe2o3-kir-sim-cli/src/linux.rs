@@ -1712,7 +1712,7 @@ fn load_admitted_bundle(
         )
     })?;
     let target = simulation_target_for_bundle(bundle.target())?;
-    let input = load_admitted_input(
+    let mut input = load_admitted_input(
         bundle.canonical_kir_v7(),
         request,
         None,
@@ -1734,6 +1734,7 @@ fn load_admitted_bundle(
             "simulation bundle KIR identity changed during admission",
         ));
     }
+    retain_declared_target(&mut input, bundle.target())?;
     Ok(crate::AdmittedSimulationBundleInputV1 { input, bundle })
 }
 
@@ -1771,7 +1772,7 @@ fn load_admitted_bundle_v2(
     let target = simulation_target_for_bundle(inner.target())?;
     // Schedule V1 continues to bind the exact executable V1 payload. The V2
     // source map is separately committed by the debugger configuration.
-    let input = load_admitted_input(
+    let mut input = load_admitted_input(
         inner.canonical_kir_v7(),
         request,
         None,
@@ -1789,6 +1790,7 @@ fn load_admitted_bundle_v2(
             "simulation bundle V2 KIR identity changed during admission",
         ));
     }
+    retain_declared_target(&mut input, inner.target())?;
     Ok(crate::AdmittedSimulationBundleInputV2 { input, bundle })
 }
 
@@ -1824,7 +1826,7 @@ fn load_admitted_bundle_v3(
     })?;
     let inner = bundle.inner_v2().inner_v1();
     let target = simulation_target_for_bundle(inner.target())?;
-    let input = load_admitted_input(
+    let mut input = load_admitted_input(
         inner.canonical_kir_v7(),
         request,
         None,
@@ -1842,6 +1844,7 @@ fn load_admitted_bundle_v3(
             "simulation bundle V3 KIR identity changed during admission",
         ));
     }
+    retain_declared_target(&mut input, inner.target())?;
     Ok(crate::AdmittedSimulationBundleInputV3 { input, bundle })
 }
 
@@ -1877,7 +1880,7 @@ fn load_admitted_bundle_v4(
     })?;
     let inner = bundle.inner_v3().inner_v2().inner_v1();
     let target = simulation_target_for_bundle(inner.target())?;
-    let input = load_admitted_input(
+    let mut input = load_admitted_input(
         inner.canonical_kir_v7(),
         request,
         None,
@@ -1895,6 +1898,7 @@ fn load_admitted_bundle_v4(
             "simulation bundle V4 KIR identity changed during admission",
         ));
     }
+    retain_declared_target(&mut input, inner.target())?;
     Ok(crate::AdmittedSimulationBundleInputV4 { input, bundle })
 }
 
@@ -1935,7 +1939,7 @@ fn load_admitted_bundle_v5(
         InputCode::Request,
         "simulation request",
     )?;
-    let input = load_admitted_input_bytes_v10(
+    let mut input = load_admitted_input_bytes_v10(
         bundle.canonical_kir_v10(),
         &request_bytes,
         None,
@@ -1953,6 +1957,7 @@ fn load_admitted_bundle_v5(
             "simulation bundle V5 KIR identity changed during admission",
         ));
     }
+    retain_declared_target(&mut input, bundle.target())?;
     Ok(crate::AdmittedSimulationBundleInputV5 { input, bundle })
 }
 
@@ -1993,7 +1998,7 @@ fn load_admitted_bundle_v6(
         InputCode::Request,
         "simulation request",
     )?;
-    let input = load_admitted_input_bytes_v11(
+    let mut input = load_admitted_input_bytes_v11(
         bundle.canonical_kir_v11(),
         &request_bytes,
         None,
@@ -2011,7 +2016,21 @@ fn load_admitted_bundle_v6(
             "simulation bundle V6 KIR identity changed during admission",
         ));
     }
+    retain_declared_target(&mut input, bundle.target())?;
     Ok(crate::AdmittedSimulationBundleInputV6 { input, bundle })
+}
+
+fn retain_declared_target(
+    input: &mut crate::AdmittedSimulationInputV1,
+    target: &str,
+) -> Result<(), Failure> {
+    input.retain_bundle_target_v1(target).map_err(|_| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            "simulation bundle target binding changed during admission",
+        )
+    })
 }
 
 fn simulation_target_for_bundle(target: &str) -> Result<SimulationTargetV1, Failure> {
@@ -2285,6 +2304,7 @@ fn finish_admitted_input(
         simulation_bundle_subject,
         simulation_bundle_identity,
         simulation_bundle_evidence: bundle_evidence,
+        bundle_target_v1: None,
     })
 }
 

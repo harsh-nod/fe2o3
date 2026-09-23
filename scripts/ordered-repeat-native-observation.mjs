@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { runNavigationCommand } from './authoring-navigation-v1-process.mjs';
 import { requireDiskReserve } from './assembly-region-worker-prototype.mjs';
 import { parseExport } from './source-promotion-instruction-edit-smoke.mjs';
+import { ORIGIN_BYTES_V1, originOutputPathV1, repeatExportArgumentsV1,
+  validateRepeatExportProfileV1, validateRepeatOriginV1 } from './ordered-repeat-origin-v1.mjs';
 import { LIMITS as SOURCE_LIMITS, LABELS, INPUTS, LENGTHS,
   parseJson, validateSources, validateSimulation, validateRefusal, declaredProgram,
   request, negativeSource } from './ordered-repeat-source-smoke.mjs';
@@ -95,13 +97,9 @@ export function revalidateSource(capture, directory, read, exists) {
     return { ...stage, stdout: retained(path.join(directory, label + '.stdout')),
       stderr: retained(path.join(directory, label + '.stderr')) };
   };
-  const exportArguments = (label, source, negative) => [
-    '--diagnostic-kir-v17', '--crate', 'fe2o3_assembly_authoring_v30_fixture',
-    '--output', path.join(directory, label + '.kir'), '--target', 'gfx942',
-    '--target-dir', path.join(directory, label + '-extraction'), '--', '--manifest-path',
-    path.join(path.dirname(path.dirname(source)), 'Cargo.toml'), '--lib', '--offline',
-    ...(negative ? ['--message-format=json'] : []),
-  ];
+  const exportProfile = validateRepeatExportProfileV1(capture, directory);
+  const exportArguments = (label, source, negative) =>
+    repeatExportArgumentsV1(exportProfile, directory, label, source, negative);
   for (let index = 0; index < LABELS.length; index++) {
     const variant = capture.variants[index], label = variant.label;
     const exported = outputOf(label + '-export');
@@ -111,6 +109,9 @@ export function revalidateSource(capture, directory, read, exists) {
     const inspected = outputOf(label + '-inspect');
     assert.equal(path.basename(inspected.executable), 'fe2o3-program-inspect');
     assert.deepEqual(parseJson(inspected.stdout), variant.inspection);
+    if (exportProfile === 'origin-v1') validateRepeatOriginV1(
+      retained(originOutputPathV1(directory, label), ORIGIN_BYTES_V1), variant.exported,
+      variant.inspection, retained(variant.kir_path, SOURCE_LIMITS.kir_bytes));
     assert.deepEqual(inspected.args, [variant.kir_path, path.join(directory, label + '-inspect-request.json')]);
     assert.deepEqual(parseJson(retained(inspected.args[1])), request(INPUTS[0], 1));
     for (let input = 0; input < INPUTS.length; input++) for (const elements of LENGTHS) {
@@ -134,6 +135,7 @@ export function revalidateSource(capture, directory, read, exists) {
     assert.deepEqual(exported.args, exportArguments(label, refusal.source_path, true));
     assert.deepEqual(validateRefusal(exported, refusal.label, refusal.source_path,
       !absent(path.join(directory, label + '.kir'))), expected);
+    assert.ok(absent(originOutputPathV1(directory, label)), 'negative origin remains absent');
   }
   return { pins: historical, variants: capture.variants, simulations: 120, refusals: 8, stages: 136 };
 }
@@ -437,6 +439,12 @@ async function run(opt) {
       expectedPin(sourceLedger.get(file), llvmLedger.get(file));
     }
     assert.ok(llvmLedger.has(path.join(here, 'ordered-repeat-llvm-observation.mjs')));
+    const originHelper = path.join(here, 'ordered-repeat-origin-v1.mjs');
+    custody.observe(originHelper, MiB);
+    if (validateRepeatExportProfileV1(inputs.source.value, path.dirname(opt['source-receipt'])) === 'origin-v1') {
+      assert.ok(sourceLedger.has(originHelper) && llvmLedger.has(originHelper));
+      expectedPin(sourceLedger.get(originHelper), llvmLedger.get(originHelper));
+    }
     custody.observe(fileURLToPath(import.meta.url), MiB);
     custody.observe(process.execPath, LIMITS.selected_file_bytes);
     const read = (file, cap, expected) => custody.read(file, cap, expected);

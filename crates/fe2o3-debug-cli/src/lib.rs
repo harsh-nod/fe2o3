@@ -1,6 +1,8 @@
 #![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 
+#[cfg(all(test, target_os = "linux"))]
+mod declared_target_owner_tests;
 mod diagnostic_kir_v16;
 mod diagnostic_kir_v17;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -3047,7 +3049,7 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
 ) -> Result<(), String> {
     let limits = backend.protocol_limits;
     loop {
-        let request = match read_request_line_any_v3(reader, limits) {
+        let request = match read_request_line_any_v4(reader, limits) {
             Ok(Some(request)) => request,
             Ok(None) => break,
             Err(error) => {
@@ -3055,6 +3057,14 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
                 write_response(writer, &response, limits)?;
                 break;
             }
+        };
+        let request = match request {
+            DebugRequestAnyV4::DeclaredTargetV1(request) => {
+                let response = backend.handle_declared_target_v1(request);
+                runtime_queries_v1::write_declared_target_v1(writer, &response, limits)?;
+                continue;
+            }
+            DebugRequestAnyV4::Legacy(request) => request,
         };
         match request {
             DebugRequestAnyV3::RuntimeObservationV1(request) => {
@@ -3270,6 +3280,7 @@ fn response_session(response: &DebugResponseV1) -> Option<SessionViewV1> {
 
 struct SimulatorBackendV1 {
     module: AdmittedSimulationModuleV1,
+    declared_target_v1: Option<fe2o3_kir_sim_cli::AdmittedBundleTargetV1>,
     session: runtime_session_owner_v1::SessionOwnerV1,
     wave_width: DebugWaveWidthV1,
     configuration_identity: OpaqueIdentityV1,
@@ -3350,6 +3361,9 @@ impl SimulatorBackendV1 {
         replay_schedule: Option<&SimulationScheduleRecordV1>,
         runtime_observations: bool,
     ) -> Result<Self, String> {
+        let declared_target_v1 = input
+            .retained_bundle_target_v1()
+            .map_err(|error| error.to_string())?;
         let diagnostic_v16 = input.module.identity().wire_version() == 16;
         let diagnostic_v17 = input.module.identity().wire_version() == 17;
         if diagnostic_v16 {
@@ -3592,6 +3606,7 @@ impl SimulatorBackendV1 {
         };
         Ok(Self {
             module: input.module,
+            declared_target_v1,
             session,
             wave_width,
             configuration_identity,

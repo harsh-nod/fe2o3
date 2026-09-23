@@ -1,6 +1,33 @@
 # Assembly authoring implementation status
 
-## Current bounded acceptance — 2026-09-23
+## Current bounded acceptance — 2026-09-23: saved recipes
+
+Accepted original exits are **M1/V1/V2/U1/U2/U3 (6/18)**. The
+[saved-recipe acceptance ledger](evidence/source-local-order-recipes-20260923.md)
+qualifies two persisted canonical local orders, fresh source binding,
+exact/advisory constraints, deterministic replay, real-edit refusal/rebind and
+explicit regeneration through the unchanged fixed production policy.
+Twenty-eight actual compiler callbacks passed (15 successes, 13 refusals),
+with 450 whole-kernel CPU simulations; eight separate ordinary public-example
+processes passed (five successes, three refusals). These are different gates.
+
+The [exact declared-target debugger readback](evidence/declared-target-debugger-20260923.md)
+adds sealed bundle identity and same-owner/full-cursor target queries, real
+70-request CLI and 81/87-request HTTP qualifications, and a bounded one-access
+LDS arithmetic view. This is CPU evidence, not a hardware adapter or V4 closure.
+The companion [same-export source/native view](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/same-export-origin-native-qualification-20260923.md)
+joins fresh origin/LLVM/native captures and passes all 180 desktop/mobile
+browser tests. Its whole-region origins and static resources advance V3/M5;
+physical register values/lifetimes and full milestone acceptance are not inferred.
+
+Final optimizer/lowerer/backend suites passed 335/1,478/1,761 tests
+(3/0/117 ignored), with affected debugger/protocol/simulator-CLI regressions.
+Site gates passed 1,382 unit tests, lint/types/build, evidence and 21 lab tests.
+All three umbrella issues remain open. M2 whole-body source admission,
+M3 authored memory/synchronization, broader targets, protected finalization,
+hardware adapters and complete curriculum/scale qualification remain separate.
+
+## Earlier bounded acceptance — 2026-09-23
 
 Accepted exits are **M1/V1/V2/U1/U2 (5/18)**. The
 [actual-source proof freshness and U2 acceptance ledger](evidence/source-proof-freshness-u2-20260923.md)

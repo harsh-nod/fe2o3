@@ -5,6 +5,10 @@ use crate::{
 use fe2o3_debug_protocol::*;
 use fe2o3_kir_debugger::DebugTranscriptCompletenessV1;
 
+#[path = "declared_target_query_v1.rs"]
+mod declared_target;
+pub(crate) use declared_target::write_declared_target_v1;
+
 #[path = "runtime_queries_map.rs"]
 mod mapping;
 #[path = "runtime_queries_resources.rs"]

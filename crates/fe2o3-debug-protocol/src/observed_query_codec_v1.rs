@@ -15,7 +15,7 @@ pub enum DebugRequestAnyV3 {
     ResourceV2(ResourceRequestV2),
 }
 
-fn payload(line: &[u8], max: usize) -> Result<&[u8], ProtocolCodecErrorV1> {
+pub(crate) fn payload(line: &[u8], max: usize) -> Result<&[u8], ProtocolCodecErrorV1> {
     if line.is_empty() {
         return Err(ProtocolCodecErrorV1::EmptyLine);
     }
@@ -126,7 +126,7 @@ pub fn read_request_line_any_v3<R: BufRead>(
     }
 }
 
-fn encode<T: Serialize>(
+pub(crate) fn encode<T: Serialize>(
     value: &T,
     limits: ProtocolLimitsV1,
 ) -> Result<Vec<u8>, ProtocolCodecErrorV1> {

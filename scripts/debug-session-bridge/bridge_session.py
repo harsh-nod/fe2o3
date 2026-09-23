@@ -19,6 +19,7 @@ from debug_console_protocol import LineFramer, ProtocolError, encode
 from bridge_inputs import CustodyError
 from bridge_live_queries import LiveQuerySession
 from bridge_observed_queries import ObservedQuerySession
+from bridge_target_values import TARGET_BYTES, TARGET_REQUEST
 
 REQUEST_SCHEMA = "fe2o3-cpu-debug-bridge-request-v1"
 RESPONSE_SCHEMA = "fe2o3-cpu-debug-bridge-response-v1"
@@ -92,6 +93,8 @@ class CPUProcess:
             raise ProtocolError("backend not live")
         outbound = bytearray(encode(request) + b"\n")
         replies = []
+        target_bytes = 0
+        is_target = request.get("schema") == TARGET_REQUEST
         selector = selectors.DefaultSelector()
         try:
             selector.register(self.child.stdout, selectors.EVENT_READ, "stdout")
@@ -140,6 +143,10 @@ class CPUProcess:
                         if self.stderr_bytes > 65536:
                             raise ProtocolError("backend stderr byte cap")
                     else:
+                        if is_target:
+                            target_bytes += len(chunk)
+                            if target_bytes > TARGET_BYTES:
+                                raise ProtocolError("target response byte cap")
                         self.framer.feed(chunk, receive)
             if self.framer.partial:
                 raise ProtocolError("trailing incomplete unsolicited response")
@@ -301,11 +308,15 @@ class BridgeSession:
             encoded = encode(response)
             if len(encoded) > MAX_INNER_BYTES:
                 raise ProtocolError("re-encoded response byte cap")
-            return {"schema": RESPONSE_SCHEMA, "status": "ok",
+            result = {"schema": RESPONSE_SCHEMA, "status": "ok",
                     "connection_id": self.connection_id, "bridge_session": self.bridge_session,
                     "sequence": str(self.protocol.sent - 1),
                     "session": projected_session(self.protocol.view),
                     "response_json": encoded.decode("ascii"), "closed": False}
+            if request.get("schema") == TARGET_REQUEST and (
+                    len(encoded) + 1 > TARGET_BYTES or len(encode(result)) > TARGET_BYTES):
+                raise ProtocolError("target inner or outer response byte cap")
+            return result
         except Exception:
             self.close()
             raise self.error("backend_failed", "unknown" if self.last_dispatched else "not_sent") from None
