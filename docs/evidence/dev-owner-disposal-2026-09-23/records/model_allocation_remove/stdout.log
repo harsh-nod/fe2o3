@@ -1,0 +1,613 @@
+{
+  "func-details": {
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_stable_validate_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_producer_unread_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::enrollment_key_less_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%3::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_plan_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::begin_reader_guards::producer_reader_count_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_refs_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_retirement_model::retirement_stable_count_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::View::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_stable_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::producer_query_historical_bodies::same_producer_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%0::unwrap": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_retirement_model::retirement_stable_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_retirement_model::retirement_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_push_index_different": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_scratch_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::spec_unwrap": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_preflight_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_stage_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_unknown_historical_bodies::retained_chain_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_spec_slice_update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::spec_vec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_unknown_historical_bodies::retained_chain_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%50::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_scan_plan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::same_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::len%returns_clause_autospec": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_scratch_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_unknown_historical_bodies::retained_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_plan_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::vec_index_mut": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_different": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_stable_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_ensures": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%43::push": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%16::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_return_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_unknown_historical_bodies::retained_header_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_requires": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::allocation_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::push_distributes_over_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::begin_exact_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_stable_validate_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_retirement_model::retirement_slots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_push_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::add_empty_right": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::new": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::exact_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::issuance::same_kind_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_some": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_roster_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_unknown_historical_bodies::retained_member_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%0::is_some": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_index_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%8::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_slots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::begin_stage_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_retirement_model::retirement_stable_count_safe_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%18::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_stable_unread_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_none": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::result::is_ok": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%48::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%14::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_commit_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_add_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_stable_unread_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::slice::impl&%0::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_scratch_at_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_same": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::spec_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_retirement_model::retirement_producer_count_safe_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_members_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_success_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_journal_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_execute_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::vec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_producer_safe_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::same_allocation_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::begin_exact_allocation_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_add_index1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "alloc::vec::impl&%1::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_producer_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::push": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_cursor_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%30::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::result::is_err": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::allocation_lookup_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_producer_validate_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_stable_safe_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_return_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::SliceAdditionalSpecFns::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal_deep": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::num::impl&%11::checked_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_slice_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_producer_to_stable_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_previous_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_plan_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_producer_validate_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::same_producer_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_retirement_model::retirement_producer_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_storage_ready_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%4::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_push_index_same": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_producer_unread_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_prefix_shapes_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::axiom_spec_slice_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::spec_slice_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq_sized": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%6::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%26::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::issuance::same_key_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::slice::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_settlement_historical_bodies::settlement_plan_at_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "core::option::impl&%0::take": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::ptrs_mut_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::OptionAdditionalFns::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_unknown_historical_bodies::retained_header_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_decreases_to_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::impl&%0::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::raw_ptr::view_reverse_for_eq": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_add_index2": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::add_empty_left": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_producer_exec_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_disposal_paired_v1::owner_disposal_model::disposal_validate_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    }
+  },
+  "verification-results": {
+    "encountered-error": true,
+    "encountered-vir-error": false,
+    "verified": 1,
+    "errors": 1,
+    "is-verifying-entire-crate": false
+  },
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  }
+}

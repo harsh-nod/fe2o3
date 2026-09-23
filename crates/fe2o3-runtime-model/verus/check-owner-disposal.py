@@ -60,7 +60,7 @@ ADAPTER_PINS = {
     'context_producer_reads/tests.rs': 'ccd83be4eac408ef34f4856d74568a7c1db204d7514a9ed3c160e3b19ceca383',
 }
 DOCUMENT_PINS = {
-    Path('docs/runtime-producer-read-reservations-v1.md'): '902ad997745fcc8f0447711dbff76bcdc05d71780cbafbfa246bf9d374f3a7d2',
+    Path('docs/runtime-producer-read-reservations-v1.md'): '86f7f8a029755fb1692d333c41f533363e5349cbb4228b577828d82f07a1f644',
 }
 
 

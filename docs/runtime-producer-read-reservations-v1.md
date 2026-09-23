@@ -562,12 +562,17 @@ Before enabling runtime admission, the remaining work is:
    invariants are not premises of raw correspondence. Executable witnesses include
    Success/NoEffect reservations whose old writer slot is reused and then disposed.
    The whole paired root reported 1,085 verified, zero errors; the raw root reported
-   356 verified, zero errors. Sixteen frozen same-owner differential tests bring
-   the model suite to 996 passing unit tests and 27 passing doctests, with 18 ignored.
+   356 verified, zero errors. Fifteen frozen same-owner differential tests and one
+   lazy-capacity probe bring the model suite to 996 passing unit tests and 27
+   passing doctests, with 18 ignored.
    Clippy with denied warnings and the optimized test build also pass.
-   The dedicated runner is `verus/check-owner-disposal.py`. Its complete signed-source
-   mutation/replay campaign and portable evidence packet are still pending. This
-   source milestone does not close Gate 1 or establish native disposal authority,
+   The dedicated runner is `verus/check-owner-disposal.py`. The
+   [Unknown-disposal packet](evidence/dev-owner-disposal-2026-09-23/README.md)
+   records source `2cfff18d91c1e0b182adc974bceee67b45c1bd05`: 405 authenticated
+   inputs, both matching paired proofs, 37 logical mutation failures, raw and
+   retirement regressions, and the CPU/build checks. All 49 commands have terminal
+   receipts; complete replay preserved all 151 record files byte-for-byte. This
+   checkpoint does not close Gate 1 or establish native disposal authority,
    physical Vec storage, constructor/unwind refinement, or HIP/HSA performance.
    Remaining bodies include construction;
    other wrapper operations, reachability and physical storage refinement remain separate.

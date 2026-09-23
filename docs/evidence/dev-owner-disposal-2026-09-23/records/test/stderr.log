@@ -1,0 +1,4 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.53s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-disposal-20260923-LIhmd08W/target/debug/deps/fe2o3_runtime_model-b397a1a75deee8ae)
+   Doc-tests fe2o3_runtime_model
