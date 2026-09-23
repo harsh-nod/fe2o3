@@ -1,0 +1,1886 @@
+{
+  "raw": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 270,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "positive-before": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 829,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "journal_noop": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs",
+            "byte_start": 1484,
+            "byte_end": 1585,
+            "line_start": 27,
+            "line_end": 29,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        journal_enrollment_wrapper_body!(self, canonical, output, enrollment_journal_exec_v1)",
+                "highlight_start": 1,
+                "highlight_end": 94
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs",
+            "byte_start": 1370,
+            "byte_end": 1478,
+            "line_start": 26,
+            "line_end": 26,
+            "column_start": 17,
+            "column_end": 125,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures enrollment_execution_relation_v1(*old(self), *final(self), canonical@, old(output)@, final(output)@, result),",
+                "highlight_start": 17,
+                "highlight_end": 125
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs:26:17\n   |\n26 |           ensures enrollment_execution_relation_v1(*old(self), *final(self), canonical@, old(output)@, final(output)@, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n27 | /     {\n28 | |         journal_enrollment_wrapper_body!(self, canonical, output, enrollment_journal_exec_v1)\n29 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable_noop": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs",
+            "byte_start": 1908,
+            "byte_end": 1978,
+            "line_start": 36,
+            "line_end": 38,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        stable_enrollment_wrapper_body!(self, entries, output)",
+                "highlight_start": 1,
+                "highlight_end": 63
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs",
+            "byte_start": 1799,
+            "byte_end": 1902,
+            "line_start": 35,
+            "line_end": 35,
+            "column_start": 17,
+            "column_end": 120,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures stable_enrollment_relation_v1(*old(self), *final(self), entries@, old(output)@, final(output)@, result),",
+                "highlight_start": 17,
+                "highlight_end": 120
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs:35:17\n   |\n35 |           ensures stable_enrollment_relation_v1(*old(self), *final(self), entries@, old(output)@, final(output)@, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n36 | /     {\n37 | |         stable_enrollment_wrapper_body!(self, entries, output)\n38 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_noop": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs",
+            "byte_start": 2305,
+            "byte_end": 2377,
+            "line_start": 45,
+            "line_end": 47,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        producer_enrollment_wrapper_body!(self, entries, output)",
+                "highlight_start": 1,
+                "highlight_end": 65
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs",
+            "byte_start": 2194,
+            "byte_end": 2299,
+            "line_start": 44,
+            "line_end": 44,
+            "column_start": 17,
+            "column_end": 122,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures producer_enrollment_relation_v1(*old(self), *final(self), entries@, old(output)@, final(output)@, result),",
+                "highlight_start": 17,
+                "highlight_end": 122
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs:44:17\n   |\n44 |           ensures producer_enrollment_relation_v1(*old(self), *final(self), entries@, old(output)@, final(output)@, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n45 | /     {\n46 | |         producer_enrollment_wrapper_body!(self, entries, output)\n47 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_wrapper_bodies.rs",
+            "byte_start": 535,
+            "byte_end": 619,
+            "line_start": 16,
+            "line_end": 16,
+            "column_start": 9,
+            "column_end": 93,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.stable.enroll_allocations($entries, $output) }",
+                "highlight_start": 9,
+                "highlight_end": 93
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs",
+                "byte_start": 2315,
+                "byte_end": 2371,
+                "line_start": 46,
+                "line_end": 46,
+                "column_start": 9,
+                "column_end": 65,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        producer_enrollment_wrapper_body!(self, entries, output)",
+                    "highlight_start": 9,
+                    "highlight_end": 65
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "producer_enrollment_wrapper_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_wrapper_bodies.rs",
+                "byte_start": 424,
+                "byte_end": 469,
+                "line_start": 14,
+                "line_end": 14,
+                "column_start": 1,
+                "column_end": 46,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! producer_enrollment_wrapper_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 46
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs",
+            "byte_start": 2194,
+            "byte_end": 2299,
+            "line_start": 44,
+            "line_end": 44,
+            "column_start": 17,
+            "column_end": 122,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures producer_enrollment_relation_v1(*old(self), *final(self), entries@, old(output)@, final(output)@, result),",
+                "highlight_start": 17,
+                "highlight_end": 122
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_bodies_v1.rs:44:17\n   |\n44 |         ensures producer_enrollment_relation_v1(*old(self), *final(self), entries@, old(output)@, final(output)@, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_wrapper_bodies.rs:16:9\n   |\n16 |         { $owner.next_incarnation = 0; $owner.stable.enroll_allocations($entries, $output) }\n   |         ------------------------------------------------------------------------------------ at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_replay": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_bodies.rs",
+            "byte_start": 6978,
+            "byte_end": 7027,
+            "line_start": 188,
+            "line_end": 188,
+            "column_start": 67,
+            "column_end": 116,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if $entries.len() > $contents.allocation_free.len() { return Err(EnrollmentErrorV1::AllocationCapacity); }",
+                "highlight_start": 67,
+                "highlight_end": 116
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs",
+                "byte_start": 24962,
+                "byte_end": 25915,
+                "line_start": 474,
+                "line_end": 494,
+                "column_start": 5,
+                "column_end": 7,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    enrollment_journal_body!(verus_exec_expr, contents, entries, output, remaining, [",
+                    "highlight_start": 5,
+                    "highlight_end": 86
+                  },
+                  {
+                    "text": "        proof { enrollment_header_success_v1(contents.context_generation, contents.allocation_capacity,",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  },
+                  {
+                    "text": "            contents.allocation_free.len(), entries@, output@); }",
+                    "highlight_start": 1,
+                    "highlight_end": 66
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        proof {",
+                    "highlight_start": 1,
+                    "highlight_end": 16
+                  },
+                  {
+                    "text": "            assert(output@ =~= enrollment_plan_output_v1(before, entries@));",
+                    "highlight_start": 1,
+                    "highlight_end": 77
+                  },
+                  {
+                    "text": "            assert(contents.allocation_free@ =~= before.allocation_free@.subrange(0, before.allocation_free@.len() as int));",
+                    "highlight_start": 1,
+                    "highlight_end": 125
+                  },
+                  {
+                    "text": "        }",
+                    "highlight_start": 1,
+                    "highlight_end": 10
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        let ghost plan = output@;",
+                    "highlight_start": 1,
+                    "highlight_end": 34
+                  },
+                  {
+                    "text": "        proof { enrollment_plan_unique_v1(before, entries@); }",
+                    "highlight_start": 1,
+                    "highlight_end": 63
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        proof {",
+                    "highlight_start": 1,
+                    "highlight_end": 16
+                  },
+                  {
+                    "text": "            enrollment_permutation_distinct_slots_v1(plan, output@);",
+                    "highlight_start": 1,
+                    "highlight_end": 69
+                  },
+                  {
+                    "text": "            enrollment_retained_permutation_v1(before, plan, output@, remaining);",
+                    "highlight_start": 1,
+                    "highlight_end": 82
+                  },
+                  {
+                    "text": "        }",
+                    "highlight_start": 1,
+                    "highlight_end": 10
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        proof { assert(output@ =~= original); }",
+                    "highlight_start": 1,
+                    "highlight_end": 48
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        proof { assert(enrollment_journal_output_bound_v1(before, entries@, output@, remaining)); }",
+                    "highlight_start": 1,
+                    "highlight_end": 100
+                  },
+                  {
+                    "text": "    ])",
+                    "highlight_start": 1,
+                    "highlight_end": 7
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "enrollment_journal_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_bodies.rs",
+                "byte_start": 6197,
+                "byte_end": 6233,
+                "line_start": 173,
+                "line_end": 173,
+                "column_start": 1,
+                "column_end": 37,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! enrollment_journal_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 37
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs",
+            "byte_start": 24772,
+            "byte_end": 24886,
+            "line_start": 470,
+            "line_end": 470,
+            "column_start": 13,
+            "column_end": 127,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures enrollment_execution_relation_v1(*old(contents), *final(contents), entries@, old(output)@, final(output)@, result),",
+                "highlight_start": 13,
+                "highlight_end": 127
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs:470:13\n    |\n470 |     ensures enrollment_execution_relation_v1(*old(contents), *final(contents), entries@, old(output)@, final(output)@, result),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_bodies.rs:188:67\n    |\n188 |             if $entries.len() > $contents.allocation_free.len() { return Err(EnrollmentErrorV1::AllocationCapacity); }\n    |                                                                   ------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_bodies.rs",
+            "byte_start": 7186,
+            "byte_end": 7229,
+            "line_start": 190,
+            "line_end": 190,
+            "column_start": 77,
+            "column_end": 120,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if !enrollment_selected_vacant_exec_v1($contents, $remaining) { return Err(EnrollmentErrorV1::InvalidState); }",
+                "highlight_start": 77,
+                "highlight_end": 120
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs",
+                "byte_start": 24962,
+                "byte_end": 25915,
+                "line_start": 474,
+                "line_end": 494,
+                "column_start": 5,
+                "column_end": 7,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "    enrollment_journal_body!(verus_exec_expr, contents, entries, output, remaining, [",
+                    "highlight_start": 5,
+                    "highlight_end": 86
+                  },
+                  {
+                    "text": "        proof { enrollment_header_success_v1(contents.context_generation, contents.allocation_capacity,",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  },
+                  {
+                    "text": "            contents.allocation_free.len(), entries@, output@); }",
+                    "highlight_start": 1,
+                    "highlight_end": 66
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        proof {",
+                    "highlight_start": 1,
+                    "highlight_end": 16
+                  },
+                  {
+                    "text": "            assert(output@ =~= enrollment_plan_output_v1(before, entries@));",
+                    "highlight_start": 1,
+                    "highlight_end": 77
+                  },
+                  {
+                    "text": "            assert(contents.allocation_free@ =~= before.allocation_free@.subrange(0, before.allocation_free@.len() as int));",
+                    "highlight_start": 1,
+                    "highlight_end": 125
+                  },
+                  {
+                    "text": "        }",
+                    "highlight_start": 1,
+                    "highlight_end": 10
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        let ghost plan = output@;",
+                    "highlight_start": 1,
+                    "highlight_end": 34
+                  },
+                  {
+                    "text": "        proof { enrollment_plan_unique_v1(before, entries@); }",
+                    "highlight_start": 1,
+                    "highlight_end": 63
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        proof {",
+                    "highlight_start": 1,
+                    "highlight_end": 16
+                  },
+                  {
+                    "text": "            enrollment_permutation_distinct_slots_v1(plan, output@);",
+                    "highlight_start": 1,
+                    "highlight_end": 69
+                  },
+                  {
+                    "text": "            enrollment_retained_permutation_v1(before, plan, output@, remaining);",
+                    "highlight_start": 1,
+                    "highlight_end": 82
+                  },
+                  {
+                    "text": "        }",
+                    "highlight_start": 1,
+                    "highlight_end": 10
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        proof { assert(output@ =~= original); }",
+                    "highlight_start": 1,
+                    "highlight_end": 48
+                  },
+                  {
+                    "text": "    ], [",
+                    "highlight_start": 1,
+                    "highlight_end": 9
+                  },
+                  {
+                    "text": "        proof { assert(enrollment_journal_output_bound_v1(before, entries@, output@, remaining)); }",
+                    "highlight_start": 1,
+                    "highlight_end": 100
+                  },
+                  {
+                    "text": "    ])",
+                    "highlight_start": 1,
+                    "highlight_end": 7
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "enrollment_journal_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_bodies.rs",
+                "byte_start": 6197,
+                "byte_end": 6233,
+                "line_start": 173,
+                "line_end": 173,
+                "column_start": 1,
+                "column_end": 37,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! enrollment_journal_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 37
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs",
+            "byte_start": 24772,
+            "byte_end": 24886,
+            "line_start": 470,
+            "line_end": 470,
+            "column_start": 13,
+            "column_end": 127,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures enrollment_execution_relation_v1(*old(contents), *final(contents), entries@, old(output)@, final(output)@, result),",
+                "highlight_start": 13,
+                "highlight_end": 127
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs:470:13\n    |\n470 |     ensures enrollment_execution_relation_v1(*old(contents), *final(contents), entries@, old(output)@, final(output)@, result),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/enrollment_bodies.rs:190:77\n    |\n190 |             if !enrollment_selected_vacant_exec_v1($contents, $remaining) { return Err(EnrollmentErrorV1::InvalidState); }\n    |                                                                             ------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs",
+            "byte_start": 24577,
+            "byte_end": 24758,
+            "line_start": 468,
+            "line_end": 469,
+            "column_start": 1,
+            "column_end": 92,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn enrollment_journal_exec_v1(contents: &mut JournalContentsV1, entries: &[EnrollmentV1],",
+                "highlight_start": 1,
+                "highlight_end": 90
+              },
+              {
+                "text": "    output: &mut [Option<AllocationReferenceV1>]) -> (result: Result<(), EnrollmentErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 92
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs:468:1\n    |\n468 | / fn enrollment_journal_exec_v1(contents: &mut JournalContentsV1, entries: &[EnrollmentV1],\n469 | |     output: &mut [Option<AllocationReferenceV1>]) -> (result: Result<(), EnrollmentErrorV1>)\n    | |___________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_owner_enrollment_historical_v1::production::enrollment_journal_exec_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_owner_enrollment_historical_v1::production::enrollment_journal_exec_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_commit": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs",
+            "byte_start": 24888,
+            "byte_end": 25917,
+            "line_start": 471,
+            "line_end": 495,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *contents;",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "    let ghost original = output@;",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "    enrollment_journal_body!(verus_exec_expr, contents, entries, output, remaining, [",
+                "highlight_start": 1,
+                "highlight_end": 86
+              },
+              {
+                "text": "        proof { enrollment_header_success_v1(contents.context_generation, contents.allocation_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 104
+              },
+              {
+                "text": "            contents.allocation_free.len(), entries@, output@); }",
+                "highlight_start": 1,
+                "highlight_end": 66
+              },
+              {
+                "text": "    ], [",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        proof {",
+                "highlight_start": 1,
+                "highlight_end": 16
+              },
+              {
+                "text": "            assert(output@ =~= enrollment_plan_output_v1(before, entries@));",
+                "highlight_start": 1,
+                "highlight_end": 77
+              },
+              {
+                "text": "            assert(contents.allocation_free@ =~= before.allocation_free@.subrange(0, before.allocation_free@.len() as int));",
+                "highlight_start": 1,
+                "highlight_end": 125
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    ], [",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        let ghost plan = output@;",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "        proof { enrollment_plan_unique_v1(before, entries@); }",
+                "highlight_start": 1,
+                "highlight_end": 63
+              },
+              {
+                "text": "    ], [",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        proof {",
+                "highlight_start": 1,
+                "highlight_end": 16
+              },
+              {
+                "text": "            enrollment_permutation_distinct_slots_v1(plan, output@);",
+                "highlight_start": 1,
+                "highlight_end": 69
+              },
+              {
+                "text": "            enrollment_retained_permutation_v1(before, plan, output@, remaining);",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    ], [",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        proof { assert(output@ =~= original); }",
+                "highlight_start": 1,
+                "highlight_end": 48
+              },
+              {
+                "text": "    ], [",
+                "highlight_start": 1,
+                "highlight_end": 9
+              },
+              {
+                "text": "        proof { assert(enrollment_journal_output_bound_v1(before, entries@, output@, remaining)); }",
+                "highlight_start": 1,
+                "highlight_end": 100
+              },
+              {
+                "text": "    ])",
+                "highlight_start": 1,
+                "highlight_end": 7
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs",
+            "byte_start": 24772,
+            "byte_end": 24886,
+            "line_start": 470,
+            "line_end": 470,
+            "column_start": 13,
+            "column_end": 127,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures enrollment_execution_relation_v1(*old(contents), *final(contents), entries@, old(output)@, final(output)@, result),",
+                "highlight_start": 13,
+                "highlight_end": 127
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs:470:13\n    |\n470 |       ensures enrollment_execution_relation_v1(*old(contents), *final(contents), entries@, old(output)@, final(output)@, result),\n    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n471 | / {\n472 | |     let ghost before = *contents;\n473 | |     let ghost original = output@;\n474 | |     enrollment_journal_body!(verus_exec_expr, contents, entries, output, remaining, [\n...   |\n494 | |     ])\n495 | | }\n    | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_owner_enrollment_historical_v1::production::enrollment_journal_exec_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_owner_enrollment_historical_v1::production::enrollment_journal_exec_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_clear": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "assertion failed",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs",
+            "byte_start": 25775,
+            "byte_end": 25795,
+            "line_start": 491,
+            "line_end": 491,
+            "column_start": 24,
+            "column_end": 44,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        proof { assert(output@ =~= original); }",
+                "highlight_start": 24,
+                "highlight_end": 44
+              }
+            ],
+            "label": "assertion failed",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: assertion failed\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_execution_bodies_v1.rs:491:24\n    |\n491 |         proof { assert(output@ =~= original); }\n    |                        ^^^^^^^^^^^^^^^^^^^^ assertion failed\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_owner_enrollment_historical_v1::production::enrollment_journal_exec_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_owner_enrollment_historical_v1::production::enrollment_journal_exec_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs",
+            "byte_start": 2335,
+            "byte_end": 3157,
+            "line_start": 31,
+            "line_end": 48,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *actual;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "    let ghost model_before = *model;",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    let ghost original = output@;",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "    let ghost model_original = model_output@;",
+                "highlight_start": 1,
+                "highlight_end": 46
+              },
+              {
+                "text": "    let result: Result<(), EnrollmentErrorV1> = Ok(());",
+                "highlight_start": 1,
+                "highlight_end": 56
+              },
+              {
+                "text": "    let model_result = logical::enrollment_journal_exec_v1(&mut model.stable.journal, model_entries, model_output);",
+                "highlight_start": 1,
+                "highlight_end": 116
+              },
+              {
+                "text": "    proof {",
+                "highlight_start": 1,
+                "highlight_end": 12
+              },
+              {
+                "text": "        enrollment_paired_transition(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 1,
+                "highlight_end": 83
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, entries@, original,",
+                "highlight_start": 1,
+                "highlight_end": 83
+              },
+              {
+                "text": "            output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 59
+              },
+              {
+                "text": "        if logical::producer_invariant_v1(model_before) {",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            logical::owner_enrollment_preserves_producer_v1(model_before, *model, model_entries@,",
+                "highlight_start": 1,
+                "highlight_end": 98
+              },
+              {
+                "text": "                model_original, model_output@, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 62
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              },
+              {
+                "text": "    (result, model_result)",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs",
+            "byte_start": 838,
+            "byte_end": 950,
+            "line_start": 12,
+            "line_end": 12,
+            "column_start": 9,
+            "column_end": 121,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        producer_enrollment_relation_v1(*old(actual), *final(actual), entries@, old(output)@, final(output)@, results.0),",
+                "highlight_start": 9,
+                "highlight_end": 121
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs:12:9\n   |\n12 |           producer_enrollment_relation_v1(*old(actual), *final(actual), entries@, old(output)@, final(output)@, results.0),\n   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n31 | / {\n32 | |     let ghost before = *actual;\n33 | |     let ghost model_before = *model;\n34 | |     let ghost original = output@;\n...  |\n47 | |     (result, model_result)\n48 | | }\n   | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
+            "byte_start": 6607,
+            "byte_end": 6689,
+            "line_start": 112,
+            "line_end": 112,
+            "column_start": 9,
+            "column_end": 91,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        enrollment_execution_relation_v1(before, after, entries, original, output, result),",
+                "highlight_start": 9,
+                "highlight_end": 91
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs",
+            "byte_start": 2678,
+            "byte_end": 2893,
+            "line_start": 39,
+            "line_end": 41,
+            "column_start": 9,
+            "column_end": 58,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        enrollment_paired_transition(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 83
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, entries@, original,",
+                "highlight_start": 1,
+                "highlight_end": 83
+              },
+              {
+                "text": "            output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 58
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs:39:9\n    |\n 39 | /         enrollment_paired_transition(before.stable.journal, actual.stable.journal,\n 40 | |             model_before.stable.journal, model.stable.journal, entries@, original,\n 41 | |             output@, model_output@, result, model_result);\n    | |_________________________________________________________^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs:112:9\n    |\n112 |           enrollment_execution_relation_v1(before, after, entries, original, output, result),\n    |           ---------------------------------------------------------------------------------- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs",
+            "byte_start": 87,
+            "byte_end": 487,
+            "line_start": 4,
+            "line_end": 7,
+            "column_start": 1,
+            "column_end": 89,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_enrollment_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,",
+                "highlight_start": 1,
+                "highlight_end": 85
+              },
+              {
+                "text": "    model: &mut logical::ProducerReadContentsV1, entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],",
+                "highlight_start": 1,
+                "highlight_end": 116
+              },
+              {
+                "text": "    output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>])",
+                "highlight_start": 1,
+                "highlight_end": 111
+              },
+              {
+                "text": "    -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 89
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs:4:1\n  |\n4 | / fn producer_enrollment_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,\n5 | |     model: &mut logical::ProducerReadContentsV1, entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],\n6 | |     output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>])\n7 | |     -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))\n  | |________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 3 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 3 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs",
+            "byte_start": 2335,
+            "byte_end": 3117,
+            "line_start": 31,
+            "line_end": 48,
+            "column_start": 1,
+            "column_end": 2,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "{",
+                "highlight_start": 1,
+                "highlight_end": 2
+              },
+              {
+                "text": "    let ghost before = *actual;",
+                "highlight_start": 1,
+                "highlight_end": 32
+              },
+              {
+                "text": "    let ghost model_before = *model;",
+                "highlight_start": 1,
+                "highlight_end": 37
+              },
+              {
+                "text": "    let ghost original = output@;",
+                "highlight_start": 1,
+                "highlight_end": 34
+              },
+              {
+                "text": "    let ghost model_original = model_output@;",
+                "highlight_start": 1,
+                "highlight_end": 46
+              },
+              {
+                "text": "    let result = actual.enroll_allocations(entries, output);",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "    let model_result: Result<(), logical::EnrollmentErrorV1> = Ok(());",
+                "highlight_start": 1,
+                "highlight_end": 71
+              },
+              {
+                "text": "    proof {",
+                "highlight_start": 1,
+                "highlight_end": 12
+              },
+              {
+                "text": "        enrollment_paired_transition(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 1,
+                "highlight_end": 83
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, entries@, original,",
+                "highlight_start": 1,
+                "highlight_end": 83
+              },
+              {
+                "text": "            output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 59
+              },
+              {
+                "text": "        if logical::producer_invariant_v1(model_before) {",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            logical::owner_enrollment_preserves_producer_v1(model_before, *model, model_entries@,",
+                "highlight_start": 1,
+                "highlight_end": 98
+              },
+              {
+                "text": "                model_original, model_output@, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 62
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              },
+              {
+                "text": "    (result, model_result)",
+                "highlight_start": 1,
+                "highlight_end": 27
+              },
+              {
+                "text": "}",
+                "highlight_start": 1,
+                "highlight_end": 2
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs",
+            "byte_start": 960,
+            "byte_end": 1138,
+            "line_start": 13,
+            "line_end": 14,
+            "column_start": 9,
+            "column_end": 81,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        logical::enrollment_execution_relation_v1(old(model).stable.journal, final(model).stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 106
+              },
+              {
+                "text": "            model_entries@, old(model_output)@, final(model_output)@, results.1),",
+                "highlight_start": 1,
+                "highlight_end": 81
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs:13:9\n   |\n13 | /         logical::enrollment_execution_relation_v1(old(model).stable.journal, final(model).stable.journal,\n14 | |             model_entries@, old(model_output)@, final(model_output)@, results.1),\n   | |________________________________________________________________________________^ failed this postcondition\n...\n31 | / {\n32 | |     let ghost before = *actual;\n33 | |     let ghost model_before = *model;\n34 | |     let ghost original = output@;\n...  |\n47 | |     (result, model_result)\n48 | | }\n   | |_- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs",
+            "byte_start": 6699,
+            "byte_end": 6857,
+            "line_start": 113,
+            "line_end": 114,
+            "column_start": 9,
+            "column_end": 67,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::enrollment_execution_relation_v1(model_before, model_after, entries_view(entries),",
+                "highlight_start": 9,
+                "highlight_end": 100
+              },
+              {
+                "text": "            references_view(original), model_output, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 67
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs",
+            "byte_start": 2638,
+            "byte_end": 2853,
+            "line_start": 39,
+            "line_end": 41,
+            "column_start": 9,
+            "column_end": 58,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        enrollment_paired_transition(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 83
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, entries@, original,",
+                "highlight_start": 1,
+                "highlight_end": 83
+              },
+              {
+                "text": "            output@, model_output@, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 58
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs:39:9\n    |\n 39 | /         enrollment_paired_transition(before.stable.journal, actual.stable.journal,\n 40 | |             model_before.stable.journal, model.stable.journal, entries@, original,\n 41 | |             output@, model_output@, result, model_result);\n    | |_________________________________________________________^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_journal_enrollment_historical_bodies_v1.rs:113:9\n    |\n113 | /         logical::enrollment_execution_relation_v1(model_before, model_after, entries_view(entries),\n114 | |             references_view(original), model_output, model_result),\n    | |__________________________________________________________________- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_invariant_v1.rs",
+            "byte_start": 478,
+            "byte_end": 590,
+            "line_start": 10,
+            "line_end": 10,
+            "column_start": 9,
+            "column_end": 121,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        enrollment_execution_relation_v1(before.stable.journal, after.stable.journal, entries, original, output, result),",
+                "highlight_start": 9,
+                "highlight_end": 121
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs",
+            "byte_start": 2925,
+            "byte_end": 3071,
+            "line_start": 43,
+            "line_end": 44,
+            "column_start": 13,
+            "column_end": 61,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            logical::owner_enrollment_preserves_producer_v1(model_before, *model, model_entries@,",
+                "highlight_start": 13,
+                "highlight_end": 98
+              },
+              {
+                "text": "                model_original, model_output@, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 61
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs:43:13\n   |\n43 | /             logical::owner_enrollment_preserves_producer_v1(model_before, *model, model_entries@,\n44 | |                 model_original, model_output@, model_result);\n   | |____________________________________________________________^\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_invariant_v1.rs:10:9\n   |\n10 |           enrollment_execution_relation_v1(before.stable.journal, after.stable.journal, entries, original, output, result),\n   |           ---------------------------------------------------------------------------------------------------------------- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs",
+            "byte_start": 87,
+            "byte_end": 487,
+            "line_start": 4,
+            "line_end": 7,
+            "column_start": 1,
+            "column_end": 89,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn producer_enrollment_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,",
+                "highlight_start": 1,
+                "highlight_end": 85
+              },
+              {
+                "text": "    model: &mut logical::ProducerReadContentsV1, entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],",
+                "highlight_start": 1,
+                "highlight_end": 116
+              },
+              {
+                "text": "    output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>])",
+                "highlight_start": 1,
+                "highlight_end": 111
+              },
+              {
+                "text": "    -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 89
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_enrollment_correspondence_v1.rs:4:1\n  |\n4 | / fn producer_enrollment_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,\n5 | |     model: &mut logical::ProducerReadContentsV1, entries: &[EnrollmentV1], model_entries: &[logical::EnrollmentV1],\n6 | |     output: &mut [Option<AllocationReferenceV1>], model_output: &mut [Option<logical::AllocationReferenceV1>])\n7 | |     -> (results: (Result<(), EnrollmentErrorV1>, Result<(), logical::EnrollmentErrorV1>))\n  | |________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "positive-after": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 829,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}
