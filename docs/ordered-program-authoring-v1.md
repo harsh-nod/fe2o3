@@ -1,5 +1,8 @@
 # Bounded instruction programs inside Rust kernels
 
+For compiler-recorded whole-region expansion and call-site spans, see the
+[opt-in source-origin report](ordered-program-origin-v1.md).
+
 The experimental `amdgpu_ordered_program!` expression lets a kernel author
 write an ordered sequence of integer instructions with explicit register roles.
 It is a diagnostic authoring path, not a general assembly language or a new

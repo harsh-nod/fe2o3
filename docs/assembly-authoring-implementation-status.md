@@ -1,6 +1,30 @@
 # Assembly authoring implementation status
 
-## Fresh source-analysis and repeat-native progress — 2026-09-23
+## Current bounded acceptance — 2026-09-23
+
+Accepted exits are **M1/V1/V2/U1/U2 (5/18)**. The
+[actual-source proof freshness and U2 acceptance ledger](evidence/source-proof-freshness-u2-20260923.md)
+completes the original one-supported-region promote/edit/recompile exit.
+A genuine signed receipt rejects under each edited source binding, reimports
+under its original binding, and each incorrect fresh reference fails a real
+Verus assertion. The distinct source-promotion, launch-analysis, simulation and
+native chains retain their own identities; no V17 proof route, protected final
+artifact, complete production admission or GPU execution is inferred.
+
+The [new region-origin exporter](ordered-program-origin-v1.md) and its
+[fresh qualification](evidence/ordered-program-origin-20260923.md) add opt-in
+whole-region call-site/expansion metadata beside unchanged diagnostic KIR V17.
+One/two/fifteen/repeated source captures passed exact inspector joins. This is
+V3/M5 progress, not per-instruction ancestry or an identity join to historical
+native captures. The companion site has a
+[source-origin lab](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/ordered-program-origin-lab-v1.md).
+
+The shared fresh backend regression passed 1,726 tests (113 ignored);
+exporter/extractor suites passed 11/24 and verifier 143 (13 ignored).
+All three umbrella issues remain open. The earlier sections below preserve
+their dated evidence and acceptance counts; they are not the current ledger.
+
+## Earlier source-analysis and repeat-native progress — 2026-09-23
 
 The [one-region U2 ledger](evidence/source-launch-analysis-u2-20260923.md)
 records a fresh full backend regression (1,711 passed, 112 ignored) and actual
@@ -17,7 +41,7 @@ historical source/LLVM/native observations, not fresh native or GPU execution.
 This advances V3/M5 without claiming physical-register lifetimes or their full
 exits. The accepted combined ledger remains **M1/V1/V2/U1 (4/18)**.
 
-## Current bounded acceptance — 2026-09-23
+## Earlier runtime bounded acceptance — 2026-09-23
 
 The [runtime identity/storage qualification](evidence/runtime-identity-storage-20260923.md)
 completes V2 for the documented bounded CPU profile: real repeated helpers,
