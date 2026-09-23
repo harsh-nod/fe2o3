@@ -136,9 +136,14 @@ while retaining the same pidfd. A closed or stalled Cargo peer fails closed
 before serving custody exists. Serving custody can be consumed by one bounded
 pidfd wait that returns an inert PID/readiness/termination record only after
 `waitid(P_PIDFD)` has reaped the exact child once. A wait timeout fails closed
-and cancels that child. Explicit cancellation uses `pidfd_send_signal`; every
-synchronous path reaps once, and dropped live custody transfers to a fixed
-64-slot reaper. Abrupt supervisor death is covered both by the bootstrap gate
+and cancels that child. Explicit cancellation uses finite nonblocking cleanup
+attempts; success means a confirmed terminal reap. Timeout and inconclusive
+errors retain custody in the fixed 64-slot reaper. Failed termination requests
+remain retryable; ownership loss is quarantined rather than reported as reaped.
+The pre-exec artifact-spawn lease follows that same custody until validated
+issuer readiness or a terminal reap. See the [cleanup contract](../../docs/compiler-execution-cleanup-custody.md),
+including the remaining native accounting requirements.
+Abrupt supervisor death is covered both by the bootstrap gate
 and the static launcher's parent identity check.
 
 `ProtectedIssuerSupervisorV1::run_session` is the sole complete per-connection

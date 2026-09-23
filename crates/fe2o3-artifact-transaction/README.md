@@ -3,6 +3,18 @@
 This crate coordinates local compiler artifact publication through bounded canonical records,
 descriptor-relative filesystem operations, and one cooperative output-directory lock.
 
+## Child creation custody
+
+`try_acquire_artifact_process_spawn_lease_v1` acquires a move-only lease from the
+same coordinator used by `with_artifact_process_spawn_v1` and lock-descriptor
+release. Supervisors whose cleanup can outlive a spawn call must transfer this
+lease with the child, retaining it until confirmed post-exec closure or terminal
+disposal. Returning an error or observing an interrupted wait is not disposal.
+The lease may move between threads but grants no execution authority. Do not
+drop artifact locks while waiting on a lease that the same thread must advance.
+The coordinator's mutex and descriptor-release waits remain blocking. See the
+[issuer cleanup contract](../../docs/compiler-execution-cleanup-custody.md).
+
 ## Filesystem coordination deployment
 
 Ordinary path-based publication requires an explicit path-guard deployment. Cross-mount-namespace

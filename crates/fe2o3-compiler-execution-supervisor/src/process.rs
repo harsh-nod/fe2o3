@@ -4,9 +4,7 @@ use core::ffi::{c_char, c_int, c_long, c_void};
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use fe2o3_compiler_execution_protocol::{
@@ -23,6 +21,8 @@ use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::net::SendFlags;
 use rustix::pipe::{PipeFlags, pipe_with};
 
+use crate::process_cleanup::{ChildCleanupV1, CleanupPollV1};
+use crate::process_reaper::{ReapSlotV1, deferred_reaper};
 use crate::process_staging::{StagedLaunchErrorV1, StagedLaunchInputV1, StagedLaunchV1};
 use crate::{
     IssuerServiceCredentialProfileV1, PreparedProtectedIssuerLaunchV1,
@@ -67,10 +67,8 @@ const PROFILE_READY_V1: u8 = 0xa5;
 const GATE_RELEASE_V1: u8 = 0x5a;
 const MAX_LAUNCH_WAIT_V1: Duration = Duration::from_secs(120);
 const POLL_INTERVAL_V1: Duration = Duration::from_millis(1);
-const REAPER_POLL_INTERVAL_V1: Duration = Duration::from_millis(10);
-const REAP_SLOT_EMPTY: u8 = 0;
-const REAP_SLOT_RESERVED: u8 = 1;
-const REAP_SLOT_DEFERRED: u8 = 2;
+const MAX_CANCEL_POLLS_V1: usize = 1024;
+const MAX_CANCEL_WAIT_V1: Duration = Duration::from_secs(2);
 
 /// Maximum number of protected issuer children owned or awaiting deferred reaping.
 pub const MAX_PROTECTED_ISSUER_PROCESSES_V1: usize = 64;
@@ -255,7 +253,11 @@ impl Error for ProtectedIssuerLaunchErrorV1 {
 ///
 /// This state has not admitted issuer readiness and grants no signing, compiler,
 /// publication, loading, or GPU authority. Dropping it sends `SIGKILL` through
-/// the pidfd and transfers exactly-once reaping to a bounded internal reaper.
+/// the pidfd and transfers cleanup custody to a fixed-capacity internal reaper.
+/// Inconclusive cleanup retains the slot; it is not successful reaping evidence.
+/// This state also retains the artifact-spawn lease until validated readiness.
+/// Do not drop artifact locks on the same thread before advancing readiness or
+/// transferring/canceling this child: lock release waits for that lease.
 ///
 /// ```compile_fail
 /// use fe2o3_compiler_execution_supervisor::LaunchedProtectedIssuerV1;
@@ -302,7 +304,7 @@ impl LaunchedProtectedIssuerV1 {
 
     /// Consumes launch-only custody and admits one exact readiness record.
     pub fn await_readiness(
-        self,
+        mut self,
         timeout: Duration,
     ) -> Result<ReadyProtectedIssuerV1, ProtectedIssuerLaunchErrorV1> {
         let deadline = bounded_deadline(timeout)?;
@@ -318,6 +320,9 @@ impl LaunchedProtectedIssuerV1 {
                 .process
                 .exited_error("exited immediately after readiness"));
         }
+        // Only the executed issuer emits this validated record. An exec-status EOF
+        // alone can precede completion of the kernel's CLOEXEC/exit descriptor sweep.
+        self.process.release_spawn_after_exec();
         let Self {
             process,
             control,
@@ -339,7 +344,8 @@ impl LaunchedProtectedIssuerV1 {
         })
     }
 
-    /// Cancels the exact child through its pidfd and synchronously reaps it once.
+    /// Attempts bounded cancellation; success means this owner reaped the child.
+    /// On timeout or ownership loss, the internal reaper retains cleanup custody.
     pub fn cancel(mut self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
         self.process.cancel_and_reap()
     }
@@ -347,6 +353,11 @@ impl LaunchedProtectedIssuerV1 {
     #[cfg(test)]
     pub(crate) fn stdout_reader_for_test(&self) -> &OwnedFd {
         &self.stdout_reader
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retains_spawn_lease_for_test(&self) -> bool {
+        self.process.cleanup.as_ref().unwrap().retains_spawn_lease()
     }
 }
 
@@ -390,6 +401,11 @@ impl fmt::Debug for ReadyProtectedIssuerV1 {
 }
 
 impl ReadyProtectedIssuerV1 {
+    #[cfg(test)]
+    pub(crate) fn retains_spawn_lease_for_test(&self) -> bool {
+        self.process.cleanup.as_ref().unwrap().retains_spawn_lease()
+    }
+
     /// Returns the exact pidfd-bound issuer PID.
     pub fn pid(&self) -> u32 {
         self.process.pid_u32()
@@ -447,7 +463,8 @@ impl ReadyProtectedIssuerV1 {
         })
     }
 
-    /// Cancels the exact child through its pidfd and synchronously reaps it once.
+    /// Attempts bounded cancellation; success means this owner reaped the child.
+    /// On timeout or ownership loss, the internal reaper retains cleanup custody.
     pub fn cancel(mut self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
         self.process.cancel_and_reap()
     }
@@ -606,7 +623,8 @@ impl ServingProtectedIssuerV1 {
         })
     }
 
-    /// Cancels the exact serving child and synchronously reaps it once.
+    /// Attempts bounded cancellation; success means this owner reaped the child.
+    /// On timeout or ownership loss, the internal reaper retains cleanup custody.
     pub fn cancel(mut self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
         self.process.cancel_and_reap()
     }
@@ -681,126 +699,135 @@ impl ProtectedIssuerSupervisorV1 {
         let launch_manifest = prepared.service_manifest().clone();
         let policy = self.policy().clone();
 
-        fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
-            let mut pidfd_raw = -1_i32;
-            let clone_arguments = CloneArgsV1 {
-                flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND,
-                pidfd: (&raw mut pidfd_raw).addr() as u64,
-                child_tid: 0,
-                parent_tid: 0,
-                exit_signal: SIGCHLD,
-                stack: 0,
-                stack_size: 0,
-                tls: 0,
-                set_tid: 0,
-                set_tid_size: 0,
-                cgroup: 0,
-            };
-            // SAFETY: clone3 receives the exact 88-byte Linux ABI record and no VM/thread-sharing
-            // flags. The child executes only direct syscalls over preallocated state and never
-            // returns into Rust cleanup. CLONE_PIDFD installs one descriptor before parent return.
-            let clone_result = unsafe {
-                syscall(
-                    SYS_CLONE3,
-                    &raw const clone_arguments,
-                    std::mem::size_of::<CloneArgsV1>(),
+        let spawn_lease = fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1()
+            .map_err(|_| ProtectedIssuerLaunchErrorV1::ProcessCapacity)?;
+        if Instant::now() >= deadline {
+            return Err(ProtectedIssuerLaunchErrorV1::Timeout("child creation"));
+        }
+        let mut pidfd_raw = -1_i32;
+        let clone_arguments = CloneArgsV1 {
+            flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND,
+            pidfd: (&raw mut pidfd_raw).addr() as u64,
+            child_tid: 0,
+            parent_tid: 0,
+            exit_signal: SIGCHLD,
+            stack: 0,
+            stack_size: 0,
+            tls: 0,
+            set_tid: 0,
+            set_tid_size: 0,
+            cgroup: 0,
+        };
+        // SAFETY: clone3 receives the exact 88-byte Linux ABI record and no VM/thread-sharing
+        // flags. The child executes only direct syscalls over preallocated state and never
+        // returns into Rust cleanup. CLONE_PIDFD installs one descriptor before parent return.
+        let clone_result = unsafe {
+            syscall(
+                SYS_CLONE3,
+                &raw const clone_arguments,
+                std::mem::size_of::<CloneArgsV1>(),
+            )
+        };
+        if clone_result < 0 {
+            return Err(io_error(
+                "clone3 protected issuer with atomic pidfd",
+                io::Error::last_os_error(),
+            ));
+        }
+        if clone_result == 0 {
+            // SAFETY: this is the post-clone child. child_exec performs direct syscalls only
+            // and terminates with execveat or _exit, so no Rust destructor can run here.
+            unsafe {
+                child_exec(
+                    &staged,
+                    child_profile,
+                    expected_parent_pid,
+                    profile_ready_reader.as_raw_fd(),
+                    gate_writer.as_raw_fd(),
+                    exec_status_reader.as_raw_fd(),
                 )
-            };
-            if clone_result < 0 {
-                return Err(io_error(
-                    "clone3 protected issuer with atomic pidfd",
-                    io::Error::last_os_error(),
-                ));
             }
-            if clone_result == 0 {
-                // SAFETY: this is the post-clone child. child_exec performs direct syscalls only
-                // and terminates with execveat or _exit, so no Rust destructor can run here.
-                unsafe {
-                    child_exec(
-                        &staged,
-                        child_profile,
-                        expected_parent_pid,
-                        profile_ready_reader.as_raw_fd(),
-                        gate_writer.as_raw_fd(),
-                        exec_status_reader.as_raw_fd(),
-                    )
-                }
-            }
+        }
 
-            let raw_pid = i32::try_from(clone_result).unwrap_or_else(|_| std::process::abort());
-            let pid =
-                rustix::process::Pid::from_raw(raw_pid).unwrap_or_else(|| std::process::abort());
-            if pidfd_raw < 0 {
-                kill_and_reap_pid_synchronously(pid);
-                return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                    "clone3 did not return the requested pidfd",
-                ));
-            }
-            // SAFETY: successful CLONE_PIDFD installed one newly owned descriptor in pidfd_raw.
-            let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd_raw) };
-            let mut process = ProtectedIssuerChildV1::new(pidfd, pid, reap_slot);
-            if let Err(error) = process.validate_pidfd() {
-                let _ = process.cancel_and_reap();
-                return Err(error);
-            }
+        let raw_pid = i32::try_from(clone_result).unwrap_or_else(|_| std::process::abort());
+        let pid = rustix::process::Pid::from_raw(raw_pid).unwrap_or_else(|| std::process::abort());
+        // Adopt all cleanup obligations before the first fallible parent operation.
+        // A missing pidfd violates clone3's contract but must still retain the child
+        // reservation and inherited artifact-lock obligation for recovery.
+        let pidfd = if pidfd_raw < 0 {
+            None
+        } else {
+            // SAFETY: successful CLONE_PIDFD installed one newly owned descriptor.
+            Some(unsafe { OwnedFd::from_raw_fd(pidfd_raw) })
+        };
+        let cleanup = ChildCleanupV1::new(pidfd, pid, Some(spawn_lease));
+        let mut process = ProtectedIssuerChildV1::new(cleanup, reap_slot);
+        if pidfd_raw < 0 {
+            return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                "clone3 did not return the requested pidfd",
+            ));
+        }
+        if let Err(error) = process.validate_pidfd() {
+            let _ = process.cancel_and_reap();
+            return Err(error);
+        }
 
-            drop(profile_ready_writer);
-            drop(gate_reader);
-            drop(exec_status_writer);
-            drop(staged);
+        drop(profile_ready_writer);
+        drop(gate_reader);
+        drop(exec_status_writer);
+        drop(staged);
 
-            let result = (|| {
-                await_profile_ready(
-                    &profile_ready_reader,
-                    &exec_status_reader,
-                    &process,
-                    deadline,
-                )?;
-                namespaces.revalidate_self().map_err(map_profile_error)?;
-                namespaces
-                    .revalidate_process(pid)
-                    .map_err(map_profile_error)?;
-                if let Some(profile) = &profile {
-                    profile.revalidate_current().map_err(map_profile_error)?;
-                    profile.revalidate_process(pid).map_err(map_profile_error)?;
-                }
-                self.revalidate()
-                    .map_err(ProtectedIssuerLaunchErrorV1::Supervisor)?;
-                prepared
-                    .revalidate(self)
-                    .map_err(ProtectedIssuerLaunchErrorV1::Preparation)?;
-                write_gate_release(&gate_writer)?;
-                drop(gate_writer);
-                await_exec_status(&exec_status_reader, &process, deadline)?;
-                if !process.is_live()? {
-                    return Err(process.exited_error("exited immediately after launcher exec"));
-                }
-                Ok(())
-            })();
-            if let Err(error) = result {
-                let cleanup = process.cancel_and_reap();
-                return match cleanup {
-                    Ok(()) => Err(error),
-                    Err(cleanup) => Err(cleanup),
-                };
+        let result = (|| {
+            await_profile_ready(
+                &profile_ready_reader,
+                &exec_status_reader,
+                &process,
+                deadline,
+            )?;
+            namespaces.revalidate_self().map_err(map_profile_error)?;
+            namespaces
+                .revalidate_process(pid)
+                .map_err(map_profile_error)?;
+            if let Some(profile) = &profile {
+                profile.revalidate_current().map_err(map_profile_error)?;
+                profile.revalidate_process(pid).map_err(map_profile_error)?;
             }
+            self.revalidate()
+                .map_err(ProtectedIssuerLaunchErrorV1::Supervisor)?;
+            prepared
+                .revalidate(self)
+                .map_err(ProtectedIssuerLaunchErrorV1::Preparation)?;
+            if Instant::now() >= deadline {
+                return Err(ProtectedIssuerLaunchErrorV1::Timeout("launch gate release"));
+            }
+            write_gate_release(&gate_writer)?;
+            drop(gate_writer);
+            await_exec_status(&exec_status_reader, &process, deadline)?;
+            if !process.is_live()? {
+                return Err(process.exited_error("exited immediately after launcher exec"));
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = process.cancel_and_reap();
+            return Err(error);
+        }
 
-            let PreparedProtectedIssuerLaunchV1 {
-                accepted,
-                stdout_reader,
-                stderr_reader,
-                readiness_reader,
-                ..
-            } = prepared;
-            Ok(LaunchedProtectedIssuerV1 {
-                process,
-                control: accepted.into_control(),
-                stdout_reader,
-                stderr_reader,
-                readiness_reader,
-                launch_manifest,
-                policy,
-            })
+        let PreparedProtectedIssuerLaunchV1 {
+            accepted,
+            stdout_reader,
+            stderr_reader,
+            readiness_reader,
+            ..
+        } = prepared;
+        Ok(LaunchedProtectedIssuerV1 {
+            process,
+            control: accepted.into_control(),
+            stdout_reader,
+            stderr_reader,
+            readiness_reader,
+            launch_manifest,
+            policy,
         })
     }
 }
@@ -1094,22 +1121,15 @@ fn await_profile_ready(
 }
 
 fn write_gate_release(gate: &OwnedFd) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-    loop {
-        match rustix::io::write(gate, &[GATE_RELEASE_V1]) {
-            Ok(1) => return Ok(()),
-            Ok(_) => {
-                return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                    "launch gate accepted a partial release record",
-                ));
-            }
-            Err(rustix::io::Errno::INTR) => {}
-            Err(source) => {
-                return Err(io_error(
-                    "release protected issuer launch gate",
-                    source.into(),
-                ));
-            }
-        }
+    match rustix::io::write(gate, &[GATE_RELEASE_V1]) {
+        Ok(1) => Ok(()),
+        Ok(_) => Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+            "launch gate accepted a partial release record",
+        )),
+        Err(source) => Err(io_error(
+            "release protected issuer launch gate",
+            source.into(),
+        )),
     }
 }
 
@@ -1273,27 +1293,45 @@ fn map_profile_error(error: ProtectedServiceProfileErrorV1) -> ProtectedIssuerLa
 }
 
 struct ProtectedIssuerChildV1 {
-    pidfd: Option<OwnedFd>,
+    cleanup: Option<ChildCleanupV1>,
     pid: rustix::process::Pid,
-    reap_slot: Option<ReapSlotV1>,
+    reap_slot: Option<ReapSlotV1<'static>>,
 }
 
 impl ProtectedIssuerChildV1 {
-    fn new(pidfd: OwnedFd, pid: rustix::process::Pid, reap_slot: ReapSlotV1) -> Self {
+    fn new(cleanup: ChildCleanupV1, reap_slot: ReapSlotV1<'static>) -> Self {
+        let pid = cleanup.pid();
         Self {
-            pidfd: Some(pidfd),
+            cleanup: Some(cleanup),
             pid,
             reap_slot: Some(reap_slot),
         }
     }
 
+    fn pidfd(&self) -> Result<&OwnedFd, ProtectedIssuerLaunchErrorV1> {
+        self.cleanup.as_ref().and_then(ChildCleanupV1::pidfd).ok_or(
+            ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                "pidfd is absent or cleanup custody was transferred",
+            ),
+        )
+    }
+
+    fn release_spawn_after_exec(&mut self) {
+        if let Some(cleanup) = self.cleanup.as_mut() {
+            cleanup.release_spawn_after_exec();
+        }
+    }
+
+    fn record_wait_error(&self, source: rustix::io::Errno) {
+        if source == rustix::io::Errno::CHILD
+            && let Some(cleanup) = self.cleanup.as_ref()
+        {
+            cleanup.ownership_lost();
+        }
+    }
+
     fn validate_pidfd(&self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        let pidfd =
-            self.pidfd
-                .as_ref()
-                .ok_or(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                    "clone3 pidfd was already transferred",
-                ))?;
+        let pidfd = self.pidfd()?;
         let flags = rustix::io::fcntl_getfd(pidfd)
             .map_err(|source| io_error("inspect clone3 pidfd", source.into()))?;
         if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
@@ -1309,28 +1347,26 @@ impl ProtectedIssuerChildV1 {
     }
 
     fn is_live(&self) -> Result<bool, ProtectedIssuerLaunchErrorV1> {
-        let pidfd =
-            self.pidfd
-                .as_ref()
-                .ok_or(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                    "pidfd was already transferred for reaping",
-                ))?;
+        let pidfd = self.pidfd()?;
         match rustix::process::waitid(
             rustix::process::WaitId::PidFd(pidfd.as_fd()),
             rustix::process::WaitIdOptions::EXITED
                 | rustix::process::WaitIdOptions::NOHANG
                 | rustix::process::WaitIdOptions::NOWAIT,
         ) {
-            Ok(None) | Err(rustix::io::Errno::INTR) => Ok(true),
+            Ok(None) => Ok(true),
             Ok(Some(_)) => Ok(false),
-            Err(source) => Err(io_error("observe exact issuer pidfd", source.into())),
+            Err(source) => {
+                self.record_wait_error(source);
+                Err(io_error("observe exact issuer pidfd", source.into()))
+            }
         }
     }
 
     fn exited_error(&self, context: &str) -> ProtectedIssuerLaunchErrorV1 {
         let detail = self
-            .pidfd
-            .as_ref()
+            .pidfd()
+            .ok()
             .and_then(|pidfd| {
                 rustix::process::waitid(
                     rustix::process::WaitId::PidFd(pidfd.as_fd()),
@@ -1338,6 +1374,7 @@ impl ProtectedIssuerChildV1 {
                         | rustix::process::WaitIdOptions::NOHANG
                         | rustix::process::WaitIdOptions::NOWAIT,
                 )
+                .inspect_err(|source| self.record_wait_error(*source))
                 .ok()
                 .flatten()
             })
@@ -1347,35 +1384,45 @@ impl ProtectedIssuerChildV1 {
     }
 
     fn cancel_and_reap(&mut self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        let Some(pidfd) = self.pidfd.as_ref() else {
+        if self.cleanup.is_none() {
             return Ok(());
-        };
-        let signal_error =
-            match rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL) {
-                Ok(()) | Err(rustix::io::Errno::SRCH) => None,
-                Err(source) => Some(io_error("pidfd-kill protected issuer", source.into())),
-            };
-        let wait_result = loop {
-            match rustix::process::waitid(
-                rustix::process::WaitId::PidFd(pidfd.as_fd()),
-                rustix::process::WaitIdOptions::EXITED,
-            ) {
-                Ok(Some(_)) => break Ok(()),
-                Ok(None) | Err(rustix::io::Errno::INTR) => {}
-                Err(rustix::io::Errno::CHILD) => {
-                    break Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                        "issuer child was reaped outside its pidfd owner",
+        }
+        let deadline = Instant::now() + MAX_CANCEL_WAIT_V1;
+        for _ in 0..MAX_CANCEL_POLLS_V1 {
+            match self
+                .cleanup
+                .as_mut()
+                .expect("foreground cleanup owner")
+                .step()
+            {
+                CleanupPollV1::Reaped => {
+                    self.complete_reaped();
+                    return Ok(());
+                }
+                CleanupPollV1::Quarantined => {
+                    self.defer_cleanup();
+                    return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                        "issuer cleanup ownership is uncertain; custody retained in quarantine",
                     ));
                 }
-                Err(source) => break Err(io_error("reap exact issuer pidfd", source.into())),
+                CleanupPollV1::Pending => {}
             }
-        };
-        drop(self.pidfd.take());
-        self.reap_slot
-            .take()
-            .expect("live issuer child retains one reap slot")
-            .complete();
-        signal_error.map_or(wait_result, Err)
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(POLL_INTERVAL_V1);
+        }
+        let last_errno = self.cleanup.as_ref().and_then(ChildCleanupV1::last_errno);
+        self.defer_cleanup();
+        Err(match last_errno {
+            Some(source) => io_error(
+                "cancel issuer; deferred cleanup retains custody",
+                source.into(),
+            ),
+            None => ProtectedIssuerLaunchErrorV1::Timeout(
+                "issuer cancellation; deferred cleanup retains custody",
+            ),
+        })
     }
 
     fn wait_and_reap(
@@ -1383,12 +1430,7 @@ impl ProtectedIssuerChildV1 {
         deadline: Instant,
     ) -> Result<ProtectedIssuerTerminationV1, ProtectedIssuerLaunchErrorV1> {
         let status = loop {
-            let pidfd =
-                self.pidfd
-                    .as_ref()
-                    .ok_or(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                        "pidfd was already transferred for reaping",
-                    ))?;
+            let pidfd = self.pidfd()?;
             match rustix::process::waitid(
                 rustix::process::WaitId::PidFd(pidfd.as_fd()),
                 rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOHANG,
@@ -1398,6 +1440,7 @@ impl ProtectedIssuerChildV1 {
                     wait_for_pidfd_exit(pidfd, deadline)?;
                 }
                 Err(rustix::io::Errno::CHILD) => {
+                    self.record_wait_error(rustix::io::Errno::CHILD);
                     return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
                         "issuer child was reaped outside its pidfd owner",
                     ));
@@ -1410,29 +1453,31 @@ impl ProtectedIssuerChildV1 {
                 }
             }
         };
-        drop(self.pidfd.take());
+        let termination = ProtectedIssuerTerminationV1::from_wait_status(&status)?;
+        self.complete_reaped();
+        Ok(termination)
+    }
+
+    fn complete_reaped(&mut self) {
+        if let Some(cleanup) = self.cleanup.as_mut() {
+            cleanup.terminal_reaped();
+        }
+        drop(self.cleanup.take());
         self.reap_slot
             .take()
             .expect("live issuer child retains one reap slot")
             .complete();
-        ProtectedIssuerTerminationV1::from_wait_status(&status)
     }
 
-    fn finish_or_defer(&mut self) {
-        let Some(pidfd) = self.pidfd.take() else {
+    fn defer_cleanup(&mut self) {
+        let Some(cleanup) = self.cleanup.take() else {
             return;
         };
         let slot = self
             .reap_slot
             .take()
             .expect("live issuer child retains one reap slot");
-        match try_reap_nonblocking(pidfd.as_fd(), self.pid) {
-            ReapPollV1::Pending => slot.defer(pidfd, self.pid),
-            ReapPollV1::Reaped | ReapPollV1::Lost => {
-                drop(pidfd);
-                slot.complete();
-            }
-        }
+        slot.defer(cleanup);
     }
 }
 
@@ -1481,10 +1526,11 @@ fn wait_for_pidfd_exit(
 
 impl Drop for ProtectedIssuerChildV1 {
     fn drop(&mut self) {
-        if let Some(pidfd) = self.pidfd.as_ref() {
-            let _ = rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL);
+        match self.cleanup.as_mut().map(ChildCleanupV1::step) {
+            Some(CleanupPollV1::Reaped) => self.complete_reaped(),
+            Some(CleanupPollV1::Pending | CleanupPollV1::Quarantined) => self.defer_cleanup(),
+            None => {}
         }
-        self.finish_or_defer();
     }
 }
 
@@ -1496,160 +1542,6 @@ fn describe_exit(status: &rustix::process::WaitIdStatus) -> String {
     } else {
         "ended without a canonical exit status".to_owned()
     }
-}
-
-fn kill_and_reap_pid_synchronously(pid: rustix::process::Pid) {
-    let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
-    loop {
-        match rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty()) {
-            Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => return,
-            Ok(None) | Err(rustix::io::Errno::INTR) => {}
-            Err(_) => return,
-        }
-    }
-}
-
-enum ReapPollV1 {
-    Pending,
-    Reaped,
-    Lost,
-}
-
-fn try_reap_nonblocking(pidfd: BorrowedFd<'_>, pid: rustix::process::Pid) -> ReapPollV1 {
-    match rustix::process::waitid(
-        rustix::process::WaitId::PidFd(pidfd),
-        rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOHANG,
-    ) {
-        Ok(Some(_)) => ReapPollV1::Reaped,
-        Ok(None) | Err(rustix::io::Errno::INTR) => ReapPollV1::Pending,
-        Err(rustix::io::Errno::CHILD) => ReapPollV1::Lost,
-        Err(_) => match rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG) {
-            Ok(Some(_)) => ReapPollV1::Reaped,
-            Ok(None) | Err(rustix::io::Errno::INTR) => ReapPollV1::Pending,
-            Err(rustix::io::Errno::CHILD) => ReapPollV1::Lost,
-            Err(_) => ReapPollV1::Pending,
-        },
-    }
-}
-
-struct DeferredReapCellV1 {
-    state: AtomicU8,
-    pidfd: AtomicI32,
-    pid: AtomicI32,
-}
-
-impl DeferredReapCellV1 {
-    const fn new() -> Self {
-        Self {
-            state: AtomicU8::new(REAP_SLOT_EMPTY),
-            pidfd: AtomicI32::new(-1),
-            pid: AtomicI32::new(-1),
-        }
-    }
-}
-
-struct DeferredReaperV1 {
-    cells: [DeferredReapCellV1; MAX_PROTECTED_ISSUER_PROCESSES_V1],
-    thread_started: OnceLock<bool>,
-}
-
-impl DeferredReaperV1 {
-    const fn new() -> Self {
-        Self {
-            cells: [const { DeferredReapCellV1::new() }; MAX_PROTECTED_ISSUER_PROCESSES_V1],
-            thread_started: OnceLock::new(),
-        }
-    }
-
-    fn reserve(&'static self) -> Result<ReapSlotV1, ProtectedIssuerLaunchErrorV1> {
-        if !*self.thread_started.get_or_init(|| {
-            std::thread::Builder::new()
-                .name("fe2o3-issuer-reaper-v1".to_owned())
-                .spawn(move || self.run())
-                .is_ok()
-        }) {
-            return Err(ProtectedIssuerLaunchErrorV1::ProcessCapacity);
-        }
-        for cell in &self.cells {
-            if cell
-                .state
-                .compare_exchange(
-                    REAP_SLOT_EMPTY,
-                    REAP_SLOT_RESERVED,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                return Ok(ReapSlotV1 { cell, armed: true });
-            }
-        }
-        Err(ProtectedIssuerLaunchErrorV1::ProcessCapacity)
-    }
-
-    fn run(&'static self) -> ! {
-        loop {
-            for cell in &self.cells {
-                if cell.state.load(Ordering::Acquire) != REAP_SLOT_DEFERRED {
-                    continue;
-                }
-                let raw_pidfd = cell.pidfd.load(Ordering::Acquire);
-                let raw_pid = cell.pid.load(Ordering::Acquire);
-                let Some(pid) = rustix::process::Pid::from_raw(raw_pid) else {
-                    continue;
-                };
-                if raw_pidfd < 0 {
-                    continue;
-                }
-                // SAFETY: the deferring owner transferred this live pidfd into the cell.
-                let pidfd = unsafe { BorrowedFd::borrow_raw(raw_pidfd) };
-                if !matches!(try_reap_nonblocking(pidfd, pid), ReapPollV1::Pending) {
-                    // SAFETY: this cell exclusively owns raw_pidfd until this transition.
-                    drop(unsafe { OwnedFd::from_raw_fd(raw_pidfd) });
-                    cell.pidfd.store(-1, Ordering::Release);
-                    cell.pid.store(-1, Ordering::Release);
-                    cell.state.store(REAP_SLOT_EMPTY, Ordering::Release);
-                }
-            }
-            std::thread::sleep(REAPER_POLL_INTERVAL_V1);
-        }
-    }
-}
-
-struct ReapSlotV1 {
-    cell: &'static DeferredReapCellV1,
-    armed: bool,
-}
-
-impl ReapSlotV1 {
-    fn complete(mut self) {
-        self.cell.pidfd.store(-1, Ordering::Release);
-        self.cell.pid.store(-1, Ordering::Release);
-        self.cell.state.store(REAP_SLOT_EMPTY, Ordering::Release);
-        self.armed = false;
-    }
-
-    fn defer(mut self, pidfd: OwnedFd, pid: rustix::process::Pid) {
-        self.cell
-            .pidfd
-            .store(pidfd.into_raw_fd(), Ordering::Release);
-        self.cell.pid.store(pid.as_raw_pid(), Ordering::Release);
-        self.cell.state.store(REAP_SLOT_DEFERRED, Ordering::Release);
-        self.armed = false;
-    }
-}
-
-impl Drop for ReapSlotV1 {
-    fn drop(&mut self) {
-        if self.armed {
-            self.cell.state.store(REAP_SLOT_EMPTY, Ordering::Release);
-        }
-    }
-}
-
-fn deferred_reaper() -> &'static DeferredReaperV1 {
-    static REAPER: DeferredReaperV1 = DeferredReaperV1::new();
-    &REAPER
 }
 
 fn io_error(operation: &'static str, source: io::Error) -> ProtectedIssuerLaunchErrorV1 {
@@ -1677,28 +1569,5 @@ mod tests {
             Err(ProtectedIssuerLaunchErrorV1::InvalidTimeout)
         ));
         bounded_deadline(Duration::from_secs(1)).unwrap();
-    }
-
-    #[test]
-    fn non_pidfd_wait_failure_falls_back_to_exact_child_pid() {
-        let (not_pidfd, _writer) =
-            protected_pipe(PipeFlags::empty(), "create fallback fixture").unwrap();
-        let mut child = fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
-            std::process::Command::new("/bin/true").spawn()
-        })
-        .unwrap();
-        let pid = rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            match try_reap_nonblocking(not_pidfd.as_fd(), pid) {
-                ReapPollV1::Pending if Instant::now() < deadline => {
-                    std::thread::sleep(POLL_INTERVAL_V1);
-                }
-                ReapPollV1::Reaped => break,
-                ReapPollV1::Pending => panic!("fallback waitpid did not reap the child in time"),
-                ReapPollV1::Lost => panic!("fallback child was reaped outside the test"),
-            }
-        }
-        assert!(child.wait().is_err(), "fallback waitpid must consume exit");
     }
 }

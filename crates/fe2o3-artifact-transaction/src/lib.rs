@@ -93,6 +93,7 @@ mod durable_link_publication;
 mod durable_published_claim;
 mod link_publication;
 mod managed_invocation_capability;
+mod process_spawn;
 mod publication_object_inventory_v1;
 mod retained_durable_directory;
 mod worker_v3_load_readiness;
@@ -223,6 +224,13 @@ pub use managed_invocation_capability::{
     BROKERED_INVOCATION_REQUEST_BYTES_V2, BrokeredInvocationCapabilityClaimV1,
     BrokeredInvocationCapabilityCodecErrorV1, BrokeredInvocationCapabilityCodecErrorV2,
     BrokeredInvocationCapabilityRequestV1, BrokeredInvocationCapabilityRequestV2,
+};
+pub(crate) use process_spawn::ArtifactProcessSpawnCoordinatorV1;
+#[cfg(feature = "test-hooks")]
+pub use process_spawn::with_test_artifact_fork_exec_barrier_v1;
+pub use process_spawn::{
+    ArtifactProcessSpawnLeaseErrorV1, ArtifactProcessSpawnLeaseV1,
+    try_acquire_artifact_process_spawn_lease_v1, with_artifact_process_spawn_v1,
 };
 pub use publication_object_inventory_v1::{
     COMPILER_MODULE_HANDOFF_PUBLICATION_OBJECT_FDS_V1,
@@ -717,99 +725,6 @@ pub fn install_begin_build_attempt_lock_probe_v1(
         .unwrap_or_else(|error| error.into_inner())
         .push(Arc::downgrade(&inner));
     BeginBuildAttemptLockProbeV1 { inner }
-}
-
-struct ArtifactProcessSpawnStateV1 {
-    pid: u32,
-    active_spawns: u64,
-}
-
-struct ArtifactProcessSpawnCoordinatorV1 {
-    state: Mutex<ArtifactProcessSpawnStateV1>,
-    idle: Condvar,
-}
-
-impl ArtifactProcessSpawnCoordinatorV1 {
-    fn global() -> &'static Self {
-        static COORDINATOR: OnceLock<ArtifactProcessSpawnCoordinatorV1> = OnceLock::new();
-        COORDINATOR.get_or_init(|| Self {
-            state: Mutex::new(ArtifactProcessSpawnStateV1 {
-                pid: process::id(),
-                active_spawns: 0,
-            }),
-            idle: Condvar::new(),
-        })
-    }
-
-    fn state(&self) -> std::sync::MutexGuard<'_, ArtifactProcessSpawnStateV1> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let pid = process::id();
-        if state.pid != pid {
-            state.pid = pid;
-            state.active_spawns = 0;
-        }
-        state
-    }
-
-    fn begin_spawn(&'static self) -> ArtifactProcessSpawnLeaseV1 {
-        let mut state = self.state();
-        state.active_spawns = state
-            .active_spawns
-            .checked_add(1)
-            .expect("concurrent artifact process spawn count overflowed");
-        ArtifactProcessSpawnLeaseV1 { coordinator: self }
-    }
-
-    fn release_lock_descriptors(&self, release: impl FnOnce()) {
-        let mut state = self.state();
-        while state.active_spawns != 0 {
-            state = self
-                .idle
-                .wait(state)
-                .unwrap_or_else(|error| error.into_inner());
-        }
-        // Keep the state lock held while descriptors close so a new child cannot inherit them.
-        release();
-    }
-}
-
-struct ArtifactProcessSpawnLeaseV1 {
-    coordinator: &'static ArtifactProcessSpawnCoordinatorV1,
-}
-
-impl Drop for ArtifactProcessSpawnLeaseV1 {
-    fn drop(&mut self) {
-        let mut state = self.coordinator.state();
-        state.active_spawns = state
-            .active_spawns
-            .checked_sub(1)
-            .expect("artifact process spawn lease underflowed");
-        if state.active_spawns == 0 {
-            self.coordinator.idle.notify_all();
-        }
-    }
-}
-
-/// Runs one process creation operation without exposing inherited artifact-lock aliases.
-///
-/// On Linux, a child temporarily retains the parent's `CLOEXEC` OFD and `flock` descriptors
-/// between `fork` and `exec`. Every process creation in a process that uses this crate's artifact
-/// transactions must pass its `Command::spawn` operation through this function. Artifact lock
-/// release then waits for all coordinated children to exec or fail, ensuring that a child can
-/// never become the sole owner of an inherited lock alias. Lock acquisition remains nonblocking
-/// and reports only genuine lock contention.
-pub fn with_artifact_process_spawn_v1<T, E>(spawn: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
-    let _spawn = ArtifactProcessSpawnCoordinatorV1::global().begin_spawn();
-    spawn()
-}
-
-/// Compatibility entry point for test fixtures that predate production spawn coordination.
-#[cfg(feature = "test-hooks")]
-#[doc(hidden)]
-pub fn with_test_artifact_fork_exec_barrier_v1<T, E>(
-    spawn: impl FnOnce() -> Result<T, E>,
-) -> Result<T, E> {
-    with_artifact_process_spawn_v1(spawn)
 }
 
 /// Starts or resumes the durable artifact generation for one rustc invocation.

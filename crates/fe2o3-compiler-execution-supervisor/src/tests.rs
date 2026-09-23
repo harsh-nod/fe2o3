@@ -1533,6 +1533,7 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
         .unwrap();
+    assert!(launched.retains_spawn_lease_for_test());
     assert!(launched.is_live().unwrap());
     let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
     read_exact_nonblocking(launched.stdout_reader_for_test(), b"LAUNCHED\n");
@@ -1546,6 +1547,7 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
     );
     drop(injected_readiness);
     let ready = launched.await_readiness(Duration::from_secs(2)).unwrap();
+    assert!(!ready.retains_spawn_lease_for_test());
     assert_eq!(ready.readiness(), &readiness);
     ready.revalidate().unwrap();
     let rendered = format!("{ready:?}");
