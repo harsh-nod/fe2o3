@@ -35,6 +35,15 @@ mod writer_lifecycle_templates {
     include!("context_version_journal/writer_lifecycle_bodies.rs");
 }
 
+#[allow(unused_macros)]
+#[macro_use]
+mod scalar_enrollment_templates {
+    include!("context_version_journal/scalar_enrollment_bodies.rs");
+}
+
+#[cfg(test)]
+mod scalar_enrollment_baseline;
+
 macro_rules! writer_rust_expr {
     ($body:expr) => {
         $body
@@ -179,51 +188,17 @@ impl ContextVersionJournalV1 {
         device: ContextJournalDeviceKeyV1,
         byte_extent: u64,
     ) -> Result<ContextAllocationReferenceV1, ContextVersionJournalErrorV1> {
-        if key.context_generation != self.context_generation {
-            return Err(ContextVersionJournalErrorV1::ForeignContext);
-        }
-        if !issuable_context_id(key.local) {
-            return Err(ContextVersionJournalErrorV1::InvalidAllocationId);
-        }
-        if device.context_generation != self.context_generation {
-            return Err(ContextVersionJournalErrorV1::ForeignContext);
-        }
-        if !issuable_context_id(device.local) {
-            return Err(ContextVersionJournalErrorV1::InvalidDeviceId);
-        }
-        if byte_extent == 0 {
-            return Err(ContextVersionJournalErrorV1::InvalidExtent);
-        }
-        for index in 0..self.allocations.len() {
-            if self
-                .read_allocation(index)
-                .is_some_and(|entry| entry.key == key)
-            {
-                return Err(ContextVersionJournalErrorV1::AllocationReplay);
-            }
-        }
-        self.count_indexed_access();
-        let slot = self
-            .allocation_free
-            .last()
-            .copied()
-            .ok_or(ContextVersionJournalErrorV1::AllocationCapacity)?;
-        self.count_indexed_access();
-        if self.allocations.get(slot) != Some(&None) {
-            return Err(ContextVersionJournalErrorV1::InvalidState);
-        }
-        self.count_indexed_access();
-        let _ = self.allocation_free.pop();
-        self.count_indexed_access();
-        self.allocations[slot] = Some(AllocationEntryV1 {
+        scalar_enrollment_body!(
+            writer_rust_expr,
+            self,
             key,
             device,
             byte_extent,
-            attempt_epoch: 0,
-            content_lineage: 0,
-            pending_member: None,
-        });
-        Ok(ContextAllocationReferenceV1 { slot, key })
+            issuable_context_id,
+            Self::count_indexed_access,
+            index,
+            []
+        )
     }
 
     #[allow(clippy::question_mark)] // Share explicit early exits with Verus.

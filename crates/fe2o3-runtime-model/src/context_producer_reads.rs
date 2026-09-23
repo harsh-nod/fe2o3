@@ -59,6 +59,15 @@ mod settlement_templates {
     include!("context_version_journal/settlement_wrapper_bodies.rs");
 }
 
+#[allow(unused_macros)]
+#[macro_use]
+mod scalar_enrollment_templates {
+    include!("context_version_journal/scalar_enrollment_bodies.rs");
+}
+
+#[cfg(test)]
+mod scalar_enrollment_baseline;
+
 #[cfg(test)]
 mod writer_lifecycle_baseline;
 
@@ -345,7 +354,7 @@ impl ContextProducerReadJournalV1 {
         device: ContextJournalDeviceKeyV1,
         extent: u64,
     ) -> Result<ContextAllocationReferenceV1, ContextVersionJournalErrorV1> {
-        self.stable.enroll_allocation(key, device, extent)
+        scalar_enrollment_forward_body!(self, stable, key, device, extent)
     }
 
     pub fn enroll_allocations(

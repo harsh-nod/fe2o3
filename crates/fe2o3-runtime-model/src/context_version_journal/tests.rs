@@ -11,6 +11,9 @@ type Kind = ContextWriterKindV1;
 #[path = "writer_lifecycle_tests.rs"]
 mod writer_lifecycle;
 
+#[path = "scalar_enrollment_tests.rs"]
+mod scalar_enrollment;
+
 fn key(local: u64) -> Key {
     Key {
         context_generation: 7,
