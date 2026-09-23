@@ -5,6 +5,16 @@ use super::*;
 mod enrollment;
 mod ordering;
 
+#[cfg(test)]
+#[path = "enrollment_baseline.rs"]
+mod enrollment_baseline;
+
+#[allow(unused_macros)]
+#[macro_use]
+mod enrollment_templates {
+    include!("enrollment_wrapper_bodies.rs");
+}
+
 macro_rules! enrollment_declarations_v1 {
     ($($declaration:tt)*) => { $($declaration)* };
 }
@@ -27,7 +37,12 @@ impl ContextVersionJournalV1 {
         canonical: &[ContextAllocationEnrollmentV1],
         output: &mut [Option<ContextAllocationReferenceV1>],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        enrollment::enrollment_journal_exec_v1(self, canonical, output)
+        journal_enrollment_wrapper_body!(
+            self,
+            canonical,
+            output,
+            enrollment::enrollment_journal_exec_v1
+        )
     }
 
     /// Preflights the entire exact roster in O(k), without mutating any state.

@@ -1,6 +1,14 @@
 use super::*;
 
 impl ContextProducerReadJournalV1 {
+    pub(crate) fn restore_enrollment_for_test_v1(
+        &mut self,
+        before: &ContextVersionJournalV1,
+        count: usize,
+    ) {
+        self.stable.restore_enrollment_for_test_v1(before, count);
+    }
+
     pub(crate) fn guard_owner_storage_v1(&self) -> Vec<(usize, usize)> {
         let mut storage = self.stable.guard_owner_storage_v1();
         storage.extend([

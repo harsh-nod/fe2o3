@@ -47,6 +47,18 @@ impl StableReadResetV1 {
 }
 
 impl ContextReadLeasedJournalV1 {
+    pub(crate) fn fault_enrollment_for_test_v1(&mut self, free: &[usize], capacity: usize) {
+        self.journal.fault_enrollment_for_test_v1(free, capacity);
+    }
+
+    pub(crate) fn restore_enrollment_for_test_v1(
+        &mut self,
+        before: &ContextVersionJournalV1,
+        count: usize,
+    ) {
+        self.journal.restore_enrollment_for_test_v1(before, count);
+    }
+
     pub(crate) fn capture_acquire_reads_for_test_v1(
         &self,
         requests: &[ContextAllocationReadV1],

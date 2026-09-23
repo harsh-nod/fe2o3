@@ -1,6 +1,24 @@
 use super::*;
 
 impl ContextVersionJournalV1 {
+    pub(crate) fn fault_enrollment_for_test_v1(&mut self, free: &[usize], capacity: usize) {
+        self.allocation_free.clear();
+        self.allocation_free.extend_from_slice(free);
+        self.allocation_capacity = capacity;
+    }
+
+    // Only selected slots and the consumed free suffix can change in enrollment.
+    pub(crate) fn restore_enrollment_for_test_v1(&mut self, before: &Self, count: usize) {
+        for &slot in before.allocation_free.iter().rev().take(count) {
+            if let Some(value) = before.allocations.get(slot) {
+                self.allocations[slot] = *value;
+            }
+        }
+        self.allocation_free
+            .extend_from_slice(&before.allocation_free[self.allocation_free.len()..]);
+        self.reset_access_count_for_test_v1();
+    }
+
     pub(crate) fn query_replace_writer_for_test_v1(
         &mut self,
         reference: ContextWriterReferenceV1,

@@ -466,7 +466,22 @@ Before enabling runtime admission, the remaining work is:
    comparisons do not establish physical allocation, constructor reachability or
    native admission. The developer runner is `verus/check-owner-unknown.py`; its
    records are not a native qualification or elapsed-time performance claim.
-   Remaining bodies include construction, enrollment/retirement and other settlement wrappers;
+   The three batch `enroll_allocations` adapters also share executable delegation
+   with `context_owner_enrollment_execution_v1.rs`, reusing the existing adaptive
+   enrollment algorithm and one actual owner type universe. Raw forwarding is
+   total, including malformed reader metadata and empty batches. Rejection
+   preserves the complete owner and caller output; successful enrollment preserves
+   reader/producer fields and untouched journal vectors exactly. Empty actual
+   success preserves the complete normal-state owner value. The paired historical
+   root independently executes both paths without an issuance premise and proves
+   producer-invariant and retained-status preservation conditionally on the initial
+   invariant. Synthetic witnesses cover reordered slots, late rollback, and ignored
+   malformed metadata; CPU differential tests retain all four producer statuses,
+   stable leases and fresh-ID retirement reuse. Replay-scan counters do not measure
+   sorting or total runtime. The developer runner is `verus/check-owner-enrollment.py`.
+   Scalar enrollment remains separate; physical Vec storage, fallible construction,
+   unwind behavior, native admission and HIP/HSA performance remain unqualified here.
+   Remaining bodies include construction, scalar enrollment/retirement and other settlement wrappers;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

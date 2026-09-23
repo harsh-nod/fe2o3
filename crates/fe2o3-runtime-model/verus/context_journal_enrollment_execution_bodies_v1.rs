@@ -1,6 +1,3 @@
-use self::ContextVersionJournalV1 as JournalContentsV1;
-use self::ContextVersionJournalErrorV1 as EnrollmentErrorV1;
-
 verus! {
 
 spec fn issuable_id_v1(id: u64) -> bool { id > 0 && id < u64::MAX }
@@ -112,11 +109,11 @@ spec fn enrollment_untouched_journal_v1(before: JournalContentsV1, after: Journa
     &&& after.writer_capacity == before.writer_capacity
     &&& after.registration_watermark == before.registration_watermark
     &&& after.reserved_count == before.reserved_count
-    &&& after.writers@ == before.writers@
-    &&& after.free@ == before.free@
-    &&& after.members@ == before.members@
-    &&& after.member_free@ == before.member_free@
-    &&& after.scratch@ == before.scratch@
+    &&& after.writers == before.writers
+    &&& after.free == before.free
+    &&& after.members == before.members
+    &&& after.member_free == before.member_free
+    &&& after.scratch == before.scratch
 }
 
 fn enrollment_commit_journal_exec_v1(contents: &mut JournalContentsV1, entries: &[EnrollmentV1],
@@ -455,6 +452,7 @@ spec fn enrollment_execution_relation_v1(before: JournalContentsV1, after: Journ
     entries: Seq<EnrollmentV1>, old_output: Seq<Option<AllocationReferenceV1>>,
     output: Seq<Option<AllocationReferenceV1>>, result: Result<(), EnrollmentErrorV1>) -> bool {
     &&& result == enrollment_decision_v1(before, entries, old_output)
+    &&& entries.len() == 0 ==> after == before
     &&& match result {
         Err(_) => after == before && output == old_output,
         Ok(()) => {

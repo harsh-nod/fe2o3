@@ -1,7 +1,3 @@
-use self::ContextAllocationReferenceV1 as AllocationReferenceV1;
-use self::ContextAllocationKeyV1 as AllocationKeyV1;
-use self::ContextAllocationEnrollmentV1 as EnrollmentV1;
-
 verus! {
 
 pub open spec fn enrollment_key_less_v1(left: AllocationKeyV1, right: AllocationKeyV1) -> bool {

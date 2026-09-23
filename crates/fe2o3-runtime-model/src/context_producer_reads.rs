@@ -41,6 +41,12 @@ mod unknown_templates {
     include!("context_version_journal/unknown_wrapper_bodies.rs");
 }
 
+#[allow(unused_macros)]
+#[macro_use]
+mod enrollment_templates {
+    include!("context_version_journal/enrollment_wrapper_bodies.rs");
+}
+
 impl Deref for ContextProducerReadJournalV1 {
     type Target = ContextReadLeasedJournalV1;
 
@@ -329,7 +335,7 @@ impl ContextProducerReadJournalV1 {
         entries: &[ContextAllocationEnrollmentV1],
         output: &mut [Option<ContextAllocationReferenceV1>],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.stable.enroll_allocations(entries, output)
+        producer_enrollment_wrapper_body!(self, entries, output)
     }
 
     pub fn settle_success(
@@ -379,3 +385,6 @@ mod stable_wrapper_baseline;
 
 #[cfg(test)]
 mod unknown_baseline;
+
+#[cfg(test)]
+mod enrollment_baseline;
