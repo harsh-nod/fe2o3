@@ -53,8 +53,17 @@ mod writer_lifecycle_templates {
     include!("context_version_journal/writer_lifecycle_bodies.rs");
 }
 
+#[allow(unused_macros)]
+#[macro_use]
+mod settlement_templates {
+    include!("context_version_journal/settlement_wrapper_bodies.rs");
+}
+
 #[cfg(test)]
 mod writer_lifecycle_baseline;
+
+#[cfg(test)]
+mod settlement_baseline;
 
 impl Deref for ContextProducerReadJournalV1 {
     type Target = ContextReadLeasedJournalV1;
@@ -352,7 +361,7 @@ impl ContextProducerReadJournalV1 {
         writer: ContextWriterReferenceV1,
         evidence: &ContextWriterSuccessEvidenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.stable.settle_success(writer, evidence)
+        settlement_owner_forward_body!(self, stable, settle_success, writer, evidence, [])
     }
 
     pub fn settle_no_effect(
@@ -360,7 +369,7 @@ impl ContextProducerReadJournalV1 {
         writer: ContextWriterReferenceV1,
         evidence: &ContextWriterNoEffectEvidenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.stable.settle_no_effect(writer, evidence)
+        settlement_owner_forward_body!(self, stable, settle_no_effect, writer, evidence, [])
     }
 
     pub fn mark_unknown(

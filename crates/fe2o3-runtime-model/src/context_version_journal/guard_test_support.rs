@@ -1,6 +1,37 @@
 use super::*;
 
 impl ContextVersionJournalV1 {
+    // Use only after successful settlement of this saved, validated chain.
+    pub(crate) fn restore_settlement_for_test_v1(
+        &mut self,
+        before: &Self,
+        writer: ContextWriterReferenceV1,
+    ) {
+        let Some(WriterEntryV1::Pending {
+            mut head, count, ..
+        }) = before.writers[writer.slot]
+        else {
+            panic!("pending baseline required");
+        };
+        assert_eq!(self.registration_watermark, before.registration_watermark);
+        assert_eq!(self.reserved_count, before.reserved_count);
+        assert_eq!(self.free.len(), before.free.len() + 1);
+        assert_eq!(self.member_free.len(), before.member_free.len() + count);
+        self.writers[writer.slot] = before.writers[writer.slot];
+        for index in 0..count {
+            let slot = head.unwrap();
+            let member = before.members[slot].unwrap();
+            self.members[slot] = Some(member);
+            self.allocations[member.allocation.slot] = before.allocations[member.allocation.slot];
+            self.scratch[index] = before.scratch[index];
+            head = member.next;
+        }
+        assert!(head.is_none());
+        self.free.truncate(before.free.len());
+        self.member_free.truncate(before.member_free.len());
+        self.reset_access_count_for_test_v1();
+    }
+
     // Register and abort change one slot and at most one free-stack suffix entry.
     pub(crate) fn restore_writer_for_test_v1(&mut self, before: &Self, slot: usize) {
         if let Some(value) = before.writers.get(slot) {

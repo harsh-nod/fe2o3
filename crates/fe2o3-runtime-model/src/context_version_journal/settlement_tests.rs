@@ -15,6 +15,9 @@ mod scratch;
 #[path = "settlement_commit_tests.rs"]
 mod commit;
 
+#[path = "settlement_shared_tests.rs"]
+mod shared;
+
 type Write = ContextAllocationWriteV1;
 type Success = ContextWriterSuccessEvidenceV1;
 type NoEffect = ContextWriterNoEffectEvidenceV1;
@@ -935,6 +938,7 @@ fn rejected_release_cost_covers_each_scratch_cell_and_return_limit() {
 #[test]
 fn settlement_routes_bounded_preflight_before_plan_and_commit() {
     let source = include_str!("settlement.rs");
+    let wrappers = include_str!("settlement_wrapper_bodies.rs");
     for forbidden in [
         "try_reserve",
         ".reserve(",
@@ -957,30 +961,43 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
         "0..self.writer_capacity",
         "self.registration_watermark =",
         "self.reserved_count =",
+        "$journal.registration_watermark =",
+        "$journal.reserved_count =",
     ] {
         assert!(
-            !source.contains(forbidden),
+            !source.contains(forbidden) && !wrappers.contains(forbidden),
             "settlement contains {forbidden}"
         );
     }
     assert_eq!(source.matches("for ").count(), 0);
     assert_eq!(source.matches(".push(").count(), 0);
-    assert!(source.contains("self.settle_retained(writer, evidence.writer, true)"));
-    assert!(source.contains("self.settle_retained(writer, evidence.writer, false)"));
+    assert_eq!(wrappers.matches("for ").count(), 0);
+    assert_eq!(wrappers.matches(".push(").count(), 0);
+    assert!(
+        source.contains(
+            "settlement_outcome_body!(self, settle_retained, writer, evidence, true, [])"
+        )
+    );
+    assert!(
+        source.contains(
+            "settlement_outcome_body!(self, settle_retained, writer, evidence, false, [])"
+        )
+    );
 
-    let release = source.split("fn settle_retained(").nth(1).unwrap();
-    let plan = release
-        .find("settlement_scratch::shared_settlement_scratch_stage_v1(self, head, count)")
+    let release = wrappers
+        .split("macro_rules! settlement_execute_body")
+        .nth(1)
         .unwrap();
+    let plan = release.find("$stage($journal, $head, $count)").unwrap();
     assert!(
         release
-            .find("self.preflight_settlement(writer, evidence)?")
+            .find("$journal.$preflight($writer, $evidence $($observations)*)")
             .unwrap()
             < plan
     );
     assert!(
         plan < release
-            .find("settlement_commit::shared_settlement_commit_v1(self, writer, count, success)")
+            .find("$commit($journal, $writer, $count, $success $($commit_extra)*)")
             .unwrap()
     );
     let preflight = source
@@ -992,31 +1009,59 @@ fn settlement_routes_bounded_preflight_before_plan_and_commit() {
         .unwrap();
     assert!(preflight.contains("&self,"));
     assert!(!preflight.contains("&mut self"));
+    for observation in ["self.free.capacity()", "self.member_free.capacity()"] {
+        assert_eq!(preflight.matches(observation).count(), 1);
+    }
+    for adapter in [
+        "retained::shared_retained_header_v1",
+        "retained::shared_retained_writer_key_v1",
+        "retained::shared_retained_chain_v1",
+        "settlement_scratch::shared_settlement_scratch_scan_v1",
+    ] {
+        assert_eq!(preflight.matches(adapter).count(), 1);
+    }
+    let preflight = wrappers
+        .split("macro_rules! settlement_execute_body")
+        .next()
+        .unwrap();
     let mut previous = 0;
     for validation in [
-        "self.retained_header(writer, false)?",
+        "$header($journal, $writer, false)",
         "SettlementEvidenceMismatch",
-        "self.validate_retained_chain(writer, head, count)?",
+        "$chain($journal, $writer, head, count)",
         "SettlementReturnStorageV1 {",
-        ".check(count)?",
-        "settlement_scratch::shared_settlement_scratch_scan_v1(self, count)?",
+        "storage.check(count)",
+        "$scan($journal, count)",
     ] {
         let position = preflight.find(validation).unwrap();
         assert!(position >= previous, "out-of-order preflight: {validation}");
         previous = position;
     }
     for observation in [
-        "writer_free_len: self.free.len()",
-        "member_free_len: self.member_free.len()",
-        "writer_limit: self.writer_capacity",
-        "writer_storage: self.free.capacity()",
-        "member_limit: self.allocation_capacity",
-        "member_storage: self.member_free.capacity()",
-        "scratch_len: self.scratch.len()",
+        "writer_free_len: $journal.free.len()",
+        "member_free_len: $journal.member_free.len()",
+        "writer_limit: $journal.writer_capacity",
+        "writer_storage: $writer_capacity",
+        "member_limit: $journal.allocation_capacity",
+        "member_storage: $member_capacity",
+        "scratch_len: $journal.scratch.len()",
     ] {
         assert_eq!(preflight.matches(observation).count(), 1);
     }
-    assert_eq!(source.matches(".check(count)?").count(), 1);
+    assert_eq!(wrappers.matches("storage.check(count)").count(), 1);
+    assert!(source.contains("settlement_execute_body!("));
+    assert_eq!(
+        source
+            .matches("settlement_scratch::shared_settlement_scratch_stage_v1")
+            .count(),
+        1
+    );
+    assert_eq!(
+        source
+            .matches("settlement_commit::shared_settlement_commit_v1")
+            .count(),
+        1
+    );
     let body = include_str!("settlement_return_body.rs");
     let storage = include_str!("settlement_storage.rs")
         .split("#[cfg(test)]")

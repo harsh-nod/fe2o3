@@ -494,7 +494,18 @@ Before enabling runtime admission, the remaining work is:
    Frozen CPU tests cover malformed raw state, exact precedence, stable/producer
    custody, buffer identity and constant indexed work. The developer runner is
    `verus/check-owner-writer.py`; no native timing or HIP/HSA parity is claimed.
-   Remaining bodies include construction, scalar enrollment/retirement and other settlement wrappers;
+   Success and NoEffect settlement now share the complete journal preflight and
+   orchestration plus both outer forwarding layers with
+   `context_owner_settlement_execution_v1.rs`. Total raw contracts derive safe
+   stage/commit execution after ordered validation and preserve exact rejection
+   and outer-owner identity. Both return-capacity observations occur once, in
+   writer/member order, only after full chain validation; neither is skipped on
+   logical return-headroom rejection. Frozen three-owner CPU comparisons preserve
+   live and malformed reader metadata on the same physical allocation. The
+   developer runner is `verus/check-owner-settlement.py`. This checkpoint does not
+   yet lift settlement through paired historical execution or conditional issued
+   custody: those bridges and reachable lifecycle witnesses remain open.
+   Remaining bodies include construction, scalar enrollment/retirement and disposal wrappers;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement
