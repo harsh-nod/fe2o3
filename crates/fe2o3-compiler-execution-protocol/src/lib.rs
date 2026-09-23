@@ -19,6 +19,8 @@ mod external_anchor_transaction;
 mod issuer_policy_codec;
 mod issuer_policy_v2;
 mod launch_manifest;
+mod launch_manifest_codec;
+mod launch_manifest_v2;
 mod receipt_carriage_v2;
 mod receipt_publication;
 mod receipt_publication_codec;
@@ -152,6 +154,12 @@ pub use launch_manifest::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
     CompilerExecutionServiceLaunchManifestErrorV1,
     CompilerExecutionServiceLaunchManifestIdentityV1, CompilerExecutionServiceLaunchManifestV1,
+};
+pub use launch_manifest_v2::{
+    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V2,
+    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_STORAGE_V2,
+    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_WORK_V2,
+    CompilerExecutionServiceLaunchManifestErrorV2, CompilerExecutionServiceLaunchManifestV2,
 };
 pub use receipt_carriage_v2::{
     COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V2,

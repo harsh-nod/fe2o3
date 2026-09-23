@@ -29,3 +29,19 @@ credential profile, protected root, caller policy, canonical signing-key
 capability, authenticated external-anchor endpoint and pidfd, twelve-entry
 descriptor manifest, and child lifecycle before launch. Publication does not
 yet perform the external anchor exchange.
+
+## Native Input Integration
+
+`CompilerExecutionIssuerLaunchInputsV2::from_inherited` separately admits native
+policy and launch-manifest capabilities from fixed slots 6 and 8, retains private
+CLOEXEC duplicates, and requires their policy identities to match. Its nested
+operations share one resource ledger. It never upgrades or retries a V1 policy.
+The launch manifest retains the identity-only V1 wire; decoding that frame alone
+does not establish a native policy match.
+
+This reader is inert and is not yet called by the serving entrypoint. Native
+executable/key custody, supervisor launch, service/durable-state admission and
+readiness must be integrated before activation. A subprocess test covers actual
+post-exec input readback and refusal cleanup, not the protected static-launcher
+path, proof execution, or GPU qualification. See the
+[native capability contract](../../docs/compiler-execution-capabilities-v2.md).

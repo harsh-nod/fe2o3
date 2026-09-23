@@ -9,8 +9,9 @@ wire bytes, hash transcripts and diagnostic precedence remain unchanged.
 
 These are trust inputs, not attestations or trusted provisioning. They do not
 prove protected compiler execution and grant no signing, compiler, publication,
-load or launch authority. The production profile pathname, sealed capability,
-supervisor and producer still use V1. This increment completes no #272 milestone
+load or launch authority. Native sealed capabilities and the fixed profile-path
+reader are documented in the [capability contract](compiler-execution-capabilities-v2.md).
+The supervisor, serving entrypoint and producer still use V1. These inputs complete no #272 milestone
 and adds no tutorial kernel or protected hardware qualification.
 
 ## Wire Contracts
@@ -100,11 +101,14 @@ precedence, and exercise exact/one-short work/storage, inherited reservations,
 cumulative work, unwind cleanup and compile-fail nominal/clone boundaries.
 Existing V1 attestation/publication and sealed-capability tests remain required.
 
-The [SubjectV2 challenge/request](compiler-execution-request-v2.md) now retains
-the complete native subject through a same-ledger nested decode. Next work is
-native signed receipts, publication, acknowledgment and carriage, followed by typed sealed trust-input
-admission, broker reconstruction, explicitly versioned durable state and service
-packets, Worker/runtime/finalizer/host admission, and provisioning. Consumers
+The [SubjectV2 challenge/request](compiler-execution-request-v2.md) retains
+the complete native subject through a same-ledger nested decode. Native signed
+receipts, publication, acknowledgment and carriage are covered by the
+[publication contract](compiler-execution-publication-v2.md). The native issuer
+launch-input reader checks independently admitted policy and manifest images,
+but does not activate service handlers. Remaining integration includes native
+program/key custody, broker reconstruction, durable-state and service packets,
+Worker/runtime/finalizer/host admission, and coherent provisioning. Consumers
 must land before activating Cargo and the producer. Existing V1 state must never
 be treated as absent V2 state or silently retried after V2 rejection. The complete
 M1 fresh-build and both restart paths, followed by the 47-kernel matrix, remain

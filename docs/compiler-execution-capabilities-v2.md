@@ -8,6 +8,12 @@ records in immutable descriptors. They are move-only, expose no `AsFd`, and
 never decode or upgrade V1 records. A policy/profile remains public configuration,
 not signing custody, protected execution, publication, GPU load, or launch authority.
 
+`CompilerExecutionServiceLaunchCapabilityV2` transports the 112-byte identity-only
+launch frame through the same private sealed-image machinery. Its wire deliberately
+remains V1: it contains a policy digest, not a policy or subject encoding. Structural
+decoding therefore accepts either opaque policy binding. A consumer must match an
+independently admitted PolicyV2; structural admission is not a policy upgrade.
+
 These APIs do not activate the native producer, service handlers, or launcher.
 No protected proof or GPU execution is credited. M0-M7 and 47/47 remain open.
 See the [native publication contract](compiler-execution-publication-v2.md)
@@ -108,10 +114,30 @@ outer cleanup. Actual work totals are:
 | from_file; policy from_inherited_at | 54800 | 65808 |
 | from_production_profile | n/a | 131344 |
 
+For the launch capability, create/revalidate/transfer cost 36360 units and
+file/inherited admission costs 39952 units including the native manifest decoder.
+The manifest API costs 3592 units for construction, decoding, or policy matching.
+Its fixed scratch is exported as `COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_STORAGE_V2`;
+borrowed policy/manifest inputs stay separately prepaid.
+
 These logical quotas do not bound syscall latency, kernel allocation, generated
 instructions/stack, allocator behavior, page cache, or process RSS.
 
 ## Remaining Integration
+
+The issuer's explicit native input reader now independently admits policy and
+launch capabilities from fixed slots 6/8 and revalidates both before requiring
+their native policy match. It borrows the installed sources, returning private
+CLOEXEC owners and their full retained charge. Nested admission and comparison
+use the same ledger; partial failures drop private duplicates and restore the
+entry floor. The caller remains responsible for closing the original sources.
+Agreement is not an external policy pin: a consistently replaced native pair
+also agrees. Trusted installation and native program admission must supply that
+pin before activation.
+The reader grants no client/anchor/process/key authentication or readiness, and
+the serving entrypoint does not call it yet. Tests exercise a real process exec
+with native, mismatched, mixed-family and corrupt inputs, without invoking the
+protected launcher or crediting a protected service occurrence.
 
 Native child installation needs an owned launcher that retains descriptor
 capture charges and prepays each spawn. Attaching a callback to a reusable

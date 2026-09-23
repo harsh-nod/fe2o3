@@ -3,6 +3,12 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-compiler-execution-issuer requires Linux x86-64");
 
+mod launch_inputs_v2;
+pub use launch_inputs_v2::{
+    CompilerExecutionIssuerLaunchInputErrorV2, CompilerExecutionIssuerLaunchInputStorageV2,
+    CompilerExecutionIssuerLaunchInputsV2,
+};
+
 use std::error::Error;
 use std::fmt;
 use std::fs::File;

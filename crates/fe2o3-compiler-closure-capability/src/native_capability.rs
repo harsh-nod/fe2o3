@@ -1,7 +1,8 @@
-//! Shared move-only transport for the two native public trust records.
+//! Shared move-only transport for native public trust and identity records.
 use crate::sealed_image::{CapabilityRole, SealedCapabilityImage};
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationErrorV2, CompilerExecutionClientProfileErrorV2,
+    CompilerExecutionServiceLaunchManifestErrorV2,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -31,6 +32,7 @@ pub enum CompilerExecutionCapabilityErrorV2 {
     Resource(Resource),
     Policy(CompilerExecutionAttestationErrorV2),
     Profile(CompilerExecutionClientProfileErrorV2),
+    Launch(CompilerExecutionServiceLaunchManifestErrorV2),
     Io { operation: &'static str, errno: i32 },
     Rejected(&'static str),
 }
@@ -65,12 +67,18 @@ impl From<CompilerExecutionClientProfileErrorV2> for CompilerExecutionCapability
         Self::Profile(value)
     }
 }
+impl From<CompilerExecutionServiceLaunchManifestErrorV2> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionServiceLaunchManifestErrorV2) -> Self {
+        Self::Launch(value)
+    }
+}
 impl fmt::Display for CompilerExecutionCapabilityErrorV2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Resource(e) => e.fmt(f),
             Self::Policy(e) => e.fmt(f),
             Self::Profile(e) => e.fmt(f),
+            Self::Launch(e) => e.fmt(f),
             Self::Io { operation, errno } => {
                 write!(f, "native capability {operation}: errno {errno}")
             }
@@ -84,6 +92,7 @@ impl Error for CompilerExecutionCapabilityErrorV2 {
             Self::Resource(e) => Some(e),
             Self::Policy(e) => Some(e),
             Self::Profile(e) => Some(e),
+            Self::Launch(e) => Some(e),
             Self::Io { .. } | Self::Rejected(_) => None,
         }
     }
