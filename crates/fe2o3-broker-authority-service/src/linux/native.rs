@@ -6,7 +6,7 @@ use fe2o3_kernel_ir::{
 };
 use std::{mem::size_of, os::fd::BorrowedFd};
 
-const ENTRY_WORK: usize = 8;
+pub(super) const ENTRY_WORK: usize = 8;
 const RECORD_BYTES: usize = 4096;
 const RECORD_ATTEMPTS: usize = RECORD_BYTES + 1;
 
@@ -120,8 +120,7 @@ impl Anchor {
     pub const PAIR_STORAGE: usize = 2 * size_of::<(OwnedFd, Storage)>();
     /// Fixed scratch for staged owners, transient descriptor pairs, procfs
     /// records, syscall structures and scope/error envelopes. Not stack/RSS bounds.
-    pub const IO_STORAGE: usize =
-        8 * Self::RETAINED + 4 * Self::PAIR_STORAGE + 2 * RECORD_ATTEMPTS + 8192;
+    pub const IO_STORAGE: usize = operation_storage(Self::RETAINED, Self::PAIR_STORAGE);
     /// Full logical operation allowances, including fallback record scans.
     pub const ADMISSION_WORK: usize = operation_work(7);
     pub const REVALIDATION_WORK: usize = operation_work(4);
@@ -252,8 +251,13 @@ impl fmt::Debug for Anchor {
 // Prepay every 4097-attempt record schedule, even when the ioctl avoids fdinfo.
 // The 64 per-record and 512 outer call slots include metadata, open/dup/close,
 // credentials and liveness. Units are weighted calls and byte visits, not cycles.
-const fn operation_work(probes: usize) -> usize {
+pub(super) const fn operation_work(probes: usize) -> usize {
     ENTRY_WORK + 512 * 1024 + 2 * probes * ((RECORD_ATTEMPTS + 64) * 1024 + 16 * RECORD_ATTEMPTS)
+}
+
+// Both native owners stage fixed values around the same sequential procfs leaves.
+pub(super) const fn operation_storage(retained: usize, descriptors: usize) -> usize {
+    8 * retained + 4 * descriptors + 2 * RECORD_ATTEMPTS + 8192
 }
 
 const _: () = {

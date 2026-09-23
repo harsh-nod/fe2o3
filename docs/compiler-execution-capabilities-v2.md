@@ -244,6 +244,9 @@ and coherent provisioning remain required before producer activation.
 Fresh native program custody consumes the pinned policy with independently
 sealed launcher/issuer images through bounded shared executable mechanics.
 Native supervisor binding joins that program to key, anchor, credentials and
-root; accepted/prepared native handoff custody and consuming launch remain open.
+root. Native accepted handoff custody now joins the canonical frame to actual
+control/service peers and a single live client pidfd on that same ledger;
+prepared launch and consuming process lifecycle remain open. See the
+[handoff contract](compiler-execution-handoff-v2.md).
 See the [program status](../crates/fe2o3-compiler-execution-supervisor/README.md)
 and [image accounting](../crates/fe2o3-protected-static-executable/README.md).

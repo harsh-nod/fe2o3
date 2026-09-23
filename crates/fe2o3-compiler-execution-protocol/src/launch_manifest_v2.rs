@@ -60,6 +60,11 @@ pub struct CompilerExecutionServiceLaunchManifestV2 {
 }
 
 impl CompilerExecutionServiceLaunchManifestV2 {
+    // Used only by prepaid shared-codec adapters, never an admitted V1 projection.
+    pub(crate) fn from_record(record: codec::Record) -> Self {
+        Self { record }
+    }
+
     pub fn new(
         client: Client,
         service: Service,

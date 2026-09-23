@@ -103,6 +103,7 @@ Custody is a point-in-time transport observation, not authority, protected proof
 signing-key custody, exclusive endpoint ownership, an independently deployed service,
 monotonic persistence or GPU execution credit. Native supervisor binding can
 now consume this owner with native program, policy-bound key, credentials and
-root custody. Native handoff admission and the consuming launch path remain
-open. Neither owner activates serving, a protected launcher, or downstream
+root custody. Native handoff admission now binds the actual submitter/client
+session to this anchor identity and process role. Prepared launch and the
+consuming process path remain open. Neither owner activates serving, a protected launcher, or downstream
 native protocols by itself.

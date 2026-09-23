@@ -109,8 +109,9 @@ launch-input reader checks independently admitted policy and manifest images,
 but does not activate service handlers. Native signing-key custody now pins the
 complete typed policy identity, and bounded native anchor transport custody
 preserves the endpoint/pidfd continuity checks. Native supervisor binding now
-joins program, key, anchor, credentials and root on one ledger. Remaining
-integration includes native handoff custody and consuming launch, broker reconstruction,
+joins program, key, anchor, credentials and root on one ledger. Native
+handoff custody binds actual submitter/client peers and one live client pidfd.
+Remaining integration includes prepared/consuming launch, broker reconstruction,
 durable-state and service packets,
 Worker/runtime/finalizer/host admission, and coherent provisioning. Consumers
 must land before activating Cargo and the producer. Existing V1 state must never

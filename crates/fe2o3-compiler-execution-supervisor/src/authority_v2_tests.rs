@@ -27,7 +27,7 @@ fn credentials() -> Credentials {
     .unwrap()
 }
 
-fn policy(f: &Fixture, generation: u64, budget: &mut Budget<'_>) -> Policy {
+pub(crate) fn policy(f: &Fixture, generation: u64, budget: &mut Budget<'_>) -> Policy {
     let (policy, delta) = Policy::new(
         generation,
         f.issuer_measurement(),
@@ -136,7 +136,7 @@ fn prepared(f: &Fixture, peer: &OwnedFd, pidfd: &OwnedFd, generation: u64) -> In
     Inputs::new(f, peer, pidfd, generation, &mut budget)
 }
 
-fn nested_work(f: &Fixture) -> usize {
+pub(crate) fn nested_work(f: &Fixture) -> usize {
     Program::WORK
         + Cap::IO_WORK
         + 2 * Image::quota(measurement(f), Operation::Revalidate)
@@ -144,6 +144,18 @@ fn nested_work(f: &Fixture) -> usize {
             .work()
         + Key::IO_WORK
         + Anchor::REVALIDATION_WORK
+}
+
+pub(crate) fn bound_fixture(
+    peer: &OwnedFd,
+    pidfd: &OwnedFd,
+    budget: &mut Budget<'_>,
+) -> (Fixture, Supervisor) {
+    let f = Fixture::new("native-handoff");
+    let inputs = Inputs::new(&f, peer, pidfd, 7, budget);
+    let (supervisor, delta) = inputs.bind(credentials(), budget).unwrap();
+    budget.reserve_storage(delta.additional_storage()).unwrap();
+    (f, supervisor)
 }
 
 fn root_references(root: &File) -> usize {

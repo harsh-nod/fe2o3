@@ -107,7 +107,7 @@ impl CompilerExecutionServiceLaunchManifestV1 {
         ))
     }
 
-    fn from_record(record: codec::Record) -> Self {
+    pub(crate) fn from_record(record: codec::Record) -> Self {
         Self {
             client: record.client,
             external_anchor_service: record.service,

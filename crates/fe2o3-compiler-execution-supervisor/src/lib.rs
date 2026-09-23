@@ -26,6 +26,13 @@ mod authority_v2_test_process;
 #[allow(unsafe_code)]
 mod deployment;
 mod handoff;
+#[allow(unsafe_code)]
+mod handoff_ancillary;
+mod handoff_checks;
+mod handoff_v2;
+mod handoff_v2_io;
+#[cfg(test)]
+mod handoff_v2_test_process;
 mod launch;
 mod listener;
 #[allow(unsafe_code)]
@@ -58,6 +65,10 @@ pub use deployment::{
     run_inherited_protected_issuer_service_v1,
 };
 pub use handoff::{AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1};
+pub use handoff_v2::{
+    AcceptedCompilerExecutionHandoffV2, ProtectedIssuerHandoffErrorV2,
+    ProtectedIssuerHandoffStorageV2,
+};
 pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
 pub use listener::{
     ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceReportV1,

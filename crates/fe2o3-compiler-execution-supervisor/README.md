@@ -22,12 +22,18 @@ CLOEXEC, read-only non-O_PATH directory custody, exact UID/GID, mode0700, nonzer
 links and no capability or POSIX access/default ACL. V1 and V2 share this root
 predicate; the native owner never converts an admitted V1 owner.
 
-The native supervisor is pre-session custody only. It does not yet authenticate
-a native compiler handoff, validate the full child confinement profile, consume
-a launch, establish readiness or activate serving/recovery. Its getters expose
-only immutable policy and identity facts, not descriptors. Every nested check
-uses the caller's ledger; reserve the returned owner-growth delta while preserving
-all consumed reservations. See the [resource contract](../../docs/compiler-execution-capabilities-v2.md#native-supervisor-binding)
+Binding alone is pre-session custody. `accept_handoff` now consumes an actual
+control connection and authenticates its canonical native frame, submitter,
+service socket, policy/anchor identities and one retained live client pidfd.
+Its move-only accepted result exposes only immutable facts. Shared socket
+predicates preserve the V1 checks; native receive uses fixed buffers and finite
+attempts. Unsupported ancillary messages fail closed with descriptor cleanup.
+
+Native prepared launch, full child confinement, consuming process creation,
+readiness and serving/recovery remain open. Every nested check uses the caller's
+ledger; reserve returned growth while preserving consumed input reservations.
+See the [handoff contract](../../docs/compiler-execution-handoff-v2.md),
+[binding resource contract](../../docs/compiler-execution-capabilities-v2.md#native-supervisor-binding)
 and [anchor custody contract](../../docs/compiler-execution-anchor-custody-v2.md).
 No protected proof or GPU qualification is credited; M0-M7 and 47/47 remain incomplete.
 

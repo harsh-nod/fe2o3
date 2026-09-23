@@ -3,7 +3,6 @@
 use std::error::Error;
 use std::fmt;
 use std::io::{self, IoSliceMut};
-use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, OwnedFd};
 use std::time::{Duration, Instant};
 
@@ -16,11 +15,10 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionSupervisorHandoffV1,
 };
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::net::{
-    AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags,
-    SocketAddrUnix, SocketType, recvmsg,
-};
+use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, recvmsg};
 
+use crate::handoff_ancillary::Guard;
+use crate::handoff_checks::{self as checks, Snapshot as DescriptorSnapshotV1};
 use crate::{ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1};
 
 /// Move-only, fully admitted rustc descriptors and their authenticated control connection.
@@ -225,14 +223,17 @@ fn receive_handoff(
         let mut payload = [0_u8; COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1];
         let result = {
             let mut vectors = [IoSliceMut::new(&mut payload)];
-            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
-            let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-            match recvmsg(
+            let mut guard = Guard::new();
+            let (space, armed) = guard.parts();
+            let mut ancillary = RecvAncillaryBuffer::new(space);
+            let received = recvmsg(
                 control,
                 &mut vectors,
                 &mut ancillary,
                 RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
-            ) {
+            );
+            *armed = received.is_ok();
+            match received {
                 Ok(received) => {
                     let invalid_packet = received.bytes != payload.len()
                         || received
@@ -248,6 +249,8 @@ fn receive_handoff(
                             _ => invalid_ancillary = true,
                         }
                     }
+                    drop(ancillary);
+                    invalid_ancillary |= guard.finish();
                     if invalid_packet || invalid_ancillary || descriptors.len() != 2 {
                         Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer)
                     } else {
@@ -306,104 +309,26 @@ fn wait_readable(
 }
 
 fn validate_control_shape(control: &OwnedFd) -> Result<(), ProtectedIssuerHandoffErrorV1> {
-    if !has_cloexec(control)? {
-        return Err(ProtectedIssuerHandoffErrorV1::InvalidControl(
-            "control descriptor is inheritable",
-        ));
-    }
-    if rustix::net::sockopt::socket_domain(control).map_err(io::Error::from)? != AddressFamily::UNIX
-        || rustix::net::sockopt::socket_type(control).map_err(io::Error::from)?
-            != SocketType::SEQPACKET
-    {
-        return Err(ProtectedIssuerHandoffErrorV1::InvalidControl(
-            "endpoint is not Unix SOCK_SEQPACKET",
-        ));
-    }
-    let local = rustix::net::getsockname(control).map_err(io::Error::from)?;
-    let remote = rustix::net::getpeername(control).map_err(io::Error::from)?;
-    if local.address_family() != AddressFamily::UNIX
-        || remote
-            .as_ref()
-            .is_none_or(|address| address.address_family() != AddressFamily::UNIX)
-    {
-        return Err(ProtectedIssuerHandoffErrorV1::InvalidControl(
-            "endpoint is not connected within AF_UNIX",
-        ));
-    }
-    Ok(())
+    checks::control_shape(control).map_err(Into::into)
 }
 
 fn control_peer_identity(
     control: &OwnedFd,
 ) -> Result<CompilerExecutionClientProcessIdentityV1, ProtectedIssuerHandoffErrorV1> {
-    let credentials = rustix::net::sockopt::socket_peercred(control).map_err(io::Error::from)?;
-    let pid = u32::try_from(credentials.pid.as_raw_nonzero().get())
-        .map_err(|_| ProtectedIssuerHandoffErrorV1::SubmitterCredentialsMismatch)?;
-    CompilerExecutionClientProcessIdentityV1::new(
-        pid,
-        credentials.uid.as_raw(),
-        credentials.gid.as_raw(),
-    )
-    .map_err(|_| ProtectedIssuerHandoffErrorV1::SubmitterCredentialsMismatch)
+    checks::control_peer(control).map_err(Into::into)
 }
 
 pub(super) fn validate_service_peer(
     peer: &impl AsFd,
     expected: CompilerExecutionClientProcessIdentityV1,
 ) -> Result<(), ProtectedIssuerHandoffErrorV1> {
-    if !has_cloexec(peer)? {
-        return Err(ProtectedIssuerHandoffErrorV1::InvalidServicePeer);
-    }
-    let before = descriptor_snapshot(peer)?;
-    if before.mode & libc::S_IFMT != libc::S_IFSOCK
-        || rustix::net::sockopt::socket_domain(peer).map_err(io::Error::from)?
-            != AddressFamily::UNIX
-        || rustix::net::sockopt::socket_type(peer).map_err(io::Error::from)?
-            != SocketType::SEQPACKET
-    {
-        return Err(ProtectedIssuerHandoffErrorV1::InvalidServicePeer);
-    }
-    let local = rustix::net::getsockname(peer).map_err(io::Error::from)?;
-    let remote = rustix::net::getpeername(peer).map_err(io::Error::from)?;
-    let unnamed = rustix::net::SocketAddrAny::from(SocketAddrUnix::new_unnamed());
-    if local != unnamed || remote.as_ref() != Some(&unnamed) {
-        return Err(ProtectedIssuerHandoffErrorV1::InvalidServicePeer);
-    }
-    let credentials = rustix::net::sockopt::socket_peercred(peer).map_err(io::Error::from)?;
-    let pid = u32::try_from(credentials.pid.as_raw_nonzero().get())
-        .map_err(|_| ProtectedIssuerHandoffErrorV1::ServicePeerCredentialsMismatch)?;
-    if (pid, credentials.uid.as_raw(), credentials.gid.as_raw())
-        != (expected.pid(), expected.uid(), expected.gid())
-    {
-        return Err(ProtectedIssuerHandoffErrorV1::ServicePeerCredentialsMismatch);
-    }
-    if descriptor_snapshot(peer)? != before {
-        return Err(ProtectedIssuerHandoffErrorV1::DescriptorChanged);
-    }
-    Ok(())
-}
-
-fn has_cloexec(descriptor: &impl AsFd) -> Result<bool, ProtectedIssuerHandoffErrorV1> {
-    let flags = rustix::io::fcntl_getfd(descriptor).map_err(io::Error::from)?;
-    Ok(flags.contains(rustix::io::FdFlags::CLOEXEC))
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DescriptorSnapshotV1 {
-    device: u64,
-    inode: u64,
-    mode: u32,
+    checks::service_peer(peer, expected).map_err(Into::into)
 }
 
 fn descriptor_snapshot(
     descriptor: &impl AsFd,
 ) -> Result<DescriptorSnapshotV1, ProtectedIssuerHandoffErrorV1> {
-    let stat = rustix::fs::fstat(descriptor).map_err(io::Error::from)?;
-    Ok(DescriptorSnapshotV1 {
-        device: stat.st_dev,
-        inode: stat.st_ino,
-        mode: stat.st_mode,
-    })
+    checks::snapshot(descriptor).map_err(Into::into)
 }
 
 fn require_distinct(
@@ -411,13 +336,21 @@ fn require_distinct(
     service_peer: DescriptorSnapshotV1,
     client_pidfd: DescriptorSnapshotV1,
 ) -> Result<(), ProtectedIssuerHandoffErrorV1> {
-    let control_key = (control.device, control.inode);
-    let service_key = (service_peer.device, service_peer.inode);
-    let pidfd_key = (client_pidfd.device, client_pidfd.inode);
-    if control_key == service_key || control_key == pidfd_key || service_key == pidfd_key {
-        return Err(ProtectedIssuerHandoffErrorV1::DescriptorAlias);
+    checks::distinct(control, service_peer, client_pidfd).map_err(Into::into)
+}
+
+impl From<checks::Failure> for ProtectedIssuerHandoffErrorV1 {
+    fn from(error: checks::Failure) -> Self {
+        match error {
+            checks::Failure::InvalidControl(reason) => Self::InvalidControl(reason),
+            checks::Failure::SubmitterCredentialsMismatch => Self::SubmitterCredentialsMismatch,
+            checks::Failure::InvalidServicePeer => Self::InvalidServicePeer,
+            checks::Failure::ServicePeerCredentialsMismatch => Self::ServicePeerCredentialsMismatch,
+            checks::Failure::DescriptorChanged => Self::DescriptorChanged,
+            checks::Failure::DescriptorAlias => Self::DescriptorAlias,
+            checks::Failure::Io(errno) => Self::Io(errno.into()),
+        }
     }
-    Ok(())
 }
 
 /// Stable failure admitting one exact cross-process rustc launch handoff.

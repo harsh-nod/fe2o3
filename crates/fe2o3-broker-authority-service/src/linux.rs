@@ -12,10 +12,12 @@ use rustix::fs::OFlags;
 use rustix::net::{AddressFamily, SocketType};
 
 mod checks;
+mod client_v2;
 mod continuity;
 mod native;
 mod native_io;
 
+pub use client_v2::{LiveClientPidfdErrorV2, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2};
 pub use native::{
     ProtectedExternalAnchorServiceAdmissionV2, ProtectedExternalAnchorServiceErrorV2,
     ProtectedExternalAnchorServiceStorageV2,

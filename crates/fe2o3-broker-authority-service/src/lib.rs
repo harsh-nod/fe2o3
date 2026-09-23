@@ -102,6 +102,10 @@
 //! anchor transport owner. It shares V1's mechanical continuity checks, but uses
 //! fixed procfs buffers, finite I/O attempts and allocation-free diagnostics on
 //! the caller's resource ledger. It has no V1-owner conversion or service authority.
+//! [`LiveClientPidfdIdentityV2`] similarly retains one freshly admitted client
+//! pidfd with bounded native liveness checks. Its cached descriptor facts and
+//! supplied expected credentials are inert; UID/GID require a separate trusted
+//! peer-credential join. Neither native owner exposes its retained descriptors.
 //!
 //! The [`BrokerSessionMachineV1`] is a separate fixed-capacity, in-memory lifecycle model. Its
 //! broker-owned route retains prepared and granted Broker V4 state, requires the V4 static-LLD
@@ -201,7 +205,8 @@ pub use durable_session_consume::{
 };
 #[cfg(target_os = "linux")]
 pub use linux::{
-    AdmissionErrorKindV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
+    AdmissionErrorKindV1, ExpectedClientProcessIdentityV1, LiveClientPidfdErrorV2,
+    LiveClientPidfdIdentityV1, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2,
     ProtectedExternalAnchorServiceAdmissionV1, ProtectedExternalAnchorServiceAdmissionV2,
     ProtectedExternalAnchorServiceErrorV2, ProtectedExternalAnchorServiceStorageV2,
     ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,

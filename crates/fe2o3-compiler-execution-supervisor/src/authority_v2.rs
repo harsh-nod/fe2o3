@@ -163,6 +163,12 @@ impl ProtectedIssuerSupervisorV2 {
     pub const fn external_anchor_service(&self) -> AnchorIdentity {
         self.external_anchor.service_identity()
     }
+    /// Returns cached anchor process facts; continuity still requires revalidation.
+    pub const fn external_anchor_process(
+        &self,
+    ) -> fe2o3_broker_authority_service::ExpectedClientProcessIdentityV1 {
+        self.external_anchor.service_process_identity()
+    }
     /// Full retained charge; retire it only after this owner is dropped or transferred.
     pub const fn retained_storage(&self) -> usize {
         self.retained

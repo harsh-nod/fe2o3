@@ -19,17 +19,17 @@ const OPT_IN: &str = "FE2O3_RUN_PRIVILEGED_SUPERVISOR_V2_TEST";
 const ROLE: &str = "FE2O3_SUPERVISOR_V2_FIXTURE_ROLE";
 const ANCHOR_UID: u32 = 65_534;
 const SUPERVISOR_UID: u32 = 65_533;
-const IO_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
 const ANCHOR_TIMEOUT: Duration = Duration::from_secs(45);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const ANCHOR_HELPER: &str = "authority_v2_test_process::anchor_process_helper";
 const SUPERVISOR_HELPER: &str = "authority_v2_test_process::supervisor_process_helper";
 
-struct ChildGuard(Child);
+pub(crate) struct ChildGuard(pub(crate) Child);
 
 impl ChildGuard {
-    fn wait_until(&mut self, deadline: Instant) -> io::Result<ExitStatus> {
+    pub(crate) fn wait_until(&mut self, deadline: Instant) -> io::Result<ExitStatus> {
         loop {
             if let Some(status) = self.0.try_wait()? {
                 return Ok(status);
@@ -63,7 +63,7 @@ impl Drop for ChildGuard {
     }
 }
 
-fn pair() -> (OwnedFd, OwnedFd) {
+pub(crate) fn pair() -> (OwnedFd, OwnedFd) {
     socketpair(
         AddressFamily::UNIX,
         SocketType::SEQPACKET,
@@ -73,7 +73,7 @@ fn pair() -> (OwnedFd, OwnedFd) {
     .unwrap()
 }
 
-fn spawn_role(name: &str, role: &str, uid: u32, control: OwnedFd) -> ChildGuard {
+pub(crate) fn spawn_role(name: &str, role: &str, uid: u32, control: OwnedFd) -> ChildGuard {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args([
@@ -101,7 +101,7 @@ fn spawn_role(name: &str, role: &str, uid: u32, control: OwnedFd) -> ChildGuard 
     ChildGuard(child)
 }
 
-fn require_child_credentials(role: &str, uid: u32) {
+pub(crate) fn require_child_credentials(role: &str, uid: u32) {
     assert_eq!(std::env::var(ROLE).as_deref(), Ok(role));
     let (mut real, mut effective, mut saved) = (0, 0, 0);
     // SAFETY: these scalar outputs are writable for the duration of each call.
@@ -119,7 +119,7 @@ fn require_child_credentials(role: &str, uid: u32) {
     assert_eq!(unsafe { libc::getgroups(0, std::ptr::null_mut()) }, 0);
 }
 
-fn inherited_control() -> OwnedFd {
+pub(crate) fn inherited_control() -> OwnedFd {
     // SAFETY: spawn_role installs the dedicated control socket as stdin. Each
     // exact helper takes that descriptor's sole Rust ownership once.
     let control = unsafe { OwnedFd::from_raw_fd(libc::STDIN_FILENO) };
@@ -134,14 +134,14 @@ fn malformed() -> io::Error {
     )
 }
 
-fn frame(tag: &[u8; 4], pid: u32) -> [u8; 8] {
+pub(crate) fn frame(tag: &[u8; 4], pid: u32) -> [u8; 8] {
     let mut bytes = [0; 8];
     bytes[..4].copy_from_slice(tag);
     bytes[4..].copy_from_slice(&pid.to_le_bytes());
     bytes
 }
 
-fn send_packet(
+pub(crate) fn send_packet(
     control: &OwnedFd,
     payload: &[u8],
     descriptors: &[std::os::fd::BorrowedFd<'_>],
@@ -191,7 +191,7 @@ fn wait_readable(control: &OwnedFd, deadline: Instant) -> io::Result<()> {
     }
 }
 
-fn receive_packet<const N: usize>(
+pub(crate) fn receive_packet<const N: usize>(
     control: &OwnedFd,
     deadline: Instant,
 ) -> io::Result<([u8; 8], [OwnedFd; N])> {
@@ -278,6 +278,13 @@ fn native_distinct_uid_supervisor_fixture() {
     assert_eq!(payload, frame(b"ANC2", pid));
 
     let (supervisor_control, child_control) = pair();
+    let (submitter_control, submitter_input) = pair();
+    let mut submitter = spawn_role(
+        "handoff_v2_test_process::submitter_process_helper",
+        "submitter",
+        65_532,
+        submitter_input,
+    );
     let mut supervisor = spawn_role(
         SUPERVISOR_HELPER,
         "supervisor",
@@ -288,15 +295,16 @@ fn native_distinct_uid_supervisor_fixture() {
     send_packet(
         &supervisor_control,
         &payload,
-        &[peer.as_fd(), pidfd.as_fd()],
+        &[peer.as_fd(), pidfd.as_fd(), submitter_control.as_fd()],
     )
     .unwrap();
-    drop((peer, pidfd));
+    drop((peer, pidfd, submitter_control));
     // A filtered libtest invocation can exit zero without running any tests.
     // Require this packet, emitted only after the actual owner cases return.
     let (completed, []) = receive_packet::<0>(&supervisor_control, deadline).unwrap();
     assert_eq!(completed, frame(b"DONE", pid));
     let supervisor_status = supervisor.wait_until(deadline).unwrap();
+    let submitter_status = submitter.wait_until(deadline).unwrap();
     send_packet(&anchor_control, &frame(b"STOP", pid), &[]).unwrap();
     let anchor_status = anchor.wait_until(Instant::now() + IO_TIMEOUT).unwrap();
     assert!(
@@ -306,6 +314,10 @@ fn native_distinct_uid_supervisor_fixture() {
     assert!(
         anchor_status.success(),
         "anchor fixture failed: {anchor_status}"
+    );
+    assert!(
+        submitter_status.success(),
+        "submitter fixture failed: {submitter_status}"
     );
 }
 
@@ -329,14 +341,18 @@ fn anchor_process_helper() {
 fn supervisor_process_helper() {
     require_child_credentials("supervisor", SUPERVISOR_UID);
     let control = inherited_control();
-    let (payload, [peer, pidfd]) =
-        receive_packet::<2>(&control, Instant::now() + IO_TIMEOUT).unwrap();
+    let (payload, [peer, pidfd, submitter]) =
+        receive_packet::<3>(&control, Instant::now() + IO_TIMEOUT).unwrap();
     assert_eq!(&payload[..4], b"ANC2");
     let pid = u32::from_le_bytes(payload[4..].try_into().unwrap());
     assert_ne!(pid, 0);
     // Existing tests::Fixture creates and removes its service-owned 0700 root
     // under TMPDIR=/tmp after this process has dropped all root credentials.
-    crate::authority_v2::tests::exercise(peer, pidfd);
+    crate::authority_v2::tests::exercise(
+        rustix::io::fcntl_dupfd_cloexec(&peer, 3).unwrap(),
+        rustix::io::fcntl_dupfd_cloexec(&pidfd, 3).unwrap(),
+    );
+    crate::handoff_v2::tests::exercise(&peer, &pidfd, &submitter);
     send_packet(&control, &frame(b"DONE", pid), &[]).unwrap();
 }
 

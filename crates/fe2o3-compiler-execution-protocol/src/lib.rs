@@ -29,6 +29,8 @@ mod service;
 mod service_ready;
 mod supervisor_deployment;
 mod supervisor_handoff;
+mod supervisor_handoff_codec;
+mod supervisor_handoff_v2;
 mod supervisor_ready;
 mod worker_anchor_journal;
 
@@ -224,6 +226,12 @@ pub use supervisor_deployment::{
 pub use supervisor_handoff::{
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, CompilerExecutionSupervisorHandoffErrorV1,
     CompilerExecutionSupervisorHandoffIdentityV1, CompilerExecutionSupervisorHandoffV1,
+};
+pub use supervisor_handoff_v2::{
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V2,
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_STORAGE_V2,
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_WORK_V2, CompilerExecutionSupervisorHandoffErrorV2,
+    CompilerExecutionSupervisorHandoffV2,
 };
 pub use supervisor_ready::{
     COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V1, CompilerExecutionSupervisorReadyErrorV1,
