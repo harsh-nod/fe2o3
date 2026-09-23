@@ -28,6 +28,12 @@ POLICY_NEW = [BRIDGE, *[CRATE / ('verus/context_owner_writer_' + name + '_v1.rs'
     for name in ('bodies', 'witnesses')]]
 PROJECTIONS = [(BODY, 'audited-writer-lifecycle.rs', 4)]
 NEW = [ROOT, RAW, BODY, *POLICY_NEW]
+CPU_INPUTS = [Path('crates/fe2o3-runtime/src/context.rs'), *[
+    CRATE / ('verus/' + name + '.rs') for name in (
+        'context_journal_representation_v1', 'context_journal_retained_execution_v1',
+        'context_journal_retained_bodies_v1', 'context_journal_unknown_execution_v1',
+        'context_journal_unknown_body_v1', 'context_journal_settlement_execution_v1',
+        'context_journal_settlement_bodies_v1')]]
 # name, source, unique declaration, module, function, before, after, kind
 MUTATIONS = [
     ('register_id', BODY, 'macro_rules! writer_register_body {', 'production',
@@ -90,12 +96,13 @@ def digest(data):
 def authenticate(repo):
     baseline = module(repo, Path('docs/evidence/dev-producer-stable-2026-09-22/performance.py'), 'writer_frozen_parser')
     def old(path):
-        return subprocess.check_output(['git', '-C', str(repo), 'show', FROZEN + ':' + str(path)], text=True)
+        return subprocess.check_output(['git', '-C', str(repo), 'show', FROZEN + ':' + str(path)]).decode()
     def compact(text):
         return re.sub(r'\s+', '', text)
     for owner, field in [('context_version_journal', None), ('context_read_leases', 'journal'), ('context_producer_reads', 'stable')]:
         path = CRATE / 'src' / (owner + '.rs')
         previous, current = old(path), (repo / path).read_text()
+        reconstructed = previous
         frozen = (repo / CRATE / 'src' / owner / 'writer_lifecycle_baseline.rs').read_text()
         names = ['register_writer', 'abort_reserved'] + ([] if field else ['lookup_reserved'])
         for name in names:
@@ -117,6 +124,25 @@ def authenticate(repo):
                 }[name]
             expected = original.split(' {', 1)[0] + ' {\n        ' + adapter + '\n    }\n'
             need(compact(baseline.method(current, name)) == compact(expected), 'exact shared adapter: ' + owner + ':' + name)
+            reconstructed = reconstructed.replace(original, baseline.method(current, name))
+        templates = ('\n\n#[allow(unused_macros)]\n#[macro_use]\nmod writer_lifecycle_templates {\n'
+                     '    include!("context_version_journal/writer_lifecycle_bodies.rs");\n}')
+        baseline_module = '\n\n#[cfg(test)]\nmod writer_lifecycle_baseline;'
+        if field:
+            anchor = ('mod enrollment_templates {\n'
+                      '    include!("context_version_journal/enrollment_wrapper_bodies.rs");\n}')
+            addition = templates + baseline_module
+        else:
+            anchor = 'include!("context_version_journal/writer_lookup_bodies.rs");'
+            addition = (templates + '\n\nmacro_rules! writer_rust_expr {\n'
+                        '    ($body:expr) => {\n        $body\n    };\n}' + baseline_module)
+            reconstructed = reconstructed.replace('    pub fn abort_reserved(',
+                '    #[allow(clippy::question_mark)]\n    pub fn abort_reserved(')
+            for name in ('read_slot', 'next_free', 'pop_free'):
+                reconstructed = reconstructed.replace('    fn ' + name + '(', '    #[cfg(test)]\n    fn ' + name + '(')
+        need(reconstructed.count(anchor) == 1, 'unique module insertion')
+        reconstructed = reconstructed.replace(anchor, anchor + addition)
+        need(current == reconstructed, 'only authenticated owner-root deltas: ' + owner)
         if field is None:
             for name in ('read_slot', 'store_slot', 'next_free', 'pop_free', 'push_free', 'count_indexed_access'):
                 need(baseline.method(previous, name) == baseline.method(current, name), 'unchanged instrumentation: ' + name)
@@ -134,6 +160,24 @@ def authenticate(repo):
         CRATE / 'verus/context_producer_journal_issuance_v1.rs',
     ]:
         need((repo / path).read_text() == old(path), 'unchanged declarations/lookup/history: ' + str(path))
+    previous = module(repo, PREVIOUS, 'writer_auth_previous')
+    ancestor = module(repo, previous.PREVIOUS, 'writer_auth_ancestor')
+    legacy = module(repo, LEGACY, 'writer_auth_legacy')
+    inherited = set(legacy.SOURCES) | set(ancestor.NEW) | set(previous.NEW)
+    for path in inherited:
+        need((repo / path).read_bytes() == old(path).encode(), 'unchanged inherited proof source: ' + str(path))
+    # Pin private runtime adapters as well as the shared proof macros. The only
+    # excluded existing source files are reconstructed above or test-only helpers.
+    exceptions = {CRATE / ('src/' + owner + '.rs') for owner in
+        ('context_version_journal', 'context_read_leases', 'context_producer_reads')}
+    exceptions.add(CRATE / 'src/context_version_journal/begin.rs')
+    exceptions.update(CRATE / ('src/' + owner + '/guard_test_support.rs') for owner in
+        ('context_version_journal', 'context_read_leases', 'context_producer_reads'))
+    exceptions.update([CRATE / 'src/context_version_journal/tests.rs', CRATE / 'src/context_producer_reads/tests.rs'])
+    paths = subprocess.check_output(['git', '-C', str(repo), 'ls-tree', '-rz', '--name-only', FROZEN, '--', str(CRATE / 'src')])
+    for path in [Path(p.decode()) for p in paths.split(b'\0') if p]:
+        if path not in exceptions:
+            need((repo / path).read_bytes() == old(path).encode(), 'unchanged inherited runtime source: ' + str(path))
 
 
 def main():
@@ -155,7 +199,7 @@ def main():
         signal.signal(number, base.interrupted)
     authenticate(repo)
     sources = sorted(set(legacy.SOURCES) | set(ancestor.NEW) | set(previous.NEW) | set(NEW))
-    inputs = set(sources) | set(legacy.PINS) | {LEGACY, PREVIOUS, previous.PREVIOUS, Path(__file__).resolve().relative_to(repo),
+    inputs = set(sources) | set(CPU_INPUTS) | set(legacy.PINS) | {LEGACY, PREVIOUS, previous.PREVIOUS, Path(__file__).resolve().relative_to(repo),
         CRATE / 'verus/context_version_journal_settlement_v1.rs',
         Path('docs/evidence/dev-producer-stable-2026-09-22/performance.py'),
         Path('docs/runtime-producer-read-reservations-v1.md'),
