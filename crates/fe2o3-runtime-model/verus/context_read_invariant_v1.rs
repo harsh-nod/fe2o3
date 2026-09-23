@@ -226,6 +226,7 @@ pub open spec fn released_readers_v1(before: ReadContentsV1, references: Seq<Rea
         (before.readers@[a] - read_slot_count_v1(released_requests_v1(before, references).take(count as int), a as usize)) as usize)
 }
 
+#[verifier::spinoff_prover]
 pub proof fn release_arena_prefix_v1(before: ReadContentsV1, references: Seq<ReadReferenceV1>, count: nat)
     requires reader_invariant_v1(before), release_commit_ready_v1(before, references), count <= references.len(),
     ensures reader_arena_v1(before.journal, released_leases_v1(before, references, count),

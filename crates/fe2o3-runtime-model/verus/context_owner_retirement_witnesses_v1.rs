@@ -65,12 +65,23 @@ fn owner_retirement_busy_witness_v1() -> (result: bool)
 }
 
 #[verifier::spinoff_prover]
-fn owner_retirement_nonmonotone_fixture_v1() -> (result: (ContextProducerReadJournalV1, logical::ProducerReadContentsV1))
+fn owner_retirement_enrolled_three_fixture_v1() -> (result: (ContextProducerReadJournalV1, logical::ProducerReadContentsV1))
     ensures producer_represents(result.0, result.1),
         logical::issued_producer_v1(result.1, logical::witness_storage_v1(3, 1), Seq::empty()),
         result.0.stable.journal.context_generation == 7, result.0.stable.journal.allocation_capacity == 3,
-        result.0.stable.journal.allocations@ == seq![None, None, None],
-        result.0.stable.journal.allocation_free@ == seq![0usize, 2, 1],
+        result.0.stable.journal.allocations@ == seq![
+            Some(AllocationEntryV1 { key: AllocationKeyV1 { context_generation: 7, local: 20 },
+                device: ContextJournalDeviceKeyV1 { context_generation: 7, local: 2 },
+                byte_extent: 16u64, attempt_epoch: 0u64, content_lineage: 0u64, pending_member: None }),
+            Some(AllocationEntryV1 { key: AllocationKeyV1 { context_generation: 7, local: 30 },
+                device: ContextJournalDeviceKeyV1 { context_generation: 7, local: 3 },
+                byte_extent: 32u64, attempt_epoch: 0u64, content_lineage: 0u64, pending_member: None }),
+            Some(AllocationEntryV1 { key: AllocationKeyV1 { context_generation: 7, local: 25 },
+                device: ContextJournalDeviceKeyV1 { context_generation: 7, local: 9 },
+                byte_extent: 32u64, attempt_epoch: 0u64, content_lineage: 0u64, pending_member: None })],
+        result.0.stable.journal.allocation_free@ == Seq::<usize>::empty(),
+        result.0.stable.readers@ == seq![0usize, 0, 0],
+        result.0.counts@ == seq![0usize, 0, 0],
 {
     let (mut actual, mut model) = owner_settlement_enrolled_fixture_v1();
     let ghost storage = logical::witness_storage_v1(3, 1);
@@ -81,11 +92,34 @@ fn owner_retirement_nonmonotone_fixture_v1() -> (result: (ContextProducerReadJou
         device: logical::DeviceKeyV1 { context_generation: 7, local: 9 }, byte_extent: 32 };
     let enrolled = owner_scalar_enrollment_paired_exec_v1(&mut actual, &mut model, entry, model_entry, Ghost(storage), Ghost(history));
     assert(enrolled.0 == Ok(AllocationReferenceV1 { slot: 2, key: entry.key }));
+    assert(actual.stable.journal.allocations@ =~= seq![
+        Some(AllocationEntryV1 { key: AllocationKeyV1 { context_generation: 7, local: 20 },
+            device: ContextJournalDeviceKeyV1 { context_generation: 7, local: 2 },
+            byte_extent: 16u64, attempt_epoch: 0u64, content_lineage: 0u64, pending_member: None }),
+        Some(AllocationEntryV1 { key: AllocationKeyV1 { context_generation: 7, local: 30 },
+            device: ContextJournalDeviceKeyV1 { context_generation: 7, local: 3 },
+            byte_extent: 32u64, attempt_epoch: 0u64, content_lineage: 0u64, pending_member: None }),
+        Some(enrollment_value_v1(entry))]);
+    assert(actual.stable.journal.allocation_free@ =~= Seq::<usize>::empty());
+    (actual, model)
+}
+
+#[verifier::spinoff_prover]
+fn owner_retirement_nonmonotone_fixture_v1() -> (result: (ContextProducerReadJournalV1, logical::ProducerReadContentsV1))
+    ensures producer_represents(result.0, result.1),
+        logical::issued_producer_v1(result.1, logical::witness_storage_v1(3, 1), Seq::empty()),
+        result.0.stable.journal.context_generation == 7, result.0.stable.journal.allocation_capacity == 3,
+        result.0.stable.journal.allocations@ == seq![None, None, None],
+        result.0.stable.journal.allocation_free@ == seq![0usize, 2, 1],
+{
+    let (mut actual, mut model) = owner_retirement_enrolled_three_fixture_v1();
+    let ghost storage = logical::witness_storage_v1(3, 1);
+    let ghost history = Seq::<logical::WriterReferenceV1>::empty();
     let roster = vec![AllocationReferenceV1 { slot: 0, key: AllocationKeyV1 { context_generation: 7, local: 20 } },
-        AllocationReferenceV1 { slot: 2, key: entry.key },
+        AllocationReferenceV1 { slot: 2, key: AllocationKeyV1 { context_generation: 7, local: 25 } },
         AllocationReferenceV1 { slot: 1, key: AllocationKeyV1 { context_generation: 7, local: 30 } }];
     let model_roster = vec![logical::AllocationReferenceV1 { slot: 0, key: logical::AllocationKeyV1 { context_generation: 7, local: 20 } },
-        logical::AllocationReferenceV1 { slot: 2, key: model_entry.key },
+        logical::AllocationReferenceV1 { slot: 2, key: logical::AllocationKeyV1 { context_generation: 7, local: 25 } },
         logical::AllocationReferenceV1 { slot: 1, key: logical::AllocationKeyV1 { context_generation: 7, local: 30 } }];
     proof {
         assert(retirement_roster_view_v1(roster@) =~= model_roster@);

@@ -2,6 +2,8 @@ use super::*;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 
+mod construction_shared;
+
 type Journal = ContextVersionJournalV1;
 type Key = ContextWriterKeyV1;
 type Reference = ContextWriterReferenceV1;

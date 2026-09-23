@@ -68,6 +68,15 @@ mod scalar_enrollment_templates {
 #[cfg(test)]
 mod scalar_enrollment_baseline;
 
+#[cfg(test)]
+mod construction_baseline;
+
+#[allow(unused_macros)]
+#[macro_use]
+mod constructor_templates {
+    include!("context_version_journal/constructor_bodies.rs");
+}
+
 #[allow(unused_macros)]
 #[macro_use]
 mod retirement_templates {
@@ -100,14 +109,6 @@ impl Deref for ContextReadLeasedJournalV1 {
     }
 }
 
-fn storage<T>(capacity: usize) -> Result<Vec<T>, ContextVersionJournalErrorV1> {
-    let mut result = Vec::new();
-    result
-        .try_reserve_exact(capacity)
-        .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
-    Ok(result)
-}
-
 #[cfg(test)]
 fn read_key(request: &ContextAllocationReadV1) -> (u64, u64, u64) {
     (
@@ -124,23 +125,40 @@ impl ContextReadLeasedJournalV1 {
         writers: usize,
         reads: usize,
     ) -> Result<Self, ContextVersionJournalErrorV1> {
-        if !(1..=CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1).contains(&reads) {
-            return Err(ContextVersionJournalErrorV1::InvalidCapacity);
-        }
-        let journal = ContextVersionJournalV1::new(generation, allocations, writers)?;
-        let mut leases = storage(reads)?;
-        leases.resize(reads, None);
-        let mut free_reads = storage(reads)?;
-        free_reads.extend((0..reads).rev());
-        let mut readers = storage(allocations)?;
-        readers.resize(allocations, 0);
-        Ok(Self {
-            journal,
-            leases,
-            free_reads,
-            readers,
-            next_incarnation: 1,
-        })
+        constructor_entry_body!(
+            Self::new_with_allocator_v1,
+            &mut construction::NativeConstructorAllocatorV1,
+            generation,
+            allocations,
+            writers,
+            reads
+        )
+    }
+
+    #[allow(clippy::question_mark)]
+    pub(crate) fn new_with_allocator_v1(
+        generation: u64,
+        allocations: usize,
+        writers: usize,
+        reads: usize,
+        allocator: &mut impl construction::ConstructorAllocatorV1,
+    ) -> Result<Self, ContextVersionJournalErrorV1> {
+        constructor_stable_body!(
+            reader_rust_expr,
+            generation,
+            allocations,
+            writers,
+            reads,
+            allocator,
+            ContextVersionJournalV1::new_with_allocator_v1,
+            construction::vacant,
+            construction::free,
+            construction::zero,
+            result,
+            [],
+            [],
+            []
+        )
     }
 
     pub fn remaining_read_slots(&self) -> usize {

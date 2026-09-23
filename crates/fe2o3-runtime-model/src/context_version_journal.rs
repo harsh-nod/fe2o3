@@ -11,6 +11,7 @@ use core::cell::Cell;
 
 mod allocation_lifecycle;
 mod begin;
+pub(crate) mod construction;
 mod retained;
 mod settlement;
 mod settlement_commit;
@@ -45,6 +46,19 @@ mod scalar_enrollment_templates {
 mod scalar_enrollment_baseline;
 
 #[cfg(test)]
+mod construction_baseline;
+
+#[cfg(test)]
+#[path = "context_version_journal/tests/construction_probe.rs"]
+pub(crate) mod construction_probe;
+
+#[allow(unused_macros)]
+#[macro_use]
+mod constructor_templates {
+    include!("context_version_journal/constructor_bodies.rs");
+}
+
+#[cfg(test)]
 mod retirement_baseline;
 
 macro_rules! writer_rust_expr {
@@ -66,23 +80,6 @@ fn issuable_context_id(value: u64) -> bool {
     value != 0 && value != u64::MAX
 }
 
-fn vacant_slots<T>(capacity: usize) -> Result<Vec<Option<T>>, ContextVersionJournalErrorV1> {
-    let mut slots = Vec::new();
-    slots
-        .try_reserve_exact(capacity)
-        .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
-    slots.resize_with(capacity, || None);
-    Ok(slots)
-}
-
-fn free_slots(capacity: usize) -> Result<Vec<usize>, ContextVersionJournalErrorV1> {
-    let mut free = Vec::new();
-    free.try_reserve_exact(capacity)
-        .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
-    free.extend((0..capacity).rev());
-    Ok(free)
-}
-
 impl ContextVersionJournalV1 {
     #[cfg(test)]
     pub(crate) fn reset_access_count_for_test_v1(&self) {
@@ -95,30 +92,27 @@ impl ContextVersionJournalV1 {
         allocation_capacity: usize,
         writer_capacity: usize,
     ) -> Result<Self, ContextVersionJournalErrorV1> {
-        if !issuable_context_id(context_generation) {
-            return Err(ContextVersionJournalErrorV1::InvalidContextGeneration);
-        }
-        if !(1..=CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1).contains(&allocation_capacity)
-            || !(1..=CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1).contains(&writer_capacity)
-        {
-            return Err(ContextVersionJournalErrorV1::InvalidCapacity);
-        }
-        Ok(Self {
+        constructor_entry_body!(
+            Self::new_with_allocator_v1,
+            &mut construction::NativeConstructorAllocatorV1,
             context_generation,
             allocation_capacity,
-            writer_capacity,
-            registration_watermark: 0,
-            reserved_count: 0,
-            writers: vacant_slots(writer_capacity)?,
-            free: free_slots(writer_capacity)?,
-            allocations: vacant_slots(allocation_capacity)?,
-            allocation_free: free_slots(allocation_capacity)?,
-            members: vacant_slots(allocation_capacity)?,
-            member_free: free_slots(allocation_capacity)?,
-            scratch: vacant_slots(allocation_capacity)?,
-            #[cfg(test)]
-            indexed_accesses: Cell::new(0),
-        })
+            writer_capacity
+        )
+    }
+
+    #[allow(clippy::question_mark)]
+    pub(crate) fn new_with_allocator_v1(
+        context_generation: u64,
+        allocation_capacity: usize,
+        writer_capacity: usize,
+        allocator: &mut impl construction::ConstructorAllocatorV1,
+    ) -> Result<Self, ContextVersionJournalErrorV1> {
+        constructor_journal_body!(
+            writer_rust_expr, context_generation, allocation_capacity, writer_capacity, allocator,
+            construction::vacant, construction::free, result, [], [], [],
+            [#[cfg(test)] indexed_accesses: Cell::new(0),]
+        )
     }
 
     pub const fn context_generation(&self) -> u64 {

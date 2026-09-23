@@ -574,8 +574,30 @@ Before enabling runtime admission, the remaining work is:
    receipts; complete replay preserved all 151 record files byte-for-byte. This
    checkpoint does not close Gate 1 or establish native disposal authority,
    physical Vec storage, constructor/unwind refinement, or HIP/HSA performance.
-   Remaining bodies include construction;
-   other wrapper operations, reachability and physical storage refinement remain separate.
+   The constructor source candidate now shares the public forwarding entries,
+   validation, reservation calls and initialization loops across the journal,
+   stable-read and producer-read owners. An independent logical executor observes
+   the same ordered reservation outcomes. Paired execution establishes exact
+   validation precedence, the first failed attempt, all 7/10/13 ordered reservation
+   sites for the journal/stable/producer owners respectively,
+   unchanged outcome sequences and full initialized contents on success. Empty or
+   exhausted outcome sequences fail at the first unavailable outcome. The raw
+   correspondence permits arbitrary incoming observation prefixes, subject only
+   to append headroom. Successful producer construction establishes the producer
+   invariant; issued custody additionally requires that the supplied ghost storage
+   satisfies its admission.
+   Constructor-derived executable witnesses then reach enrollment, registration,
+   Begin and retained reads, both Success/NoEffect settlement and release, and
+   Unknown disposal, without starting from synthetic owner contents.
+   The native allocator remains a separate, source-pinned Rust adapter. The proof
+   does not establish physical allocation success, buffer capacity or addresses,
+   partial-object destruction, panic/unwind cleanup, context-generation freshness
+   authority or native backend admission. Eighteen frozen-baseline CPU tests
+   compare typed reservation order, every failure site, validation and initialized
+   contents, with separate buffer-stability checks. The dedicated qualification
+   runner is `verus/check-owner-constructor.py`.
+   Other wrapper operations, general reachability and physical storage refinement
+   remain separate; this constructor checkpoint does not close Gate 1.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement
    return/scratch/commit bodies now have actual-typed operation correspondence.
