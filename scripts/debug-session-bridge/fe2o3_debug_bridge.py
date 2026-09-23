@@ -79,6 +79,17 @@ def run_service(controller, token, port, allowed_origin):
     return 0 if reaped and not controller.custody_failed else 1
 
 
+def observed_launch_arguments(args):
+    """Only the local owner selects the additive CLI profile; no browser argv."""
+    command = launch_arguments(args)
+    profile = getattr(args, "runtime_observations", None)
+    if profile is not None:
+        if profile != "v1":
+            raise ValueError("closed runtime observation profile")
+        command.extend(("--runtime-observations", "v1"))
+    return command
+
+
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True)
@@ -92,6 +103,8 @@ def arguments(argv=None):
     parser.add_argument("--request-bytes", required=True, type=int)
     parser.add_argument("--request-sha256", required=True)
     parser.add_argument("--wave-width", choices=(32, 64), type=int, required=True)
+    parser.add_argument("--runtime-observations", choices=("v1",),
+                        help="owner-selected CPU runtime/storage observations; default unchanged")
     parser.add_argument("--token-file", required=True, help="owner-only 0600 file, 64 random lowercase hex")
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--origin", required=True, help="exact http://127.0.0.1:PORT frontend origin")
@@ -116,12 +129,12 @@ def main(argv=None):
     try:
         if os.name != "posix" or not sys.platform.startswith("linux"):
             raise ValueError("Linux local CPU profile required")
-        command = launch_arguments(args)  # Existing closed CLI/regular path owner.
+        command = observed_launch_arguments(args)  # Existing closed CLI/path owner plus explicit opt-in.
         token = TokenFile(args.token_file)
         inputs = InputPins(((args.binary, args.binary_bytes, args.binary_sha256, 512 * MIB, True),
                             (args.input, args.input_bytes, args.input_sha256, 64 * MIB, False),
                             (args.request, args.request_bytes, args.request_sha256, MIB, False)))
-        controller = BridgeSession(command, inputs)
+        controller = BridgeSession(command, inputs, runtime_observations=args.runtime_observations)
         signal.signal(signal.SIGTERM, interrupted)
         return run_service(controller, token, args.port, args.origin)
     except KeyboardInterrupt:

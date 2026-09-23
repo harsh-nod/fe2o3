@@ -220,4 +220,4 @@ const fn scalar_tag(scalar: ScalarType) -> u8 {
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "diagnostic_kir_v16_tests.rs"]
-mod tests;
+pub(crate) mod tests;

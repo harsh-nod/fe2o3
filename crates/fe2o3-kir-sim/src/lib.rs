@@ -3,7 +3,10 @@
 
 mod capability;
 mod debug;
+mod debug_allocation_lifecycle_v1;
 mod debug_identity_state;
+mod debug_observation;
+mod debug_runtime_frames;
 mod debug_runtime_origin;
 mod execute;
 mod explore;
@@ -37,20 +40,33 @@ pub use debug::{
     SimulationDebugScheduleV1, SimulationDebugSinkControlV1, SimulationDebugSinkV1,
     SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
 };
+pub use debug_allocation_lifecycle_v1::{
+    SimulationAllocationDescriptorV1, SimulationAllocationObservationUnavailableV1,
+    SimulationAllocationScopeV1, SimulationAllocationStorageIdentityV1,
+    SimulationAllocationTransitionKindV1, SimulationAllocationTransitionV1,
+    SimulationAllocationWatermarkV1,
+};
+pub use debug_observation::SimulationDebugObservationContextV1;
+pub use debug_runtime_frames::{
+    SimulationDebugCheckpointFramesV1, SimulationDebugFrameOperationV1,
+    SimulationDebugFrameOriginUnavailableV1, SimulationDebugFrameOriginV1,
+    SimulationDebugFrameOriginsV1, SimulationDebugFrameParentV1,
+};
 pub use debug_runtime_origin::{
     SimulationDebugOperationOriginV1, SimulationDebugOriginContextV1,
     SimulationDebugOriginUnavailableV1,
 };
 pub use execute::{
     DivergentWaveV1, DivergentWorkgroupBarrierV1, DivergentWorkgroupBarrierV2, IncompleteWaveV1,
-    MismatchedWaveV1, MismatchedWorkgroupBarrierV1, NoopSimulationEventSinkV1, SimulationAbiViewV1,
-    SimulationConflictAssessmentV1, SimulationDataRaceV1, SimulationErrorV1, SimulationEventKindV1,
-    SimulationEventSinkControlV1, SimulationEventSinkErrorV1, SimulationEventSinkV1,
-    SimulationEventSiteV1, SimulationEventV1, SimulationExecutionErrorKindV1,
-    SimulationExecutionErrorV1, SimulationExecutionOutcomeV1, SimulationExecutionV1,
-    SimulationHappensBeforeReasonV1, SimulationMemoryConflictV1, SimulationObservationFailureV1,
-    SimulationOrderedMemoryConflictV1, SimulationOutOfBoundsV2, SimulationRaceAssessmentV1,
-    WorkgroupBarrierMismatchV1, WorkgroupParticipantV1,
+    MAX_ALLOCATION_REUSE_CACHED_PAYLOAD_BYTES_V1, MismatchedWaveV1, MismatchedWorkgroupBarrierV1,
+    NoopSimulationEventSinkV1, ObservationExecutionOptionsV1, SimulationAbiViewV1,
+    SimulationAllocationReuseErrorV1, SimulationAllocationReuseV1, SimulationConflictAssessmentV1,
+    SimulationDataRaceV1, SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1,
+    SimulationEventSinkErrorV1, SimulationEventSinkV1, SimulationEventSiteV1, SimulationEventV1,
+    SimulationExecutionErrorKindV1, SimulationExecutionErrorV1, SimulationExecutionOutcomeV1,
+    SimulationExecutionV1, SimulationHappensBeforeReasonV1, SimulationMemoryConflictV1,
+    SimulationObservationFailureV1, SimulationOrderedMemoryConflictV1, SimulationOutOfBoundsV2,
+    SimulationRaceAssessmentV1, WorkgroupBarrierMismatchV1, WorkgroupParticipantV1,
 };
 pub use explore::{
     MAX_EXPLORATION_RETAINED_DECISIONS_V1, MAX_EXPLORATION_SCHEDULES_V1,

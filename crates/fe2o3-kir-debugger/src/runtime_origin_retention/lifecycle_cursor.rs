@@ -183,6 +183,10 @@ impl LifecycleSession {
     ) -> Result<DebugNavigationV1, SessionError> {
         self.observed.continue_to_stop(direction, work)
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Rejected predicates return ownership without allocation, traversal, or drop"
+    )]
     pub(in super::super) fn add_breakpoint(
         &mut self,
         breakpoint: crate::DebugBreakpointV1,

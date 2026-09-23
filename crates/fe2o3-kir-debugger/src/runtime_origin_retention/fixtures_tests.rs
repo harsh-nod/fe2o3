@@ -266,6 +266,10 @@ pub(super) fn identity(module: &AdmittedSimulationModuleV1) -> DebugKirIdentityV
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Fixture preserves the simulator result for exact diagnostic assertions"
+)]
 pub(super) fn drive(
     module: &AdmittedSimulationModuleV1,
     request: &SimulationRequestV1,

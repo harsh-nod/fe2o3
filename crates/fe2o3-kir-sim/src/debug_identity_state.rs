@@ -75,6 +75,26 @@ impl OperationIdentity {
     }
 }
 
+/// Parent call custody without copying invocation coordinates a second time.
+/// The child's FrameIdentity supplies the already-validated full invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ParentCallIdentity {
+    activation: FrameActivationId,
+    attempt: OperationAttemptId,
+    site: SimulationDebugSiteV1,
+}
+impl ParentCallIdentity {
+    pub(crate) const fn activation(self) -> FrameActivationId {
+        self.activation
+    }
+    pub(crate) const fn attempt(self) -> OperationAttemptId {
+        self.attempt
+    }
+    pub(crate) const fn site(self) -> SimulationDebugSiteV1 {
+        self.site
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum IdentityStateError {
     InvalidSimulationLimits(SimulationLimitsErrorV1),
@@ -201,6 +221,7 @@ impl InvocationIdentityState {
             attempt_limit: self.attempt_limit,
             last_attempt: 0,
             phase: FramePhase::Ready,
+            parent: None,
         }
     }
 }
@@ -228,10 +249,10 @@ pub(crate) struct FrameIdentityState {
     attempt_limit: u64,
     last_attempt: u64,
     phase: FramePhase,
+    parent: Option<ParentCallIdentity>,
 }
 
 impl FrameIdentityState {
-    #[cfg(test)]
     pub(crate) const fn identity(&self) -> FrameIdentity {
         self.identity
     }
@@ -241,7 +262,6 @@ impl FrameIdentityState {
         self.last_attempt
     }
 
-    #[cfg(test)]
     pub(crate) const fn is_suspended(&self) -> bool {
         matches!(self.phase, FramePhase::Suspended(_))
     }
@@ -249,6 +269,48 @@ impl FrameIdentityState {
     #[cfg(test)]
     pub(crate) const fn is_retired(&self) -> bool {
         matches!(self.phase, FramePhase::Retired)
+    }
+
+    pub(crate) const fn parent(&self) -> Option<ParentCallIdentity> {
+        self.parent
+    }
+
+    /// Called only after successful helper entry with its actual suspended caller.
+    pub(crate) fn set_parent(
+        &mut self,
+        parent: OperationIdentity,
+    ) -> Result<(), IdentityStateError> {
+        if self.identity.activation.get() == 1 || self.parent.is_some() {
+            return Err(IdentityStateError::CannotResetRoot);
+        }
+        if parent.frame().invocation() != self.identity.invocation {
+            return Err(IdentityStateError::WrongInvocation);
+        }
+        if self.phase != FramePhase::Ready || self.last_attempt != 0 {
+            return Err(IdentityStateError::OperationAlreadyPending);
+        }
+        self.parent = Some(ParentCallIdentity {
+            activation: parent.frame().activation(),
+            attempt: parent.attempt(),
+            site: parent.site(),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn observed_phase(&self) -> Option<crate::SimulationDebugFrameOperationV1> {
+        use crate::SimulationDebugFrameOperationV1 as Phase;
+        Some(match self.phase {
+            FramePhase::Ready => Phase::Ready,
+            FramePhase::Running(pending) => Phase::ActiveOperation {
+                attempt: pending.attempt.get(),
+                site: pending.site,
+            },
+            FramePhase::Suspended(pending) => Phase::Suspended {
+                attempt: pending.attempt.get(),
+                site: pending.site,
+            },
+            FramePhase::Retired => return None,
+        })
     }
 
     pub(crate) fn pending(&self) -> Option<OperationIdentity> {

@@ -333,7 +333,7 @@ fn missing_capture_and_partial_history_keep_actual_producer_limits() {
             DebuggerLimitsV1::new(record_budget, 32768, 1 << 20).unwrap(),
             DebugWaveWidthV1::Wave32,
         );
-        backend.session = DebugSessionV1::new(run.transcript);
+        backend.session = DebugSessionV1::new(run.transcript).into();
         select_last_checkpoint(&mut backend);
         let query = request(&backend, record_budget == 3, 256);
         let response = backend.handle_resource_queries_v1(query.clone());

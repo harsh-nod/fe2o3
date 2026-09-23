@@ -179,6 +179,32 @@ impl InvocationMachine<'_> {
         if !engine.identity_active() {
             return;
         }
+        let Some(caller) = self
+            .active_depth
+            .checked_sub(1)
+            .and_then(|index| self.frames.get(index))
+        else {
+            engine.identity_failed();
+            return;
+        };
+        let parent = caller
+            .debug_identity
+            .as_ref()
+            .filter(|state| state.is_suspended())
+            .and_then(FrameIdentityState::pending);
+        let target = engine
+            .call_targets
+            .get(caller.function_index)
+            .and_then(|blocks| blocks.get(caller.current_index))
+            .and_then(|operations| operations.get(caller.operation));
+        if parent.is_none_or(|parent| parent.frame().invocation() != self.invocation)
+            || !matches!(target, Some(CallTarget::Internal(index))
+                if *index == self.frames[self.active_depth].function_index)
+        {
+            engine.identity_failed();
+            return;
+        }
+        let parent = parent.expect("validated suspended caller");
         let slot = &mut self.frames[self.active_depth];
         let ordinal = engine.function_module_indices[slot.function_index];
         let Some(owner) = self.debug_identity.as_mut() else {
@@ -191,7 +217,14 @@ impl InvocationMachine<'_> {
                 .enter_frame(ordinal)
                 .map(|state| slot.debug_identity = Some(state)),
         };
-        if result.is_err() {
+        if result.is_err()
+            || !matches!(
+                slot.debug_identity
+                    .as_mut()
+                    .map(|state| state.set_parent(parent)),
+                Some(Ok(()))
+            )
+        {
             engine.identity_failed();
         }
     }

@@ -18,6 +18,7 @@ from debug_console_protocol import LineFramer, ProtocolError, encode
 
 from bridge_inputs import CustodyError
 from bridge_live_queries import LiveQuerySession
+from bridge_observed_queries import ObservedQuerySession
 
 REQUEST_SCHEMA = "fe2o3-cpu-debug-bridge-request-v1"
 RESPONSE_SCHEMA = "fe2o3-cpu-debug-bridge-response-v1"
@@ -162,7 +163,11 @@ class CPUProcess:
 
 class BridgeSession:
     """V1 correlation plus separately versioned, bridge-local checkpoint queries."""
-    def __init__(self, argv, inputs, process_factory=CPUProcess, clock=time.monotonic):
+    def __init__(self, argv, inputs, process_factory=CPUProcess, clock=time.monotonic,
+                 runtime_observations=None):
+        if runtime_observations is not None and runtime_observations != "v1":
+            raise ValueError("closed owner-selected runtime observation profile")
+        self.runtime_observations = runtime_observations
         self.argv = tuple(argv)
         self.inputs = inputs
         self.process_factory = process_factory
@@ -185,7 +190,10 @@ class BridgeSession:
         """Only closed=True permits reconnect; failed reaping retains the owned handle."""
         self.poisoned = True
         if self.protocol is not None:
-            self.protocol.clear_selection()
+            if self.runtime_observations == "v1":
+                self.protocol.close_observation_connection()
+            else:
+                self.protocol.clear_selection()
         if self.process is None:
             return True
         if not self.process.close():
@@ -269,7 +277,7 @@ class BridgeSession:
         self.connection_id = connection_id
         self.bridge_session = secrets.token_hex(32)
         self.used_connections.add(connection_id)
-        self.protocol = LiveQuerySession()
+        self.protocol = ObservedQuerySession() if self.runtime_observations == "v1" else LiveQuerySession()
         self.started = self.clock()
         self.poisoned = False
         self.process = self.process_factory()
