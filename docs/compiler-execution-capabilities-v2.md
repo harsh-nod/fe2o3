@@ -1,0 +1,121 @@
+# Native Trust Capabilities V2
+
+## Status
+
+`CompilerExecutionPolicyCapabilityV2` and
+`CompilerExecutionClientProfileCapabilityV2` transport the native public trust
+records in immutable descriptors. They are move-only, expose no `AsFd`, and
+never decode or upgrade V1 records. A policy/profile remains public configuration,
+not signing custody, protected execution, publication, GPU load, or launch authority.
+
+These APIs do not activate the native producer, service handlers, or launcher.
+No protected proof or GPU execution is credited. M0-M7 and 47/47 remain open.
+See the [native publication contract](compiler-execution-publication-v2.md)
+for the other completed inert protocol boundaries and remaining integration.
+
+## Admission Invariants
+
+The shared sealed-image validator checks metadata, exact regular mode0400,
+exact length, exact WRITE/GROW/SHRINK/SEAL seals, and CLOEXEC, in that order.
+Revalidation also checks the retained device/inode and compares every byte to
+the private immutable native record. Identical bytes in another inode are not
+a substitute. Mode and descriptor flags are rechecked because seals do not
+freeze them. Validation is an observation, not perpetual metadata protection.
+
+Policy and profile images are 216 and 280 bytes, respectively, just like V1.
+Length or a memfd name cannot identify their family: the actual strict native
+decoder admits transferred images. Creation instead consumes an already admitted
+native record. Revalidation needs no second decode because byte equality preserves
+that immutable record's admission invariant. No owner is cloned or projected.
+
+Native reads and writes are positional, fixed-size, single-attempt operations.
+Short transfers and EINTR fail; there are no retry loops or dynamically sized
+content buffers. Errors retain static operation/reason labels and an errno or
+typed decoder error. V1 retains its existing allocating APIs and diagnostic order.
+
+Policy inherited admission borrows an fd >= 3 with CLOEXEC clear and creates a
+private CLOEXEC duplicate. It never closes or changes the original descriptor.
+The caller must keep that original slot live and unchanged during admission.
+Transfer produces another CLOEXEC File referring to the same sealed object.
+Raw File interoperability does not meter subsequent arbitrary File operations.
+
+## Production Profile
+
+The only production native profile is
+`/etc/fe2o3/compiler-execution/client-profile-v2`. There is no configurable root,
+environment override, basename selector, or fallback to `client-profile-v1`.
+
+The fixed walk opens `/`, `etc`, `fe2o3`, and `compiler-execution` relative to
+pinned directory descriptors, without following symlinks. All must be owned by
+uid/gid 0, owner-traversable, non-group/world-writable directories. The final
+RDONLY/NONBLOCK/CLOEXEC object must be a regular, single-link, root-owned,
+exact mode0444 file of the expected length. Every directory and both final-file
+checks probe `security.capability`, `system.posix_acl_access`, and
+`system.posix_acl_default` with a one-byte buffer; presence, including ERANGE,
+fails. NODATA and unsupported-xattr filesystems are accepted, as in V1.
+
+The final file's metadata snapshot must match before and after reading. It
+includes dev/ino, mode, ownership, links, length, mtime, and ctime, excluding atime.
+The result is decoded and sealed. This trusts the protected root-owned tree;
+it does not prove exclusion of a privileged writer, immutable ancestors, or
+perpetual pathname currentness. Tests use private synthetic trees, never a
+public alternate production path.
+
+## Resources And Ownership
+
+All operations use the caller's resource ledger. The shared
+`Budget::with_prepaid_scope` prepays outer work and scratch; actual nested native
+decoders charge that same ledger. No unlimited child budget is created.
+Scope cleanup restores the full entry reservation on success, failure, and
+unwind, without refunding work or clearing peaks/first denials. Replaced ledgers
+are not released. This is accounting, not an authority gate.
+
+Let `N` be the image length, `S` the capability storage-receipt type, `C` the
+capability type, and `Drecord` the native record's retained charge:
+
+```text
+Dfile = N + size_of::<(File, S)>()
+Dcap  = N + size_of::<(C, S)>()
+```
+
+Tuple sizes include alignment padding. Every descriptor conservatively pays
+for its complete logical image even when duplicates share one backing inode.
+
+| Operation | Prepaid Input | Additional Returned Charge |
+|---|---|---|
+| create(record) | consumed Drecord | Dcap - Drecord |
+| from_file(file) | consumed Dfile | Dcap - Dfile |
+| revalidate | borrowed Dcap | none |
+| try_clone_for_transfer | borrowed Dcap | full Dfile |
+| from_inherited_at | borrowed Dfile | full Dcap |
+| from_production_profile | none | full Dcap |
+
+Keep consumed inputs' reservations and reserve the returned delta before
+retaining the result. On consuming failure, retire the dropped input's old
+reservation after return. On eventual drop or transfer, retire the full owner's
+charge, not its construction delta. Unrelated entry owners remain prepaid.
+
+Outer work is `8 + 32*1024 + 32*N`: at most 32 descriptor syscalls with a fixed
+logical weight, plus byte processing. The trusted-root walk adds `64*1024`.
+The exported `IO_STORAGE` and `PRODUCTION_STORAGE` constants cover outer frames;
+admission additionally peaks at the larger of native decoder scratch and its
+returned record retention. That record is reserved immediately and kept through
+outer cleanup. Actual work totals are:
+
+| Operation | Policy | Profile |
+|---|---:|---:|
+| create, revalidate, transfer | 39688 | 41736 |
+| from_file; policy from_inherited_at | 54800 | 65808 |
+| from_production_profile | n/a | 131344 |
+
+These logical quotas do not bound syscall latency, kernel allocation, generated
+instructions/stack, allocator behavior, page cache, or process RSS.
+
+## Remaining Integration
+
+Native child installation needs an owned launcher that retains descriptor
+capture charges and prepays each spawn. Attaching a callback to a reusable
+external `Command` would not meter its future spawns; no such native adapter
+is exposed here. Service handlers, native durable-state families, broker V4
+observation, anchor/Worker/ACK ordering, Cargo restart paths, runtime/host joins,
+and coherent provisioning remain required before producer activation.

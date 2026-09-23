@@ -12,6 +12,7 @@ description = "Sealed descriptor capabilities for fe2o3 compiler execution coord
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-build-authority.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-kernel-ir.workspace = true
 fe2o3-rustc-invocation.workspace = true
 libc.workspace = true
 rustix = { workspace = true, features = ["process"] }

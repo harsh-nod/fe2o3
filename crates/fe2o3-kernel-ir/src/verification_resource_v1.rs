@@ -190,6 +190,58 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
         self.storage
     }
 
+    /// Runs a bounded operation on this same ledger, with prepaid outer work
+    /// and scratch. Nested operations must charge this ledger, never a fresh
+    /// budget. `entry_work` is charged before checking the input-owner floor;
+    /// the rest of `work` is charged before reserving `scratch` or calling out.
+    ///
+    /// Returns entry storage on success, error, and unwind, retaining work,
+    /// peak, and denial history. The callback must preserve the reserved frame
+    /// and ledger identity. A replaced ledger is never released. Returned
+    /// owners are unreserved: callers must reserve their retained charge before
+    /// keeping them. This is logical accounting, not admission or authority.
+    pub fn with_prepaid_scope<T, E: From<CanonicalKernelIrVerificationResourceErrorV1>>(
+        &mut self,
+        input_floor: usize,
+        entry_work: usize,
+        work: usize,
+        scratch: usize,
+        operation: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        use CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+        self.charge_work(entry_work)?;
+        if self.storage() < input_floor {
+            return Err(Resource::Accounting.into());
+        }
+        self.charge_work(work.checked_sub(entry_work).ok_or(Resource::Arithmetic)?)?;
+        let floor = self.storage();
+        let ledger = self.work_ledger_identity_v1();
+        self.reserve_storage(scratch)?;
+        let protected_floor = self.storage();
+        let result = catch_unwind(AssertUnwindSafe(|| operation(self)));
+        let frame_intact = self.storage() >= protected_floor;
+        let cleanup = if self.work_ledger_identity_v1() == ledger {
+            self.storage()
+                .checked_sub(floor)
+                .ok_or(Resource::Accounting)
+                .and_then(|release| self.release_storage(release))
+        } else {
+            Err(Resource::Accounting)
+        };
+        match result {
+            Ok(result) => {
+                cleanup?;
+                if !frame_intact {
+                    return Err(Resource::Accounting.into());
+                }
+                result
+            }
+            Err(panic) => resume_unwind(panic),
+        }
+    }
+
     pub(crate) fn rollback_storage(
         &mut self,
         checkpoint: usize,
@@ -245,6 +297,32 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepaid_scope_honors_variable_entry_cost_before_callback_or_scratch() {
+        type Resource = CanonicalKernelIrVerificationResourceErrorV1;
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(100);
+        let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 100);
+        budget.reserve_storage(9).unwrap();
+        let result =
+            budget.with_prepaid_scope::<(), Resource>(10, 3, 7, 20, |_| panic!("unpaid input"));
+        assert!(matches!(result, Err(Resource::Accounting)));
+        assert_eq!(budget.work(), 3);
+        let result =
+            budget.with_prepaid_scope::<(), Resource>(9, 4, 3, 20, |_| panic!("invalid quota"));
+        assert!(matches!(result, Err(Resource::Arithmetic)));
+        assert_eq!(budget.work(), 7);
+        assert_eq!(budget.peak_storage(), 9);
+        budget
+            .with_prepaid_scope::<(), Resource>(9, 0, 7, 20, |budget| {
+                assert_eq!(budget.storage(), 29);
+                budget.charge_work(5)
+            })
+            .unwrap();
+        assert_eq!(budget.storage(), 9);
+        assert_eq!(budget.work(), 19);
+        assert_eq!(budget.peak_storage(), 29);
+    }
 
     #[test]
     fn work_identity_follows_the_meter_not_the_resource_budget_slot() {

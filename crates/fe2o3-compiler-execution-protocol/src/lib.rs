@@ -61,6 +61,10 @@ pub const COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1: u32 = 0o400;
 pub const COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1: &str =
     "/etc/fe2o3/compiler-execution/client-profile-v1";
 
+/// Sole native public client-profile pathname. No legacy-profile fallback.
+pub const COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V2: &str =
+    "/etc/fe2o3/compiler-execution/client-profile-v2";
+
 pub use attestation::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
     COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1,

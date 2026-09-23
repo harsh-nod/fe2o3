@@ -1,25 +1,21 @@
 use std::fs::File;
-use std::os::fd::AsFd;
-use std::os::unix::fs::{FileExt, MetadataExt};
+use std::os::unix::fs::FileExt;
 
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1, COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1,
     CompilerExecutionClientProfileV1,
 };
-use rustix::fs::{FileType, Mode, OFlags};
+use rustix::fs::{Mode, OFlags};
 
 use crate::sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};
+use crate::trusted_profile_tree::{self, TrustedFileSnapshot};
 
 const ROLE: CapabilityRole = CapabilityRole {
     name: "compiler-execution client-profile capability",
     memfd_name: "fe2o3-compiler-execution-client-profile-v1",
 };
 const LENGTH: ImageLength = ImageLength::Exact(COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1);
-const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
-const TRUSTED_FILE_MODE: u32 = 0o444;
-const TRUSTED_DIRECTORY_FORBIDDEN_MODE: u32 = 0o022;
-const TRUSTED_DIRECTORY_REQUIRED_MODE: u32 = 0o100;
-const PRODUCTION_DIRECTORY_COMPONENTS: [&str; 3] = ["etc", "fe2o3", "compiler-execution"];
+const PRODUCTION_DIRECTORY_COMPONENTS: [&str; 3] = trusted_profile_tree::COMPONENTS;
 const PRODUCTION_PROFILE_NAME: &str = "client-profile-v1";
 
 /// Immutable descriptor capability carrying one exact compiler-execution client profile.
@@ -163,48 +159,14 @@ impl CompilerExecutionClientProfileCapabilityV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct TrustedFileSnapshot {
-    device: u64,
-    inode: u64,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    links: u64,
-    length: u64,
-    modified_seconds: i64,
-    modified_nanoseconds: i64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
-}
-
 fn validate_trusted_directory(
     directory: &File,
     expected_uid: u32,
     expected_gid: u32,
     label: &str,
 ) -> Result<(), String> {
-    let descriptor_flags = rustix::io::fcntl_getfd(directory)
-        .map_err(|error| format!("cannot inspect trusted directory {label:?}: {error}"))?;
-    let status = rustix::fs::fcntl_getfl(directory)
-        .map_err(|error| format!("cannot inspect trusted directory {label:?}: {error}"))?;
-    let stat = rustix::fs::fstat(directory)
-        .map_err(|error| format!("cannot inspect trusted directory {label:?}: {error}"))?;
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC)
-        || status & OFlags::ACCMODE != OFlags::RDONLY
-        || status.contains(OFlags::PATH)
-        || FileType::from_raw_mode(stat.st_mode) != FileType::Directory
-        || stat.st_uid != expected_uid
-        || stat.st_gid != expected_gid
-        || stat.st_nlink == 0
-        || stat.st_mode & TRUSTED_DIRECTORY_FORBIDDEN_MODE != 0
-        || stat.st_mode & TRUSTED_DIRECTORY_REQUIRED_MODE == 0
-    {
-        return Err(format!(
-            "trusted client-profile directory {label:?} has invalid descriptor, type, owner, mode, or link state"
-        ));
-    }
-    require_absent_xattrs(directory, "trusted client-profile directory")
+    trusted_profile_tree::validate_directory(directory, expected_uid, expected_gid)
+        .map_err(|error| error.legacy(label, true))
 }
 
 fn validate_trusted_profile_file(
@@ -213,66 +175,13 @@ fn validate_trusted_profile_file(
     expected_gid: u32,
     label: &str,
 ) -> Result<TrustedFileSnapshot, String> {
-    let descriptor_flags = rustix::io::fcntl_getfd(profile)
-        .map_err(|error| format!("cannot inspect trusted client profile {label:?}: {error}"))?;
-    let status = rustix::fs::fcntl_getfl(profile)
-        .map_err(|error| format!("cannot inspect trusted client profile {label:?}: {error}"))?;
-    let metadata = profile
-        .metadata()
-        .map_err(|error| format!("cannot inspect trusted client profile {label:?}: {error}"))?;
-    let snapshot = TrustedFileSnapshot {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-        mode: metadata.mode(),
-        uid: metadata.uid(),
-        gid: metadata.gid(),
-        links: metadata.nlink(),
-        length: metadata.len(),
-        modified_seconds: metadata.mtime(),
-        modified_nanoseconds: metadata.mtime_nsec(),
-        changed_seconds: metadata.ctime(),
-        changed_nanoseconds: metadata.ctime_nsec(),
-    };
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC)
-        || status & OFlags::ACCMODE != OFlags::RDONLY
-        || status.contains(OFlags::PATH)
-        || FileType::from_raw_mode(snapshot.mode) != FileType::RegularFile
-        || snapshot.uid != expected_uid
-        || snapshot.gid != expected_gid
-        || snapshot.links != 1
-        || snapshot.mode & PERMISSION_AND_SPECIAL_BITS != TRUSTED_FILE_MODE
-        || snapshot.length != COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1 as u64
-    {
-        return Err(format!(
-            "trusted client profile {label:?} has invalid descriptor, type, owner, mode, link count, or length"
-        ));
-    }
-    require_absent_xattrs(profile, "trusted client-profile file")?;
-    Ok(snapshot)
-}
-
-fn require_absent_xattrs(object: &impl AsFd, label: &str) -> Result<(), String> {
-    for attribute in [
-        "security.capability",
-        "system.posix_acl_access",
-        "system.posix_acl_default",
-    ] {
-        let mut byte = 0_u8;
-        match rustix::fs::fgetxattr(object, attribute, std::slice::from_mut(&mut byte)) {
-            Err(rustix::io::Errno::NODATA | rustix::io::Errno::OPNOTSUPP) => {}
-            Ok(_) | Err(rustix::io::Errno::RANGE) => {
-                return Err(format!(
-                    "{label} has forbidden capability or POSIX ACL attribute {attribute:?}"
-                ));
-            }
-            Err(error) => {
-                return Err(format!(
-                    "cannot inspect {label} extended attribute {attribute:?}: {error}"
-                ));
-            }
-        }
-    }
-    Ok(())
+    trusted_profile_tree::validate_file(
+        profile,
+        expected_uid,
+        expected_gid,
+        COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
+    )
+    .map_err(|error| error.legacy(label, false))
 }
 
 fn decode(bytes: &[u8]) -> Result<CompilerExecutionClientProfileV1, String> {
@@ -283,6 +192,7 @@ fn decode(bytes: &[u8]) -> Result<CompilerExecutionClientProfileV1, String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::trusted_profile_tree::TRUSTED_FILE_MODE;
     use std::fs::{self, File};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};

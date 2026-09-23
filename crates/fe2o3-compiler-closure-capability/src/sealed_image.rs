@@ -5,6 +5,8 @@ use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
+mod native;
+
 pub(super) const REQUIRED_SEALS: rustix::fs::SealFlags = rustix::fs::SealFlags::WRITE
     .union(rustix::fs::SealFlags::GROW)
     .union(rustix::fs::SealFlags::SHRINK)
@@ -24,14 +26,19 @@ pub(super) enum ImageLength {
 
 impl ImageLength {
     fn admit(self, length: u64, role: CapabilityRole) -> Result<usize, String> {
+        self.admit_checked(length)
+            .map_err(|error| error.for_role(role))
+    }
+
+    fn admit_checked(self, length: u64) -> Result<usize, ImageError> {
         let length = usize::try_from(length)
-            .map_err(|_| format!("{} has an unrepresentable length", role.name))?;
+            .map_err(|_| ImageError::Invalid(" has an unrepresentable length"))?;
         let valid = match self {
             Self::Exact(expected) => length == expected,
             Self::Bounded { max } => length != 0 && length <= max,
         };
         if !valid {
-            return Err(format!("{} has an invalid length", role.name));
+            return Err(ImageError::Invalid(" has an invalid length"));
         }
         Ok(length)
     }
@@ -263,29 +270,80 @@ fn validate_file(
     role: CapabilityRole,
     length_rule: ImageLength,
 ) -> Result<(fs::Metadata, usize), String> {
-    let metadata = image
-        .metadata()
-        .map_err(|error| format!("cannot inspect {}: {error}", role.name))?;
+    validate_file_checked(image, length_rule).map_err(|error| error.for_role(role))
+}
+
+enum ImageError {
+    Inspect { operation: Inspection, errno: i32 },
+    Invalid(&'static str),
+}
+
+enum Inspection {
+    Metadata,
+    Seals,
+    Descriptor,
+}
+impl Inspection {
+    fn legacy_suffix(&self) -> &'static str {
+        match self {
+            Self::Metadata => "",
+            Self::Seals => " seals",
+            Self::Descriptor => " descriptor flags",
+        }
+    }
+    fn native_operation(&self) -> &'static str {
+        match self {
+            Self::Metadata => "inspect sealed image",
+            Self::Seals => "inspect sealed image seals",
+            Self::Descriptor => "inspect sealed image descriptor flags",
+        }
+    }
+}
+
+impl ImageError {
+    fn for_role(self, role: CapabilityRole) -> String {
+        match self {
+            Self::Inspect { operation, errno } => format!(
+                "cannot inspect {}{}: {}",
+                role.name,
+                operation.legacy_suffix(),
+                std::io::Error::from_raw_os_error(errno)
+            ),
+            Self::Invalid(suffix) => format!("{}{suffix}", role.name),
+        }
+    }
+}
+
+fn validate_file_checked(
+    image: &File,
+    length_rule: ImageLength,
+) -> Result<(fs::Metadata, usize), ImageError> {
+    let metadata = image.metadata().map_err(|error| ImageError::Inspect {
+        operation: Inspection::Metadata,
+        errno: error.raw_os_error().unwrap_or(libc::EIO),
+    })?;
     if metadata.mode() != libc::S_IFREG | 0o400 {
-        return Err(format!(
-            "{} is not an exact regular mode-0400 file",
-            role.name
+        return Err(ImageError::Invalid(
+            " is not an exact regular mode-0400 file",
         ));
     }
-    let length = length_rule.admit(metadata.len(), role)?;
-    if rustix::fs::fcntl_get_seals(image)
-        .map_err(|error| format!("cannot inspect {} seals: {error}", role.name))?
-        != REQUIRED_SEALS
+    let length = length_rule.admit_checked(metadata.len())?;
+    if rustix::fs::fcntl_get_seals(image).map_err(|error| ImageError::Inspect {
+        operation: Inspection::Seals,
+        errno: error.raw_os_error(),
+    })? != REQUIRED_SEALS
     {
-        return Err(format!("{} is not exactly immutable", role.name));
+        return Err(ImageError::Invalid(" is not exactly immutable"));
     }
     if !rustix::io::fcntl_getfd(image)
-        .map_err(|error| format!("cannot inspect {} descriptor flags: {error}", role.name))?
+        .map_err(|error| ImageError::Inspect {
+            operation: Inspection::Descriptor,
+            errno: error.raw_os_error(),
+        })?
         .contains(rustix::io::FdFlags::CLOEXEC)
     {
-        return Err(format!(
-            "{} descriptor is unexpectedly inheritable",
-            role.name
+        return Err(ImageError::Invalid(
+            " descriptor is unexpectedly inheritable",
         ));
     }
     Ok((metadata, length))

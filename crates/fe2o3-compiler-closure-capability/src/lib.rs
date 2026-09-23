@@ -16,17 +16,22 @@ use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 
 mod compiler_execution_client_profile;
+mod compiler_execution_client_profile_v2;
 mod compiler_execution_external_anchor_deployment;
 mod compiler_execution_external_anchor_provisioning;
 mod compiler_execution_external_anchor_signing_key;
 mod compiler_execution_policy;
+mod compiler_execution_policy_v2;
 mod compiler_execution_service_launch;
 mod compiler_execution_signing_key;
 mod compiler_execution_supervisor_deployment;
+mod native_capability;
 mod rustc_invocation;
 mod sealed_image;
+mod trusted_profile_tree;
 
 pub use compiler_execution_client_profile::CompilerExecutionClientProfileCapabilityV1;
+pub use compiler_execution_client_profile_v2::CompilerExecutionClientProfileCapabilityV2;
 pub use compiler_execution_external_anchor_deployment::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
     CompilerExecutionExternalAnchorDeploymentCapabilityV1,
@@ -42,6 +47,7 @@ pub use compiler_execution_external_anchor_signing_key::{
 pub use compiler_execution_policy::{
     COMPILER_EXECUTION_POLICY_CHILD_FD_V1, CompilerExecutionPolicyCapabilityV1,
 };
+pub use compiler_execution_policy_v2::CompilerExecutionPolicyCapabilityV2;
 pub use compiler_execution_service_launch::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_CHILD_FD_V1,
     CompilerExecutionServiceLaunchCapabilityV1,
@@ -52,6 +58,9 @@ pub use compiler_execution_signing_key::{
 pub use compiler_execution_supervisor_deployment::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1,
     CompilerExecutionSupervisorDeploymentCapabilityV1,
+};
+pub use native_capability::{
+    CompilerExecutionCapabilityErrorV2, CompilerExecutionCapabilityStorageV2,
 };
 pub use rustc_invocation::{RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1};
 use sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};

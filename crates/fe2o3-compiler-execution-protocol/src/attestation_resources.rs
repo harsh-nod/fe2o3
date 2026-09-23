@@ -4,7 +4,6 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 pub(crate) const ENTRY_WORK: usize = 8;
 pub(crate) const KEY_VALIDATION_WORK: usize = 4096;
@@ -43,36 +42,7 @@ pub(crate) fn nested_fixed<'work, T, E: From<Resource>>(
     storage: usize,
     operation: impl FnOnce(&mut Budget<'work>) -> Result<T, E>,
 ) -> Result<T, E> {
-    budget.charge_work(ENTRY_WORK)?;
-    if budget.storage() < input_floor {
-        return Err(Resource::Accounting.into());
-    }
-    budget.charge_work(work.checked_sub(ENTRY_WORK).ok_or(Resource::Arithmetic)?)?;
-    let floor = budget.storage();
-    let ledger = budget.work_ledger_identity_v1();
-    budget.reserve_storage(storage)?;
-    let protected_floor = budget.storage();
-    let result = catch_unwind(AssertUnwindSafe(|| operation(budget)));
-    let frame_intact = budget.storage() >= protected_floor;
-    let cleanup = if budget.work_ledger_identity_v1() == ledger {
-        budget
-            .storage()
-            .checked_sub(floor)
-            .ok_or(Resource::Accounting)
-            .and_then(|release| budget.release_storage(release))
-    } else {
-        Err(Resource::Accounting)
-    };
-    match result {
-        Ok(result) => {
-            cleanup?;
-            if !frame_intact {
-                return Err(Resource::Accounting.into());
-            }
-            result
-        }
-        Err(panic) => resume_unwind(panic),
-    }
+    budget.with_prepaid_scope(input_floor, ENTRY_WORK, work, storage, operation)
 }
 
 pub(crate) fn fixed_input_floor(bytes: &[u8], expected: usize) -> usize {
@@ -83,6 +53,7 @@ pub(crate) fn fixed_input_floor(bytes: &[u8], expected: usize) -> usize {
 mod tests {
     use super::*;
     use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     #[test]
     fn nested_scope_preserves_work_floor_peak_and_denial_history() {

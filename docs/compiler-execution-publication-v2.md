@@ -132,6 +132,10 @@ latency, generated-stack, allocator or RSS bounds.
 
 ## Validation And Next Steps
 
+[Native sealed policy/profile admission](compiler-execution-capabilities-v2.md)
+adds metered descriptor transport and a fixed trusted-root V2 profile reader.
+It does not activate the producer, services, or launcher.
+
 Tests freeze independent V1/V2 identities and full-wire hashes, mutate every
 byte, reseal mixed families, assert paired-error precedence and ACK asymmetry,
 exercise nonzero prior anchors, and check full/delta retention, exact/one-short
