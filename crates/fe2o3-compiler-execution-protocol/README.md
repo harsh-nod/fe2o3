@@ -14,8 +14,12 @@ issuance, durable state and consumers remain on the previous family.
 Native move-only signed receipts and pinned-key verification are also available
 with explicit work/storage admission. Signature validity does not establish a
 protected compiler occurrence or advance a durable ledger. See the
-[receipt contract](../../docs/compiler-execution-receipt-v2.md); native publication,
-service transport and production consumer integration remain pending.
+[receipt contract](../../docs/compiler-execution-receipt-v2.md).
+Native publication, ACK and complete carriage now validate nested owners and
+their exact relationships on the same resource ledger, without proving durable
+publication. See the [publication contract](../../docs/compiler-execution-publication-v2.md).
+Versioned durable state, service transport and production consumer integration
+remain pending.
 
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,

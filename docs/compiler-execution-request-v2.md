@@ -12,8 +12,8 @@ These records establish content agreement, not protected execution, freshness,
 rollback authority, signing, compiler admission or GPU load/launch authority.
 No service or producer is activated. Native signed receipts now have a separate
 [issuance and verification contract](compiler-execution-receipt-v2.md).
-Publication/ACK/carriage,
-durable state, sealed capabilities and the production consumer chain still need
+[Native publication/ACK/carriage](compiler-execution-publication-v2.md) is also
+implemented. Durable state, sealed capabilities and the production consumer chain still need
 native integration. This increment closes no #272 milestone and qualifies no
 tutorial kernel, simulator execution, protected proof or GPU run.
 
@@ -108,7 +108,7 @@ mixed/cloned owners. Scope tests cover nested errors, unwind, sticky denial
 history, partial frame retirement, input underflow and ledger replacement.
 
 Native signed receipt issuance/verification is implemented; the next dependency
-is publication, acknowledgment and carriage. Broker admission must independently
+is durable/service migration and production carriage admission. Broker admission must independently
 reconstruct this SubjectV2 from the actual V4 transaction; accepting this client
 request alone is insufficient. Durable format/service migration, Worker replay,
 host currentness, both Cargo restart paths and coordinated provisioning must

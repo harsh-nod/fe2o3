@@ -19,7 +19,10 @@ mod external_anchor_transaction;
 mod issuer_policy_codec;
 mod issuer_policy_v2;
 mod launch_manifest;
+mod receipt_carriage_v2;
 mod receipt_publication;
+mod receipt_publication_codec;
+mod receipt_publication_v2;
 mod service;
 mod service_ready;
 mod supervisor_deployment;
@@ -146,6 +149,15 @@ pub use launch_manifest::{
     CompilerExecutionServiceLaunchManifestErrorV1,
     CompilerExecutionServiceLaunchManifestIdentityV1, CompilerExecutionServiceLaunchManifestV1,
 };
+pub use receipt_carriage_v2::{
+    COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V2,
+    COMPILER_EXECUTION_RECEIPT_CARRIAGE_CONSTRUCT_STORAGE_V2,
+    COMPILER_EXECUTION_RECEIPT_CARRIAGE_CONSTRUCT_WORK_V2,
+    COMPILER_EXECUTION_RECEIPT_CARRIAGE_DECODE_STORAGE_V2,
+    COMPILER_EXECUTION_RECEIPT_CARRIAGE_DECODE_WORK_V2,
+    COMPILER_EXECUTION_RECEIPT_CARRIAGE_STORAGE_V2, COMPILER_EXECUTION_RECEIPT_CARRIAGE_WORK_V2,
+    CompilerExecutionReceiptCarriageIdentityV2, CompilerExecutionReceiptCarriageV2,
+};
 pub use receipt_publication::{
     COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
@@ -153,6 +165,19 @@ pub use receipt_publication::{
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckIdentityV1,
     CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
     CompilerExecutionReceiptPublicationIdentityV1, CompilerExecutionReceiptPublicationV1,
+};
+pub use receipt_publication_v2::{
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V2,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_STORAGE_V2,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_WORK_V2,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V2,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_DECODE_STORAGE_V2,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_DECODE_WORK_V2,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_STORAGE_V2,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_WORK_V2,
+    CompilerExecutionReceiptPublicationAckIdentityV2, CompilerExecutionReceiptPublicationAckV2,
+    CompilerExecutionReceiptPublicationErrorV2, CompilerExecutionReceiptPublicationIdentityV2,
+    CompilerExecutionReceiptPublicationV2,
 };
 pub use service::{
     COMPILER_EXECUTION_SERVICE_CONTROL_REQUEST_BYTES_V1,

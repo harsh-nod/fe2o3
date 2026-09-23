@@ -25,7 +25,8 @@ pub const COMPILER_EXECUTION_ATTESTATION_RECEIPT_VERIFY_WORK_V2: usize =
     COMPILER_EXECUTION_ATTESTATION_RECEIPT_IDENTITY_WORK_V2
         + resources::KEY_VALIDATION_WORK
         + resources::STRICT_VERIFY_WORK;
-const RETAINED: usize = size_of::<CompilerExecutionAttestationReceiptV2>() + size_of::<Storage>();
+pub(crate) const RETAINED: usize =
+    size_of::<CompilerExecutionAttestationReceiptV2>() + size_of::<Storage>();
 const VERIFIED_RETAINED: usize =
     size_of::<VerifiedCompilerExecutionAttestationV2>() + size_of::<Storage>();
 /// Fixed additional logical peak: result, canonical staging, hash/public crypto
@@ -52,12 +53,16 @@ const _: () = {
             <= VERIFIED_RETAINED + 4096
     );
     assert!(size_of::<std::thread::Result<Result<bool>>>() <= 4096);
+    assert!(size_of::<std::thread::Result<Result<()>>>() <= 4096);
 };
 type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerExecutionAttestationReceiptIdentityV2([u8; 32]);
 impl CompilerExecutionAttestationReceiptIdentityV2 {
+    pub(crate) const fn from_bytes_for_protocol(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -148,9 +153,7 @@ impl CompilerExecutionAttestationReceiptV2 {
             RETAINED + policy.retained_storage() + request.retained_storage(),
             COMPILER_EXECUTION_ATTESTATION_RECEIPT_VERIFY_WORK_V2,
             || {
-                codec::V2.verify_signature(&self.record)?;
-                let expected = expected(policy, request)?;
-                codec::compare(&self.record.fields, &expected, current_rollback_anchor)?;
+                self.check(policy, request, current_rollback_anchor)?;
                 Ok((
                     VerifiedCompilerExecutionAttestationV2 { receipt: self },
                     Storage(VERIFIED_RETAINED - RETAINED),
@@ -160,6 +163,27 @@ impl CompilerExecutionAttestationReceiptV2 {
     }
     pub const fn request_sha256(&self) -> &[u8; 32] {
         &self.record.fields.request_sha256
+    }
+    // Internal carriage validation preserves the receipt owner. It mints no
+    // verified owner or authority and prepays the same checks as consuming verify.
+    pub(crate) fn verify_matches(
+        &self,
+        policy: &Policy,
+        request: &Request,
+        current: [u8; 32],
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        metered(
+            budget,
+            RETAINED + policy.retained_storage() + request.retained_storage(),
+            COMPILER_EXECUTION_ATTESTATION_RECEIPT_VERIFY_WORK_V2,
+            || self.check(policy, request, current),
+        )
+    }
+    fn check(&self, policy: &Policy, request: &Request, current: [u8; 32]) -> Result<()> {
+        codec::V2.verify_signature(&self.record)?;
+        let expected = expected(policy, request)?;
+        Ok(codec::compare(&self.record.fields, &expected, current)?)
     }
     pub const fn policy_identity(&self) -> PolicyIdentity {
         PolicyIdentity::from_bytes_for_protocol(self.record.fields.policy_identity)

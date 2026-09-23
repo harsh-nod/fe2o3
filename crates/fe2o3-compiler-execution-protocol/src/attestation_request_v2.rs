@@ -22,7 +22,8 @@ pub const COMPILER_EXECUTION_ATTESTATION_REQUEST_WORK_V2: usize =
 /// Decode work includes the actual nested SubjectV2 decoder, not a new meter.
 pub const COMPILER_EXECUTION_ATTESTATION_REQUEST_DECODE_WORK_V2: usize =
     COMPILER_EXECUTION_ATTESTATION_REQUEST_WORK_V2 + SUBJECT_WORK;
-const RETAINED: usize = size_of::<CompilerExecutionAttestationRequestV2>() + size_of::<Storage>();
+pub(crate) const RETAINED: usize =
+    size_of::<CompilerExecutionAttestationRequestV2>() + size_of::<Storage>();
 const INHERITED: usize = challenge::RETAINED + challenge::SUBJECT_RETAINED;
 /// Additional fixed logical construction peak, excluding prepaid input owners.
 pub const COMPILER_EXECUTION_ATTESTATION_REQUEST_STORAGE_V2: usize =

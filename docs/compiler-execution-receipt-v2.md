@@ -112,7 +112,8 @@ error order, policy-axis and valid alternate-request substitution, both sides of
 the prior-anchor comparison, exact/one-short quotas, full-key floors, inherited
 storage, denial history and nominal move-only compile-fail contracts.
 
-Next are native publication/ACK/carriage and versioned durable/service records.
+[Native publication/ACK/carriage](compiler-execution-publication-v2.md) is now
+implemented. Next are versioned durable/service records and production consumers.
 Broker reconstruction must observe the actual V4 transaction independently.
 Worker replay, runtime/host joins, both Cargo restart paths and coherent
 provisioning must be integrated before producer activation. A signed receipt
