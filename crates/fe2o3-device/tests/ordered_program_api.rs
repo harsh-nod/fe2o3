@@ -4,6 +4,9 @@ use fe2o3_device::ordered_program::__checked_ordered_program_words_v1 as pack;
 #[path = "ordered_program/repeat_v1.rs"]
 mod repeat_v1;
 
+#[path = "ordered_program/select_v1.rs"]
+mod select_v1;
+
 #[test]
 fn marker_keeps_exact_eight_runtime_parameters_with_five_typed_consts() {
     let _: fn(u32, u32, u32, u8, u8, u8, u8, u8) -> u32 =
