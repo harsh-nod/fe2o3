@@ -29,6 +29,21 @@ include!("context_version_journal/declarations.rs");
 include!("context_version_journal/lookup_bodies.rs");
 include!("context_version_journal/writer_lookup_bodies.rs");
 
+#[allow(unused_macros)]
+#[macro_use]
+mod writer_lifecycle_templates {
+    include!("context_version_journal/writer_lifecycle_bodies.rs");
+}
+
+macro_rules! writer_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
+
+#[cfg(test)]
+mod writer_lifecycle_baseline;
+
 #[cfg(test)]
 mod query_baseline;
 
@@ -125,32 +140,13 @@ impl ContextVersionJournalV1 {
         &mut self,
         key: ContextWriterKeyV1,
     ) -> Result<ContextWriterReferenceV1, ContextVersionJournalErrorV1> {
-        if key.context_generation != self.context_generation {
-            return Err(ContextVersionJournalErrorV1::ForeignContext);
-        }
-        if !issuable_context_id(key.local) {
-            return Err(ContextVersionJournalErrorV1::InvalidWriterId);
-        }
-        if key.local <= self.registration_watermark {
-            return Err(ContextVersionJournalErrorV1::WriterReplay);
-        }
-        let slot = self
-            .next_free()
-            .ok_or(ContextVersionJournalErrorV1::WriterCapacity)?;
-        if self.read_slot(slot) != Some(&None) {
-            return Err(ContextVersionJournalErrorV1::InvalidState);
-        }
-        let reserved_count = self
-            .reserved_count
-            .checked_add(1)
-            .filter(|count| *count <= self.writer_capacity)
-            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
-        // Exclusive preflight fixes the free slot; commit has no fallible work.
-        self.pop_free();
-        self.store_slot(slot, Some(WriterEntryV1::Reserved(key)));
-        self.reserved_count = reserved_count;
-        self.registration_watermark = key.local;
-        Ok(ContextWriterReferenceV1 { slot, key })
+        writer_register_body!(
+            writer_rust_expr,
+            self,
+            key,
+            issuable_context_id,
+            Self::count_indexed_access
+        )
     }
 
     /// Validates exact Reserved identity, not the latest registration order.
@@ -158,33 +154,22 @@ impl ContextVersionJournalV1 {
         &self,
         reference: ContextWriterReferenceV1,
     ) -> Result<ContextWriterKeyV1, ContextVersionJournalErrorV1> {
-        match self.read_slot(reference.slot).copied().flatten() {
-            Some(WriterEntryV1::Reserved(key))
-                if key == reference.key && key.context_generation == self.context_generation =>
-            {
-                Ok(key)
-            }
-            _ => Err(ContextVersionJournalErrorV1::InvalidReference),
-        }
+        writer_reserved_lookup_body!(self, reference, begin::begin_reserved_exec_v1)
     }
 
     /// Explicitly releases a Reserved slot before effects; never rolls back IDs.
+    #[allow(clippy::question_mark)]
     pub fn abort_reserved(
         &mut self,
         reference: ContextWriterReferenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.lookup_reserved(reference)?;
-        if self.free.len() >= self.writer_capacity || self.free.len() >= self.free.capacity() {
-            return Err(ContextVersionJournalErrorV1::InvalidState);
-        }
-        let reserved_count = self
-            .reserved_count
-            .checked_sub(1)
-            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
-        self.store_slot(reference.slot, None);
-        self.push_free(reference.slot);
-        self.reserved_count = reserved_count;
-        Ok(())
+        writer_abort_body!(
+            writer_rust_expr,
+            self,
+            reference,
+            self.free.capacity(),
+            Self::count_indexed_access
+        )
     }
 
     /// Enrolls an existing allocation. No retirement or re-enrollment is implied.
@@ -318,6 +303,7 @@ impl ContextVersionJournalV1 {
         self.indexed_accesses.set(self.indexed_accesses.get() + 1);
     }
 
+    #[cfg(test)]
     fn read_slot(&self, slot: usize) -> Option<&Option<WriterEntryV1>> {
         self.count_indexed_access();
         self.writers.get(slot)
@@ -328,11 +314,13 @@ impl ContextVersionJournalV1 {
         self.writers[slot] = value;
     }
 
+    #[cfg(test)]
     fn next_free(&self) -> Option<usize> {
         self.count_indexed_access();
         self.free.last().copied()
     }
 
+    #[cfg(test)]
     fn pop_free(&mut self) {
         self.count_indexed_access();
         let _ = self.free.pop();

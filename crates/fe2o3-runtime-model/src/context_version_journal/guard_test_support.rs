@@ -1,6 +1,19 @@
 use super::*;
 
 impl ContextVersionJournalV1 {
+    // Register and abort change one slot and at most one free-stack suffix entry.
+    pub(crate) fn restore_writer_for_test_v1(&mut self, before: &Self, slot: usize) {
+        if let Some(value) = before.writers.get(slot) {
+            self.writers[slot] = *value;
+        }
+        assert!(self.free.len().abs_diff(before.free.len()) <= 1);
+        self.free.truncate(before.free.len());
+        self.free.extend_from_slice(&before.free[self.free.len()..]);
+        self.registration_watermark = before.registration_watermark;
+        self.reserved_count = before.reserved_count;
+        self.reset_access_count_for_test_v1();
+    }
+
     pub(crate) fn fault_enrollment_for_test_v1(&mut self, free: &[usize], capacity: usize) {
         self.allocation_free.clear();
         self.allocation_free.extend_from_slice(free);

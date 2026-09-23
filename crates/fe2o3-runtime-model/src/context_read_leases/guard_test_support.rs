@@ -47,6 +47,14 @@ impl StableReadResetV1 {
 }
 
 impl ContextReadLeasedJournalV1 {
+    pub(crate) fn restore_writer_for_test_v1(
+        &mut self,
+        before: &ContextVersionJournalV1,
+        slot: usize,
+    ) {
+        self.journal.restore_writer_for_test_v1(before, slot);
+    }
+
     pub(crate) fn fault_enrollment_for_test_v1(&mut self, free: &[usize], capacity: usize) {
         self.journal.fault_enrollment_for_test_v1(free, capacity);
     }

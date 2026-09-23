@@ -8,6 +8,9 @@ type Reference = ContextWriterReferenceV1;
 type Error = ContextVersionJournalErrorV1;
 type Kind = ContextWriterKindV1;
 
+#[path = "writer_lifecycle_tests.rs"]
+mod writer_lifecycle;
+
 fn key(local: u64) -> Key {
     Key {
         context_generation: 7,
@@ -713,6 +716,21 @@ fn runtime_identity_and_operation_routing_contract_is_explicit() {
         .next()
         .unwrap();
     let helpers = source.split("fn count_indexed_access(").nth(1).unwrap();
+    let shared = include_str!("writer_lifecycle_bodies.rs");
+    let reserved = include_str!("begin_bodies.rs")
+        .split("macro_rules! begin_reserved_body")
+        .nth(1)
+        .unwrap()
+        .split("macro_rules! begin_canonical_body")
+        .next()
+        .unwrap();
+    let reserved_adapter = include_str!("begin.rs")
+        .split("pub(super) fn begin_reserved_exec_v1(")
+        .nth(1)
+        .unwrap()
+        .split("#[inline]")
+        .next()
+        .unwrap();
     for forbidden in [
         "try_reserve",
         ".resize(",
@@ -727,7 +745,9 @@ fn runtime_identity_and_operation_routing_contract_is_explicit() {
         "loop",
     ] {
         assert!(
-            !operations.contains(forbidden) && !helpers.contains(forbidden),
+            [operations, helpers, shared, reserved, reserved_adapter]
+                .iter()
+                .all(|part| !part.contains(forbidden)),
             "operation contains {forbidden}"
         );
     }
@@ -745,6 +765,12 @@ fn runtime_identity_and_operation_routing_contract_is_explicit() {
             "operation bypasses indexed helper with {direct_access}"
         );
     }
+    assert!(operations.contains("writer_register_body!"));
+    assert!(operations.contains("writer_reserved_lookup_body!"));
+    assert!(operations.contains("writer_abort_body!"));
+    assert!(shared.contains("$count($journal);"));
+    assert!(reserved.contains("begin_indexed_access_v1($journal);"));
+    assert!(reserved_adapter.contains("begin_reserved_body!(journal, writer)"));
 }
 
 #[path = "membership_tests.rs"]

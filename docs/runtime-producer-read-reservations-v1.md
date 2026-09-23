@@ -481,6 +481,19 @@ Before enabling runtime admission, the remaining work is:
    sorting or total runtime. The developer runner is `verus/check-owner-enrollment.py`.
    Scalar enrollment remains separate; physical Vec storage, fallible construction,
    unwind behavior, native admission and HIP/HSA performance remain unqualified here.
+   Writer registration, reserved lookup and reserved abort now share executable
+   bodies with `context_owner_writer_execution_v1.rs`, including both mutable
+   owner forwarding layers. Raw contracts remain total and preserve the complete
+   actual owner on rejection. The paired historical execution preserves projected
+   producer status unconditionally; issuance and custody preservation require the
+   initial combined producer-custody/issuance invariant, and abort additionally
+   binds its observed capacity to the ghost storage label. Physical capacity is evaluated only after reference
+   validation and logical return headroom. Synthetic-start traces execute public
+   enrollment, registration, lookup, abort/reuse and Begin with both empty and
+   nonempty rosters. These are not Rust constructor or native admission proofs.
+   Frozen CPU tests cover malformed raw state, exact precedence, stable/producer
+   custody, buffer identity and constant indexed work. The developer runner is
+   `verus/check-owner-writer.py`; no native timing or HIP/HSA parity is claimed.
    Remaining bodies include construction, scalar enrollment/retirement and other settlement wrappers;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but

@@ -47,6 +47,15 @@ mod enrollment_templates {
     include!("context_version_journal/enrollment_wrapper_bodies.rs");
 }
 
+#[allow(unused_macros)]
+#[macro_use]
+mod writer_lifecycle_templates {
+    include!("context_version_journal/writer_lifecycle_bodies.rs");
+}
+
+#[cfg(test)]
+mod writer_lifecycle_baseline;
+
 impl Deref for ContextReadLeasedJournalV1 {
     type Target = ContextVersionJournalV1;
 
@@ -251,13 +260,13 @@ impl ContextReadLeasedJournalV1 {
         &mut self,
         key: ContextWriterKeyV1,
     ) -> Result<ContextWriterReferenceV1, ContextVersionJournalErrorV1> {
-        self.journal.register_writer(key)
+        writer_owner_forward_body!(self, journal, register_writer, key, [])
     }
     pub fn abort_reserved(
         &mut self,
         writer: ContextWriterReferenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.journal.abort_reserved(writer)
+        writer_owner_forward_body!(self, journal, abort_reserved, writer, [])
     }
     pub fn enroll_allocation(
         &mut self,

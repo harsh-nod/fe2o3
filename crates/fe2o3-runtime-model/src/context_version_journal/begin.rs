@@ -23,7 +23,7 @@ fn begin_indexed_access_v1(journal: &JournalContentsV1) {
 }
 
 #[inline]
-fn begin_reserved_exec_v1(
+pub(super) fn begin_reserved_exec_v1(
     journal: &JournalContentsV1,
     writer: WriterReferenceV1,
 ) -> Result<WriterKeyV1, ReadErrorV1> {

@@ -1,6 +1,14 @@
 use super::*;
 
 impl ContextProducerReadJournalV1 {
+    pub(crate) fn restore_writer_for_test_v1(
+        &mut self,
+        before: &ContextVersionJournalV1,
+        slot: usize,
+    ) {
+        self.stable.restore_writer_for_test_v1(before, slot);
+    }
+
     pub(crate) fn restore_enrollment_for_test_v1(
         &mut self,
         before: &ContextVersionJournalV1,
