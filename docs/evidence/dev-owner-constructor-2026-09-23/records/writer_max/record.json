@@ -1,0 +1,30 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--foreground",
+    "--signal=TERM",
+    "--kill-after=5",
+    "600",
+    "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus",
+    "--crate-type",
+    "lib",
+    "--triggers-mode",
+    "silent",
+    "--no-cheating",
+    "--output-json",
+    "--error-format=json",
+    "--no-report-long-running",
+    "--num-threads",
+    "4",
+    "--verify-only-module",
+    "production",
+    "--verify-function",
+    "ContextVersionJournalV1::new_with_allocator_v1",
+    "/home/harsh/.codex-tmp/fe2o3-constructor-20260923-reEd7VGd/campaign/sources-3btyj_6p/crates/fe2o3-runtime-model/verus/context_owner_constructor_paired_v1.rs"
+  ],
+  "started_ns": 1790196314615186138,
+  "process_group": 3998400,
+  "group_absent": true,
+  "finished_ns": 1790196337447911782,
+  "status": 1
+}

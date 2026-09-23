@@ -1,0 +1,3 @@
+PASS: receipt and checkpoint replay checks; 29 malformed or conflicting operations rejected
+PASS: retirement negative diagnostic policy; 8 malformed cases rejected
+PASS: constructor diagnostic, independence, and source-auth checks; 24 malformed cases rejected; 74 scoped mutation anchors authenticated
