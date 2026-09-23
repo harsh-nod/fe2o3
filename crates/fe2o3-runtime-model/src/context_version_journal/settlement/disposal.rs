@@ -1,5 +1,50 @@
 use super::*;
 
+#[allow(unused_macros)]
+#[macro_use]
+mod templates {
+    include!("../disposal_bodies.rs");
+}
+
+macro_rules! disposal_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
+
+#[allow(clippy::question_mark)]
+fn scan_scratch(
+    journal: &ContextVersionJournalV1,
+    count: usize,
+) -> Result<(), ContextVersionJournalErrorV1> {
+    disposal_scratch_scan_body!(disposal_rust_expr, journal, count, index, [])
+}
+
+fn stage(journal: &mut ContextVersionJournalV1, initial: Option<usize>, count: usize) {
+    disposal_stage_body!(
+        disposal_rust_expr,
+        journal,
+        initial,
+        count,
+        ContextVersionJournalV1::count_indexed_access,
+        head,
+        index,
+        []
+    );
+}
+
+fn commit(journal: &mut ContextVersionJournalV1, writer: ContextWriterReferenceV1, count: usize) {
+    disposal_commit_body!(
+        disposal_rust_expr,
+        journal,
+        writer,
+        count,
+        ContextVersionJournalV1::count_indexed_access,
+        index,
+        []
+    );
+}
+
 impl ContextVersionJournalV1 {
     /// Preflights the complete Unknown roster without authorizing native effects.
     /// Partial disposal must remain retained by the production owner until every
@@ -9,7 +54,7 @@ impl ContextVersionJournalV1 {
         writer: ContextWriterReferenceV1,
         canonical: &[ContextAllocationWriteV1],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.unknown_disposal_plan(writer, canonical).map(|_| ())
+        disposal_validate_body!(self, writer, canonical, unknown_disposal_plan, [])
     }
 
     /// Retires an exact Unknown writer and all its allocations atomically.
@@ -17,93 +62,56 @@ impl ContextVersionJournalV1 {
     /// Writer issuance history remains burned. Callers must not reuse disposed
     /// allocation keys. This operation is O(k), with no allocation or callback;
     /// partition preservation assumes a valid prestate.
+    #[allow(clippy::question_mark)]
     pub fn dispose_unknown(
         &mut self,
         writer: ContextWriterReferenceV1,
         evidence: &ContextWriterDisposalEvidenceV1<'_>,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.retained_header(writer, true)?;
-        if evidence.writer != writer {
-            return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);
-        }
-        let (mut head, count) = self.unknown_disposal_plan(writer, evidence.allocations)?;
-        for index in 0..count {
-            let slot = head.expect("validated complete Unknown chain");
-            let member = self.members[slot].expect("validated Unknown member");
-            self.store_plan(
-                index,
-                BeginMemberPlanV1 {
-                    member_slot: slot,
-                    allocation: member.allocation,
-                    prior_lineage: member.prior_lineage,
-                    attempt_epoch: member.attempt_epoch,
-                },
-            );
-            head = member.next;
-        }
-        // Disposal removes membership and allocation together. It does not pass
-        // through a state that could be mistaken for recovered content.
-        for index in 0..count {
-            let plan = self.scratch[index].take().expect("complete disposal plan");
-            self.allocations[plan.allocation.slot] = None;
-            self.allocation_free.push(plan.allocation.slot);
-            self.members[plan.member_slot] = None;
-            self.member_free.push(plan.member_slot);
-        }
-        self.store_slot(writer.slot, None);
-        self.push_free(writer.slot);
-        Ok(())
+        disposal_execute_body!(
+            disposal_rust_expr,
+            self,
+            writer,
+            evidence,
+            retained::shared_retained_header_v1,
+            retained::shared_retained_writer_key_v1,
+            unknown_disposal_plan,
+            [],
+            stage,
+            commit,
+            head,
+            count,
+            [],
+            [],
+            []
+        )
     }
 
+    #[allow(clippy::question_mark)]
     fn unknown_disposal_plan(
         &self,
         writer: ContextWriterReferenceV1,
         canonical: &[ContextAllocationWriteV1],
     ) -> Result<(Option<usize>, usize), ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
-        let (head, count, unknown) = self.retained_header(writer, true)?;
-        if !unknown {
-            return Err(E::InvalidState);
-        }
-        if canonical.len() != count {
-            return Err(E::SettlementEvidenceMismatch);
-        }
-        self.validate_retained_chain(writer, head, count)?;
-        let mut cursor = head;
-        for destination in canonical {
-            let slot = cursor.ok_or(E::InvalidState)?;
-            let member = self.members[slot].ok_or(E::InvalidState)?;
-            let allocation = self.exact_allocation(member.allocation)?;
-            if destination.allocation != member.allocation
-                || destination.device != allocation.device
-                || destination.byte_extent != allocation.byte_extent
-            {
-                return Err(E::SettlementEvidenceMismatch);
-            }
-            cursor = member.next;
-        }
-        let writer_returns = self.free.len().checked_add(1).ok_or(E::InvalidState)?;
-        let member_returns = self
-            .member_free
-            .len()
-            .checked_add(count)
-            .ok_or(E::InvalidState)?;
-        let allocation_returns = self
-            .allocation_free
-            .len()
-            .checked_add(count)
-            .ok_or(E::InvalidState)?;
-        if writer_returns > self.writer_capacity
-            || writer_returns > self.free.capacity()
-            || member_returns > self.allocation_capacity
-            || member_returns > self.member_free.capacity()
-            || allocation_returns > self.allocation_capacity
-            || allocation_returns > self.allocation_free.capacity()
-            || count > self.scratch.len()
-            || self.scratch[..count].iter().any(Option::is_some)
-        {
-            return Err(E::InvalidState);
-        }
-        Ok((head, count))
+        disposal_plan_body!(
+            disposal_rust_expr,
+            self,
+            writer,
+            canonical,
+            self.free.capacity(),
+            self.member_free.capacity(),
+            self.allocation_free.capacity(),
+            retained::shared_retained_header_v1,
+            retained::shared_retained_chain_v1,
+            retained::shared_retained_allocation_v1,
+            scan_scratch,
+            head,
+            count,
+            cursor,
+            index,
+            [],
+            [],
+            []
+        )
     }
 }

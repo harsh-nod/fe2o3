@@ -74,6 +74,15 @@ mod retirement_templates {
     include!("context_version_journal/retirement_bodies.rs");
 }
 
+#[allow(unused_macros)]
+#[macro_use]
+mod disposal_templates {
+    include!("context_version_journal/disposal_bodies.rs");
+}
+
+#[cfg(test)]
+mod disposal_baseline;
+
 #[cfg(test)]
 mod retirement_baseline;
 
@@ -220,6 +229,7 @@ impl ContextReadLeasedJournalV1 {
         )
     }
 
+    #[cfg(test)]
     fn require_unread(
         &self,
         references: impl IntoIterator<Item = ContextAllocationReferenceV1>,
@@ -290,22 +300,42 @@ impl ContextReadLeasedJournalV1 {
         )
     }
 
+    #[allow(clippy::question_mark)]
     pub fn validate_unknown_disposal(
         &self,
         writer: ContextWriterReferenceV1,
         members: &[ContextAllocationWriteV1],
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.require_unread(members.iter().map(|member| member.allocation))?;
-        self.journal.validate_unknown_disposal(writer, members)
+        disposal_owner_validate_body!(
+            reader_rust_expr,
+            self,
+            journal,
+            writer,
+            members,
+            require_unread_writes,
+            validate_unknown_disposal,
+            [],
+            []
+        )
     }
 
+    #[allow(clippy::question_mark)]
     pub fn dispose_unknown(
         &mut self,
         writer: ContextWriterReferenceV1,
         evidence: &ContextWriterDisposalEvidenceV1<'_>,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        self.validate_unknown_disposal(writer, evidence.allocations)?;
-        self.journal.dispose_unknown(writer, evidence)
+        disposal_owner_execute_body!(
+            reader_rust_expr,
+            self,
+            journal,
+            writer,
+            evidence,
+            validate_unknown_disposal,
+            dispose_unknown,
+            [],
+            []
+        )
     }
 
     pub fn register_writer(

@@ -248,11 +248,13 @@ impl ContextVersionJournalV1 {
         begin::begin_exec_v1(self, writer, canonical)
     }
 
+    #[cfg(test)]
     fn read_allocation(&self, slot: usize) -> Option<&AllocationEntryV1> {
         self.count_indexed_access();
         self.allocations.get(slot).and_then(Option::as_ref)
     }
 
+    #[cfg(test)]
     fn exact_allocation(
         &self,
         reference: ContextAllocationReferenceV1,
@@ -271,6 +273,7 @@ impl ContextVersionJournalV1 {
         self.member_free[self.member_free.len() - 1 - offset]
     }
 
+    #[cfg(test)]
     fn store_plan(&mut self, index: usize, plan: BeginMemberPlanV1) {
         self.count_indexed_access();
         self.scratch[index] = Some(plan);
@@ -287,6 +290,7 @@ impl ContextVersionJournalV1 {
         self.writers.get(slot)
     }
 
+    #[cfg(test)]
     fn store_slot(&mut self, slot: usize, value: Option<WriterEntryV1>) {
         self.count_indexed_access();
         self.writers[slot] = value;
@@ -304,6 +308,7 @@ impl ContextVersionJournalV1 {
         let _ = self.free.pop();
     }
 
+    #[cfg(test)]
     fn push_free(&mut self, slot: usize) {
         self.count_indexed_access();
         self.free.push(slot);

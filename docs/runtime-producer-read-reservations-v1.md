@@ -552,7 +552,24 @@ Before enabling runtime admission, the remaining work is:
    and 980 unit tests plus 27 doctests passed. These records do not establish
    physical Vec storage, allocator/unwind behavior, actual constructor reachability,
    native disposal authority, native admission or HIP/HSA performance.
-   Remaining bodies include construction and Unknown disposal wrappers;
+   The Unknown-disposal source candidate now shares journal admission, staging,
+   commit and both outer wrappers with an independent logical executor.
+   Paired normal-return execution preserves exact errors and complete rejection
+   identity. Successful execution removes the exact Unknown chain and allocations,
+   returns their slots in chain order, and restores the scratch prefix without
+   changing its arbitrary suffix. Custody, issuance history and existing retained
+   query results are preserved conditionally on their initial invariants; those
+   invariants are not premises of raw correspondence. Executable witnesses include
+   Success/NoEffect reservations whose old writer slot is reused and then disposed.
+   The whole paired root reported 1,085 verified, zero errors; the raw root reported
+   356 verified, zero errors. Sixteen frozen same-owner differential tests bring
+   the model suite to 996 passing unit tests and 27 passing doctests, with 18 ignored.
+   Clippy with denied warnings and the optimized test build also pass.
+   The dedicated runner is `verus/check-owner-disposal.py`. Its complete signed-source
+   mutation/replay campaign and portable evidence packet are still pending. This
+   source milestone does not close Gate 1 or establish native disposal authority,
+   physical Vec storage, constructor/unwind refinement, or HIP/HSA performance.
+   Remaining bodies include construction;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

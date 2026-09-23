@@ -3,6 +3,9 @@ use super::*;
 #[path = "disposal_tests.rs"]
 mod disposal;
 
+#[path = "disposal_shared_tests.rs"]
+mod disposal_shared;
+
 #[path = "retained_tests.rs"]
 mod retained;
 

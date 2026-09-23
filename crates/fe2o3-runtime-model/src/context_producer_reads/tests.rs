@@ -5,6 +5,7 @@ type Error = ContextVersionJournalErrorV1;
 type Status = ContextProducerReadStatusV1;
 
 mod acquire_shared;
+mod disposal_shared;
 mod enrollment_shared;
 mod query_shared;
 mod release_shared;

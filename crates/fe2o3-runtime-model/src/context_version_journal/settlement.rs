@@ -3,6 +3,10 @@ use super::*;
 mod disposal;
 
 #[cfg(test)]
+#[path = "disposal_baseline.rs"]
+mod disposal_baseline;
+
+#[cfg(test)]
 #[path = "settlement_baseline.rs"]
 mod settlement_baseline;
 
@@ -55,6 +59,7 @@ impl ContextVersionJournalV1 {
         journal_unknown_wrapper_body!(self, writer, retained::shared_retained_unknown_v1)
     }
 
+    #[cfg(test)]
     fn retained_header(
         &self,
         writer: ContextWriterReferenceV1,
@@ -63,6 +68,7 @@ impl ContextVersionJournalV1 {
         retained::shared_retained_header_v1(self, writer, allow_unknown)
     }
 
+    #[cfg(test)]
     fn validate_retained_chain(
         &self,
         writer: ContextWriterReferenceV1,

@@ -1,6 +1,42 @@
 use super::*;
 
 impl ContextVersionJournalV1 {
+    // Use only after successful disposal of the saved, validated Unknown chain.
+    pub(crate) fn restore_disposal_for_test_v1(
+        &mut self,
+        before: &Self,
+        writer: ContextWriterReferenceV1,
+    ) {
+        let Some(WriterEntryV1::Unknown {
+            mut head, count, ..
+        }) = before.writers[writer.slot]
+        else {
+            panic!("Unknown baseline required");
+        };
+        assert_eq!(self.registration_watermark, before.registration_watermark);
+        assert_eq!(self.reserved_count, before.reserved_count);
+        assert_eq!(self.free.len(), before.free.len() + 1);
+        assert_eq!(self.member_free.len(), before.member_free.len() + count);
+        assert_eq!(
+            self.allocation_free.len(),
+            before.allocation_free.len() + count
+        );
+        self.writers[writer.slot] = before.writers[writer.slot];
+        for index in 0..count {
+            let slot = head.unwrap();
+            let member = before.members[slot].unwrap();
+            self.members[slot] = Some(member);
+            self.allocations[member.allocation.slot] = before.allocations[member.allocation.slot];
+            self.scratch[index] = before.scratch[index];
+            head = member.next;
+        }
+        assert!(head.is_none());
+        self.free.truncate(before.free.len());
+        self.member_free.truncate(before.member_free.len());
+        self.allocation_free.truncate(before.allocation_free.len());
+        self.reset_access_count_for_test_v1();
+    }
+
     // Retirement changes only selected slots and an appended free-stack suffix.
     pub(crate) fn restore_retirement_for_test_v1(
         &mut self,
