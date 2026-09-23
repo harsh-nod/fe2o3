@@ -3935,6 +3935,7 @@ pub(crate) mod guarded_loop_source_v1;
 #[path = "production_pipeline_loop_capture_v1.rs"]
 pub(crate) mod loop_capture_v1;
 pub(crate) mod ordered_program_diagnostic_v32;
+pub(crate) mod ordered_program_origin_v1;
 pub(crate) mod ordered_region_diagnostic_v31;
 #[cfg(test)]
 pub(crate) mod ordered_region_qualification_v31;

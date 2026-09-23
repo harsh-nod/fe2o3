@@ -19,6 +19,9 @@ use reserved_fe2o3_symbols::{
     CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, derive_crate_binding_id_v1,
 };
 
+#[path = "fe2o3-rustc-extract/ordered_origin_v1.rs"]
+mod ordered_origin_v1;
+
 const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
 const EXTRACT_RANKED_MEMORY_ENV_V1: &str = "FE2O3_EXTRACT_RANKED_MEMORY_V1";
 const EXTRACT_AMDGPU_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1";
@@ -574,7 +577,8 @@ fn passthrough_command(executable: OsString, forwarded_args: Vec<OsString>) -> C
     command
         .args(forwarded_args)
         .env_remove(CRATE_BINDING_ID_ENV_V1)
-        .env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2);
+        .env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)
+        .env_remove(ordered_origin_v1::OUTPUT_ENV);
     command
 }
 
@@ -587,6 +591,10 @@ fn execute_passthrough(executable: OsString, forwarded_args: Vec<OsString>) -> R
 }
 
 fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
+    let origin_output = ordered_origin_v1::selected_output(
+        &selected.mode,
+        env::var_os(ordered_origin_v1::OUTPUT_ENV),
+    )?;
     install_selected_compile_environment_before_rustc_threads_v1(
         selected.crate_binding,
         selected.metadata_observation,
@@ -665,10 +673,18 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
             )?;
         }
         ExtractionModeV1::DiagnosticKirV17(output) => {
-            rustc_codegen_fe2o3::run_diagnostic_ordered_program_kir_extraction_driver_v17(
-                &selected.args,
-                std::path::Path::new(&output),
-            )?;
+            if let Some(origin) = origin_output {
+                rustc_codegen_fe2o3::run_diagnostic_ordered_program_origin_driver_v1(
+                    &selected.args,
+                    std::path::Path::new(&output),
+                    &origin,
+                )?;
+            } else {
+                rustc_codegen_fe2o3::run_diagnostic_ordered_program_kir_extraction_driver_v17(
+                    &selected.args,
+                    std::path::Path::new(&output),
+                )?;
+            }
         }
     }
     if let Some(output) = selected.crate_binding_output {

@@ -1,5 +1,7 @@
 # One-region U2 acceptance ledger — 2026-09-23
 
+Subsequent qualification: the [actual-source proof freshness ledger](source-proof-freshness-u2-20260923.md) records the later protected-proof test and bounded U2 acceptance. This earlier run and its pending-at-capture statements remain unchanged below.
+
 The final fresh build, full backend regression and actual-source launch-analysis
 freshness test passed. The backend suite reports **1,711 passed, 112 ignored,
 zero failed**; the separately selected ignored actual-source ladder reports

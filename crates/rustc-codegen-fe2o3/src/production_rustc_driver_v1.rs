@@ -33,6 +33,9 @@ pub use ordered_region_diagnostic_export_v16::run_diagnostic_ordered_region_kir_
 #[path = "production_rustc_driver_v1/ordered_program_diagnostic_export_v17.rs"]
 mod ordered_program_diagnostic_export_v17;
 pub use ordered_program_diagnostic_export_v17::run_diagnostic_ordered_program_kir_extraction_driver_v17;
+#[path = "production_rustc_driver_v1/ordered_program_origin_export_v1.rs"]
+mod ordered_program_origin_export_v1;
+pub use ordered_program_origin_export_v1::run_diagnostic_ordered_program_origin_driver_v1;
 #[path = "production_rustc_driver_fixed_checked_output_v1.rs"]
 mod fixed_checked_output_v1;
 pub use fixed_checked_output_v1::run_production_fixed_checked_output_extraction_driver_v1;
