@@ -51,6 +51,13 @@ the accepted set remains exactly these two complete materializations. Old
 closures are not appended as compatibility exceptions. New source/semantic
 identities are expected, not carried over from prior captures.
 
+The mirror adopted the already-reviewed canonical fork's exact 1922-byte
+Cargo-produced fixture and actual Cargo metadata target-roster regression.
+The old 1770-byte manifest omitted the two existing ordered-program/region
+test stanzas. The adopted artifact retains the historical producer provenance
+from revision c4c5cdd0f69f3844386440a5addb4d4c3dce0e4b, pinned nightly
+2026-04-03; this refresh does not claim a fresh Cargo producer run.
+
 The retained vendor manifest is 1922 bytes, SHA-256
 `a5505445b6b63f1e46b7fca58aa25450de19f3cec1c8d44ce444e64d441a22b4`.
 Repeat tests are nested under the existing ordered_program_api target, so
