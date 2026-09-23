@@ -353,6 +353,10 @@ fn supervisor_process_helper() {
         rustix::io::fcntl_dupfd_cloexec(&pidfd, 3).unwrap(),
     );
     crate::handoff_v2::tests::exercise(&peer, &pidfd, &submitter);
+    crate::launch_v2::tests::exercise(&peer, &pidfd, &submitter);
+    send_packet(&submitter, &frame(b"STOP", 0), &[]).unwrap();
+    let (completed, []) = receive_packet::<0>(&submitter, Instant::now() + IO_TIMEOUT).unwrap();
+    assert_eq!(&completed[..4], b"DONE");
     send_packet(&control, &frame(b"DONE", pid), &[]).unwrap();
 }
 

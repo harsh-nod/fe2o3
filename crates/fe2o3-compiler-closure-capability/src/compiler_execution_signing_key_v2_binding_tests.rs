@@ -83,6 +83,11 @@ fn assert_secret_file(file: &File, cloexec: bool) {
 fn revalidation_pins_every_policy_component_even_with_the_same_signing_key() {
     let original = policy(7);
     let cap = key(&original);
+    let (transfer, _) = run(cap.retained_storage(), Cap::IO_WORK, 1_000_000, |b| {
+        cap.try_clone_for_transfer(b)
+    })
+    .0
+    .unwrap();
     for changed in 0..4 {
         let (variant, _) = run(0, 100_000, 100_000, |budget| {
             Ok(Policy::new(
@@ -112,7 +117,8 @@ fn revalidation_pins_every_policy_component_even_with_the_same_signing_key() {
         .unwrap();
         assert_eq!(original.verifying_key(), variant.verifying_key());
         assert_ne!(original.identity(), variant.identity());
-        let floor = UNRELATED + cap.retained_storage() + variant.retained_storage();
+        let floor =
+            UNRELATED + cap.retained_storage() + variant.retained_storage() + Cap::FILE_STORAGE;
         let (result, work, live, _) = run(floor, 1_000_000, 1_000_000, |budget| {
             cap.revalidate(&variant, budget)
         });
@@ -122,6 +128,16 @@ fn revalidation_pins_every_policy_component_even_with_the_same_signing_key() {
         ));
         assert_eq!(work, Cap::IO_WORK);
         assert_eq!(live, floor);
+        let (result, work, live, _) = run(floor, Cap::IO_WORK, 1_000_000, |budget| {
+            cap.validate_transfer(&transfer, &variant, budget)
+        });
+        assert!(matches!(
+            failure(result),
+            Error::Rejected("signing key is pinned to another native policy")
+        ));
+        assert_eq!(work, Cap::IO_WORK);
+        assert_eq!(live, floor);
+        assert_eq!(references(&transfer), 2);
         assert_eq!(cap.policy_identity(), original.identity());
     }
     let floor = cap.retained_storage() + original.retained_storage();
@@ -171,6 +187,12 @@ fn transfer_and_consuming_readmission_preserve_custody_on_one_ledger() {
         assert_eq!(references(&file), 2);
         file.seek(SeekFrom::Start(17)).unwrap();
         cap.revalidate(&policy, &mut budget).unwrap();
+        cap.validate_transfer(&file, &policy, &mut budget).unwrap();
+        assert_eq!(
+            budget.storage(),
+            policy_floor + retained + Cap::FILE_STORAGE
+        );
+        assert_eq!(references(&file), 2);
         assert_eq!(file.stream_position().unwrap(), 17);
         let expected_object = identity(&file);
         drop(cap);
@@ -189,7 +211,7 @@ fn transfer_and_consuming_readmission_preserve_custody_on_one_ledger() {
         assert!(rustix::io::pwrite(recovered.image.as_file(), &[0], 0).is_err());
         assert!(rustix::fs::ftruncate(recovered.image.as_file(), 0).is_err());
         recovered.revalidate(&policy, &mut budget).unwrap();
-        assert_eq!(budget.work(), 2 * Cap::ADMISSION_WORK + 3 * Cap::IO_WORK);
+        assert_eq!(budget.work(), 2 * Cap::ADMISSION_WORK + 4 * Cap::IO_WORK);
         drop(recovered);
         budget.release_storage(retained).unwrap();
         policy.retained_storage()
@@ -403,6 +425,87 @@ fn retained_metadata_access_and_inode_drift_refuse_revalidation_and_transfer() {
         drop(witness);
         budget.release_storage(Cap::FILE_STORAGE).unwrap();
         assert_eq!(budget.storage(), UNRELATED + policy.retained_storage());
+    }
+}
+
+#[test]
+fn borrowed_secret_transfer_rejects_replacement_inheritable_and_non_readonly_files() {
+    let policy = policy(7);
+    let cap = key(&policy);
+    for change in 0..7 {
+        let mut file = cap.image.clone_fixed().unwrap();
+        match change {
+            0 => file = readonly_secret(7),
+            1 => file = readonly_secret(9),
+            2 => rustix::io::fcntl_setfd(&file, FdFlags::empty()).unwrap(),
+            3..=5 => {
+                rustix::fs::fchmod(&file, Mode::RUSR | Mode::WUSR).unwrap();
+                file = reopen(
+                    &file,
+                    [OFlags::RDWR, OFlags::WRONLY, OFlags::PATH][change - 3],
+                );
+                rustix::fs::fchmod(cap.image.as_file(), Mode::RUSR).unwrap();
+            }
+            _ => file = sealed(&[7; KEY_BYTES - 1]),
+        }
+        let floor =
+            UNRELATED + cap.retained_storage() + policy.retained_storage() + Cap::FILE_STORAGE;
+        let before = references(&file);
+        let (result, work, live, _) = run(floor, Cap::IO_WORK, 1_000_000, |b| {
+            cap.validate_transfer(&file, &policy, b)
+        });
+        match (change, failure(result)) {
+            (0 | 1, Error::Rejected("sealed image identity or length changed"))
+            | (2, Error::Rejected(" descriptor is unexpectedly inheritable"))
+            | (
+                3 | 4,
+                Error::Rejected(
+                    "sealed secret image is not an anonymous current-owner read-only image",
+                ),
+            )
+            | (5, Error::Io { .. })
+            | (6, Error::Rejected(" has an invalid length")) => {}
+            (_, error) => panic!("unexpected transfer refusal for case {change}: {error:?}"),
+        }
+        assert_eq!(work, Cap::IO_WORK);
+        assert_eq!(live, floor);
+        assert_eq!(references(&file), before);
+        assert_secret_file(cap.image.as_file(), true);
+        assert!(
+            run(floor, Cap::IO_WORK, 1_000_000, |b| cap
+                .revalidate(&policy, b))
+            .0
+            .is_ok()
+        );
+    }
+}
+
+#[test]
+fn borrowed_secret_transfer_rechecks_owner_identity_seed_and_descriptor_flags() {
+    let policy = policy(7);
+    for change in 0..3 {
+        let mut cap = key(&policy);
+        let transfer = cap.image.clone_fixed().unwrap();
+        match change {
+            0 => cap.image.replace_file_for_test(readonly_secret(7)),
+            1 => cap.key = SigningKey::from_bytes(&[8; KEY_BYTES]),
+            _ => rustix::io::fcntl_setfd(cap.image.as_file(), FdFlags::empty()).unwrap(),
+        }
+        let floor = cap.retained_storage() + policy.retained_storage() + Cap::FILE_STORAGE;
+        let before = references(&transfer);
+        let (result, work, live, _) = run(floor, Cap::IO_WORK, 1_000_000, |b| {
+            cap.validate_transfer(&transfer, &policy, b)
+        });
+        let expected = [
+            "sealed image identity or length changed",
+            "signing-key bytes changed",
+            " descriptor is unexpectedly inheritable",
+        ][change];
+        assert!(matches!(failure(result), Error::Rejected(reason) if reason == expected));
+        assert_eq!(work, Cap::IO_WORK);
+        assert_eq!(live, floor);
+        assert_eq!(references(&transfer), before);
+        assert_secret_file(&transfer, true);
     }
 }
 

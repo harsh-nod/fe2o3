@@ -110,6 +110,85 @@ pub(crate) fn run<T>(
     )
 }
 
+pub(crate) fn transfer_boundaries(
+    floor: usize,
+    work: usize,
+    scratch: usize,
+    validate: impl Fn(&mut Budget<'_>) -> Result<()>,
+) {
+    for case in 0..6 {
+        let prepaid = match case {
+            1 => floor - 1,
+            5 => floor + 19,
+            _ => floor,
+        };
+        let work_limit = match case {
+            0 => ENTRY_WORK - 1,
+            2 => work - 1,
+            _ => work,
+        };
+        let storage_limit = prepaid + scratch - usize::from(case == 3);
+        let mut meter = Work::new(work_limit);
+        {
+            let mut budget = Budget::new(&mut meter, storage_limit);
+            budget.reserve_storage(prepaid).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let result = validate(&mut budget);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.storage(), prepaid);
+            assert_eq!(
+                budget.work(),
+                match case {
+                    0 => 0,
+                    1 | 2 => ENTRY_WORK,
+                    _ => work,
+                }
+            );
+            assert_eq!(
+                budget.peak_storage(),
+                prepaid + if case >= 4 { scratch } else { 0 }
+            );
+            match case {
+                0 | 2 => {
+                    assert!(matches!(
+                        failure(result),
+                        CompilerExecutionCapabilityErrorV2::Resource(Resource::Work(_))
+                    ));
+                    assert!(budget.charge_work(work + 1).is_err());
+                }
+                1 => assert!(matches!(
+                    failure(result),
+                    CompilerExecutionCapabilityErrorV2::Resource(Resource::Accounting)
+                )),
+                3 => {
+                    assert!(matches!(
+                        failure(result),
+                        CompilerExecutionCapabilityErrorV2::Resource(Resource::Storage(_))
+                    ));
+                    assert_eq!(budget.failed_storage(), Some(prepaid + scratch));
+                    assert!(budget.reserve_storage(scratch + 1).is_err());
+                }
+                _ => result.unwrap(),
+            }
+            budget.release_storage(prepaid).unwrap();
+            budget.reserve_storage(1).unwrap();
+            budget.charge_work(0).unwrap();
+            assert_eq!(
+                budget.failed_storage(),
+                (case == 3).then_some(prepaid + scratch)
+            );
+        }
+        assert_eq!(
+            meter.failed_work(),
+            match case {
+                0 => Some(ENTRY_WORK),
+                2 => Some(work),
+                _ => None,
+            }
+        );
+    }
+}
+
 #[test]
 fn policy_ownership_chain_preserves_inode_bytes_offsets_and_exact_charges() {
     let p = policy(7);
@@ -500,6 +579,36 @@ fn borrowed_operations_require_the_complete_owner_and_exact_outer_budget() {
             }
             assert_eq!(used, if case < 2 { ENTRY_WORK } else { Cap::IO_WORK });
         }
+    }
+}
+
+#[test]
+fn borrowed_transfer_rechecks_retained_owner_before_accepting_original_alias() {
+    for replacement_seed in [7, 9] {
+        let p = policy(7);
+        let (mut cap, _) = run(p.retained_storage(), Cap::IO_WORK, 1_000_000, |b| {
+            Cap::create(p, b)
+        })
+        .0
+        .unwrap();
+        let (transfer, _) = run(Cap::RETAINED, Cap::IO_WORK, 1_000_000, |b| {
+            cap.try_clone_for_transfer(b)
+        })
+        .0
+        .unwrap();
+        cap.image
+            .replace_file_for_test(sealed(policy(replacement_seed).canonical_bytes()));
+        let floor = Cap::RETAINED + Cap::FILE_STORAGE;
+        let (result, work, live, _) = run(floor, Cap::IO_WORK, 1_000_000, |b| {
+            cap.validate_transfer(&transfer, b)
+        });
+        assert!(matches!(
+            failure(result),
+            CompilerExecutionCapabilityErrorV2::Rejected("sealed image identity or length changed")
+        ));
+        assert_eq!(work, Cap::IO_WORK);
+        assert_eq!(live, floor);
+        assert_eq!(transfer.metadata().unwrap().len(), 216);
     }
 }
 

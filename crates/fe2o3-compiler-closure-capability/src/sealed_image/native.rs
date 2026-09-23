@@ -96,17 +96,28 @@ impl SealedCapabilityImage {
     /// Reads directly into caller-owned storage, which may remain partially or
     /// fully populated on failure. Secret callers must install a wipe guard first.
     pub(crate) fn read_fixed_into<const N: usize>(&self, bytes: &mut [u8; N]) -> Result<()> {
-        self.read_fixed_into_with(bytes, |bytes| {
-            rustix::io::pread(&self.image, bytes.as_mut_slice(), 0)
+        self.read_transfer_fixed_into(&self.image, bytes)
+    }
+
+    /// Borrows an exact alias of the originally admitted object. Neither closes
+    /// nor duplicates it; secret callers must guard the output before this call.
+    pub(crate) fn read_transfer_fixed_into<const N: usize>(
+        &self,
+        transfer: &File,
+        bytes: &mut [u8; N],
+    ) -> Result<()> {
+        self.read_fixed_into_with(transfer, bytes, |bytes| {
+            rustix::io::pread(transfer, bytes.as_mut_slice(), 0)
         })
     }
 
     fn read_fixed_into_with<const N: usize>(
         &self,
+        image: &File,
         bytes: &mut [u8; N],
         read: impl FnOnce(&mut [u8; N]) -> rustix::io::Result<usize>,
     ) -> Result<()> {
-        self.revalidate_fixed()?;
+        self.revalidate_file_fixed(image)?;
         if self.length != N {
             return Err(Error::Rejected(
                 "sealed image length disagrees with fixed record",
@@ -116,12 +127,16 @@ impl SealedCapabilityImage {
         if read != N {
             return Err(Error::Rejected("short sealed image read"));
         }
-        self.revalidate_fixed()?;
+        self.revalidate_file_fixed(image)?;
         Ok(())
     }
 
     fn revalidate_fixed(&self) -> Result<fs::Metadata> {
-        let (metadata, length) = validate_file_checked(&self.image, self.length_rule)?;
+        self.revalidate_file_fixed(&self.image)
+    }
+
+    fn revalidate_file_fixed(&self, image: &File) -> Result<fs::Metadata> {
+        let (metadata, length) = validate_file_checked(image, self.length_rule)?;
         if metadata.dev() != self.device || metadata.ino() != self.inode || length != self.length {
             return Err(Error::Rejected("sealed image identity or length changed"));
         }
@@ -156,8 +171,12 @@ impl SealedCapabilityImage {
     }
 
     pub(crate) fn validate_secret_fixed(&self) -> Result<()> {
-        let metadata = self.revalidate_fixed()?;
-        let status = rustix::fs::fcntl_getfl(&self.image)
+        self.validate_secret_transfer_fixed(&self.image)
+    }
+
+    pub(crate) fn validate_secret_transfer_fixed(&self, transfer: &File) -> Result<()> {
+        let metadata = self.revalidate_file_fixed(transfer)?;
+        let status = rustix::fs::fcntl_getfl(transfer)
             .map_err(|e| Error::io("inspect sealed secret image access", e))?;
         if metadata.nlink() != 0
             || metadata.uid() != rustix::process::geteuid().as_raw()

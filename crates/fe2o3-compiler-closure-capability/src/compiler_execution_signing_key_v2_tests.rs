@@ -1,6 +1,6 @@
 use super::binding_tests::references;
 use super::*;
-use crate::native_capability::tests::{failure, policy, run};
+use crate::native_capability::tests::{failure, policy, run, transfer_boundaries};
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::{os::fd::AsRawFd, panic::AssertUnwindSafe};
 
@@ -197,6 +197,29 @@ fn admission_and_borrowed_operations_have_exact_shared_ledger_boundaries() {
             Ok(file)
         });
     }
+}
+
+#[test]
+fn exact_borrowed_transfer_requires_owner_file_policy_and_preserves_sticky_denials() {
+    let policy = policy(7);
+    let cap = key(&policy);
+    let file = transfer(&cap);
+    assert_eq!(references(&file), 2);
+    transfer_boundaries(
+        cap.retained_storage() + Cap::FILE_STORAGE + policy.retained_storage(),
+        Cap::IO_WORK,
+        Cap::IO_STORAGE,
+        |budget| {
+            let result = cap.validate_transfer(&file, &policy, budget);
+            assert_eq!(references(&file), 2);
+            result
+        },
+    );
+    assert_eq!(references(&file), 2);
+    assert_eq!(
+        rustix::io::fcntl_getfd(&file).unwrap(),
+        rustix::io::FdFlags::CLOEXEC
+    );
 }
 
 #[test]

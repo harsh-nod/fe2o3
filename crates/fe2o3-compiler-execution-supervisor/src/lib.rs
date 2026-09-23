@@ -34,6 +34,8 @@ mod handoff_v2_io;
 #[cfg(test)]
 mod handoff_v2_test_process;
 mod launch;
+mod launch_checks;
+mod launch_v2;
 mod listener;
 #[allow(unsafe_code)]
 mod process;
@@ -70,6 +72,10 @@ pub use handoff_v2::{
     ProtectedIssuerHandoffStorageV2,
 };
 pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
+pub use launch_v2::{
+    PreparedProtectedIssuerLaunchV2, ProtectedIssuerLaunchPreparationErrorV2,
+    ProtectedIssuerLaunchStorageV2,
+};
 pub use listener::{
     ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceReportV1,
     ProtectedIssuerServiceShutdownV1, ProtectedIssuerServiceV1,

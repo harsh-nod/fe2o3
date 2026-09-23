@@ -371,9 +371,6 @@ pub(crate) fn exercise(peer: &OwnedFd, pidfd: &OwnedFd, submitter: &OwnedFd) {
     assert_eq!(denied.failed_storage(), Some(STORAGE + 1));
     assert_eq!(work.failed_work(), Some(WORK + 1));
 
-    send_packet(submitter, &frame(b"STOP", 0), &[]).unwrap();
-    let (completed, []) = receive_packet::<0>(submitter, Instant::now() + IO_TIMEOUT).unwrap();
-    assert_eq!(&completed[..4], b"DONE");
     drop(supervisor);
     budget.release_storage(supervisor_storage).unwrap();
     assert_eq!(budget.storage(), EXTRA);

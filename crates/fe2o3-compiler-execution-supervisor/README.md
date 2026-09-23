@@ -29,10 +29,22 @@ Its move-only accepted result exposes only immutable facts. Shared socket
 predicates preserve the V1 checks; native receive uses fixed buffers and finite
 attempts. Unsupported ancillary messages fail closed with descriptor cleanup.
 
-Native prepared launch, full child confinement, consuming process creation,
-readiness and serving/recovery remain open. Every nested check uses the caller's
-ledger; reserve returned growth while preserving consumed input reservations.
-See the [handoff contract](../../docs/compiler-execution-handoff-v2.md),
+`prepare_launch` now consumes the native accepted handoff into move-only
+`PreparedProtectedIssuerLaunchV2`. It retains exact native descriptor transfers,
+a fresh native service-launch capability, seven pipe ends and a sealed 704-byte
+static manifest binding the current parent and twelve ordered source roles.
+Revalidation repeats native owner/transfer continuity, parent, pipe, metadata,
+canonical-byte and non-aliasing checks. The shared `StaticPreexecManifestV1`
+codec has fixed-capacity inert storage: its V1 wire name is not a conversion
+from admitted V1 authority. Native manifest I/O is finite and fixed-size.
+
+Full child confinement, consuming native process creation, readiness,
+serving/recovery and producer activation remain open. Every nested check uses
+the caller's ledger; reserve returned growth while preserving consumed input
+reservations. Logical work/retained/scratch charges are not wall-time, RSS,
+kernel-memory or generated-stack bounds. See the
+[prepared-launch contract](../../docs/compiler-execution-prepared-launch-v2.md),
+[handoff contract](../../docs/compiler-execution-handoff-v2.md),
 [binding resource contract](../../docs/compiler-execution-capabilities-v2.md#native-supervisor-binding)
 and [anchor custody contract](../../docs/compiler-execution-anchor-custody-v2.md).
 No protected proof or GPU qualification is credited; M0-M7 and 47/47 remain incomplete.

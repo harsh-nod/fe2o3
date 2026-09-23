@@ -17,7 +17,11 @@ mod continuity;
 mod native;
 mod native_io;
 
-pub use client_v2::{LiveClientPidfdErrorV2, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2};
+pub use client_v2::{
+    CURRENT_PROCESS_START_TIME_IO_STORAGE_V2, CURRENT_PROCESS_START_TIME_WORK_V2,
+    LiveClientPidfdErrorV2, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2,
+    current_process_start_time_ticks_v2,
+};
 pub use native::{
     ProtectedExternalAnchorServiceAdmissionV2, ProtectedExternalAnchorServiceErrorV2,
     ProtectedExternalAnchorServiceStorageV2,

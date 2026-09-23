@@ -74,6 +74,14 @@ impl CompilerExecutionServiceLaunchCapabilityV2 {
     pub fn try_clone_for_transfer(&self, budget: &mut Budget<'_>) -> Result<(File, Storage)> {
         self.0.try_clone_for_transfer(budget)
     }
+    /// Revalidates this owner and a borrowed CLOEXEC transfer against the original
+    /// sealed object and bytes. Prepay `retained_storage() + FILE_STORAGE` on
+    /// the same ledger. Charges IO_WORK and IO_STORAGE scratch, restoring entry
+    /// storage without creating, retaining, closing or moving either descriptor.
+    /// This does not establish a native policy match or launch authority.
+    pub fn validate_transfer(&self, transfer: &File, budget: &mut Budget<'_>) -> Result<()> {
+        self.0.validate_transfer(transfer, budget)
+    }
     pub const fn retained_storage(&self) -> usize {
         Capability::RETAINED
     }
@@ -88,7 +96,7 @@ mod tests {
     use super::*;
     use crate::native_capability::{
         CompilerExecutionCapabilityErrorV2 as Error,
-        tests::{failure, policy, run, sealed},
+        tests::{failure, policy, run, sealed, transfer_boundaries},
     };
     use fe2o3_compiler_execution_protocol::{
         COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_STORAGE_V2 as SCRATCH,
@@ -132,6 +140,11 @@ mod tests {
         b.reserve_storage(charge.additional_storage()).unwrap();
         let inode = file.metadata().unwrap().ino();
         let floor = b.storage();
+        cap.validate_transfer(&file, &mut b).unwrap();
+        assert_eq!(b.storage(), floor);
+        transfer_boundaries(floor, Capability::IO_WORK, Capability::IO_STORAGE, |b| {
+            cap.validate_transfer(&file, b)
+        });
         let denied =
             CompilerExecutionServiceLaunchCapabilityV2::from_inherited_at(file.as_raw_fd(), &mut b);
         assert!(denied.is_err());
@@ -238,11 +251,37 @@ mod tests {
             CompilerExecutionServiceLaunchCapabilityV2::create(m, b)
         });
         let (mut cap, _) = result.unwrap();
+        let (transfer, _) = run(cap.retained_storage(), 1_000_000, 1_000_000, |b| {
+            cap.try_clone_for_transfer(b)
+        })
+        .0
+        .unwrap();
+        let replacement = sealed(&bytes);
+        let floor = cap.retained_storage() + 2 * Capability::FILE_STORAGE;
+        let (result, _, live, _) = run(floor, Capability::IO_WORK, 1_000_000, |b| {
+            cap.validate_transfer(&replacement, b)
+        });
+        assert!(matches!(
+            failure(result),
+            Error::Rejected("sealed image identity or length changed")
+        ));
+        assert_eq!(live, floor);
+        drop(replacement);
         cap.0.image.replace_file_for_test(sealed(&bytes));
         let (result, _, live, _) = run(cap.retained_storage(), 1_000_000, 1_000_000, |b| {
             cap.revalidate(b)
         });
         assert!(result.is_err());
         assert_eq!(live, cap.retained_storage());
+        let floor = cap.retained_storage() + Capability::FILE_STORAGE;
+        let (result, _, live, _) = run(floor, Capability::IO_WORK, 1_000_000, |b| {
+            cap.validate_transfer(&transfer, b)
+        });
+        assert!(matches!(
+            failure(result),
+            Error::Rejected("sealed image identity or length changed")
+        ));
+        assert_eq!(live, floor);
+        assert_eq!(transfer.metadata().unwrap().len(), BYTES as u64);
     }
 }

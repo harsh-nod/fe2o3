@@ -71,6 +71,8 @@ impl CompilerExecutionSigningKeyCapabilityV2 {
     pub const DERIVATION_WORK: usize = 65_536;
     /// Entry, at most 64 descriptor/credential/cleanup calls at weight 1024,
     /// and fixed byte staging/comparison. No native I/O operation retries.
+    /// Borrowed transfer validation uses 38 calls: two 19-call secret checks,
+    /// each with pre/post metadata, credentials, access and one positional read.
     pub const IO_WORK: usize = ENTRY_WORK + 64 * 1024 + 32 * KEY_BYTES;
     /// Create, consuming-file and inherited admission each derive one key.
     pub const ADMISSION_WORK: usize = Self::IO_WORK + Self::DERIVATION_WORK;
@@ -170,25 +172,29 @@ impl CompilerExecutionSigningKeyCapabilityV2 {
             budget,
             Self::RETAINED + policy.retained_storage(),
             Self::IO_WORK,
-            |_| {
-                if policy.identity() != self.policy {
-                    return Err(Error::Rejected(
-                        "signing key is pinned to another native policy",
-                    ));
-                }
-                self.check_image()?;
-                require_policy_key(&self.key, policy)
-            },
+            |_| self.check_policy_image(policy),
         )
     }
 
+    fn check_policy_image(&self, policy: &Policy) -> Result<()> {
+        if policy.identity() != self.policy {
+            return Err(Error::Rejected(
+                "signing key is pinned to another native policy",
+            ));
+        }
+        self.check_image()?;
+        require_policy_key(&self.key, policy)
+    }
+
     fn check_image(&self) -> Result<()> {
-        read_secret(&self.image, |seed| {
-            if !bool::from(seed.ct_eq(self.key.as_bytes())) {
-                return Err(Error::Rejected("signing-key bytes changed"));
-            }
-            Ok(())
-        })
+        read_secret(&self.image, |seed| self.check_seed(seed))
+    }
+
+    fn check_seed(&self, seed: &[u8; KEY_BYTES]) -> Result<()> {
+        if !bool::from(seed.ct_eq(self.key.as_bytes())) {
+            return Err(Error::Rejected("signing-key bytes changed"));
+        }
+        Ok(())
     }
 
     /// Revalidates and returns a separately charged read-only CLOEXEC File.
@@ -199,6 +205,38 @@ impl CompilerExecutionSigningKeyCapabilityV2 {
             self.check_image()?;
             Ok((self.image.clone_fixed()?, Storage(Self::FILE_STORAGE)))
         })
+    }
+
+    /// Revalidates the exact native policy, owner and borrowed read-only CLOEXEC
+    /// transfer, including original object identity and guarded seed comparison.
+    /// Prepay `retained_storage() + FILE_STORAGE + policy.retained_storage()` on
+    /// the same ledger. Charges IO_WORK and IO_STORAGE scratch, restoring entry
+    /// storage. No key derivation, descriptor duplication or ownership transfer;
+    /// both descriptors stay live and secret staging is wiped on every exit.
+    pub fn validate_transfer(
+        &self,
+        transfer: &File,
+        policy: &Policy,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        Self::scope(
+            budget,
+            Self::RETAINED + Self::FILE_STORAGE + policy.retained_storage(),
+            Self::IO_WORK,
+            |_| {
+                self.check_policy_image(policy)?;
+                self.image.validate_secret_transfer_fixed(transfer)?;
+                let mut seed = [0; KEY_BYTES];
+                with_secret(
+                    &mut seed,
+                    |seed| {
+                        self.image.read_transfer_fixed_into(transfer, seed)?;
+                        self.image.validate_secret_transfer_fixed(transfer)
+                    },
+                    |seed| self.check_seed(seed),
+                )
+            },
+        )
     }
 
     pub fn verifying_key(&self) -> [u8; KEY_BYTES] {

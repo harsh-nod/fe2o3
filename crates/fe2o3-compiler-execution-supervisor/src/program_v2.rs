@@ -208,6 +208,24 @@ impl AdmittedIssuerProgramV2 {
             |b| Ok(self.issuer.revalidate_exec_clone(image, b)?),
         )
     }
+    pub(super) fn try_clone_policy_for_launch(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(
+        File,
+        fe2o3_compiler_closure_capability::CompilerExecutionCapabilityStorageV2,
+    )> {
+        self.transport(0, budget, |b| Ok(self.policy.try_clone_for_transfer(b)?))
+    }
+    pub(super) fn revalidate_policy_clone(
+        &self,
+        image: &File,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.transport(PolicyCapability::FILE_STORAGE, budget, |b| {
+            Ok(self.policy.validate_transfer(image, b)?)
+        })
+    }
     fn transport<T>(
         &self,
         extra: usize,

@@ -79,6 +79,13 @@ impl CompilerExecutionPolicyCapabilityV2 {
     pub fn try_clone_for_transfer(&self, budget: &mut Budget<'_>) -> Result<(File, Storage)> {
         self.0.try_clone_for_transfer(budget)
     }
+    /// Revalidates this owner and a borrowed CLOEXEC transfer against the original
+    /// sealed object and bytes. Prepay `retained_storage() + FILE_STORAGE` on
+    /// the same ledger. Charges IO_WORK and IO_STORAGE scratch, restoring entry
+    /// storage without creating, retaining, closing or moving either descriptor.
+    pub fn validate_transfer(&self, transfer: &File, budget: &mut Budget<'_>) -> Result<()> {
+        self.0.validate_transfer(transfer, budget)
+    }
     pub const fn retained_storage(&self) -> usize {
         Capability::RETAINED
     }
@@ -87,3 +94,87 @@ impl CompilerExecutionPolicyCapabilityV2 {
 const _: () = {
     Capability::assert_layout::<CompilerExecutionPolicyCapabilityV2>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native_capability::{
+        CompilerExecutionCapabilityErrorV2 as Error,
+        tests::{failure, policy, run, sealed, transfer_boundaries},
+    };
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+    #[test]
+    fn policy_transfer_borrows_exact_object_and_preserves_one_ledger_and_offset() {
+        let policy = policy(7);
+        let mut work = Work::new(1_000_000);
+        let mut budget = Budget::new(&mut work, 1_000_000);
+        budget.reserve_storage(policy.retained_storage()).unwrap();
+        let (cap, charge) =
+            CompilerExecutionPolicyCapabilityV2::create(policy, &mut budget).unwrap();
+        budget.reserve_storage(charge.additional_storage()).unwrap();
+        let (transfer, charge) = cap.try_clone_for_transfer(&mut budget).unwrap();
+        budget.reserve_storage(charge.additional_storage()).unwrap();
+        let floor = cap.retained_storage() + Capability::FILE_STORAGE;
+        assert_eq!(budget.storage(), floor);
+        rustix::fs::seek(&transfer, rustix::fs::SeekFrom::Start(17)).unwrap();
+        cap.validate_transfer(&transfer, &mut budget).unwrap();
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.work(), 3 * Capability::IO_WORK);
+        assert_eq!(
+            rustix::fs::seek(&transfer, rustix::fs::SeekFrom::Current(0)).unwrap(),
+            17
+        );
+        assert_eq!(
+            rustix::io::fcntl_getfd(&transfer).unwrap(),
+            rustix::io::FdFlags::CLOEXEC
+        );
+        transfer_boundaries(floor, Capability::IO_WORK, Capability::IO_STORAGE, |b| {
+            cap.validate_transfer(&transfer, b)
+        });
+        drop(transfer);
+        budget.release_storage(Capability::FILE_STORAGE).unwrap();
+        drop(cap);
+        budget.release_storage(Capability::RETAINED).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
+
+    #[test]
+    fn policy_transfer_rejects_an_identical_image_and_inheritable_alias() {
+        let p = policy(7);
+        let (cap, _) = run(p.retained_storage(), 1_000_000, 1_000_000, |b| {
+            CompilerExecutionPolicyCapabilityV2::create(p, b)
+        })
+        .0
+        .unwrap();
+        let (alias, _) = run(cap.retained_storage(), 1_000_000, 1_000_000, |b| {
+            cap.try_clone_for_transfer(b)
+        })
+        .0
+        .unwrap();
+        let replacement = sealed(cap.policy().canonical_bytes());
+        let floor = cap.retained_storage() + 2 * Capability::FILE_STORAGE;
+        let result = run(floor, Capability::IO_WORK, 1_000_000, |b| {
+            cap.validate_transfer(&replacement, b)
+        });
+        assert!(matches!(
+            failure(result.0),
+            Error::Rejected("sealed image identity or length changed")
+        ));
+        assert_eq!(result.2, floor);
+        rustix::io::fcntl_setfd(&alias, rustix::io::FdFlags::empty()).unwrap();
+        let result = run(floor, Capability::IO_WORK, 1_000_000, |b| {
+            cap.validate_transfer(&alias, b)
+        });
+        assert!(matches!(
+            failure(result.0),
+            Error::Rejected(" descriptor is unexpectedly inheritable")
+        ));
+        assert_eq!(result.2, floor);
+        assert_eq!(
+            rustix::io::fcntl_getfd(&alias).unwrap(),
+            rustix::io::FdFlags::empty()
+        );
+        assert!(replacement.metadata().is_ok());
+    }
+}

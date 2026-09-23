@@ -59,8 +59,9 @@ fn fixed_read_uses_guarded_caller_storage_without_changing_the_offset() {
 }
 
 #[test]
-fn partial_reads_and_errors_never_retry_or_escape_the_caller_guard() {
+fn partial_borrowed_reads_and_errors_never_retry_or_escape_the_caller_guard() {
     let image = image();
+    let transfer = image.clone_fixed().unwrap();
     for outcome in [
         Ok(0),
         Ok(N - 1),
@@ -71,7 +72,7 @@ fn partial_reads_and_errors_never_retry_or_escape_the_caller_guard() {
         let mut attempts = 0;
         {
             let guard = SecretBuffer(&mut bytes);
-            let result = image.read_fixed_into_with(guard.0, |bytes| {
+            let result = image.read_fixed_into_with(&transfer, guard.0, |bytes| {
                 attempts += 1;
                 bytes[..5].copy_from_slice(&PAYLOAD[..5]);
                 outcome
@@ -90,7 +91,65 @@ fn partial_reads_and_errors_never_retry_or_escape_the_caller_guard() {
             }
         }
         assert_eq!(bytes, [0; N]);
+        assert_eq!(references(&transfer), 2);
     }
+}
+
+#[test]
+fn borrowed_reads_pin_original_identity_without_owning_aliases_or_changing_offsets() {
+    let original = image();
+    let transfer = original.clone_fixed().unwrap();
+    let replacement = image();
+    rustix::fs::seek(&transfer, rustix::fs::SeekFrom::Start(9)).unwrap();
+    let mut bytes = [0; N];
+    {
+        let guard = SecretBuffer(&mut bytes);
+        original
+            .read_transfer_fixed_into(&transfer, guard.0)
+            .unwrap();
+        assert_eq!(*guard.0, PAYLOAD);
+    }
+    assert_eq!(bytes, [0; N]);
+    assert_eq!(references(&transfer), 2);
+    assert_eq!(
+        rustix::fs::seek(&transfer, rustix::fs::SeekFrom::Current(0)).unwrap(),
+        9
+    );
+    let guard = SecretBuffer(&mut bytes);
+    assert_rejected(
+        original.read_fixed_into_with(&replacement.image, guard.0, |_| panic!("unexpected read")),
+        "sealed image identity or length changed",
+    );
+    assert_eq!(*guard.0, [0; N]);
+    assert_eq!(references(&replacement.image), 1);
+    assert_eq!(references(&transfer), 2);
+}
+
+#[test]
+fn borrowed_read_rechecks_transfer_flags_after_read_and_keeps_secret_under_guard() {
+    let image = image();
+    let transfer = image.clone_fixed().unwrap();
+    let mut bytes = [0; N];
+    let mut attempts = 0;
+    {
+        let guard = SecretBuffer(&mut bytes);
+        let result = image.read_fixed_into_with(&transfer, guard.0, |bytes| {
+            attempts += 1;
+            let count = rustix::io::pread(&transfer, bytes.as_mut_slice(), 0)?;
+            rustix::io::fcntl_setfd(&transfer, rustix::io::FdFlags::empty())?;
+            Ok(count)
+        });
+        assert_rejected(result, " descriptor is unexpectedly inheritable");
+        assert_eq!(attempts, 1);
+        assert_eq!(*guard.0, PAYLOAD);
+    }
+    assert_eq!(bytes, [0; N]);
+    assert_eq!(references(&transfer), 2);
+    assert_eq!(image.read_fixed::<N>().unwrap(), PAYLOAD);
+    assert_eq!(
+        rustix::io::fcntl_getfd(&transfer).unwrap(),
+        rustix::io::FdFlags::empty()
+    );
 }
 
 #[test]
@@ -100,7 +159,7 @@ fn post_read_rejection_leaves_fully_populated_storage_under_the_caller_guard() {
     let mut attempts = 0;
     {
         let guard = SecretBuffer(&mut bytes);
-        let result = image.read_fixed_into_with(guard.0, |bytes| {
+        let result = image.read_fixed_into_with(&image.image, guard.0, |bytes| {
             attempts += 1;
             let read = rustix::io::pread(&image.image, bytes.as_mut_slice(), 0)?;
             rustix::fs::fchmod(&image.image, Mode::RUSR | Mode::WUSR)?;
@@ -120,11 +179,13 @@ fn common_admission_and_fixed_length_are_checked_before_reading() {
     let mut bytes = [0xA5; N - 1];
     {
         let guard = SecretBuffer(&mut bytes);
-        let result = image.read_fixed_into_with(guard.0, |_| panic!("unexpected read"));
+        let result =
+            image.read_fixed_into_with(&image.image, guard.0, |_| panic!("unexpected read"));
         assert_rejected(result, "sealed image length disagrees with fixed record");
         assert_eq!(*guard.0, [0xA5; N - 1]);
         rustix::fs::fchmod(&image.image, Mode::RUSR | Mode::WUSR).unwrap();
-        let result = image.read_fixed_into_with(guard.0, |_| panic!("unexpected read"));
+        let result =
+            image.read_fixed_into_with(&image.image, guard.0, |_| panic!("unexpected read"));
         assert_rejected(result, " is not an exact regular mode-0400 file");
     }
     assert_eq!(bytes, [0; N - 1]);
@@ -224,7 +285,7 @@ fn replaced_retained_file_is_rejected_before_read_reopen_or_secret_checks() {
     {
         let guard = SecretBuffer(&mut bytes);
         assert_rejected(
-            original.read_fixed_into_with(guard.0, |_| panic!("unexpected read")),
+            original.read_fixed_into_with(&original.image, guard.0, |_| panic!("unexpected read")),
             "sealed image identity or length changed",
         );
     }

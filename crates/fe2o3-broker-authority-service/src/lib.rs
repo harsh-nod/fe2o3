@@ -205,12 +205,13 @@ pub use durable_session_consume::{
 };
 #[cfg(target_os = "linux")]
 pub use linux::{
-    AdmissionErrorKindV1, ExpectedClientProcessIdentityV1, LiveClientPidfdErrorV2,
+    AdmissionErrorKindV1, CURRENT_PROCESS_START_TIME_IO_STORAGE_V2,
+    CURRENT_PROCESS_START_TIME_WORK_V2, ExpectedClientProcessIdentityV1, LiveClientPidfdErrorV2,
     LiveClientPidfdIdentityV1, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2,
     ProtectedExternalAnchorServiceAdmissionV1, ProtectedExternalAnchorServiceAdmissionV2,
     ProtectedExternalAnchorServiceErrorV2, ProtectedExternalAnchorServiceStorageV2,
     ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,
-    current_process_start_time_ticks_v1,
+    current_process_start_time_ticks_v1, current_process_start_time_ticks_v2,
 };
 #[cfg(target_os = "linux")]
 pub use session::{

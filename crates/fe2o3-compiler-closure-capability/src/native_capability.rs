@@ -116,7 +116,9 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
     pub(crate) const FILE_STORAGE: usize = size_of::<(File, Storage)>() + N;
     pub(crate) const RETAINED: usize = size_of::<(Self, Storage)>() + N;
     // At most 32 descriptor syscalls, weighted at 1024 logical work each, plus
-    // fixed byte staging/comparison. Native decoding charges separately.
+    // fixed byte staging/comparison. Borrowed transfer validation uses 14:
+    // (two three-call metadata checks + one pread) for each descriptor.
+    // Native decoding charges separately.
     pub(crate) const IO_WORK: usize = ENTRY_WORK + 32 * 1024 + 32 * N;
     pub(crate) const IO_STORAGE: usize =
         4 * Self::RETAINED + 4 * N + 4 * size_of::<std::fs::Metadata>() + 4096;
@@ -231,6 +233,20 @@ impl<T: Record<N>, const N: usize> NativeCapability<T, N> {
         Self::scope(budget, Self::RETAINED, |_| {
             self.check()?;
             Ok((self.image.clone_fixed()?, Storage(Self::FILE_STORAGE)))
+        })
+    }
+
+    pub(crate) fn validate_transfer(&self, transfer: &File, budget: &mut Budget<'_>) -> Result<()> {
+        Self::scope(budget, Self::RETAINED + Self::FILE_STORAGE, |_| {
+            self.check()?;
+            let mut bytes = [0; N];
+            self.image.read_transfer_fixed_into(transfer, &mut bytes)?;
+            if &bytes != self.record.bytes() {
+                return Err(CompilerExecutionCapabilityErrorV2::Rejected(
+                    "sealed image bytes changed",
+                ));
+            }
+            Ok(())
         })
     }
 }

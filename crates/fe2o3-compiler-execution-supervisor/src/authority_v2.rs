@@ -27,6 +27,8 @@ use std::{
 };
 
 const ENTRY: usize = 8;
+#[path = "authority_v2_launch.rs"]
+pub(super) mod launch;
 use ProtectedIssuerSupervisorStorageV2 as Storage;
 type Result<T> = std::result::Result<T, ProtectedIssuerSupervisorErrorV2>;
 
