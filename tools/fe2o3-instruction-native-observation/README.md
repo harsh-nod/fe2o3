@@ -299,3 +299,33 @@ allocation/lifetime proof, source authentication, compiler/runtime closure
 attestation, protected/ranked proof/admission or milestone closure is asserted.
 All corresponding report flags remain false/unavailable. Synthetic worker
 request identity fields remain explicitly disclosed.
+
+## Separate bounded-repeat observer
+
+The additive `ordered-repeat-source-candidate` target has its own closed
+MOV-plus-ADD profile; it does not extend `instruction-source-candidate`'s two
+selectors or relabel the earlier four-case qualification above.
+See the [repeat-native workflow](../../docs/ordered-repeat-native-observation-v1.md)
+for the exact original-repository-path capture contract and independent join.
+The separate [dated qualification](../../docs/evidence/authoring-repeat-native-20260923.md)
+records the actual repeat-native builds, controls and observations.
+
+Configure a fresh standalone build with every existing guard, worker-source pin,
+static SDK component and independently reviewed claim unchanged, then explicitly
+build `--target ordered-repeat-source-candidate --parallel 2`.
+This new target is `EXCLUDE_FROM_ALL`; no root build, test registration,
+production worker, finalizer, decoder or launch route is added.
+
+Its CLI is `--shape-controls`, or exactly
+`1|2|15 ABS_LLVM SHA256 BYTES NEW_ABS_PAYLOAD_DIR`. Counts 1, 2 and 15 select
+one MOV followed by precisely that many ADDs, with roles 32..36 and exact
+constraints `=&{v33},{v34},{v35},{v36},~{v32}`. The encoded descriptor must
+cover high-water 37. That is a capacity observation, not allocation/lifetime proof.
+The existing input/payload helpers are shared without modification.
+
+The separate source-to-native driver revalidates real retained source/CPU/LLVM
+captures and invokes four fresh native commands, each O0/O3, retaining eight
+whole HSACOs and joining instruction/descriptor bytes at actual ELF file offsets.
+It executes no new source export, ordinary LLVM lowering, CPU simulation or GPU
+kernel. Repeat-native results have their own dated evidence;
+the original tool's successful receipts do not establish them.

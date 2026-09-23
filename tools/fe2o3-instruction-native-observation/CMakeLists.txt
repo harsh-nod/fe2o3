@@ -139,3 +139,18 @@ llvm_map_components_to_libnames(InstructionObserverLlvmLibraries AsmParser)
 target_link_libraries(instruction-source-candidate PRIVATE
   fe2o3_worker_pipeline ${InstructionObserverLlvmLibraries})
 # No install(), add_test(), publication, loading, launch, or resume registration.
+
+# Separate closed repeat observer. Existing target, guards, worker pins and
+# component selection are unchanged; build this target explicitly.
+add_executable(ordered-repeat-source-candidate EXCLUDE_FROM_ALL OrderedRepeatSourceCandidate.cpp)
+target_compile_features(ordered-repeat-source-candidate PRIVATE cxx_std_20)
+target_include_directories(ordered-repeat-source-candidate PRIVATE
+  "${FE2O3_INSTRUCTION_WORKER_SOURCE}/tests"
+  "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(ordered-repeat-source-candidate PRIVATE
+  FE2O3_LLVM_BUILD_ID="${FE2O3_EXPECTED_LLVM_BUILD_ID}"
+  FE2O3_WORKER_BUILD_ID="${InstructionWorkerBuildId}")
+target_compile_options(ordered-repeat-source-candidate PRIVATE
+  -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter -fno-exceptions -fno-rtti)
+target_link_libraries(ordered-repeat-source-candidate PRIVATE
+  fe2o3_worker_pipeline ${InstructionObserverLlvmLibraries})
