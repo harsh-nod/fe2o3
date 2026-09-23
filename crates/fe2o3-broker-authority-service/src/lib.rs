@@ -126,6 +126,7 @@ mod compiler_execution_external_anchor;
 mod compiler_execution_issuer;
 #[cfg(target_os = "linux")]
 mod compiler_execution_issuer_durable;
+mod compiler_execution_journal_recovery;
 #[cfg(target_os = "linux")]
 mod compiler_execution_occurrence;
 #[cfg(target_os = "linux")]

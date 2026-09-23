@@ -305,6 +305,20 @@ impl RetainedDurableDirectoryV1 {
         )
     }
 
+    /// Requires namespace absence without opening or following an entry. A malformed
+    /// object, including a dangling symlink or FIFO, is present, not a fresh store.
+    pub fn require_absent(&self, entry: &str) -> Result<(), RetainedDurableDirectoryErrorV1> {
+        self.verify()?;
+        validate_name(entry)?;
+        match statat(&self.output.fd, entry, AtFlags::SYMLINK_NOFOLLOW) {
+            Err(rustix::io::Errno::NOENT) => self.verify(),
+            Err(error) => Err(io::Error::from(error).into()),
+            Ok(_) => Err(RetainedDurableDirectoryErrorV1::ExistingEntry {
+                entry: entry.to_owned(),
+            }),
+        }
+    }
+
     fn read_managed(
         &self,
         entry: &str,
@@ -316,7 +330,7 @@ impl RetainedDurableDirectoryV1 {
         let fd = match openat(
             &self.output.fd,
             entry,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
             Mode::empty(),
         ) {
             Ok(fd) => fd,
@@ -1722,6 +1736,25 @@ mod tests {
                 .is_none()
         );
         assert_eq!(fs::read(substitution.displaced).unwrap(), expected);
+    }
+
+    #[test]
+    fn absence_is_a_nofollow_namespace_check_and_fifo_reads_do_not_wait() {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        store.require_absent("missing").unwrap();
+        assert!(store.require_absent("../outside").is_err());
+        fs::write(directory.path.join("empty"), []).unwrap();
+        fs::create_dir(directory.path.join("directory")).unwrap();
+        std::os::unix::fs::symlink("missing-target", directory.path.join("dangling")).unwrap();
+        rustix::fs::mkfifoat(&store.output.fd, "fifo", Mode::RUSR | Mode::WUSR).unwrap();
+        for entry in ["empty", "directory", "dangling", "fifo"] {
+            assert!(matches!(
+                store.require_absent(entry),
+                Err(RetainedDurableDirectoryErrorV1::ExistingEntry { .. })
+            ));
+        }
+        assert!(store.read_private("fifo", 1024).is_err());
     }
 
     #[test]
