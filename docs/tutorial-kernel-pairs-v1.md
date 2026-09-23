@@ -168,10 +168,19 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   Outer or argument-bearing `no_std` forms remain unsupported.
   Qualified attribute paths and name-value forms such as `#[doc = "..."]` are
   unsupported and reject claimed bindings.
+  Conditional `cfg_attr` may apply supported attributes, including nested
+  `cfg_attr` and conjunctive `cfg`, with zero or multiple attributes and a
+  trailing comma. Predicates and attributes are validated even in inactive
+  branches. Effective kernel attribution is evaluated separately from the
+  conservative display census; inactive conditional kernels do not bind.
+  Multiple active kernel attributes and inner kernel attributes reject.
+  Attribute bodies are limited to 8 KiB, nesting to 32 levels and each
+  `cfg_attr` to 64 child attributes; every visited attribute consumes the
+  shared record budget. The existing 256-token cfg limit is unchanged.
 
 The fill fixture's SIMT variant is associated with the exact current
 `examples/fill/src/lib.rs` function and its registered compiler-input identity.
-Its tile variant, execution evidence and historical displayed excerpt remain
+Its tile variant and execution evidence remain
 pending. This association does not complete a pair or the curriculum census.
 
 Eight GPT-OSS occurrences in tabs 1-6 retain these expected fixture/source
@@ -183,13 +192,18 @@ also bind to their exact selected physical source. Eight FP4/FP8 GEMM and
 attention displays, including their performance-lab excerpts, also bind to the
 registered feature-selected source. The declared runners use non-test
 `cargo check --lib`; test-only declarations are excluded from this selection.
-These eighteen associations leave
-46 pending display bindings and the historical
+Together with first-fill and fourteen systems occurrences, these thirty-three
+associations leave 31 pending display bindings and the historical
 GEMM lesson's source gap unresolved. The two attention variants are required
 positive compile obligations with separate pending-design simulation requests;
 neither inherits another variant's retained KIR or execution evidence. These
 registrations bring known kernel identities to 60, not completed pairs or a
 proven final curriculum denominator.
+The systems occurrences cover routing, expert computation, expert combination,
+gradient staging, Muon update, n-gram gather and speculative verification,
+including repeated performance excerpts. They bind eleven existing
+feature-specific identities, not eleven completed pairs. No source bytes,
+historical performance evidence or execution qualification are changed.
 The scalar-GEMM simulation request and independent expectation are checked in and
 registered in generic CI. Their status remains `pending-reconciliation` until
 the required source-produced Bundle V7/KIR V12 simulation and oracle checks run.

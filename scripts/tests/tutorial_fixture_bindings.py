@@ -22,6 +22,9 @@ SOURCE_SHA256 = "feebb7e80801c6b5323d19bcdb7908b93a5159c26fe2aa8181fb2de623bf6a5
 
 
 class FixtureBindingTests(unittest.TestCase):
+    expected_displays = 8
+    expected_identities = 4
+
     @classmethod
     def setUpClass(cls):
         path = ROOT / "scripts/validate-tutorial-kernel-manifest.py"
@@ -78,8 +81,8 @@ class FixtureBindingTests(unittest.TestCase):
         before = copy.deepcopy((document, runtime))
         result = self.check(document, runtime)
         self.assertEqual(result["unresolvedBindings"], [])
-        self.assertEqual(result["displayItemCount"], 8)
-        self.assertEqual(result["knownKernelIdentityCount"], 4)
+        self.assertEqual(result["displayItemCount"], self.expected_displays)
+        self.assertEqual(result["knownKernelIdentityCount"], self.expected_identities)
         self.assertEqual(result["sourceBoundVariantCount"], 0)
         self.assertEqual(result["sourceBoundPairCount"], 0)
         self.assertTrue(all(variant["status"] == "pending" and variant["source"] is None
@@ -137,6 +140,103 @@ class FixtureBindingTests(unittest.TestCase):
         self.parent.validate_site_inventory(document["curriculum"], runtime)
         with self.assertRaisesRegex(SystemExit, "differs from its physical source"):
             self.parent.validate_kernel_inventory(document, runtime, repo_root=ROOT)
+
+
+class SystemsFixtureBindingTests(FixtureBindingTests):
+    expected_displays = 14
+    expected_identities = 11
+    # Independent physical spans from the current source, not symbol searches.
+    spans = {
+        "advanced-moe": [(1329, 14012), (14014, 27554), (27556, 29573)],
+        "speculative-mtp-verification": [(29575, 37620)],
+        "ngram-embedding-gather": [(37622, 42940)],
+        "muon-optimizer": [(42942, 45746), (45748, 52096)],
+        "moe-route-performance-lab": [(1329, 14012)],
+        "moe-expert-performance-lab": [(14014, 27554)],
+        "expert-combine-performance-lab": [(27556, 29573)],
+        "speculative-performance-lab": [(29575, 37620)],
+        "ngram-performance-lab": [(37622, 42940)],
+        "gradient-stage-performance-lab": [(42942, 45746)],
+        "muon-performance-lab": [(45748, 52096)],
+    }
+    coordinates = {
+        "gfx950_moe_route_fp4_t16_e4_k2_v1": 1541,
+        "gfx950_moe_expert_rank_fp4_fp8_v1": 14556,
+        "gfx950_combine_expert_ranks_v1": 28051,
+        "gfx950_speculative_transaction_v1": 30160,
+        "gfx950_qwen_ngram_gather_v1": 38139,
+        "gfx950_stage_gradient_shard_v1": 43436,
+        "gfx950_muon_update_4x4_v1": 46247,
+    }
+    fixture_names = {
+        "combine-expert-ranks", "moe-expert-rank-expert-serial", "moe-expert-rank",
+        "moe-route", "muon-update-broadcast16", "muon-update",
+        "qwen-ngram-gather-reverse-probe", "qwen-ngram-gather",
+        "speculative-transaction-recompute-prefix", "speculative-transaction",
+        "stage-gradient-shard",
+    }
+
+    def document(self):
+        """A real-source systems projection; the full Vite census is separate."""
+        document = copy.deepcopy(self.original)
+        lessons = {"gfx950-" + name for name in self.spans}
+        fixtures = {"gfx950-" + name for name in self.fixture_names}
+        document["compilerFixtures"] = [
+            row for row in document["compilerFixtures"] if row["fixtureId"] in fixtures
+        ]
+        inventory = document["kernelInventory"]
+        inventory["kernels"] = [
+            row for row in inventory["kernels"] if any(
+                ref["kind"] == "fixture" and ref["fixtureId"] in fixtures for ref in row["selections"])
+        ]
+        inventory["negativeCases"] = []
+        inventory["displayItems"] = [
+            row for row in inventory["displayItems"] if row["lessonId"] in lessons and row["tabOrdinal"] == 0
+        ]
+        self.assertEqual(len(inventory["kernels"]), 11)
+        self.assertEqual(len(inventory["displayItems"]), 14)
+        self.assertTrue(all(row["bindingStatus"] == "fixture-source-contract" for row in inventory["displayItems"]))
+        document["curriculum"]["lessons"] = [
+            row for row in document["curriculum"]["lessons"] if row["lessonId"] in lessons
+        ]
+        runtime = {"schema": self.parent.SITE_INVENTORY_SCHEMA,
+                   "site": document["curriculum"]["site"], "lessons": []}
+        source_path = "examples/gfx950_advanced_systems/src/kernel.rs"
+        physical = (ROOT / source_path).read_bytes()
+        self.assertEqual(len(physical), 52097)
+        self.assertEqual(hashlib.sha256(physical).hexdigest(),
+                         "0211e451f562b961eea723fd4d5a6c5b188cfaab83ae2354ff8bcf36dd5056d6")
+        for lesson in document["curriculum"]["lessons"]:
+            lesson["codeTabs"] = lesson["codeTabs"][:1]
+            tab = lesson["codeTabs"][0]
+            self.assertEqual(tab["sourcePath"], source_path)
+            spans = self.spans[lesson["lessonId"].removeprefix("gfx950-")]
+            parts = [physical[start:end].decode("utf-8") for start, end in spans]
+            for row in inventory["displayItems"]:
+                if row["lessonId"] != lesson["lessonId"]:
+                    continue
+                offset = row["functionUtf8Offset"]
+                physical_offsets = []
+                for start, end in spans:
+                    if 0 <= offset < end - start:
+                        physical_offsets.append(start + offset)
+                    offset -= end - start + 2
+                self.assertEqual(physical_offsets, [self.coordinates[row["kernelSymbol"]]])
+            runtime["lessons"].append({"id": lesson["lessonId"], "codeTabs": [
+                {**tab, "displayedCode": "\n\n".join(parts),
+                 "sourceFragments": parts if tab["sourceFragmentsSha256"] is not None else None},
+            ]})
+        return document, runtime
+
+    def test_feature_alternatives_remain_distinct_despite_identical_physical_function(self):
+        document, runtime = self.document()
+        result = self.check(document, runtime)
+        by_symbol = {}
+        for kernel in result["kernelIdentities"]:
+            symbol = kernel["selections"][0]["kernelSymbol"]
+            by_symbol.setdefault(symbol, []).append(kernel["selectionSha256"])
+        self.assertEqual(sorted(map(len, by_symbol.values())), [1, 1, 1, 2, 2, 2, 2])
+        self.assertTrue(all(len(values) == len(set(values)) for values in by_symbol.values()))
 
 
 if __name__ == "__main__":

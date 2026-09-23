@@ -320,6 +320,104 @@ def _fixture_cfg(body: str, features: set[str]) -> bool:
     return result
 
 
+def _fixture_trivia_end(source: str, start: int, end: int) -> int:
+    """Skip only comments/whitespace, never literals hidden by the census lexer."""
+    cursor = start
+    while cursor < end:
+        if source[cursor].isspace():
+            cursor += 1
+        elif source.startswith("//", cursor):
+            newline = source.find("\n", cursor, end)
+            cursor = end if newline < 0 else newline + 1
+        elif source.startswith("/*", cursor):
+            depth = 1
+            cursor += 2
+            while cursor < end and depth:
+                if source.startswith(("/*", "*/"), cursor):
+                    depth += 1 if source.startswith("/*", cursor) else -1
+                    cursor += 2
+                else:
+                    cursor += 1
+            if depth:
+                _fail("unterminated fixture attribute comment")
+        else:
+            break
+    return cursor
+
+
+def _fixture_attribute(source: str, code: str, pairs: dict[int, int], start: int, end: int,
+                       features: set[str], budget: _Budget, inner: bool,
+                       depth: int = 0) -> tuple[bool, int]:
+    """Evaluate a bounded attribute subset, separately from the lexical census."""
+    if depth > 32:
+        _fail("fixture selection attribute exceeds its nesting bound")
+    budget.rows([None], "fixture selection attributes")
+    body = source[start:end]
+    if len(body) > 8192 or len(body.encode("utf-8")) > 8192:
+        _fail("fixture selection attribute exceeds its byte bound")
+    match = IDENTIFIER.match(source, _fixture_trivia_end(source, start, end), end)
+    if match is None:
+        _fail("unsupported fixture selection attribute")
+    name = match[0]
+    cursor = _fixture_trivia_end(source, match.end(), end)
+    arguments = None
+    if cursor < end:
+        if source[cursor] != "(" or pairs.get(cursor, end + 1) > end:
+            _fail("unsupported fixture selection attribute")
+        closing = pairs[cursor] - 1
+        if _fixture_trivia_end(source, closing + 1, end) != end:
+            _fail("unsupported fixture selection attribute")
+        arguments = (cursor + 1, closing)
+    if name == "cfg" and arguments is not None:
+        return _fixture_cfg(source[arguments[0]:arguments[1]], features), 0
+    if name == "cfg_attr" and arguments is not None:
+        # Preserve the existing crate-level no_std spelling; other no_std
+        # transformations remain outside this restricted source selector.
+        if inner and depth == 0 and re.fullmatch(
+                r'\s*cfg_attr\s*\(\s*target_arch\s*=\s*"amdgpu"\s*,\s*no_std\s*\)\s*', body):
+            return True, 0
+        spans = []
+        first = cursor = arguments[0]
+        while cursor < arguments[1]:
+            if code[cursor] in "([{":
+                cursor = pairs[cursor]
+                continue
+            if code[cursor] == ",":
+                spans.append((first, cursor))
+                first = cursor + 1
+            cursor += 1
+        if not spans:
+            _fail("fixture cfg_attr requires a predicate and comma")
+        if _fixture_trivia_end(source, first, arguments[1]) != arguments[1]:
+            spans.append((first, arguments[1]))
+        if len(spans) > 65:
+            _fail("fixture cfg_attr exceeds its child bound")
+        active = _fixture_cfg(source[spans[0][0]:spans[0][1]], features)
+        enabled, kernels = True, 0
+        for first, last in spans[1:]:
+            # Validate inactive branches too. Unsupported transformations must
+            # not disappear simply because this particular feature is absent.
+            child_enabled, child_kernels = _fixture_attribute(
+                source, code, pairs, first, last, features, budget, inner, depth + 1)
+            enabled = enabled and child_enabled
+            kernels += child_kernels
+        return (enabled, kernels) if active else (True, 0)
+    if name == "no_std" and inner and depth == 0 and arguments is None:
+        return True, 0
+    if name not in {"allow", "deny", "forbid", "warn", "doc", "inline", "kernel"}:
+        _fail("unsupported fixture selection attribute")
+    if arguments is None and name not in {"inline", "kernel"}:
+        _fail("unsupported fixture selection attribute")
+    if name == "inline" and arguments is not None:
+        inline = IDENTIFIER.match(source, _fixture_trivia_end(source, *arguments), arguments[1])
+        if (inline is None or inline[0] not in {"always", "never"}
+                or _fixture_trivia_end(source, inline.end(), arguments[1]) != arguments[1]):
+            _fail("unsupported fixture selection attribute")
+    if name == "kernel" and inner:
+        _fail("unsupported fixture selection attribute")
+    return True, int(name == "kernel")
+
+
 def _fixture_declarations(
     source: str, features: set[str], scan_functions: Callable,
     rust_syntax: Callable, budget: _Budget,
@@ -339,28 +437,14 @@ def _fixture_declarations(
             continue
         budget.rows([None], "fixture source items")
         enabled = True
+        kernels = 0
         while match := attribute.match(code, cursor):
             opening = match.end() - 1
             end = pairs[opening]
-            body = source[opening + 1:end - 1].strip()
-            masked = code[opening + 1:end - 1].strip()
-            cfg = re.fullmatch(r"cfg\s*\((.*)\)", body, re.DOTALL)
-            if cfg is not None:
-                enabled = _fixture_cfg(cfg[1], features) and enabled
-            elif match[1] and body == "no_std":
-                pass
-            elif re.fullmatch(r'cfg_attr\s*\(\s*target_arch\s*=\s*"amdgpu"\s*,\s*no_std\s*\)', body) and match[1]:
-                pass
-            else:
-                benign = re.fullmatch(r"(allow|deny|forbid|warn|doc|inline|kernel)(?:\s*(\(.*\)))?", masked, re.DOTALL)
-                if benign is None or (benign[2] is None and benign[1] not in {"inline", "kernel"}):
-                    _fail("unsupported fixture selection attribute")
-                if benign[2] is not None:
-                    arguments = code.find("(", opening + 1, end - 1)
-                    if code[pairs[arguments]:end - 1].strip():
-                        _fail("unsupported fixture selection attribute")
-                    if benign[1] == "inline" and re.fullmatch(r"inline\s*\(\s*(?:always|never)\s*\)", masked) is None:
-                        _fail("unsupported fixture selection attribute")
+            attr_enabled, attr_kernels = _fixture_attribute(
+                source, code, pairs, opening + 1, end - 1, features, budget, bool(match[1]))
+            enabled = enabled and attr_enabled
+            kernels += attr_kernels
             if match[1] and not enabled:
                 _fail("conditional fixture crate/module is unsupported")
             cursor = end
@@ -393,6 +477,8 @@ def _fixture_declarations(
                 item_functions.append(function)
         if not enabled:
             continue
+        if kernels > 1:
+            _fail("duplicate active fixture kernel attributes")
         module = re.fullmatch(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*", head)
         if module is not None:
             if code[boundary] != ";":
@@ -402,7 +488,8 @@ def _fixture_declarations(
         if (re.search(r"\b(?:macro_rules|include)\b|!", head)
                 or re.match(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:use|const|static|type|fn)\b", head) is None):
             _fail("unsupported fixture item or module selection")
-        selected.extend(item_functions)
+        if kernels:
+            selected.extend(item_functions)
     return selected, modules
 
 

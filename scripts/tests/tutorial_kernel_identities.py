@@ -465,12 +465,104 @@ class FixtureDisplayTests(unittest.TestCase):
     def test_test_cfg_does_not_admit_conditional_crates_or_transforming_attributes(self):
         for source, error in (
             ("#![cfg(test)]\nmod left;", "conditional fixture crate/module"),
-            ("#[cfg_attr(test, kernel)] fn same() {}", "selection attribute"),
-            ("#[cfg_attr(not(test), kernel)] fn same() {}", "selection attribute"),
         ):
             self.sources[self.library] = source
             with self.subTest(source=source), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, error):
                 self.validate(False)
+
+    def selected_attributes(self, attributes, features=(), budget=None):
+        source = "// UTF-8: \u03bb\n" + attributes + "\nfn same() {}\n"
+        code = self.scanner._rust_code_without_comments_and_literals(source)
+        selected, modules = IDENTITIES._fixture_declarations(
+            source, set(features), self.scanner.ordinary_rust_function_items,
+            lambda _: (code, self.scanner._rust_delimiters(code)),
+            budget if budget is not None else IDENTITIES._Budget(1000))
+        self.assertEqual(modules, [])
+        for item in selected:
+            self.assertEqual(item["kernelSymbol"], "same")
+            self.assertEqual(item["functionUtf8Offset"], source.encode().index(b"same"))
+        return len(selected)
+
+    def test_conditional_attributes_use_effective_not_lexical_kernel_attribution(self):
+        for attributes, count in (
+            ("#[cfg_attr(test, kernel)]", 0),
+            ("#[cfg_attr(not(test), kernel)]", 1),
+            ("#[cfg_attr(test, kernel)] #[kernel]", 1),
+            ("#[cfg_attr(not(test), allow(kernel), doc(kernel))]", 0),
+            ("#[cfg_attr(test,)]", 0),
+            ("#[cfg_attr(not(test), kernel /* outer /* nested */ end */ (), /* trailing */)]", 1),
+            ("#[cfg_attr(not(test), inline(/* before */ always /* after */),)]", 0),
+            ("#[cfg_attr(not(test), cfg_attr(not(test), kernel),)]", 1),
+            ("#[cfg_attr(test, cfg_attr(not(test), kernel))]", 0),
+            ("#[cfg_attr(not(test), cfg_attr(test, kernel))]", 0),
+            ("#[cfg_attr(not(test), allow(dead_code), kernel(typed, launch(max = [64, 1, 1])),)]", 1),
+            ("#[cfg_attr(not(test), cfg(test), kernel)] #[cfg(not(test))]", 0),
+            ("#[cfg(test)] #[cfg_attr(not(test), kernel)]", 0),
+            ("#[cfg_attr(test, cfg(test))] #[kernel]", 1),
+            ("#![cfg_attr(not(test), allow(kernel))] #[kernel]", 1),
+        ):
+            with self.subTest(attributes=attributes):
+                self.assertEqual(self.selected_attributes(attributes), count)
+        attributes = ('#[cfg_attr(feature = "left", kernel)]'
+                      '#[cfg_attr(not(feature = "left"), kernel)]')
+        for features in ((), ("left",)):
+            self.assertEqual(self.selected_attributes(attributes, features), 1)
+
+    def test_conditional_attribute_module_selection_and_inactive_kernel_roster(self):
+        self.sources[self.library] = '#[cfg_attr(not(test), cfg(feature = "left"))] mod left;'
+        self.assertEqual(self.validate()["unresolvedBindings"], [])
+        self.sources[self.library] = '#[cfg_attr(not(test), cfg(test))] mod left;'
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "roster differs"):
+            self.validate(False)
+        self.sources[self.library] = "mod left;"
+        self.sources[self.path] = "#[cfg_attr(test, kernel)] fn same() {}"
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "roster differs"):
+            self.validate(False)
+
+    def test_conditional_attributes_reject_unsupported_syntax_even_when_inactive(self):
+        for predicate in ("test", "not(test)"):
+            for child in ('path = "other.rs"', "unknown", "kernel::rewrite", "inline::rewrite(always)",
+                          "cfg(unknown)", "cfg_attr(unknown, kernel)", "no_std", "kernel() trailing",
+                          'kernel "trailing"', 'inline(always "extra")', ",", "kernel,,inline"):
+                attributes = f"#[cfg_attr({predicate}, {child})]"
+                with self.subTest(attributes=attributes), self.assertRaises(IDENTITIES.KernelInventoryError):
+                    self.selected_attributes(attributes)
+        for attributes in (
+            "#[cfg_attr()]", "#[cfg_attr(test)]", "#[cfg_attr(, kernel)]",
+            "#[cfg_attr(not(test), kernel)] #[kernel]",
+            "#[cfg_attr(not(test), kernel, kernel)]",
+            "#![cfg_attr(not(test), kernel)]", "#![cfg_attr(not(test), cfg(test))]",
+            "#[cfg_attr(not(test), inline(unknown))]",
+        ):
+            with self.subTest(attributes=attributes), self.assertRaises(IDENTITIES.KernelInventoryError):
+                self.selected_attributes(attributes)
+        for source in (
+            "#[cfg_attr(not(test), allow(unused))] macro_rules! m { () => {} }",
+            "#[cfg_attr(not(test), allow(unused))] include!(\"other.rs\");",
+        ):
+            with self.subTest(source=source), self.assertRaisesRegex(
+                    IDENTITIES.KernelInventoryError, "unsupported fixture item"):
+                self.selected_attributes(source)
+
+    def test_conditional_attribute_depth_bytes_children_and_work_are_bounded(self):
+        self.assertEqual(self.selected_attributes(
+            "#[" + "cfg_attr(not(test), " * 32 + "kernel" + ")" * 32 + "]"), 1)
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "nesting bound"):
+            self.selected_attributes("#[" + "cfg_attr(test, " * 33 + "kernel" + ")" * 33 + "]")
+        for predicate in ("test", "not(test)"):
+            self.assertEqual(self.selected_attributes(
+                f"#[cfg_attr({predicate}, " + ", ".join(["inline"] * 64) + ")]"), 0)
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "child bound"):
+                self.selected_attributes(f"#[cfg_attr({predicate}, " + ", ".join(["inline"] * 65) + ")]")
+        self.assertEqual(self.selected_attributes("#[" + "inline".ljust(8192) + "]"), 0)
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "byte bound"):
+            self.selected_attributes("#[" + "inline".ljust(8193) + "]")
+        attributes = "#[cfg_attr(test, inline)]"
+        exact = IDENTITIES._Budget(1000)
+        self.selected_attributes(attributes, budget=exact)
+        self.selected_attributes(attributes, budget=IDENTITIES._Budget(exact.used))
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "record bound"):
+            self.selected_attributes(attributes, budget=IDENTITIES._Budget(exact.used - 1))
 
     def test_fixture_attributes_reject_qualified_benign_names(self):
         for attribute in ("doc::rewrite", "inline::rewrite", "doc::rewrite(hidden)",
