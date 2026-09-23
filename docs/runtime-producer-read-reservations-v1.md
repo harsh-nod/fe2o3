@@ -532,7 +532,27 @@ Before enabling runtime admission, the remaining work is:
    rejects unaccepted records and does not replace full qualification. Physical
    Vec storage, construction, unwind behavior, native admission and performance
    are not established by these records.
-   Remaining bodies include construction, allocation retirement and disposal wrappers;
+   The [allocation retirement packet](evidence/dev-owner-retirement-2026-09-23/README.md)
+   now shares journal preflight/execution and both outer unread/forwarding layers
+   with an independently executed logical retirement model. Raw journal contracts
+   are total over normal contents; outer correspondence needs only reached-prefix
+   reader-count safety, represented owners and mapped rosters. Exact error order,
+   repeated validation and lazy physical-capacity observation are preserved.
+   Rejection preserves the complete owner; success clears selected allocation
+   slots and appends their indices in caller order. Initial producer invariants
+   and issued custody are preserved conditionally, without equating observed
+   capacity with ghost storage. Under the initial producer invariant, all stable
+   lease and producer-reservation reference lookup results are preserved, as are
+   statuses for requests held by existing live reservations. Arbitrary unretained
+   requests to retired allocations are outside that status-preservation claim.
+   Frozen same-owner CPU comparisons cover malformed metadata, live readers,
+   all four producer statuses, nonmonotone slots and fresh-identity reuse. The
+   runner is `verus/check-owner-retirement.py`: whole-root verification reported
+   999 verified twice; all 25 negative controls failed logically, raw/scalar regressions passed,
+   and 980 unit tests plus 27 doctests passed. These records do not establish
+   physical Vec storage, allocator/unwind behavior, actual constructor reachability,
+   native disposal authority, native admission or HIP/HSA performance.
+   Remaining bodies include construction and Unknown disposal wrappers;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
    explicit comparisons, retained admission, Unknown mutation and the settlement

@@ -1,0 +1,3 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-retirement-20260923-6VDPBsq4/target/debug/deps/fe2o3_runtime_model-b397a1a75deee8ae)
+   Doc-tests fe2o3_runtime_model

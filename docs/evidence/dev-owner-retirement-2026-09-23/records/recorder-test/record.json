@@ -1,0 +1,13 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-retirement.py",
+    "--selftest"
+  ],
+  "started_ns": 1790183552413790039,
+  "process_group": 1610359,
+  "group_absent": true,
+  "finished_ns": 1790183552620156260,
+  "status": 0
+}

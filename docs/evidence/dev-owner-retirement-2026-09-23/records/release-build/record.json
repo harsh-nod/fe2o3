@@ -1,0 +1,17 @@
+{
+  "command": [
+    "cargo",
+    "+1.97.1",
+    "test",
+    "--locked",
+    "-p",
+    "fe2o3-runtime-model",
+    "--release",
+    "--no-run"
+  ],
+  "started_ns": 1790183589166643381,
+  "process_group": 1621111,
+  "group_absent": true,
+  "finished_ns": 1790183625882822975,
+  "status": 0
+}

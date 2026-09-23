@@ -1,0 +1,2 @@
+PASS: receipt and checkpoint replay checks; 29 malformed or conflicting operations rejected
+PASS: retirement negative diagnostic policy; 8 malformed cases rejected
