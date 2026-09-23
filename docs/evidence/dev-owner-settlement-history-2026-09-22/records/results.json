@@ -1,0 +1,3731 @@
+{
+  "positive-before": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 916,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "evidence": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 696,
+            "byte_end": 713,
+            "line_start": 14,
+            "line_end": 14,
+            "column_start": 74,
+            "column_end": 91,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if let Err(error) = $chain($journal, $writer, head, count) { return Err(error); }",
+                "highlight_start": 74,
+                "highlight_end": 91
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |         ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:14:74\n   |\n14 |             if let Err(error) = $chain($journal, $writer, head, count) { return Err(error); }\n   |                                                                          ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 1303,
+            "byte_end": 1320,
+            "line_start": 25,
+            "line_end": 25,
+            "column_start": 58,
+            "column_end": 75,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if let Err(error) = $scan($journal, count) { return Err(error); }",
+                "highlight_start": 58,
+                "highlight_end": 75
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |         ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:25:58\n   |\n25 |             if let Err(error) = $scan($journal, count) { return Err(error); }\n   |                                                          ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4699,
+            "byte_end": 4918,
+            "line_start": 79,
+            "line_end": 81,
+            "column_start": 5,
+            "column_end": 64,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,",
+                "highlight_start": 5,
+                "highlight_end": 103
+              },
+              {
+                "text": "        free_storage: usize, member_free_storage: usize)",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "        -> (result: Result<(Option<usize>, usize), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 64
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:79:5\n   |\n79 | /     fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,\n80 | |         free_storage: usize, member_free_storage: usize)\n81 | |         -> (result: Result<(Option<usize>, usize), ReadErrorV1>)\n   | |_______________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "unknown_header": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 605,
+            "byte_end": 673,
+            "line_start": 12,
+            "line_end": 12,
+            "column_start": 17,
+            "column_end": 85,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);",
+                "highlight_start": 17,
+                "highlight_end": 85
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |         ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:12:17\n   |\n12 |                 return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);\n   |                 -------------------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 762,
+            "byte_end": 779,
+            "line_start": 14,
+            "line_end": 14,
+            "column_start": 74,
+            "column_end": 91,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if let Err(error) = $chain($journal, $writer, head, count) { return Err(error); }",
+                "highlight_start": 74,
+                "highlight_end": 91
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |         ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:14:74\n   |\n14 |             if let Err(error) = $chain($journal, $writer, head, count) { return Err(error); }\n   |                                                                          ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4699,
+            "byte_end": 4918,
+            "line_start": 79,
+            "line_end": 81,
+            "column_start": 5,
+            "column_end": 64,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,",
+                "highlight_start": 5,
+                "highlight_end": 103
+              },
+              {
+                "text": "        free_storage: usize, member_free_storage: usize)",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "        -> (result: Result<(Option<usize>, usize), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 64
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:79:5\n   |\n79 | /     fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,\n80 | |         free_storage: usize, member_free_storage: usize)\n81 | |         -> (result: Result<(Option<usize>, usize), ReadErrorV1>)\n   | |_______________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "chain": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 3 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 3 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 321,
+            "byte_end": 1349,
+            "line_start": 6,
+            "line_end": 27,
+            "column_start": 18,
+            "column_end": 10,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $syntax!({",
+                "highlight_start": 18,
+                "highlight_end": 19
+              },
+              {
+                "text": "            let (head, count, _) = match $header($journal, $writer, false) {",
+                "highlight_start": 1,
+                "highlight_end": 77
+              },
+              {
+                "text": "                Ok(value) => value,",
+                "highlight_start": 1,
+                "highlight_end": 36
+              },
+              {
+                "text": "                Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "            };",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "            if $evidence.slot != $writer.slot || !$same_key($evidence.key, $writer.key) {",
+                "highlight_start": 1,
+                "highlight_end": 90
+              },
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);",
+                "highlight_start": 1,
+                "highlight_end": 86
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "            ",
+                "highlight_start": 1,
+                "highlight_end": 13
+              },
+              {
+                "text": "            let storage = SettlementReturnStorageV1 {",
+                "highlight_start": 1,
+                "highlight_end": 54
+              },
+              {
+                "text": "                writer_free_len: $journal.free.len(),",
+                "highlight_start": 1,
+                "highlight_end": 54
+              },
+              {
+                "text": "                member_free_len: $journal.member_free.len(),",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "                writer_limit: $journal.writer_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 56
+              },
+              {
+                "text": "                writer_storage: $writer_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 50
+              },
+              {
+                "text": "                member_limit: $journal.allocation_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 60
+              },
+              {
+                "text": "                member_storage: $member_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 50
+              },
+              {
+                "text": "                scratch_len: $journal.scratch.len(),",
+                "highlight_start": 1,
+                "highlight_end": 53
+              },
+              {
+                "text": "            };",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "            if let Err(error) = storage.check(count) { return Err(error); }",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "            if let Err(error) = $scan($journal, count) { return Err(error); }",
+                "highlight_start": 1,
+                "highlight_end": 78
+              },
+              {
+                "text": "            Ok((head, count))",
+                "highlight_start": 1,
+                "highlight_end": 30
+              },
+              {
+                "text": "        })",
+                "highlight_start": 1,
+                "highlight_end": 10
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |           ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:6:18\n   |\n 6 |           $syntax!({\n   |  __________________-\n 7 | |             let (head, count, _) = match $header($journal, $writer, false) {\n 8 | |                 Ok(value) => value,\n 9 | |                 Err(error) => return Err(error),\n...  |\n26 | |             Ok((head, count))\n27 | |         })\n   | |_________- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 1211,
+            "byte_end": 1228,
+            "line_start": 24,
+            "line_end": 24,
+            "column_start": 56,
+            "column_end": 73,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if let Err(error) = storage.check(count) { return Err(error); }",
+                "highlight_start": 56,
+                "highlight_end": 73
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |         ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:24:56\n   |\n24 |             if let Err(error) = storage.check(count) { return Err(error); }\n   |                                                        ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 1289,
+            "byte_end": 1306,
+            "line_start": 25,
+            "line_end": 25,
+            "column_start": 58,
+            "column_end": 75,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if let Err(error) = $scan($journal, count) { return Err(error); }",
+                "highlight_start": 58,
+                "highlight_end": 75
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |         ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:25:58\n   |\n25 |             if let Err(error) = $scan($journal, count) { return Err(error); }\n   |                                                          ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4699,
+            "byte_end": 4918,
+            "line_start": 79,
+            "line_end": 81,
+            "column_start": 5,
+            "column_end": 64,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,",
+                "highlight_start": 5,
+                "highlight_end": 103
+              },
+              {
+                "text": "        free_storage: usize, member_free_storage: usize)",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "        -> (result: Result<(Option<usize>, usize), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 64
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:79:5\n   |\n79 | /     fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,\n80 | |         free_storage: usize, member_free_storage: usize)\n81 | |         -> (result: Result<(Option<usize>, usize), ReadErrorV1>)\n   | |_______________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "writer_capacity": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 321,
+            "byte_end": 1424,
+            "line_start": 6,
+            "line_end": 27,
+            "column_start": 18,
+            "column_end": 10,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $syntax!({",
+                "highlight_start": 18,
+                "highlight_end": 19
+              },
+              {
+                "text": "            let (head, count, _) = match $header($journal, $writer, false) {",
+                "highlight_start": 1,
+                "highlight_end": 77
+              },
+              {
+                "text": "                Ok(value) => value,",
+                "highlight_start": 1,
+                "highlight_end": 36
+              },
+              {
+                "text": "                Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "            };",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "            if $evidence.slot != $writer.slot || !$same_key($evidence.key, $writer.key) {",
+                "highlight_start": 1,
+                "highlight_end": 90
+              },
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);",
+                "highlight_start": 1,
+                "highlight_end": 86
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "            if let Err(error) = $chain($journal, $writer, head, count) { return Err(error); }",
+                "highlight_start": 1,
+                "highlight_end": 94
+              },
+              {
+                "text": "            let storage = SettlementReturnStorageV1 {",
+                "highlight_start": 1,
+                "highlight_end": 54
+              },
+              {
+                "text": "                writer_free_len: $journal.free.len(),",
+                "highlight_start": 1,
+                "highlight_end": 54
+              },
+              {
+                "text": "                member_free_len: $journal.member_free.len(),",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "                writer_limit: $journal.writer_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 56
+              },
+              {
+                "text": "                writer_storage: usize::MAX,",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "                member_limit: $journal.allocation_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 60
+              },
+              {
+                "text": "                member_storage: $member_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 50
+              },
+              {
+                "text": "                scratch_len: $journal.scratch.len(),",
+                "highlight_start": 1,
+                "highlight_end": 53
+              },
+              {
+                "text": "            };",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "            if let Err(error) = storage.check(count) { return Err(error); }",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "            if let Err(error) = $scan($journal, count) { return Err(error); }",
+                "highlight_start": 1,
+                "highlight_end": 78
+              },
+              {
+                "text": "            Ok((head, count))",
+                "highlight_start": 1,
+                "highlight_end": 30
+              },
+              {
+                "text": "        })",
+                "highlight_start": 1,
+                "highlight_end": 10
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |           ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:6:18\n   |\n 6 |           $syntax!({\n   |  __________________-\n 7 | |             let (head, count, _) = match $header($journal, $writer, false) {\n 8 | |                 Ok(value) => value,\n 9 | |                 Err(error) => return Err(error),\n...  |\n26 | |             Ok((head, count))\n27 | |         })\n   | |_________- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 1364,
+            "byte_end": 1381,
+            "line_start": 25,
+            "line_end": 25,
+            "column_start": 58,
+            "column_end": 75,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if let Err(error) = $scan($journal, count) { return Err(error); }",
+                "highlight_start": 58,
+                "highlight_end": 75
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |         ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:25:58\n   |\n25 |             if let Err(error) = $scan($journal, count) { return Err(error); }\n   |                                                          ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4699,
+            "byte_end": 4918,
+            "line_start": 79,
+            "line_end": 81,
+            "column_start": 5,
+            "column_end": 64,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,",
+                "highlight_start": 5,
+                "highlight_end": 103
+              },
+              {
+                "text": "        free_storage: usize, member_free_storage: usize)",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "        -> (result: Result<(Option<usize>, usize), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 64
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:79:5\n   |\n79 | /     fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,\n80 | |         free_storage: usize, member_free_storage: usize)\n81 | |         -> (result: Result<(Option<usize>, usize), ReadErrorV1>)\n   | |_______________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "member_capacity": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 321,
+            "byte_end": 1424,
+            "line_start": 6,
+            "line_end": 27,
+            "column_start": 18,
+            "column_end": 10,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $syntax!({",
+                "highlight_start": 18,
+                "highlight_end": 19
+              },
+              {
+                "text": "            let (head, count, _) = match $header($journal, $writer, false) {",
+                "highlight_start": 1,
+                "highlight_end": 77
+              },
+              {
+                "text": "                Ok(value) => value,",
+                "highlight_start": 1,
+                "highlight_end": 36
+              },
+              {
+                "text": "                Err(error) => return Err(error),",
+                "highlight_start": 1,
+                "highlight_end": 49
+              },
+              {
+                "text": "            };",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "            if $evidence.slot != $writer.slot || !$same_key($evidence.key, $writer.key) {",
+                "highlight_start": 1,
+                "highlight_end": 90
+              },
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);",
+                "highlight_start": 1,
+                "highlight_end": 86
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "            if let Err(error) = $chain($journal, $writer, head, count) { return Err(error); }",
+                "highlight_start": 1,
+                "highlight_end": 94
+              },
+              {
+                "text": "            let storage = SettlementReturnStorageV1 {",
+                "highlight_start": 1,
+                "highlight_end": 54
+              },
+              {
+                "text": "                writer_free_len: $journal.free.len(),",
+                "highlight_start": 1,
+                "highlight_end": 54
+              },
+              {
+                "text": "                member_free_len: $journal.member_free.len(),",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "                writer_limit: $journal.writer_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 56
+              },
+              {
+                "text": "                writer_storage: $writer_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 50
+              },
+              {
+                "text": "                member_limit: $journal.allocation_capacity,",
+                "highlight_start": 1,
+                "highlight_end": 60
+              },
+              {
+                "text": "                member_storage: usize::MAX,",
+                "highlight_start": 1,
+                "highlight_end": 44
+              },
+              {
+                "text": "                scratch_len: $journal.scratch.len(),",
+                "highlight_start": 1,
+                "highlight_end": 53
+              },
+              {
+                "text": "            };",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "            if let Err(error) = storage.check(count) { return Err(error); }",
+                "highlight_start": 1,
+                "highlight_end": 76
+              },
+              {
+                "text": "            if let Err(error) = $scan($journal, count) { return Err(error); }",
+                "highlight_start": 1,
+                "highlight_end": 78
+              },
+              {
+                "text": "            Ok((head, count))",
+                "highlight_start": 1,
+                "highlight_end": 30
+              },
+              {
+                "text": "        })",
+                "highlight_start": 1,
+                "highlight_end": 10
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |           ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:6:18\n   |\n 6 |           $syntax!({\n   |  __________________-\n 7 | |             let (head, count, _) = match $header($journal, $writer, false) {\n 8 | |                 Ok(value) => value,\n 9 | |                 Err(error) => return Err(error),\n...  |\n26 | |             Ok((head, count))\n27 | |         })\n   | |_________- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 1364,
+            "byte_end": 1381,
+            "line_start": 25,
+            "line_end": 25,
+            "column_start": 58,
+            "column_end": 75,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if let Err(error) = $scan($journal, count) { return Err(error); }",
+                "highlight_start": 58,
+                "highlight_end": 75
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 5054,
+                "byte_end": 5299,
+                "line_start": 84,
+                "line_end": 86,
+                "column_start": 9,
+                "column_end": 104,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_preflight_body!(verus_exec_expr, self, writer, evidence,",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  },
+                  {
+                    "text": "            free_storage, member_free_storage, shared_retained_header_v1,",
+                    "highlight_start": 1,
+                    "highlight_end": 74
+                  },
+                  {
+                    "text": "            shared_retained_writer_key_v1, shared_retained_chain_v1, shared_settlement_scratch_scan_v1)",
+                    "highlight_start": 1,
+                    "highlight_end": 104
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_preflight_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 117,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_preflight_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4936,
+            "byte_end": 5038,
+            "line_start": 82,
+            "line_end": 82,
+            "column_start": 17,
+            "column_end": 119,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),",
+                "highlight_start": 17,
+                "highlight_end": 119
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:82:17\n   |\n82 |         ensures result == settlement_preflight_decision_v1(*self, writer, evidence, free_storage, member_free_storage),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:25:58\n   |\n25 |             if let Err(error) = $scan($journal, count) { return Err(error); }\n   |                                                          ----------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 4699,
+            "byte_end": 4918,
+            "line_start": 79,
+            "line_end": 81,
+            "column_start": 5,
+            "column_end": 64,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,",
+                "highlight_start": 5,
+                "highlight_end": 103
+              },
+              {
+                "text": "        free_storage: usize, member_free_storage: usize)",
+                "highlight_start": 1,
+                "highlight_end": 57
+              },
+              {
+                "text": "        -> (result: Result<(Option<usize>, usize), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 64
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:79:5\n   |\n79 | /     fn preflight_settlement_observed_v1(&self, writer: WriterReferenceV1, evidence: WriterReferenceV1,\n80 | |         free_storage: usize, member_free_storage: usize)\n81 | |         -> (result: Result<(Option<usize>, usize), ReadErrorV1>)\n   | |_______________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "success_selection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 2317,
+            "byte_end": 2378,
+            "line_start": 51,
+            "line_end": 51,
+            "column_start": 9,
+            "column_end": 70,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $journal.$method($writer, $evidence.writer, false $($extra)*)",
+                "highlight_start": 9,
+                "highlight_end": 70
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 6528,
+                "byte_end": 6650,
+                "line_start": 106,
+                "line_end": 106,
+                "column_start": 9,
+                "column_end": 131,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_outcome_body!(self, settle_retained_observed_v1, writer, evidence, true, [, free_storage, member_free_storage])",
+                    "highlight_start": 9,
+                    "highlight_end": 131
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_outcome_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 2162,
+                "byte_end": 2198,
+                "line_start": 49,
+                "line_end": 49,
+                "column_start": 1,
+                "column_end": 37,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_outcome_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 37
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 6368,
+            "byte_end": 6512,
+            "line_start": 103,
+            "line_end": 104,
+            "column_start": 17,
+            "column_end": 61,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures settlement_execution_relation_v1(*old(self), *final(self), writer, evidence.writer,",
+                "highlight_start": 17,
+                "highlight_end": 100
+              },
+              {
+                "text": "            free_storage, member_free_storage, true, result),",
+                "highlight_start": 1,
+                "highlight_end": 61
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:103:17\n    |\n103 |           ensures settlement_execution_relation_v1(*old(self), *final(self), writer, evidence.writer,\n    |  _________________^\n104 | |             free_storage, member_free_storage, true, result),\n    | |____________________________________________________________^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:51:9\n    |\n 51 |           $journal.$method($writer, $evidence.writer, false $($extra)*)\n    |           ------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "no_effect_selection": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 2317,
+            "byte_end": 2377,
+            "line_start": 51,
+            "line_end": 51,
+            "column_start": 9,
+            "column_end": 69,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $journal.$method($writer, $evidence.writer, true $($extra)*)",
+                "highlight_start": 9,
+                "highlight_end": 69
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 7047,
+                "byte_end": 7170,
+                "line_start": 114,
+                "line_end": 114,
+                "column_start": 9,
+                "column_end": 132,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_outcome_body!(self, settle_retained_observed_v1, writer, evidence, false, [, free_storage, member_free_storage])",
+                    "highlight_start": 9,
+                    "highlight_end": 132
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_outcome_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 2162,
+                "byte_end": 2198,
+                "line_start": 49,
+                "line_end": 49,
+                "column_start": 1,
+                "column_end": 37,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_outcome_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 37
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 6886,
+            "byte_end": 7031,
+            "line_start": 111,
+            "line_end": 112,
+            "column_start": 17,
+            "column_end": 62,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures settlement_execution_relation_v1(*old(self), *final(self), writer, evidence.writer,",
+                "highlight_start": 17,
+                "highlight_end": 100
+              },
+              {
+                "text": "            free_storage, member_free_storage, false, result),",
+                "highlight_start": 1,
+                "highlight_end": 62
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:111:17\n    |\n111 |           ensures settlement_execution_relation_v1(*old(self), *final(self), writer, evidence.writer,\n    |  _________________^\n112 | |             free_storage, member_free_storage, false, result),\n    | |_____________________________________________________________^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:51:9\n    |\n 51 |           $journal.$method($writer, $evidence.writer, true $($extra)*)\n    |           ------------------------------------------------------------ at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "lineage": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "invariant not satisfied at end of loop body",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 3745,
+            "byte_end": 3839,
+            "line_start": 64,
+            "line_end": 64,
+            "column_start": 13,
+            "column_end": 107,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            journal.allocations@ =~= settlement_allocations_prefix_v1(before, head, success, index as nat),",
+                "highlight_start": 13,
+                "highlight_end": 107
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: invariant not satisfied at end of loop body\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:64:13\n   |\n64 |             journal.allocations@ =~= settlement_allocations_prefix_v1(before, head, success, index as nat),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "scratch_clear": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 1,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "invariant not satisfied at end of loop body",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 3434,
+            "byte_end": 3610,
+            "line_start": 61,
+            "line_end": 62,
+            "column_start": 13,
+            "column_end": 93,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            forall|i: int| 0 <= i < journal.scratch@.len() ==> (#[trigger] journal.scratch@[i])",
+                "highlight_start": 13,
+                "highlight_end": 96
+              },
+              {
+                "text": "                == settlement_scratch_v1(before, head, count, count as nat, index as nat)[i],",
+                "highlight_start": 1,
+                "highlight_end": 93
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: invariant not satisfied at end of loop body\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:61:13\n   |\n61 | /             forall|i: int| 0 <= i < journal.scratch@.len() ==> (#[trigger] journal.scratch@[i])\n62 | |                 == settlement_scratch_v1(before, head, count, count as nat, index as nat)[i],\n   | |____________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 2547,
+            "byte_end": 2632,
+            "line_start": 57,
+            "line_end": 57,
+            "column_start": 9,
+            "column_end": 94,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.$method($writer, $evidence $($extra)*) }",
+                "highlight_start": 9,
+                "highlight_end": 94
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 7741,
+                "byte_end": 7871,
+                "line_start": 126,
+                "line_end": 126,
+                "column_start": 9,
+                "column_end": 139,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_owner_forward_body!(self, journal, settle_success_observed_v1, writer, evidence, [, free_storage, member_free_storage])",
+                    "highlight_start": 9,
+                    "highlight_end": 139
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_owner_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 2392,
+                "byte_end": 2434,
+                "line_start": 55,
+                "line_end": 55,
+                "column_start": 1,
+                "column_end": 43,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_owner_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 43
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 7611,
+            "byte_end": 7665,
+            "line_start": 123,
+            "line_end": 123,
+            "column_start": 13,
+            "column_end": 67,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            owner_writer_stable_frame_v1(*old(self), *final(self)),",
+                "highlight_start": 13,
+                "highlight_end": 67
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:123:13\n    |\n123 |             owner_writer_stable_frame_v1(*old(self), *final(self)),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:57:9\n    |\n 57 |         { $owner.next_incarnation = 0; $owner.$field.$method($writer, $evidence $($extra)*) }\n    |         ------------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 2547,
+            "byte_end": 2632,
+            "line_start": 57,
+            "line_end": 57,
+            "column_start": 9,
+            "column_end": 94,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.$method($writer, $evidence $($extra)*) }",
+                "highlight_start": 9,
+                "highlight_end": 94
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 7741,
+                "byte_end": 7871,
+                "line_start": 126,
+                "line_end": 126,
+                "column_start": 9,
+                "column_end": 139,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_owner_forward_body!(self, journal, settle_success_observed_v1, writer, evidence, [, free_storage, member_free_storage])",
+                    "highlight_start": 9,
+                    "highlight_end": 139
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_owner_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 2392,
+                "byte_end": 2434,
+                "line_start": 55,
+                "line_end": 55,
+                "column_start": 1,
+                "column_end": 43,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_owner_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 43
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 7679,
+            "byte_end": 7725,
+            "line_start": 124,
+            "line_end": 124,
+            "column_start": 13,
+            "column_end": 59,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            result.is_err() ==> *final(self) == *old(self),",
+                "highlight_start": 13,
+                "highlight_end": 59
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:124:13\n    |\n124 |             result.is_err() ==> *final(self) == *old(self),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:57:9\n    |\n 57 |         { $owner.next_incarnation = 0; $owner.$field.$method($writer, $evidence $($extra)*) }\n    |         ------------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 7218,
+            "byte_end": 7421,
+            "line_start": 119,
+            "line_end": 120,
+            "column_start": 5,
+            "column_end": 93,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn settle_success_observed_v1(&mut self, writer: WriterReferenceV1, evidence: &ContextWriterSuccessEvidenceV1,",
+                "highlight_start": 5,
+                "highlight_end": 115
+              },
+              {
+                "text": "        free_storage: usize, member_free_storage: usize) -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 93
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:119:5\n    |\n119 | /     fn settle_success_observed_v1(&mut self, writer: WriterReferenceV1, evidence: &ContextWriterSuccessEvidenceV1,\n120 | |         free_storage: usize, member_free_storage: usize) -> (result: Result<(), ReadErrorV1>)\n    | |____________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 2547,
+            "byte_end": 2632,
+            "line_start": 57,
+            "line_end": 57,
+            "column_start": 9,
+            "column_end": 94,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.$method($writer, $evidence $($extra)*) }",
+                "highlight_start": 9,
+                "highlight_end": 94
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 9815,
+                "byte_end": 9946,
+                "line_start": 158,
+                "line_end": 158,
+                "column_start": 9,
+                "column_end": 140,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_owner_forward_body!(self, stable, settle_no_effect_observed_v1, writer, evidence, [, free_storage, member_free_storage])",
+                    "highlight_start": 9,
+                    "highlight_end": 140
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_owner_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 2392,
+                "byte_end": 2434,
+                "line_start": 55,
+                "line_end": 55,
+                "column_start": 1,
+                "column_end": 43,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_owner_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 43
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 9683,
+            "byte_end": 9739,
+            "line_start": 155,
+            "line_end": 155,
+            "column_start": 13,
+            "column_end": 69,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            owner_writer_producer_frame_v1(*old(self), *final(self)),",
+                "highlight_start": 13,
+                "highlight_end": 69
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:155:13\n    |\n155 |             owner_writer_producer_frame_v1(*old(self), *final(self)),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:57:9\n    |\n 57 |         { $owner.next_incarnation = 0; $owner.$field.$method($writer, $evidence $($extra)*) }\n    |         ------------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+            "byte_start": 2547,
+            "byte_end": 2632,
+            "line_start": 57,
+            "line_end": 57,
+            "column_start": 9,
+            "column_end": 94,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.$method($writer, $evidence $($extra)*) }",
+                "highlight_start": 9,
+                "highlight_end": 94
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+                "byte_start": 9815,
+                "byte_end": 9946,
+                "line_start": 158,
+                "line_end": 158,
+                "column_start": 9,
+                "column_end": 140,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        settlement_owner_forward_body!(self, stable, settle_no_effect_observed_v1, writer, evidence, [, free_storage, member_free_storage])",
+                    "highlight_start": 9,
+                    "highlight_end": 140
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "settlement_owner_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs",
+                "byte_start": 2392,
+                "byte_end": 2434,
+                "line_start": 55,
+                "line_end": 55,
+                "column_start": 1,
+                "column_end": 43,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! settlement_owner_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 43
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 9753,
+            "byte_end": 9799,
+            "line_start": 156,
+            "line_end": 156,
+            "column_start": 13,
+            "column_end": 59,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            result.is_err() ==> *final(self) == *old(self),",
+                "highlight_start": 13,
+                "highlight_end": 59
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:156:13\n    |\n156 |             result.is_err() ==> *final(self) == *old(self),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/settlement_wrapper_bodies.rs:57:9\n    |\n 57 |         { $owner.next_incarnation = 0; $owner.$field.$method($writer, $evidence $($extra)*) }\n    |         ------------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs",
+            "byte_start": 9272,
+            "byte_end": 9478,
+            "line_start": 151,
+            "line_end": 152,
+            "column_start": 5,
+            "column_end": 93,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn settle_no_effect_observed_v1(&mut self, writer: WriterReferenceV1, evidence: &ContextWriterNoEffectEvidenceV1,",
+                "highlight_start": 5,
+                "highlight_end": 118
+              },
+              {
+                "text": "        free_storage: usize, member_free_storage: usize) -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 93
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_bodies_v1.rs:151:5\n    |\n151 | /     fn settle_no_effect_observed_v1(&mut self, writer: WriterReferenceV1, evidence: &ContextWriterNoEffectEvidenceV1,\n152 | |         free_storage: usize, member_free_storage: usize) -> (result: Result<(), ReadErrorV1>)\n    | |____________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 5695,
+            "byte_end": 5812,
+            "line_start": 91,
+            "line_end": 91,
+            "column_start": 9,
+            "column_end": 126,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        settlement_execution_relation_v1(before, after, writer, evidence, free_storage, member_free_storage, success, result),",
+                "highlight_start": 9,
+                "highlight_end": 126
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 14851,
+            "byte_end": 15081,
+            "line_start": 209,
+            "line_end": 210,
+            "column_start": 9,
+            "column_end": 118,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_settlement_paired_transition_v1(before.stable.journal, actual.stable.journal, model_before.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 121
+              },
+              {
+                "text": "            model.stable.journal, writer, evidence, free_storage, member_free_storage, success, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 118
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs:209:9\n    |\n 91 |           settlement_execution_relation_v1(before, after, writer, evidence, free_storage, member_free_storage, success, result),\n    |           --------------------------------------------------------------------------------------------------------------------- failed precondition\n...\n209 | /         owner_settlement_paired_transition_v1(before.stable.journal, actual.stable.journal, model_before.stable.journal,\n210 | |             model.stable.journal, writer, evidence, free_storage, member_free_storage, success, result, model_result);\n    | |_____________________________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 5822,
+            "byte_end": 6024,
+            "line_start": 92,
+            "line_end": 93,
+            "column_start": 9,
+            "column_end": 103,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::settlement_execution_relation_v1(model_before, model_after, writer_reference_view(writer),",
+                "highlight_start": 9,
+                "highlight_end": 108
+              },
+              {
+                "text": "            writer_reference_view(evidence), free_storage, member_free_storage, success, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 103
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 15036,
+            "byte_end": 15266,
+            "line_start": 212,
+            "line_end": 213,
+            "column_start": 9,
+            "column_end": 118,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_settlement_paired_transition_v1(before.stable.journal, actual.stable.journal, model_before.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 121
+              },
+              {
+                "text": "            model.stable.journal, writer, evidence, free_storage, member_free_storage, success, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 118
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs:212:9\n    |\n 92 | /         logical::settlement_execution_relation_v1(model_before, model_after, writer_reference_view(writer),\n 93 | |             writer_reference_view(evidence), free_storage, member_free_storage, success, model_result),\n    | |______________________________________________________________________________________________________- failed precondition\n...\n212 | /         owner_settlement_paired_transition_v1(before.stable.journal, actual.stable.journal, model_before.stable.journal,\n213 | |             model.stable.journal, writer, evidence, free_storage, member_free_storage, success, result, model_result);\n    | |_____________________________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "historical_outcome": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 5822,
+            "byte_end": 6024,
+            "line_start": 92,
+            "line_end": 93,
+            "column_start": 9,
+            "column_end": 103,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::settlement_execution_relation_v1(model_before, model_after, writer_reference_view(writer),",
+                "highlight_start": 9,
+                "highlight_end": 108
+              },
+              {
+                "text": "            writer_reference_view(evidence), free_storage, member_free_storage, success, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 103
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 15133,
+            "byte_end": 15363,
+            "line_start": 213,
+            "line_end": 214,
+            "column_start": 9,
+            "column_end": 118,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_settlement_paired_transition_v1(before.stable.journal, actual.stable.journal, model_before.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 121
+              },
+              {
+                "text": "            model.stable.journal, writer, evidence, free_storage, member_free_storage, success, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 118
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs:213:9\n    |\n 92 | /         logical::settlement_execution_relation_v1(model_before, model_after, writer_reference_view(writer),\n 93 | |             writer_reference_view(evidence), free_storage, member_free_storage, success, model_result),\n    | |______________________________________________________________________________________________________- failed precondition\n...\n213 | /         owner_settlement_paired_transition_v1(before.stable.journal, actual.stable.journal, model_before.stable.journal,\n214 | |             model.stable.journal, writer, evidence, free_storage, member_free_storage, success, result, model_result);\n    | |_____________________________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 10216,
+            "byte_end": 10384,
+            "line_start": 152,
+            "line_end": 153,
+            "column_start": 9,
+            "column_end": 64,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::settlement_execution_relation_v1(before.stable.journal, after.stable.journal, writer, evidence,",
+                "highlight_start": 9,
+                "highlight_end": 113
+              },
+              {
+                "text": "            free_storage, member_free_storage, success, result),",
+                "highlight_start": 1,
+                "highlight_end": 64
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 15373,
+            "byte_end": 15545,
+            "line_start": 215,
+            "line_end": 216,
+            "column_start": 9,
+            "column_end": 53,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_settlement_preservation_v1(model_before, *model, model_writer, model_evidence, free_storage, member_free_storage,",
+                "highlight_start": 9,
+                "highlight_end": 128
+              },
+              {
+                "text": "            success, model_result, storage, history);",
+                "highlight_start": 1,
+                "highlight_end": 53
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs:215:9\n    |\n152 | /         logical::settlement_execution_relation_v1(before.stable.journal, after.stable.journal, writer, evidence,\n153 | |             free_storage, member_free_storage, success, result),\n    | |_______________________________________________________________- failed precondition\n...\n215 | /         owner_settlement_preservation_v1(model_before, *model, model_writer, model_evidence, free_storage, member_free_storage,\n216 | |             success, model_result, storage, history);\n    | |____________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 12658,
+            "byte_end": 13188,
+            "line_start": 184,
+            "line_end": 188,
+            "column_start": 1,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn owner_settlement_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "    model: &mut logical::ProducerReadContentsV1, writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,",
+                "highlight_start": 1,
+                "highlight_end": 118
+              },
+              {
+                "text": "    evidence: WriterReferenceV1, model_evidence: logical::WriterReferenceV1, free_storage: usize, member_free_storage: usize,",
+                "highlight_start": 1,
+                "highlight_end": 126
+              },
+              {
+                "text": "    success: bool, Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 128
+              },
+              {
+                "text": "    -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 77
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs:184:1\n    |\n184 | / fn owner_settlement_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,\n185 | |     model: &mut logical::ProducerReadContentsV1, writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,\n186 | |     evidence: WriterReferenceV1, model_evidence: logical::WriterReferenceV1, free_storage: usize, member_free_storage: usize,\n187 | |     success: bool, Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n188 | |     -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))\n    | |____________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "historical_capacity": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 5822,
+            "byte_end": 6024,
+            "line_start": 92,
+            "line_end": 93,
+            "column_start": 9,
+            "column_end": 103,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::settlement_execution_relation_v1(model_before, model_after, writer_reference_view(writer),",
+                "highlight_start": 9,
+                "highlight_end": 108
+              },
+              {
+                "text": "            writer_reference_view(evidence), free_storage, member_free_storage, success, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 103
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 15123,
+            "byte_end": 15353,
+            "line_start": 213,
+            "line_end": 214,
+            "column_start": 9,
+            "column_end": 118,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_settlement_paired_transition_v1(before.stable.journal, actual.stable.journal, model_before.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 121
+              },
+              {
+                "text": "            model.stable.journal, writer, evidence, free_storage, member_free_storage, success, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 118
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs:213:9\n    |\n 92 | /         logical::settlement_execution_relation_v1(model_before, model_after, writer_reference_view(writer),\n 93 | |             writer_reference_view(evidence), free_storage, member_free_storage, success, model_result),\n    | |______________________________________________________________________________________________________- failed precondition\n...\n213 | /         owner_settlement_paired_transition_v1(before.stable.journal, actual.stable.journal, model_before.stable.journal,\n214 | |             model.stable.journal, writer, evidence, free_storage, member_free_storage, success, result, model_result);\n    | |_____________________________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 10216,
+            "byte_end": 10384,
+            "line_start": 152,
+            "line_end": 153,
+            "column_start": 9,
+            "column_end": 64,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::settlement_execution_relation_v1(before.stable.journal, after.stable.journal, writer, evidence,",
+                "highlight_start": 9,
+                "highlight_end": 113
+              },
+              {
+                "text": "            free_storage, member_free_storage, success, result),",
+                "highlight_start": 1,
+                "highlight_end": 64
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 15363,
+            "byte_end": 15535,
+            "line_start": 215,
+            "line_end": 216,
+            "column_start": 9,
+            "column_end": 53,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_settlement_preservation_v1(model_before, *model, model_writer, model_evidence, free_storage, member_free_storage,",
+                "highlight_start": 9,
+                "highlight_end": 128
+              },
+              {
+                "text": "            success, model_result, storage, history);",
+                "highlight_start": 1,
+                "highlight_end": 53
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs:215:9\n    |\n152 | /         logical::settlement_execution_relation_v1(before.stable.journal, after.stable.journal, writer, evidence,\n153 | |             free_storage, member_free_storage, success, result),\n    | |_______________________________________________________________- failed precondition\n...\n215 | /         owner_settlement_preservation_v1(model_before, *model, model_writer, model_evidence, free_storage, member_free_storage,\n216 | |             success, model_result, storage, history);\n    | |____________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 12658,
+            "byte_end": 13188,
+            "line_start": 184,
+            "line_end": 188,
+            "column_start": 1,
+            "column_end": 77,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "fn owner_settlement_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "    model: &mut logical::ProducerReadContentsV1, writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,",
+                "highlight_start": 1,
+                "highlight_end": 118
+              },
+              {
+                "text": "    evidence: WriterReferenceV1, model_evidence: logical::WriterReferenceV1, free_storage: usize, member_free_storage: usize,",
+                "highlight_start": 1,
+                "highlight_end": 126
+              },
+              {
+                "text": "    success: bool, Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)",
+                "highlight_start": 1,
+                "highlight_end": 128
+              },
+              {
+                "text": "    -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))",
+                "highlight_start": 1,
+                "highlight_end": 77
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs:184:1\n    |\n184 | / fn owner_settlement_historical_exec_v1(actual: &mut ContextProducerReadJournalV1,\n185 | |     model: &mut logical::ProducerReadContentsV1, writer: WriterReferenceV1, model_writer: logical::WriterReferenceV1,\n186 | |     evidence: WriterReferenceV1, model_evidence: logical::WriterReferenceV1, free_storage: usize, member_free_storage: usize,\n187 | |     success: bool, Ghost(storage): Ghost<logical::StorageCapacitiesV1>, Ghost(history): Ghost<Seq<logical::WriterReferenceV1>>)\n188 | |     -> (results: (Result<(), ReadErrorV1>, Result<(), logical::ReadErrorV1>))\n    | |____________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "resolved_status": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 10800,
+            "byte_end": 12572,
+            "line_start": 159,
+            "line_end": 180,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    if logical::pending_custody_v1(before.stable.journal) && result.is_ok() {",
+                "highlight_start": 5,
+                "highlight_end": 78
+              },
+              {
+                "text": "        let (head, count) = match logical::settlement_preflight_decision_v1(before.stable.journal, writer, evidence,",
+                "highlight_start": 1,
+                "highlight_end": 117
+              },
+              {
+                "text": "            free_storage, member_free_storage) { Ok(value) => value, Err(_) => (None, 0usize) };",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "        logical::settlement_raw_refines_chain_v1(before.stable.journal, after.stable.journal, writer, evidence,",
+                "highlight_start": 1,
+                "highlight_end": 112
+              },
+              {
+                "text": "            free_storage, member_free_storage, head, count, success);",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        let chain = choose|chain: Seq<usize>| #[trigger] logical::settle_chain_relation_v1(",
+                "highlight_start": 1,
+                "highlight_end": 92
+              },
+              {
+                "text": "            before.stable.journal, after.stable.journal, writer, chain, success);",
+                "highlight_start": 1,
+                "highlight_end": 82
+              },
+              {
+                "text": "        if logical::producer_invariant_v1(before) {",
+                "highlight_start": 1,
+                "highlight_end": 52
+              },
+              {
+                "text": "            logical::settle_preserves_producer_invariant_v1(before, after, writer, chain, success);",
+                "highlight_start": 1,
+                "highlight_end": 100
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        if logical::issued_producer_v1(before, storage, history) {",
+                "highlight_start": 1,
+                "highlight_end": 67
+              },
+              {
+                "text": "            logical::settle_preserves_issued_producer_v1(before, after, writer, chain, success, storage, history);",
+                "highlight_start": 1,
+                "highlight_end": 115
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "        assert forall|request: logical::ProducerReadV1| logical::producer_status_v1(before.stable.journal, request).is_some() implies",
+                "highlight_start": 1,
+                "highlight_end": 134
+              },
+              {
+                "text": "            #[trigger] logical::producer_status_v1(after.stable.journal, request) ==",
+                "highlight_start": 1,
+                "highlight_end": 85
+              },
+              {
+                "text": "                if logical::producer_status_v1(before.stable.journal, request) == Some(logical::ProducerStatusV1::Pending)",
+                "highlight_start": 1,
+                "highlight_end": 123
+              },
+              {
+                "text": "                    && logical::same_producer_v1(request.producer, writer) {",
+                "highlight_start": 1,
+                "highlight_end": 77
+              },
+              {
+                "text": "                    Some(if success { logical::ProducerStatusV1::Success } else { logical::ProducerStatusV1::NoEffect })",
+                "highlight_start": 1,
+                "highlight_end": 121
+              },
+              {
+                "text": "                } else { logical::producer_status_v1(before.stable.journal, request) } by {",
+                "highlight_start": 1,
+                "highlight_end": 92
+              },
+              {
+                "text": "            logical::settled_producer_status_v1(before.stable.journal, after.stable.journal, writer, chain, success, request);",
+                "highlight_start": 1,
+                "highlight_end": 127
+              },
+              {
+                "text": "        }",
+                "highlight_start": 1,
+                "highlight_end": 10
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs",
+            "byte_start": 10608,
+            "byte_end": 10792,
+            "line_start": 156,
+            "line_end": 157,
+            "column_start": 9,
+            "column_end": 112,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        logical::pending_custody_v1(before.stable.journal) && result.is_ok() ==>",
+                "highlight_start": 9,
+                "highlight_end": 81
+              },
+              {
+                "text": "            owner_settlement_status_transition_v1(before.stable.journal, after.stable.journal, writer, success),",
+                "highlight_start": 1,
+                "highlight_end": 112
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_settlement_correspondence_v1.rs:156:9\n    |\n156 | /         logical::pending_custody_v1(before.stable.journal) && result.is_ok() ==>\n157 | |             owner_settlement_status_transition_v1(before.stable.journal, after.stable.journal, writer, success),\n    | |_______________________________________________________________________________________________________________^ failed this postcondition\n158 |   {\n159 | /     if logical::pending_custody_v1(before.stable.journal) && result.is_ok() {\n160 | |         let (head, count) = match logical::settlement_preflight_decision_v1(before.stable.journal, writer, evidence,\n161 | |             free_storage, member_free_storage) { Ok(value) => value, Err(_) => (None, 0usize) };\n162 | |         logical::settlement_raw_refines_chain_v1(before.stable.journal, after.stable.journal, writer, evidence,\n...   |\n180 | |     }\n    | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "positive-after": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 916,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "raw-regression": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 306,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}

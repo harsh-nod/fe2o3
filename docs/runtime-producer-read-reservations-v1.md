@@ -502,9 +502,19 @@ Before enabling runtime admission, the remaining work is:
    writer/member order, only after full chain validation; neither is skipped on
    logical return-headroom rejection. Frozen three-owner CPU comparisons preserve
    live and malformed reader metadata on the same physical allocation. The
-   developer runner is `verus/check-owner-settlement.py`. This checkpoint does not
-   yet lift settlement through paired historical execution or conditional issued
-   custody: those bridges and reachable lifecycle witnesses remain open.
+   developer runner is `verus/check-owner-settlement.py`.
+   The [historical settlement packet](evidence/dev-owner-settlement-history-2026-09-22/README.md)
+   now executes the shared public producer-owner methods and independent historical
+   settlement in one represented type universe. Raw correspondence requires only
+   represented contents and projected arguments; custody and issuance preservation
+   are conditional postconditions, without binding capacity observations to ghost
+   storage labels. Previously valid retained references remain lookup-valid, with
+   Pending reads for the settled writer resolving to Success or NoEffect. This is
+   not error preservation for arbitrary invalid requests. Synthetic-start traces
+   execute enrollment, registration, Begin, both read acquisitions, both settlement
+   outcomes, subsequent queries and replay; malformed raw state is covered separately.
+   The runner is `verus/check-owner-settlement-historical.py`. Actual construction,
+   physical Vec capacity, allocator/unwind behavior and native admission remain open.
    Remaining bodies include construction, scalar enrollment/retirement and disposal wrappers;
    other wrapper operations, reachability and physical storage refinement remain separate.
    Core journal declarations and content views are now shared and related, but
