@@ -285,7 +285,8 @@ fn search_performance() {
 #[test]
 fn production_uses_shared_sort_and_searches() {
     let source = include_str!("../../allocation_lifecycle.rs");
-    assert!(source.contains("enrollment::enrollment_journal_exec_v1(self, canonical, output)"));
+    assert!(source.contains("journal_enrollment_wrapper_body!("));
+    assert!(source.contains("enrollment::enrollment_journal_exec_v1"));
     assert!(!source.contains("ordering::sort_slots"));
     assert!(!source.contains("sort_unstable"));
     let enrollment = include_str!("../enrollment.rs");

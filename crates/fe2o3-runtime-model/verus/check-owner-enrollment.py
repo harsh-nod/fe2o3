@@ -108,6 +108,12 @@ def authenticate(repo):
     unchanged += [p.relative_to(repo) for p in (repo / CRATE / 'src/context_version_journal/allocation_lifecycle/ordering').rglob('*.rs')]
     for path in unchanged:
         old = subprocess.check_output(['git', '-C', str(repo), 'show', FROZEN + ':' + str(path)])
+        if path == CRATE / 'src/context_version_journal/allocation_lifecycle/ordering/tests.rs':
+            before = b'    assert!(source.contains("enrollment::enrollment_journal_exec_v1(self, canonical, output)"));'
+            after = (b'    assert!(source.contains("journal_enrollment_wrapper_body!("));\n'
+                     b'    assert!(source.contains("enrollment::enrollment_journal_exec_v1"));')
+            need(old.count(before) == 1, 'unique legacy source-shape assertion')
+            old = old.replace(before, after)
         need((repo / path).read_bytes() == old, 'unchanged enrollment algorithm/type/history: ' + str(path))
 
 
