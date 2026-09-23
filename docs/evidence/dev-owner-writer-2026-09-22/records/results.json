@@ -1,0 +1,2311 @@
+{
+  "raw": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 278,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "positive-before": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 845,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "register_id": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 539,
+            "byte_end": 593,
+            "line_start": 10,
+            "line_end": 10,
+            "column_start": 17,
+            "column_end": 71,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::WriterReplay);",
+                "highlight_start": 17,
+                "highlight_end": 71
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 4255,
+                "byte_end": 4355,
+                "line_start": 98,
+                "line_end": 98,
+                "column_start": 9,
+                "column_end": 109,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_register_body!(verus_exec_expr, self, key, owner_writer_issuable_v1, begin_indexed_access_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 109
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_register_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 34,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_register_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 34
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4174,
+            "byte_end": 4239,
+            "line_start": 96,
+            "line_end": 96,
+            "column_start": 17,
+            "column_end": 82,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_register_relation_v1(*old(self), *final(self), key, result),",
+                "highlight_start": 17,
+                "highlight_end": 82
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:96:17\n   |\n96 |         ensures owner_register_relation_v1(*old(self), *final(self), key, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:10:17\n   |\n10 |                 return Err(ContextVersionJournalErrorV1::WriterReplay);\n   |                 ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 681,
+            "byte_end": 737,
+            "line_start": 13,
+            "line_end": 13,
+            "column_start": 43,
+            "column_end": 99,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if $journal.free.len() == 0 { return Err(ContextVersionJournalErrorV1::WriterCapacity); }",
+                "highlight_start": 43,
+                "highlight_end": 99
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 4255,
+                "byte_end": 4355,
+                "line_start": 98,
+                "line_end": 98,
+                "column_start": 9,
+                "column_end": 109,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_register_body!(verus_exec_expr, self, key, owner_writer_issuable_v1, begin_indexed_access_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 109
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_register_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 34,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_register_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 34
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4174,
+            "byte_end": 4239,
+            "line_start": 96,
+            "line_end": 96,
+            "column_start": 17,
+            "column_end": 82,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_register_relation_v1(*old(self), *final(self), key, result),",
+                "highlight_start": 17,
+                "highlight_end": 82
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:96:17\n   |\n96 |         ensures owner_register_relation_v1(*old(self), *final(self), key, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:13:43\n   |\n13 |             if $journal.free.len() == 0 { return Err(ContextVersionJournalErrorV1::WriterCapacity); }\n   |                                           -------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4058,
+            "byte_end": 4156,
+            "line_start": 95,
+            "line_end": 95,
+            "column_start": 5,
+            "column_end": 103,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn register_writer(&mut self, key: WriterKeyV1) -> (result: Result<WriterReferenceV1, ReadErrorV1>)",
+                "highlight_start": 5,
+                "highlight_end": 103
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:95:5\n   |\n95 |     fn register_writer(&mut self, key: WriterKeyV1) -> (result: Result<WriterReferenceV1, ReadErrorV1>)\n   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "register_replay": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 658,
+            "byte_end": 714,
+            "line_start": 13,
+            "line_end": 13,
+            "column_start": 43,
+            "column_end": 99,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "            if $journal.free.len() == 0 { return Err(ContextVersionJournalErrorV1::WriterCapacity); }",
+                "highlight_start": 43,
+                "highlight_end": 99
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 4255,
+                "byte_end": 4355,
+                "line_start": 98,
+                "line_end": 98,
+                "column_start": 9,
+                "column_end": 109,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_register_body!(verus_exec_expr, self, key, owner_writer_issuable_v1, begin_indexed_access_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 109
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_register_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 34,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_register_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 34
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4174,
+            "byte_end": 4239,
+            "line_start": 96,
+            "line_end": 96,
+            "column_start": 17,
+            "column_end": 82,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_register_relation_v1(*old(self), *final(self), key, result),",
+                "highlight_start": 17,
+                "highlight_end": 82
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:96:17\n   |\n96 |         ensures owner_register_relation_v1(*old(self), *final(self), key, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:13:43\n   |\n13 |             if $journal.free.len() == 0 { return Err(ContextVersionJournalErrorV1::WriterCapacity); }\n   |                                           -------------------------------------------------------- at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 911,
+            "byte_end": 965,
+            "line_start": 17,
+            "line_end": 17,
+            "column_start": 17,
+            "column_end": 71,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 17,
+                "highlight_end": 71
+              }
+            ],
+            "label": "at this exit",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 4255,
+                "byte_end": 4355,
+                "line_start": 98,
+                "line_end": 98,
+                "column_start": 9,
+                "column_end": 109,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_register_body!(verus_exec_expr, self, key, owner_writer_issuable_v1, begin_indexed_access_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 109
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_register_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 34,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_register_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 34
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4174,
+            "byte_end": 4239,
+            "line_start": 96,
+            "line_end": 96,
+            "column_start": 17,
+            "column_end": 82,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_register_relation_v1(*old(self), *final(self), key, result),",
+                "highlight_start": 17,
+                "highlight_end": 82
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:96:17\n   |\n96 |         ensures owner_register_relation_v1(*old(self), *final(self), key, result),\n   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:17:17\n   |\n17 |                 return Err(ContextVersionJournalErrorV1::InvalidState);\n   |                 ------------------------------------------------------ at this exit\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4058,
+            "byte_end": 4156,
+            "line_start": 95,
+            "line_end": 95,
+            "column_start": 5,
+            "column_end": 103,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn register_writer(&mut self, key: WriterKeyV1) -> (result: Result<WriterReferenceV1, ReadErrorV1>)",
+                "highlight_start": 5,
+                "highlight_end": 103
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:95:5\n   |\n95 |     fn register_writer(&mut self, key: WriterKeyV1) -> (result: Result<WriterReferenceV1, ReadErrorV1>)\n   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "register_store": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 214,
+            "byte_end": 1647,
+            "line_start": 4,
+            "line_end": 31,
+            "column_start": 18,
+            "column_end": 10,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        $syntax!({",
+                "highlight_start": 18,
+                "highlight_end": 19
+              },
+              {
+                "text": "            if $key.context_generation != $journal.context_generation {",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::ForeignContext);",
+                "highlight_start": 1,
+                "highlight_end": 74
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "            if !$issuable($key.local) { return Err(ContextVersionJournalErrorV1::InvalidWriterId); }",
+                "highlight_start": 1,
+                "highlight_end": 101
+              },
+              {
+                "text": "            if $key.local <= $journal.registration_watermark {",
+                "highlight_start": 1,
+                "highlight_end": 63
+              },
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::WriterReplay);",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "            $count($journal);",
+                "highlight_start": 1,
+                "highlight_end": 30
+              },
+              {
+                "text": "            if $journal.free.len() == 0 { return Err(ContextVersionJournalErrorV1::WriterCapacity); }",
+                "highlight_start": 1,
+                "highlight_end": 102
+              },
+              {
+                "text": "            let slot = $journal.free[$journal.free.len() - 1];",
+                "highlight_start": 1,
+                "highlight_end": 63
+              },
+              {
+                "text": "            $count($journal);",
+                "highlight_start": 1,
+                "highlight_end": 30
+              },
+              {
+                "text": "            if slot >= $journal.writers.len() || $journal.writers[slot].is_some() {",
+                "highlight_start": 1,
+                "highlight_end": 84
+              },
+              {
+                "text": "                return Err(ContextVersionJournalErrorV1::InvalidState);",
+                "highlight_start": 1,
+                "highlight_end": 72
+              },
+              {
+                "text": "            }",
+                "highlight_start": 1,
+                "highlight_end": 14
+              },
+              {
+                "text": "            let reserved_count = match $journal.reserved_count.checked_add(1) {",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "                Some(count) => count,",
+                "highlight_start": 1,
+                "highlight_end": 38
+              },
+              {
+                "text": "                None => return Err(ContextVersionJournalErrorV1::InvalidState),",
+                "highlight_start": 1,
+                "highlight_end": 80
+              },
+              {
+                "text": "            };",
+                "highlight_start": 1,
+                "highlight_end": 15
+              },
+              {
+                "text": "            if reserved_count > $journal.writer_capacity { return Err(ContextVersionJournalErrorV1::InvalidState); }",
+                "highlight_start": 1,
+                "highlight_end": 117
+              },
+              {
+                "text": "            $count($journal);",
+                "highlight_start": 1,
+                "highlight_end": 30
+              },
+              {
+                "text": "            let _ = $journal.free.pop();",
+                "highlight_start": 1,
+                "highlight_end": 41
+              },
+              {
+                "text": "            $count($journal);",
+                "highlight_start": 1,
+                "highlight_end": 30
+              },
+              {
+                "text": "            ",
+                "highlight_start": 1,
+                "highlight_end": 13
+              },
+              {
+                "text": "            $journal.reserved_count = reserved_count;",
+                "highlight_start": 1,
+                "highlight_end": 54
+              },
+              {
+                "text": "            $journal.registration_watermark = $key.local;",
+                "highlight_start": 1,
+                "highlight_end": 58
+              },
+              {
+                "text": "            Ok(ContextWriterReferenceV1 { slot, key: $key })",
+                "highlight_start": 1,
+                "highlight_end": 61
+              },
+              {
+                "text": "        })",
+                "highlight_start": 1,
+                "highlight_end": 10
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 4255,
+                "byte_end": 4355,
+                "line_start": 98,
+                "line_end": 98,
+                "column_start": 9,
+                "column_end": 109,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_register_body!(verus_exec_expr, self, key, owner_writer_issuable_v1, begin_indexed_access_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 109
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_register_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 79,
+                "byte_end": 112,
+                "line_start": 2,
+                "line_end": 2,
+                "column_start": 1,
+                "column_end": 34,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_register_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 34
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4174,
+            "byte_end": 4239,
+            "line_start": 96,
+            "line_end": 96,
+            "column_start": 17,
+            "column_end": 82,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_register_relation_v1(*old(self), *final(self), key, result),",
+                "highlight_start": 17,
+                "highlight_end": 82
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:96:17\n   |\n96 |           ensures owner_register_relation_v1(*old(self), *final(self), key, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:4:18\n   |\n 4 |           $syntax!({\n   |  __________________-\n 5 | |             if $key.context_generation != $journal.context_generation {\n 6 | |                 return Err(ContextVersionJournalErrorV1::ForeignContext);\n...  |\n30 | |             Ok(ContextWriterReferenceV1 { slot, key: $key })\n31 | |         })\n   | |_________- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "register_watermark": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4245,
+            "byte_end": 4361,
+            "line_start": 97,
+            "line_end": 99,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        writer_register_body!(verus_exec_expr, self, key, owner_writer_issuable_v1, begin_indexed_access_v1)",
+                "highlight_start": 1,
+                "highlight_end": 109
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4174,
+            "byte_end": 4239,
+            "line_start": 96,
+            "line_end": 96,
+            "column_start": 17,
+            "column_end": 82,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_register_relation_v1(*old(self), *final(self), key, result),",
+                "highlight_start": 17,
+                "highlight_end": 82
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:96:17\n   |\n96 |           ensures owner_register_relation_v1(*old(self), *final(self), key, result),\n   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n97 | /     {\n98 | |         writer_register_body!(verus_exec_expr, self, key, owner_writer_issuable_v1, begin_indexed_access_v1)\n99 | |     }\n   | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "lookup_noop": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 1829,
+            "byte_end": 1847,
+            "line_start": 37,
+            "line_end": 37,
+            "column_start": 9,
+            "column_end": 27,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        Ok($reference.key)",
+                "highlight_start": 9,
+                "highlight_end": 27
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 4555,
+                "byte_end": 4624,
+                "line_start": 104,
+                "line_end": 104,
+                "column_start": 9,
+                "column_end": 78,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_reserved_lookup_body!(self, reference, begin_reserved_exec_v1)",
+                    "highlight_start": 9,
+                    "highlight_end": 78
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_reserved_lookup_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 1720,
+                "byte_end": 1760,
+                "line_start": 35,
+                "line_end": 35,
+                "column_start": 1,
+                "column_end": 41,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_reserved_lookup_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 41
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4485,
+            "byte_end": 4539,
+            "line_start": 102,
+            "line_end": 102,
+            "column_start": 17,
+            "column_end": 71,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures result == begin_reserved_decision_v1(*self, reference),",
+                "highlight_start": 17,
+                "highlight_end": 71
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:102:17\n    |\n102 |         ensures result == begin_reserved_decision_v1(*self, reference),\n    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:37:9\n    |\n 37 |         Ok($reference.key)\n    |         ------------------ at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "abort_capacity": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4978,
+            "byte_end": 5095,
+            "line_start": 111,
+            "line_end": 113,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        writer_abort_body!(verus_exec_expr, self, reference, observed_free_capacity, begin_indexed_access_v1)",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4880,
+            "byte_end": 4972,
+            "line_start": 110,
+            "line_end": 110,
+            "column_start": 17,
+            "column_end": 109,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_abort_relation_v1(*old(self), *final(self), reference, observed_free_capacity, result),",
+                "highlight_start": 17,
+                "highlight_end": 109
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:110:17\n    |\n110 |           ensures owner_abort_relation_v1(*old(self), *final(self), reference, observed_free_capacity, result),\n    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n111 | /     {\n112 | |         writer_abort_body!(verus_exec_expr, self, reference, observed_free_capacity, begin_indexed_access_v1)\n113 | |     }\n    | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "abort_watermark": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4978,
+            "byte_end": 5095,
+            "line_start": 111,
+            "line_end": 113,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        writer_abort_body!(verus_exec_expr, self, reference, observed_free_capacity, begin_indexed_access_v1)",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4880,
+            "byte_end": 4972,
+            "line_start": 110,
+            "line_end": 110,
+            "column_start": 17,
+            "column_end": 109,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_abort_relation_v1(*old(self), *final(self), reference, observed_free_capacity, result),",
+                "highlight_start": 17,
+                "highlight_end": 109
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:110:17\n    |\n110 |           ensures owner_abort_relation_v1(*old(self), *final(self), reference, observed_free_capacity, result),\n    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n111 | /     {\n112 | |         writer_abort_body!(verus_exec_expr, self, reference, observed_free_capacity, begin_indexed_access_v1)\n113 | |     }\n    | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "abort_physical_capacity": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4978,
+            "byte_end": 5095,
+            "line_start": 111,
+            "line_end": 113,
+            "column_start": 5,
+            "column_end": 6,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    {",
+                "highlight_start": 5,
+                "highlight_end": 6
+              },
+              {
+                "text": "        writer_abort_body!(verus_exec_expr, self, reference, observed_free_capacity, begin_indexed_access_v1)",
+                "highlight_start": 1,
+                "highlight_end": 110
+              },
+              {
+                "text": "    }",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 4880,
+            "byte_end": 4972,
+            "line_start": 110,
+            "line_end": 110,
+            "column_start": 17,
+            "column_end": 109,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        ensures owner_abort_relation_v1(*old(self), *final(self), reference, observed_free_capacity, result),",
+                "highlight_start": 17,
+                "highlight_end": 109
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:110:17\n    |\n110 |           ensures owner_abort_relation_v1(*old(self), *final(self), reference, observed_free_capacity, result),\n    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n111 | /     {\n112 | |         writer_abort_body!(verus_exec_expr, self, reference, observed_free_capacity, begin_indexed_access_v1)\n113 | |     }\n    | |_____- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 2894,
+            "byte_end": 2970,
+            "line_start": 64,
+            "line_end": 64,
+            "column_start": 9,
+            "column_end": 85,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.$method($argument $($extra)*) }",
+                "highlight_start": 9,
+                "highlight_end": 85
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 5476,
+                "byte_end": 5543,
+                "line_start": 122,
+                "line_end": 122,
+                "column_start": 9,
+                "column_end": 76,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_owner_forward_body!(self, journal, register_writer, key, [])",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_owner_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 2758,
+                "byte_end": 2796,
+                "line_start": 62,
+                "line_end": 62,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_owner_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 5346,
+            "byte_end": 5400,
+            "line_start": 119,
+            "line_end": 119,
+            "column_start": 13,
+            "column_end": 67,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            owner_writer_stable_frame_v1(*old(self), *final(self)),",
+                "highlight_start": 13,
+                "highlight_end": 67
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:119:13\n    |\n119 |             owner_writer_stable_frame_v1(*old(self), *final(self)),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:64:9\n    |\n 64 |         { $owner.next_incarnation = 0; $owner.$field.$method($argument $($extra)*) }\n    |         ---------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 2894,
+            "byte_end": 2970,
+            "line_start": 64,
+            "line_end": 64,
+            "column_start": 9,
+            "column_end": 85,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.$method($argument $($extra)*) }",
+                "highlight_start": 9,
+                "highlight_end": 85
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 5476,
+                "byte_end": 5543,
+                "line_start": 122,
+                "line_end": 122,
+                "column_start": 9,
+                "column_end": 76,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_owner_forward_body!(self, journal, register_writer, key, [])",
+                    "highlight_start": 9,
+                    "highlight_end": 76
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_owner_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 2758,
+                "byte_end": 2796,
+                "line_start": 62,
+                "line_end": 62,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_owner_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 5414,
+            "byte_end": 5460,
+            "line_start": 120,
+            "line_end": 120,
+            "column_start": 13,
+            "column_end": 59,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            result.is_err() ==> *final(self) == *old(self),",
+                "highlight_start": 13,
+                "highlight_end": 59
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:120:13\n    |\n120 |             result.is_err() ==> *final(self) == *old(self),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:64:9\n    |\n 64 |         { $owner.next_incarnation = 0; $owner.$field.$method($argument $($extra)*) }\n    |         ---------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 5137,
+            "byte_end": 5235,
+            "line_start": 117,
+            "line_end": 117,
+            "column_start": 5,
+            "column_end": 103,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn register_writer(&mut self, key: WriterKeyV1) -> (result: Result<WriterReferenceV1, ReadErrorV1>)",
+                "highlight_start": 5,
+                "highlight_end": 103
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:117:5\n    |\n117 |     fn register_writer(&mut self, key: WriterKeyV1) -> (result: Result<WriterReferenceV1, ReadErrorV1>)\n    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer_frame": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 2894,
+            "byte_end": 2970,
+            "line_start": 64,
+            "line_end": 64,
+            "column_start": 9,
+            "column_end": 85,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.$method($argument $($extra)*) }",
+                "highlight_start": 9,
+                "highlight_end": 85
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 6988,
+                "byte_end": 7095,
+                "line_start": 150,
+                "line_end": 150,
+                "column_start": 9,
+                "column_end": 116,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_owner_forward_body!(self, stable, abort_reserved_observed_v1, reference, [, observed_free_capacity])",
+                    "highlight_start": 9,
+                    "highlight_end": 116
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_owner_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 2758,
+                "byte_end": 2796,
+                "line_start": 62,
+                "line_end": 62,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_owner_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 6856,
+            "byte_end": 6912,
+            "line_start": 147,
+            "line_end": 147,
+            "column_start": 13,
+            "column_end": 69,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            owner_writer_producer_frame_v1(*old(self), *final(self)),",
+                "highlight_start": 13,
+                "highlight_end": 69
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:147:13\n    |\n147 |             owner_writer_producer_frame_v1(*old(self), *final(self)),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:64:9\n    |\n 64 |         { $owner.next_incarnation = 0; $owner.$field.$method($argument $($extra)*) }\n    |         ---------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+            "byte_start": 2894,
+            "byte_end": 2970,
+            "line_start": 64,
+            "line_end": 64,
+            "column_start": 9,
+            "column_end": 85,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        { $owner.next_incarnation = 0; $owner.$field.$method($argument $($extra)*) }",
+                "highlight_start": 9,
+                "highlight_end": 85
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": {
+              "span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+                "byte_start": 6988,
+                "byte_end": 7095,
+                "line_start": 150,
+                "line_end": 150,
+                "column_start": 9,
+                "column_end": 116,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "        writer_owner_forward_body!(self, stable, abort_reserved_observed_v1, reference, [, observed_free_capacity])",
+                    "highlight_start": 9,
+                    "highlight_end": 116
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              },
+              "macro_decl_name": "writer_owner_forward_body!",
+              "def_site_span": {
+                "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs",
+                "byte_start": 2758,
+                "byte_end": 2796,
+                "line_start": 62,
+                "line_end": 62,
+                "column_start": 1,
+                "column_end": 39,
+                "is_primary": false,
+                "text": [
+                  {
+                    "text": "macro_rules! writer_owner_forward_body {",
+                    "highlight_start": 1,
+                    "highlight_end": 39
+                  }
+                ],
+                "label": null,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "expansion": null
+              }
+            }
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 6926,
+            "byte_end": 6972,
+            "line_start": 148,
+            "line_end": 148,
+            "column_start": 13,
+            "column_end": 59,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            result.is_err() ==> *final(self) == *old(self),",
+                "highlight_start": 13,
+                "highlight_end": 59
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:148:13\n    |\n148 |             result.is_err() ==> *final(self) == *old(self),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/../src/context_version_journal/writer_lifecycle_bodies.rs:64:9\n    |\n 64 |         { $owner.next_incarnation = 0; $owner.$field.$method($argument $($extra)*) }\n    |         ---------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs",
+            "byte_start": 6559,
+            "byte_end": 6704,
+            "line_start": 144,
+            "line_end": 145,
+            "column_start": 5,
+            "column_end": 44,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    fn abort_reserved_observed_v1(&mut self, reference: WriterReferenceV1, observed_free_capacity: usize)",
+                "highlight_start": 5,
+                "highlight_end": 106
+              },
+              {
+                "text": "        -> (result: Result<(), ReadErrorV1>)",
+                "highlight_start": 1,
+                "highlight_end": 44
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_bodies_v1.rs:144:5\n    |\n144 | /     fn abort_reserved_observed_v1(&mut self, reference: WriterReferenceV1, observed_free_capacity: usize)\n145 | |         -> (result: Result<(), ReadErrorV1>)\n    | |___________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual_register": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs",
+            "byte_start": 2586,
+            "byte_end": 2640,
+            "line_start": 46,
+            "line_end": 46,
+            "column_start": 48,
+            "column_end": 102,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    requires represents(before, model_before), owner_register_relation_v1(before, after, key, result),",
+                "highlight_start": 48,
+                "highlight_end": 102
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs",
+            "byte_start": 6985,
+            "byte_end": 7156,
+            "line_start": 110,
+            "line_end": 111,
+            "column_start": 9,
+            "column_end": 90,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_register_paired_transition_v1(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 90
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, key, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 90
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs:110:9\n    |\n 46 |       requires represents(before, model_before), owner_register_relation_v1(before, after, key, result),\n    |                                                  ------------------------------------------------------ failed precondition\n...\n110 | /         owner_register_paired_transition_v1(before.stable.journal, actual.stable.journal,\n111 | |             model_before.stable.journal, model.stable.journal, key, result, model_result);\n    | |_________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical_register": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs",
+            "byte_start": 2650,
+            "byte_end": 2745,
+            "line_start": 47,
+            "line_end": 47,
+            "column_start": 9,
+            "column_end": 104,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        owner_model_register_relation_v1(model_before, model_after, writer_key_view(key), model_result),",
+                "highlight_start": 9,
+                "highlight_end": 104
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs",
+            "byte_start": 6973,
+            "byte_end": 7144,
+            "line_start": 110,
+            "line_end": 111,
+            "column_start": 9,
+            "column_end": 90,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_register_paired_transition_v1(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 90
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, key, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 90
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs:110:9\n    |\n 47 |           owner_model_register_relation_v1(model_before, model_after, writer_key_view(key), model_result),\n    |           ----------------------------------------------------------------------------------------------- failed precondition\n...\n110 | /         owner_register_paired_transition_v1(before.stable.journal, actual.stable.journal,\n111 | |             model_before.stable.journal, model.stable.journal, key, result, model_result);\n    | |_________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_actual_abort": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs",
+            "byte_start": 3615,
+            "byte_end": 3682,
+            "line_start": 63,
+            "line_end": 63,
+            "column_start": 48,
+            "column_end": 115,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    requires represents(before, model_before), owner_abort_relation_v1(before, after, reference, capacity, result),",
+                "highlight_start": 48,
+                "highlight_end": 115
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs",
+            "byte_start": 9735,
+            "byte_end": 9933,
+            "line_start": 147,
+            "line_end": 148,
+            "column_start": 9,
+            "column_end": 120,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_abort_paired_transition_v1(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 87
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, reference, observed_free_capacity, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 120
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs:147:9\n    |\n 63 |       requires represents(before, model_before), owner_abort_relation_v1(before, after, reference, capacity, result),\n    |                                                  ------------------------------------------------------------------- failed precondition\n...\n147 | /         owner_abort_paired_transition_v1(before.stable.journal, actual.stable.journal,\n148 | |             model_before.stable.journal, model.stable.journal, reference, observed_free_capacity, result, model_result);\n    | |_______________________________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "skip_historical_abort": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs",
+            "byte_start": 3692,
+            "byte_end": 3806,
+            "line_start": 64,
+            "line_end": 64,
+            "column_start": 9,
+            "column_end": 123,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        owner_model_abort_relation_v1(model_before, model_after, writer_reference_view(reference), capacity, model_result),",
+                "highlight_start": 9,
+                "highlight_end": 123
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs",
+            "byte_start": 9716,
+            "byte_end": 9914,
+            "line_start": 147,
+            "line_end": 148,
+            "column_start": 9,
+            "column_end": 120,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        owner_abort_paired_transition_v1(before.stable.journal, actual.stable.journal,",
+                "highlight_start": 9,
+                "highlight_end": 87
+              },
+              {
+                "text": "            model_before.stable.journal, model.stable.journal, reference, observed_free_capacity, result, model_result);",
+                "highlight_start": 1,
+                "highlight_end": 120
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_writer_correspondence_v1.rs:147:9\n    |\n 64 |           owner_model_abort_relation_v1(model_before, model_after, writer_reference_view(reference), capacity, model_result),\n    |           ------------------------------------------------------------------------------------------------------------------ failed precondition\n...\n147 | /         owner_abort_paired_transition_v1(before.stable.journal, actual.stable.journal,\n148 | |             model_before.stable.journal, model.stable.journal, reference, observed_free_capacity, result, model_result);\n    | |_______________________________________________________________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "positive-after": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 845,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}
