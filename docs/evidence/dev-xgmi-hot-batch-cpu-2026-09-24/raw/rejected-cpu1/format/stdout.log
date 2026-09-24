@@ -1,0 +1,19 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/examples/gfx942-runtime-xgmi-peer-benchmark.rs:932:
+     #[test]
+     fn aggregate_hot_only_admits_bounded_batches() {
+         for depth in [1, 16, 32] {
+-            assert!(valid_depth(ProgressModeV1::AggregatePeerBatchHotOnly, depth));
++            assert!(valid_depth(
++                ProgressModeV1::AggregatePeerBatchHotOnly,
++                depth
++            ));
+         }
+         for depth in [0, 33, usize::MAX] {
+-            assert!(!valid_depth(ProgressModeV1::AggregatePeerBatchHotOnly, depth));
++            assert!(!valid_depth(
++                ProgressModeV1::AggregatePeerBatchHotOnly,
++                depth
++            ));
+         }
+     }
+ 

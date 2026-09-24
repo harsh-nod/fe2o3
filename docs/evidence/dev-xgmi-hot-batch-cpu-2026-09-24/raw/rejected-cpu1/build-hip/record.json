@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/opt/rocm/bin/hipcc",
+    "-std=c++17",
+    "-O3",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "--offload-arch=gfx942",
+    "benchmarks/runtime_gfx942/xgmi_peer_hip.cpp",
+    "-o",
+    "/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/cpu1/peer-hip"
+  ],
+  "started_ns": 1790259474067205882,
+  "process_group": 4097140,
+  "group_absent": true,
+  "finished_ns": 1790259479242343074,
+  "status": 0
+}

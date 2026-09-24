@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "benchmarks/runtime_gfx942/test_xgmi_peer_hot_results.py"
+  ],
+  "started_ns": 1790260189949895817,
+  "process_group": 24532,
+  "group_absent": true,
+  "finished_ns": 1790260190092722111,
+  "status": 0
+}

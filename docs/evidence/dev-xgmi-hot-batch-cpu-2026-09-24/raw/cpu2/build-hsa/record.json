@@ -1,0 +1,22 @@
+{
+  "command": [
+    "/usr/bin/g++",
+    "-std=c++17",
+    "-O3",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-I/opt/rocm/include",
+    "benchmarks/runtime_gfx942/xgmi_peer_hsa.cpp",
+    "-L/opt/rocm/lib",
+    "-Wl,-rpath,/opt/rocm/lib",
+    "-lhsa-runtime64",
+    "-o",
+    "/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/cpu2/peer-hsa"
+  ],
+  "started_ns": 1790260199651288517,
+  "process_group": 24681,
+  "group_absent": true,
+  "finished_ns": 1790260202149711195,
+  "status": 0
+}

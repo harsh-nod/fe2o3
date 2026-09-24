@@ -1,0 +1,11 @@
+{
+  "command": [
+    "/opt/rocm/bin/hipcc",
+    "--version"
+  ],
+  "started_ns": 1790259436088781283,
+  "process_group": 4096367,
+  "group_absent": true,
+  "finished_ns": 1790259436410707115,
+  "status": 0
+}

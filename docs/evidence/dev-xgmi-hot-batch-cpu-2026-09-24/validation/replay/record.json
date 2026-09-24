@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-xgmi-hot-batch-cpu-2026-09-24/verify.py"
+  ],
+  "started_ns": 1790261164557215536,
+  "process_group": 195699,
+  "group_absent": true,
+  "finished_ns": 1790261165410331653,
+  "status": 0
+}

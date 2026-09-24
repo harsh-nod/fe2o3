@@ -406,6 +406,11 @@ condition for release evidence.
 
 ## Native XGMI Peer Qualification
 
+The separate [persistent-hot batch contract](../../docs/runtime-xgmi-hot-batches-v1.md)
+extends the opt-in hot-only producers to depth 32, with a strict matched-result
+parser for depths 1, 16 and 32. Its CPU callback tests do not qualify native batch
+performance. The legacy script below retains its existing measurement protocol.
+
 Run the matched public-runtime-facade KFD, HSA, and HIP native peer-copy harness
 on two idle MI300X GPUs:
 

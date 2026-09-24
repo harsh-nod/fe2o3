@@ -1,0 +1,21 @@
+{
+  "command": [
+    "cargo",
+    "--offline",
+    "--locked",
+    "test",
+    "-p",
+    "fe2o3-runtime",
+    "--example",
+    "gfx942-runtime-xgmi-peer-benchmark",
+    "--target",
+    "x86_64-unknown-linux-musl",
+    "--",
+    "--test-threads=2"
+  ],
+  "started_ns": 1790259771545716252,
+  "process_group": 4146593,
+  "group_absent": true,
+  "finished_ns": 1790260004610981345,
+  "status": 0
+}

@@ -9,6 +9,7 @@
 namespace fe2o3::runtime_gfx942 {
 
 inline constexpr std::size_t peer_canary_bytes = 32;
+inline constexpr std::size_t peer_hot_max_depth = 32;
 
 struct PeerBenchmarkControls {
   bool persistent_hot = false;
@@ -31,7 +32,7 @@ inline bool parse_peer_controls(const char *optional_flag,
   parsed.allocation_bytes = workload.bytes;
   if (optional_flag != nullptr) {
     if (std::strcmp(optional_flag, "--persistent-hot") != 0 ||
-        workload.depth != 1 ||
+        workload.depth > peer_hot_max_depth ||
         !checked_add(workload.bytes, 2 * peer_canary_bytes,
                      &parsed.allocation_bytes) ||
         !checked_add(iterations, 1, &parsed.hot_pattern_round))
@@ -90,6 +91,26 @@ inline bool validate_peer_guarded(const std::uint8_t *data, std::size_t total,
                      [inner](std::uint8_t byte) { return byte == inner; }) &&
          std::all_of(suffix, data + total,
                      [outer](std::uint8_t byte) { return byte == outer; });
+}
+
+template <typename Visit>
+bool visit_peer_buffers(std::size_t depth, Visit visit) {
+  bool valid = true;
+  for (std::size_t slot = 0; slot < depth; ++slot) {
+    // Inspect both allocations and every slot even after a payload mismatch.
+    const bool source_valid = visit(slot, true);
+    const bool destination_valid = visit(slot, false);
+    valid = source_valid && destination_valid && valid;
+  }
+  return valid;
+}
+
+template <typename Enqueue, typename Wait>
+void run_peer_batch(std::size_t depth, Enqueue enqueue, Wait wait) {
+  for (std::size_t slot = 0; slot < depth; ++slot)
+    enqueue(slot);
+  for (std::size_t slot = 0; slot < depth; ++slot)
+    wait(slot);
 }
 
 template <typename Prepare, typename Copy, typename Validate,

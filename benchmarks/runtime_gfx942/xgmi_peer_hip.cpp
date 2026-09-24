@@ -130,41 +130,48 @@ static uint64_t run_direction(DirectionBuffers &buffers, int source_device,
 
 static bool prepare_persistent_hot(
     DirectionBuffers &buffers, int source_device, int destination_device,
-    const fe2o3::runtime_gfx942::PeerBenchmarkControls &controls,
-    size_t bytes, size_t direction) {
-  const uint8_t value = fe2o3::runtime_gfx942::peer_pattern(
-      controls.hot_pattern_round, 0, direction);
-  if (!fe2o3::runtime_gfx942::fill_peer_guarded(
-          buffers.host.data(), controls.allocation_bytes, bytes,
-          fe2o3::runtime_gfx942::peer_source_canary(direction), value))
-    return false;
-  HIP_CHECK(hipSetDevice(source_device));
-  HIP_CHECK(hipMemcpy(buffers.source[0], buffers.host.data(),
-                      controls.allocation_bytes, hipMemcpyHostToDevice));
-
-  if (!fe2o3::runtime_gfx942::fill_peer_guarded(
-          buffers.host.data(), controls.allocation_bytes, bytes,
-          fe2o3::runtime_gfx942::peer_destination_canary(direction),
-          value ^ 0xff))
-    return false;
-  HIP_CHECK(hipSetDevice(destination_device));
-  HIP_CHECK(hipMemcpy(buffers.destination[0], buffers.host.data(),
-                      controls.allocation_bytes, hipMemcpyHostToDevice));
-  return true;
+    const fe2o3::runtime_gfx942::PeerBenchmarkControls &controls, size_t bytes,
+    size_t direction) {
+  return fe2o3::runtime_gfx942::visit_peer_buffers(
+      buffers.source.size(), [&](size_t slot, bool source) {
+        const uint8_t value = fe2o3::runtime_gfx942::peer_pattern(
+            controls.hot_pattern_round, slot, direction);
+        const auto canary =
+            source ? fe2o3::runtime_gfx942::peer_source_canary(direction)
+                   : fe2o3::runtime_gfx942::peer_destination_canary(direction);
+        if (!fe2o3::runtime_gfx942::fill_peer_guarded(
+                buffers.host.data(), controls.allocation_bytes, bytes, canary,
+                source ? value : static_cast<uint8_t>(value ^ 0xff)))
+          return false;
+        HIP_CHECK(hipSetDevice(source ? source_device : destination_device));
+        HIP_CHECK(
+            hipMemcpy(source ? buffers.source[slot] : buffers.destination[slot],
+                      buffers.host.data(), controls.allocation_bytes,
+                      hipMemcpyHostToDevice));
+        return true;
+      });
 }
 
 static uint64_t copy_persistent_hot(
     DirectionBuffers &buffers, int source_device, int destination_device,
     const fe2o3::runtime_gfx942::PeerBenchmarkControls &controls,
     size_t bytes) {
-  auto *source = static_cast<uint8_t *>(buffers.source[0]) + controls.copy_offset;
-  auto *destination =
-      static_cast<uint8_t *>(buffers.destination[0]) + controls.copy_offset;
   HIP_CHECK(hipSetDevice(destination_device));
   const auto start = std::chrono::steady_clock::now();
-  HIP_CHECK(hipMemcpyPeerAsync(destination, destination_device, source,
-                              source_device, bytes, buffers.streams[0]));
-  HIP_CHECK(hipStreamSynchronize(buffers.streams[0]));
+  fe2o3::runtime_gfx942::run_peer_batch(
+      buffers.source.size(),
+      [&](size_t slot) {
+        auto *source =
+            static_cast<uint8_t *>(buffers.source[slot]) + controls.copy_offset;
+        auto *destination = static_cast<uint8_t *>(buffers.destination[slot]) +
+                            controls.copy_offset;
+        HIP_CHECK(hipMemcpyPeerAsync(destination, destination_device, source,
+                                     source_device, bytes,
+                                     buffers.streams[slot]));
+      },
+      [&](size_t slot) {
+        HIP_CHECK(hipStreamSynchronize(buffers.streams[slot]));
+      });
   const auto end = std::chrono::steady_clock::now();
   return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start)
       .count();
@@ -172,24 +179,30 @@ static uint64_t copy_persistent_hot(
 
 static bool validate_persistent_hot(
     DirectionBuffers &buffers, int source_device, int destination_device,
-    const fe2o3::runtime_gfx942::PeerBenchmarkControls &controls,
-    size_t bytes, size_t direction) {
-  const uint8_t expected = fe2o3::runtime_gfx942::peer_pattern(
-      controls.hot_pattern_round, 0, direction);
-  HIP_CHECK(hipSetDevice(source_device));
-  HIP_CHECK(hipMemcpy(buffers.host.data(), buffers.source[0],
+    const fe2o3::runtime_gfx942::PeerBenchmarkControls &controls, size_t bytes,
+    size_t direction) {
+  return fe2o3::runtime_gfx942::visit_peer_buffers(
+      buffers.source.size(), [&](size_t slot, bool source) {
+        const uint8_t expected = fe2o3::runtime_gfx942::peer_pattern(
+            controls.hot_pattern_round, slot, direction);
+        HIP_CHECK(hipSetDevice(source ? source_device : destination_device));
+        HIP_CHECK(
+            hipMemcpy(buffers.host.data(),
+                      source ? buffers.source[slot] : buffers.destination[slot],
                       controls.allocation_bytes, hipMemcpyDeviceToHost));
-  if (!fe2o3::runtime_gfx942::validate_peer_guarded(
-          buffers.host.data(), controls.allocation_bytes, bytes,
-          fe2o3::runtime_gfx942::peer_source_canary(direction), expected))
-    return false;
-
-  HIP_CHECK(hipSetDevice(destination_device));
-  HIP_CHECK(hipMemcpy(buffers.host.data(), buffers.destination[0],
-                      controls.allocation_bytes, hipMemcpyDeviceToHost));
-  return fe2o3::runtime_gfx942::validate_peer_guarded(
-      buffers.host.data(), controls.allocation_bytes, bytes,
-      fe2o3::runtime_gfx942::peer_destination_canary(direction), expected);
+        const auto canary =
+            source ? fe2o3::runtime_gfx942::peer_source_canary(direction)
+                   : fe2o3::runtime_gfx942::peer_destination_canary(direction);
+        const bool valid = fe2o3::runtime_gfx942::validate_peer_guarded(
+            buffers.host.data(), controls.allocation_bytes, bytes, canary,
+            expected);
+        if (!valid)
+          std::fprintf(
+              stderr,
+              "HIP persistent-hot %s mismatch at direction %zu slot %zu\n",
+              source ? "source" : "destination", direction, slot);
+        return valid;
+      });
 }
 
 namespace peer = fe2o3::runtime_gfx942;
@@ -383,10 +396,10 @@ int main(int argc, char **argv) {
     if (forward_p50 == 0 || reverse_p50 == 0)
       return 2;
     std::printf(
-        "backend=hip schema=fe2o3.xgmi-peer-persistent-hot-benchmark.v1 surface=native-api devices=%d,%d unique_ids=%016llx,%016llx targets=%s,%s bytes=%zu depth=%zu warmups=%zu samples=%zu peer_access=enabled measurement=persistent-hot mapping_lifetime=process-persistent-hot prime_batches=1 direction=forward-then-reverse outstanding_depth=1 engine_parallelism=runtime-selected-unknown progress=peer-async-then-stream-synchronize timing=native-enqueue-through-observed-completion canaries=pass teardown=explicit forward_p50_ns=%llu forward_p95_ns=%llu forward_p50_GBps=%.3f reverse_p50_ns=%llu reverse_p95_ns=%llu reverse_p50_GBps=%.3f\n",
+        "backend=hip schema=fe2o3.xgmi-peer-persistent-hot-benchmark.v1 surface=native-api devices=%d,%d unique_ids=%016llx,%016llx targets=%s,%s bytes=%zu depth=%zu warmups=%zu samples=%zu peer_access=enabled measurement=persistent-hot mapping_lifetime=process-persistent-hot prime_batches=1 direction=forward-then-reverse outstanding_depth=%zu engine_parallelism=runtime-selected-unknown progress=peer-async-then-stream-synchronize timing=native-enqueue-through-observed-completion canaries=pass teardown=explicit forward_p50_ns=%llu forward_p95_ns=%llu forward_p50_GBps=%.3f reverse_p50_ns=%llu reverse_p95_ns=%llu reverse_p50_GBps=%.3f\n",
         devices[0], devices[1], static_cast<unsigned long long>(unique_ids[0]),
         static_cast<unsigned long long>(unique_ids[1]), properties[0].gcnArchName,
-        properties[1].gcnArchName, bytes, depth, warmups, samples,
+        properties[1].gcnArchName, bytes, depth, warmups, samples, depth,
         static_cast<unsigned long long>(forward_p50),
         static_cast<unsigned long long>(forward_p95),
         gbps(workload.transfer_bytes, forward_p50),

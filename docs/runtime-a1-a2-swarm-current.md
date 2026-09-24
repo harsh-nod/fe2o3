@@ -1,5 +1,30 @@
 # Current Runtime Swarm Work Orders
 
+Latest benchmark qualification (2026-09-24): the
+[matched hot-batch CPU packet](evidence/dev-xgmi-hot-batch-cpu-2026-09-24/README.md)
+qualifies all-slot HIP/HSA persistent-hot callbacks, the bounded KFD hot-only
+depth gate and a strict maintained depth-1/16/32 result parser. All 21 command
+stages pass: GNU/musl default/all-feature example matrices, real comparator
+builds, actual callbacks with CPU APIs, UBSan, compiled negative mutations,
+formatting and strict Clippy. One existing optional Rust/C++ segment differential
+is skipped. The ten-path source delta leaves production libraries unchanged.
+Owned build cleanup reclaims 1,438,052,352 allocated bytes. Native depth-16/32
+execution and matched performance are next; no native, formal-refinement,
+aggregate-memory or A1/A2 acceptance is added.
+
+Latest matched native performance (2026-09-24): the
+[fresh-link scratch comparison](evidence/dev-topology-link-scratch-mi300x-2026-09-24/README.md)
+passes complete-buffer checks, explicit teardown and all endpoint observations
+on GPUs 5/6, but establishes no latency gain. At one MiB/depth one, process-level
+p50 ranges are 14,304.621-14,387.585 us for baseline KFD,
+14,319.261-14,347.637 us for candidate KFD, 30.155-30.806 us for HSA and
+38.347-38.678 us for HIP. Separate diagnostics attribute median
+94.630-94.681 percent to topology discovery. Host timing boundaries differ;
+these are not isolated copy-engine measurements. The first cohort reused a
+baseline ELF and is excluded in full; corrected cold builds retain distinct
+KFD ELFs. No A7 or general HIP/HSA parity claim follows. Whole-host currentness
+must not be silently weakened to obtain a speedup.
+
 Latest native resource qualification (2026-09-24): the
 [backing-budget MI300X packet](evidence/dev-xgmi-backing-budget-native-mi300x-2026-09-24/README.md)
 passes on GPUs 5/6 from signed `419fe4818`. Both isolated capacity rejections

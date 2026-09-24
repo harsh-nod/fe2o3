@@ -97,10 +97,11 @@ fn progress_mode(args: &[String]) -> BenchmarkResult<ProgressModeV1> {
 
 fn valid_depth(mode: ProgressModeV1, depth: usize) -> bool {
     let maximum = match mode {
-        ProgressModeV1::Ordinary | ProgressModeV1::Diagnostic => MAX_DEPTH,
+        ProgressModeV1::Ordinary
+        | ProgressModeV1::Diagnostic
+        | ProgressModeV1::AggregatePeerBatchHotOnly => MAX_DEPTH,
         ProgressModeV1::AggregatePeerBatch => MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1,
-        ProgressModeV1::AggregatePeerBatchHotOnly
-        | ProgressModeV1::AggregatePeerBatchHotDiagnostic
+        ProgressModeV1::AggregatePeerBatchHotDiagnostic
         | ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic => 1,
     };
     depth != 0 && depth <= maximum
@@ -929,15 +930,31 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_hot_only_requires_depth_one() {
+    fn aggregate_hot_only_admits_bounded_batches() {
+        for depth in [1, 16, 32] {
+            assert!(valid_depth(
+                ProgressModeV1::AggregatePeerBatchHotOnly,
+                depth
+            ));
+        }
+        for depth in [0, 33, usize::MAX] {
+            assert!(!valid_depth(
+                ProgressModeV1::AggregatePeerBatchHotOnly,
+                depth
+            ));
+        }
+    }
+
+    #[test]
+    fn aggregate_hot_diagnostics_require_depth_one() {
         for mode in [
-            ProgressModeV1::AggregatePeerBatchHotOnly,
             ProgressModeV1::AggregatePeerBatchHotDiagnostic,
             ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic,
         ] {
             assert!(valid_depth(mode, 1));
-            assert!(!valid_depth(mode, 0));
-            assert!(!valid_depth(mode, 2));
+            for depth in [0, 2, 16, 32, 33] {
+                assert!(!valid_depth(mode, depth));
+            }
         }
     }
 

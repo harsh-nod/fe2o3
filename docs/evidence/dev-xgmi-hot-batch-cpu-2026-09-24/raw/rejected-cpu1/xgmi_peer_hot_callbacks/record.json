@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "benchmarks/runtime_gfx942/test_xgmi_peer_hot_callbacks.py"
+  ],
+  "started_ns": 1790259443450418350,
+  "process_group": 4096432,
+  "group_absent": true,
+  "finished_ns": 1790259469942340828,
+  "status": 0
+}

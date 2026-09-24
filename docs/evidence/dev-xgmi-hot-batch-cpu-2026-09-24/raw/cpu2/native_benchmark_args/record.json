@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "benchmarks/runtime_gfx942/test_native_benchmark_args.py"
+  ],
+  "started_ns": 1790260154495082532,
+  "process_group": 23710,
+  "group_absent": true,
+  "finished_ns": 1790260155515631469,
+  "status": 0
+}

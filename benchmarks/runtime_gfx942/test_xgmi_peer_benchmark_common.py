@@ -47,6 +47,8 @@ class PeerBenchmarkCommonTests(unittest.TestCase):
                 self.assertIn('#include "xgmi_peer_benchmark_common.hpp"', source)
                 self.assertIn("parse_peer_controls(", source)
                 self.assertIn("run_peer_persistent_hot(", source)
+                self.assertIn("run_peer_batch(", source)
+                self.assertIn("visit_peer_buffers(", source)
                 self.assertIn("fill_peer_guarded(", source)
                 self.assertIn("validate_peer_guarded(", source)
 

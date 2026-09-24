@@ -1,0 +1,27 @@
+{
+  "prior_inputs_sha256": "abfdd5839e0096b55eb4a43d3d3f193d9f72f1389248d89aefe7ee0ffdb96327",
+  "changed": [
+    "benchmarks/runtime_gfx942/test_xgmi_peer_benchmark_common.py",
+    "benchmarks/runtime_gfx942/test_xgmi_peer_hot_callbacks.py",
+    "benchmarks/runtime_gfx942/test_xgmi_peer_hot_results.py",
+    "benchmarks/runtime_gfx942/xgmi_peer_benchmark_common.hpp",
+    "benchmarks/runtime_gfx942/xgmi_peer_benchmark_common_test.cpp",
+    "benchmarks/runtime_gfx942/xgmi_peer_hip.cpp",
+    "benchmarks/runtime_gfx942/xgmi_peer_hot_callbacks_test.cpp",
+    "benchmarks/runtime_gfx942/xgmi_peer_hot_results.py",
+    "benchmarks/runtime_gfx942/xgmi_peer_hsa.cpp",
+    "crates/fe2o3-runtime/examples/gfx942-runtime-xgmi-peer-benchmark.rs"
+  ],
+  "allowed": [
+    "benchmarks/runtime_gfx942/test_xgmi_peer_benchmark_common.py",
+    "benchmarks/runtime_gfx942/test_xgmi_peer_hot_callbacks.py",
+    "benchmarks/runtime_gfx942/test_xgmi_peer_hot_results.py",
+    "benchmarks/runtime_gfx942/xgmi_peer_benchmark_common.hpp",
+    "benchmarks/runtime_gfx942/xgmi_peer_benchmark_common_test.cpp",
+    "benchmarks/runtime_gfx942/xgmi_peer_hip.cpp",
+    "benchmarks/runtime_gfx942/xgmi_peer_hot_callbacks_test.cpp",
+    "benchmarks/runtime_gfx942/xgmi_peer_hot_results.py",
+    "benchmarks/runtime_gfx942/xgmi_peer_hsa.cpp",
+    "crates/fe2o3-runtime/examples/gfx942-runtime-xgmi-peer-benchmark.rs"
+  ]
+}

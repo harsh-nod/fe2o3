@@ -206,39 +206,44 @@ static bool prepare_persistent_direction(
     hsa_agent_t destination_agent, hsa_agent_t cpu_agent, size_t bytes,
     const fe2o3::runtime_gfx942::PeerBenchmarkControls &controls,
     size_t direction) {
-  const uint8_t value = fe2o3::runtime_gfx942::peer_pattern(
-      controls.hot_pattern_round, 0, direction);
-  if (!fe2o3::runtime_gfx942::fill_peer_guarded(
-          buffers.upload[0], controls.allocation_bytes, bytes,
-          fe2o3::runtime_gfx942::peer_source_canary(direction), value) ||
-      !fe2o3::runtime_gfx942::fill_peer_guarded(
-          buffers.download[0], controls.allocation_bytes, bytes,
-          fe2o3::runtime_gfx942::peer_destination_canary(direction),
-          static_cast<uint8_t>(value ^ 0xff)))
-    return false;
-  HSA_CHECK(hsa_amd_memory_async_copy(
-      buffers.source[0], source_agent, buffers.upload[0], cpu_agent,
-      controls.allocation_bytes, 0, nullptr, buffers.signals[0]));
-  wait_and_reset(buffers.signals[0]);
-  HSA_CHECK(hsa_amd_memory_async_copy(
-      buffers.destination[0], destination_agent, buffers.download[0], cpu_agent,
-      controls.allocation_bytes, 0, nullptr, buffers.signals[0]));
-  wait_and_reset(buffers.signals[0]);
-  return true;
+  return fe2o3::runtime_gfx942::visit_peer_buffers(
+      buffers.source.size(), [&](size_t slot, bool source) {
+        const uint8_t value = fe2o3::runtime_gfx942::peer_pattern(
+            controls.hot_pattern_round, slot, direction);
+        auto *host = source ? buffers.upload[slot] : buffers.download[slot];
+        const auto canary =
+            source ? fe2o3::runtime_gfx942::peer_source_canary(direction)
+                   : fe2o3::runtime_gfx942::peer_destination_canary(direction);
+        if (!fe2o3::runtime_gfx942::fill_peer_guarded(
+                host, controls.allocation_bytes, bytes, canary,
+                source ? value : static_cast<uint8_t>(value ^ 0xff)))
+          return false;
+        HSA_CHECK(hsa_amd_memory_async_copy(
+            source ? buffers.source[slot] : buffers.destination[slot],
+            source ? source_agent : destination_agent, host, cpu_agent,
+            controls.allocation_bytes, 0, nullptr, buffers.signals[slot]));
+        wait_and_reset(buffers.signals[slot]);
+        return true;
+      });
 }
 
 static uint64_t copy_persistent_direction(
     DirectionBuffers &buffers, hsa_agent_t source_agent,
     hsa_agent_t destination_agent, size_t bytes,
     const fe2o3::runtime_gfx942::PeerBenchmarkControls &controls) {
-  auto *source = static_cast<uint8_t *>(buffers.source[0]) + controls.copy_offset;
-  auto *destination =
-      static_cast<uint8_t *>(buffers.destination[0]) + controls.copy_offset;
   const auto start = std::chrono::steady_clock::now();
-  HSA_CHECK(hsa_amd_memory_async_copy(
-      destination, destination_agent, source, source_agent, bytes, 0, nullptr,
-      buffers.signals[0]));
-  wait_and_reset(buffers.signals[0]);
+  fe2o3::runtime_gfx942::run_peer_batch(
+      buffers.source.size(),
+      [&](size_t slot) {
+        auto *source =
+            static_cast<uint8_t *>(buffers.source[slot]) + controls.copy_offset;
+        auto *destination = static_cast<uint8_t *>(buffers.destination[slot]) +
+                            controls.copy_offset;
+        HSA_CHECK(hsa_amd_memory_async_copy(destination, destination_agent,
+                                            source, source_agent, bytes, 0,
+                                            nullptr, buffers.signals[slot]));
+      },
+      [&](size_t slot) { wait_and_reset(buffers.signals[slot]); });
   const auto end = std::chrono::steady_clock::now();
   return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start)
       .count();
@@ -249,33 +254,29 @@ static bool validate_persistent_direction(
     hsa_agent_t destination_agent, hsa_agent_t cpu_agent, size_t bytes,
     const fe2o3::runtime_gfx942::PeerBenchmarkControls &controls,
     size_t direction) {
-  const uint8_t value = fe2o3::runtime_gfx942::peer_pattern(
-      controls.hot_pattern_round, 0, direction);
-  HSA_CHECK(hsa_amd_memory_async_copy(
-      buffers.download[0], cpu_agent, buffers.source[0], source_agent,
-      controls.allocation_bytes, 0, nullptr, buffers.signals[0]));
-  wait_and_reset(buffers.signals[0]);
-  if (!fe2o3::runtime_gfx942::validate_peer_guarded(
-          buffers.download[0], controls.allocation_bytes, bytes,
-          fe2o3::runtime_gfx942::peer_source_canary(direction), value)) {
-    std::fprintf(stderr,
-                 "HSA persistent-hot source mismatch at direction %zu\n",
-                 direction);
-    return false;
-  }
-  HSA_CHECK(hsa_amd_memory_async_copy(
-      buffers.download[0], cpu_agent, buffers.destination[0], destination_agent,
-      controls.allocation_bytes, 0, nullptr, buffers.signals[0]));
-  wait_and_reset(buffers.signals[0]);
-  if (!fe2o3::runtime_gfx942::validate_peer_guarded(
-          buffers.download[0], controls.allocation_bytes, bytes,
-          fe2o3::runtime_gfx942::peer_destination_canary(direction), value)) {
-    std::fprintf(stderr,
-                 "HSA persistent-hot destination mismatch at direction %zu\n",
-                 direction);
-    return false;
-  }
-  return true;
+  return fe2o3::runtime_gfx942::visit_peer_buffers(
+      buffers.source.size(), [&](size_t slot, bool source) {
+        const uint8_t value = fe2o3::runtime_gfx942::peer_pattern(
+            controls.hot_pattern_round, slot, direction);
+        HSA_CHECK(hsa_amd_memory_async_copy(
+            buffers.download[slot], cpu_agent,
+            source ? buffers.source[slot] : buffers.destination[slot],
+            source ? source_agent : destination_agent,
+            controls.allocation_bytes, 0, nullptr, buffers.signals[slot]));
+        wait_and_reset(buffers.signals[slot]);
+        const auto canary =
+            source ? fe2o3::runtime_gfx942::peer_source_canary(direction)
+                   : fe2o3::runtime_gfx942::peer_destination_canary(direction);
+        const bool valid = fe2o3::runtime_gfx942::validate_peer_guarded(
+            buffers.download[slot], controls.allocation_bytes, bytes, canary,
+            value);
+        if (!valid)
+          std::fprintf(
+              stderr,
+              "HSA persistent-hot %s mismatch at direction %zu slot %zu\n",
+              source ? "source" : "destination", direction, slot);
+        return valid;
+      });
 }
 
 namespace peer = fe2o3::runtime_gfx942;
@@ -536,8 +537,8 @@ int main(int argc, char **argv) {
     return 2;
   if (controls.persistent_hot) {
     std::printf(
-        "backend=hsa schema=fe2o3.xgmi-peer-persistent-hot-benchmark.v1 surface=native-api measurement=persistent-hot mapping_lifetime=process-persistent-hot prime_batches=1 direction=forward-then-reverse outstanding_depth=1 engine_parallelism=runtime-selected-unknown progress=peer-async-then-signal-wait-reset timing=native-enqueue-through-observed-completion canaries=pass teardown=explicit gpu_indices=%zu,%zu unique_ids=%016llx,%016llx targets=%s,%s xnack=disabled bytes=%zu depth=%zu warmups=%zu samples=%zu forward_p50_ns=%llu forward_p95_ns=%llu forward_p50_GBps=%.3f reverse_p50_ns=%llu reverse_p95_ns=%llu reverse_p50_GBps=%.3f\n",
-        indices[0], indices[1], static_cast<unsigned long long>(unique_ids[0]),
+        "backend=hsa schema=fe2o3.xgmi-peer-persistent-hot-benchmark.v1 surface=native-api measurement=persistent-hot mapping_lifetime=process-persistent-hot prime_batches=1 direction=forward-then-reverse outstanding_depth=%zu engine_parallelism=runtime-selected-unknown progress=peer-async-then-signal-wait-reset timing=native-enqueue-through-observed-completion canaries=pass teardown=explicit gpu_indices=%zu,%zu unique_ids=%016llx,%016llx targets=%s,%s xnack=disabled bytes=%zu depth=%zu warmups=%zu samples=%zu forward_p50_ns=%llu forward_p95_ns=%llu forward_p50_GBps=%.3f reverse_p50_ns=%llu reverse_p95_ns=%llu reverse_p50_GBps=%.3f\n",
+        depth, indices[0], indices[1], static_cast<unsigned long long>(unique_ids[0]),
         static_cast<unsigned long long>(unique_ids[1]), targets[0], targets[1],
         bytes, depth, warmups, samples,
         static_cast<unsigned long long>(forward_p50),

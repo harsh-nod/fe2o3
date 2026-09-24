@@ -1,0 +1,22 @@
+[
+  {
+    "path": "/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/cpu2/target",
+    "allocated_bytes": 755986432,
+    "absent": true
+  },
+  {
+    "path": "/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/cpu1/target",
+    "allocated_bytes": 681984000,
+    "absent": true
+  },
+  {
+    "path": "/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/hsa-callbacks",
+    "allocated_bytes": 45056,
+    "absent": true
+  },
+  {
+    "path": "/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/hip-callbacks",
+    "allocated_bytes": 36864,
+    "absent": true
+  }
+]

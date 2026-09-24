@@ -1,0 +1,11 @@
+{
+  "command": [
+    "/usr/bin/g++",
+    "--version"
+  ],
+  "started_ns": 1790260154304746903,
+  "process_group": 23699,
+  "group_absent": true,
+  "finished_ns": 1790260154312747468,
+  "status": 0
+}

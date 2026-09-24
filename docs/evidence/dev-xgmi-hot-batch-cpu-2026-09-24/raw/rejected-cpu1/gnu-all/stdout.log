@@ -1,0 +1,19 @@
+
+running 14 tests
+test tests::aggregate_classification_includes_all_aggregate_modes ... ok
+test tests::aggregate_and_ordinary_depth_bounds_are_distinct ... ok
+test tests::aggregate_diagnostic_call_roster_is_bounded_before_native_open ... ok
+test tests::aggregate_hot_diagnostics_require_depth_one ... ok
+test tests::aggregate_hot_only_admits_bounded_batches ... ok
+test tests::canaries_bind_the_exact_inner_copy_region ... ok
+test tests::currentness_flag_is_feature_gated_and_exclusive_before_native_open ... ok
+test tests::currentness_mode_preserves_hot_only_summary_with_distinct_diagnostic_label ... ok
+test tests::currentness_rows_preserve_every_identity_and_distinct_nested_interval ... ok
+test tests::diagnostic_submission_roster_is_bounded_before_native_open ... ok
+test tests::existing_modes_preserve_both_phases_and_report_schemas ... ok
+test tests::patterns_distinguish_round_slot_and_direction ... ok
+test tests::percentile_uses_nearest_rank ... ok
+test tests::progress_flags_are_explicit_and_mutually_exclusive_before_native_open ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
