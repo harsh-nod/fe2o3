@@ -1,5 +1,24 @@
 # Current Runtime Swarm Work Orders
 
+Latest proof checkpoint (2026-09-23): the
+[constructor-origin owner lifecycle packet](evidence/dev-owner-lifecycle-2026-09-23/README.md)
+completes its signed-source 62-command campaign: both 1,240-obligation positives,
+all 49 strict logical negatives and the raw/inspection/constructor regressions
+(384/1,179/1,156 obligations) pass. Runtime-model tests pass 1,021 unit tests
+with eighteen existing ignores and 27 doctests; strict Clippy, formatting,
+release compilation and source/tool brackets pass. The complete 190-record
+packet binds 449 source inputs. Its auditor rejects 39 rehashed malformed
+record sets and two source-policy changes, and supports bare Git replay.
+
+This establishes the named constructor-origin normal-return relations, not
+physical allocation/unwind, global identity freshness or native execution.
+Context still rejects pending-producer reads. Next is custody-safe, idempotent
+bounded backend progress, followed by exact producer/dependency ownership,
+producer-first outcome reconciliation and native chain qualification. Native
+R125, Admission R118B and Resources R116/V3 remain the broader accepted lane
+checkpoints; A1/A2, #182 and HIP/HSA parity remain open. No GPU or performance
+measurement is added by this proof packet.
+
 <a id="renewed-swarm-dispatch"></a>
 
 The latest [post-R114 dispatch](runtime-swarm-dispatch-r114.md) records the

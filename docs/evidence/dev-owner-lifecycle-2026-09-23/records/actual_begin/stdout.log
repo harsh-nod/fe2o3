@@ -1,0 +1,2081 @@
+{
+  "func-details": {
+    "context_owner_lifecycle_paired_v1::issuance::same_kind_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::next_group_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_abort_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_destination_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_preflight_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_acquire_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::writer_retains_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquire_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_execute_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_unknown_historical_bodies::retained_header_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::kind_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::register_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::register_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::no_duplicates": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%52::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::member_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_roster_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::acquire_commit_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_owner_paired_transition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_requests_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_unknown_paired_transition": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_inspect_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_acquired_reference_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_budget_domain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_read_order_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_unknown_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_retained_chain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_model_register_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_query_historical_bodies::producer_lookup_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_scalar_enrollment_model::scalar_enrollment_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_register_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::lease_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::spec_unwrap": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_read_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::member_entry_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::empty": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_acquire_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_arena_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_released_reservations_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_next_group_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_push_index_different": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::same_producer_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_order_lt_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_producer_validate_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_error_embed": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_acquire_commit_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_count_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_count_safe_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::allocation_key_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_release_historical_bodies::producer_release_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_plan_at_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_preflight_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_members_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::member_entry_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_abort_paired_transition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_abort_result_from_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_next_group_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_entry_valid_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::released_leases_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_producer_unread_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_guard_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_decreases_to_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_lifecycle_model::lifecycle_step_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_lifecycle_model::lifecycle_abort_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_capacity_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_commit_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_issued_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_stable_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_header_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_released_requests_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_stable_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_exact_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::push_distributes_over_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_validate_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_header_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_scratch_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::represents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_begin_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_plan_output_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_push_index_same": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_stable_unread_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_slot_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_key_less_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_selected_vacant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_acquire_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_success_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::writer_entry_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::read_lease_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_acquire_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_producer_safe_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_stable_unread_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_replay_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::result::is_err": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::spec_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_refs_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquire_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_producer_safe_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_requires": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::capacity_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_unknown_historical_bodies::retained_chain_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_read_order_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_next_group_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_owner_paired_transition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::lookup_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_producer_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_add_index1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_slots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquire_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_updated_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_acquired_leases_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_updated_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_guard_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_settlement_paired_transition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_total_retained_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_add_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_weight_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_acquire_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_capacity_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::device_key_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::journal_issuance::retaining_entry_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::writer_key_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_release_historical_bodies::producer_release_commit_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::writer_key_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::release_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::take": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_validate_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_producer_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_request_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_exact_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::new": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::issuance_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_producer_unread_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::release_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::release_commit_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::occupied_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_commit_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::read_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_unknown_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_allocations_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_output_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::journal_issuance::retaining_writers_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_reader_journal_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::allocation_read_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::journal_error_embed": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_stable_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_retirement_invariant_domain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_acquired_reservations_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_acquire_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_different": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_enrollment_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::pending_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::logical_contents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_vec_has_resolved": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::lease_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_order_lt_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_stable_historical_bodies::stable_wrapper_acquire_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_read_references_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::partition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_plan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_empty": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_roster_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::same_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_reader_guards::producer_reader_count_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::reader_journal_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_producer_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::allocation_entry_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_query_historical_bodies::producer_status_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_result_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_reservations_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::scalar_enrollment_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::order_lt_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::contains": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::acquire_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::map": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_untouched_journal_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_request_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_entry_error_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::result::is_ok": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_capacity_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%30::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_paired_transition": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_writer_stable_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::journal_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::last": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_stable_unread_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::scalar_enrollment_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_roster_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_journal_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_begin_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::scalar_enrollment_paired_transition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::writer_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_unknown_historical_bodies::unknown_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::lifecycle_actual_step_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_release_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::acquire_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_acquire_commit_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_outer_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquire_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_scalar_enrollment_model::scalar_enrollment_replay_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_scratch_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_read_order_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_order_lt_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_key_less_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::references_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_status_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_represents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_abort_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_some": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_plan_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_retained_clear_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::constructor_contents_projection_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_members_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_member_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_acquire_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_slot_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_output_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_reference_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_references_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::impl&%2::spec_add": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::issuable_id_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_value_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_lifecycle_model::lifecycle_settlement_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::scalar_enrollment_result_from_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::writer_entry_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_retained_member_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_index_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::read_slot_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_retained_clear_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_scalar_enrollment_model::scalar_enrollment_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_slots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::abort_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_released_leases_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::reserved_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_unknown_historical_bodies::retained_member_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_unknown_historical_bodies::retained_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_retained_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::issuance_contents_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::axiom_spec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_members_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_producer_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::allocation_write_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_release_historical_bodies::producer_release_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_allocations_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_lifecycle_adapters::lifecycle_begin_preserves_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::reference_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_replay_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_domain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::add_empty_left": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquire_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_updated_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_paired_transition": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_lookup_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_unread_writes_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::reserved_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_consumer_same_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_commit_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_unread_writes_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_issued_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_stable_validate_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_subrange_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_output_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_represents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%48::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_writer_producer_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::allocation_custody_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::allocation_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%2::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%6::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::read_order_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::lift_error_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::OptionAdditionalFns::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_slots_distinct_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::is_none": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_ext_equal_deep": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::allocation_reference_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_destination_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_slots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::occupied_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_execute_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_references_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::allocation_key_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_roster_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%4::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_roster_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_subrange_decreases": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::constructor_admission_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_acquire_paired_transition": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_cursor_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_unknown_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_preflight_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_preflight_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_enrollment_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_commit_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_scalar_enrollment_model::scalar_enrollment_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_released_requests_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::View::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_subrange_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_unknown_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_plan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_cursor_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_validate_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_stable_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::release_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_commit_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_stable_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_key_less_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_acquire_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_retained_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_plan_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::acquired_leases_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_remaining_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_unknown_historical_bodies::unknown_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::lifecycle_mutation_correspondence_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_register_result_from_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_producer_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_release_historical_bodies::producer_release_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_query_historical_bodies::same_producer_read_reference_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_refs_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::function::axiom_fn_mut_call_ensures": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_read_order_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_guard_storage_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_retained_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_value_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_slots_distinct_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::representation_valid_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::add_empty_right": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquired_reservations_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_success_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::writer_lookup_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_push_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_raw_success_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquire_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_new_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_success_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::same_read_reference_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::release_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_storage_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::acquired_reference_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::entries_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_add_index2": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::mark_unknown_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_plan_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::issuance_contents_projection_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_acquire_domain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_release_historical_bodies::producer_released_reservations_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_update_same": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_commit_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_roster_view_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_stable_historical_bodies::stable_wrapper_acquire_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::concrete_contents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::acquire_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::push": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_release_historical_bodies::producer_release_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%16::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::issuable_id_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::reader_arena_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_unknown_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_destination_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_register_paired_transition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_capacity_arithmetic_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_lifecycle_model::lifecycle_register_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::project_contents": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::writer_key_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::release_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_count_safe_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_member_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_retained_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_capacity_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::lifecycle_step_answers_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::writer_reference_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquired_reference_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_updated_allocation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_release_historical_bodies::producer_released_requests_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_canonical_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_lease_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_reservation_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%0::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::acquire_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%8::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::allocation_entry_slot_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::read_error_embed": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_model_abort_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::acquire_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_plan_at_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::subrange": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::unread_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_disposal_invariant_domain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::reader_invariant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::released_requests_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_read_slot_count_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_stable_count_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_query_historical_bodies::producer_validate_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::same_key_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::lease_weight_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_untouched_journal_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_acquired_reference_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_raw_success_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_order_lt_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_stable_validate_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::vec::spec_vec_len": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_reserved_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_stable_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_acquire_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::writer_reference_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_result_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_lifecycle_adapters::lifecycle_begin_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%50::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_stable_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::history_valid_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::allocation_lookup_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::scalar_enrollment_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_producer_unread_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_writer_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_begin_paired_transition": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_members_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_slots_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_return_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_plan_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_read_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_output_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_live_reads_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::kind_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_read_reference_same_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::lemma_seq_two_subranges_index": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%26::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_settlement_historical_bodies::settlement_return_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::slot_partition_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%18::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_acquire_item_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_contents_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_entry_error_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq_lib::impl&%0::drop_last": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::unknown_writer_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_producer_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_allocations_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::settlement_return_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::begin_canonical_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_acquire_header_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_producer_validate_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::reader_storage_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_allocations_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::allocation_reference_from": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::lifecycle_step_inputs_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::retirement_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquire_paired_transition": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_release_next_group_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_count_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_return_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_requests_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_reader_guards::producer_unread_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_disposal_model::disposal_success_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::reader_contents_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::seq::Seq::update": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::std_specs::option::impl&%0::arrow_0": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::read_reference_view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_stable_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::disposal_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::scalar_enrollment_replay_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_release_paired_transition": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_prefix_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::begin_destination_scan_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquire_domain_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::stable_read_consumer_same_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::owner_register_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_stable_historical_bodies::stable_wrapper_acquire_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::enrollment_selected_vacant_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::production::producer_acquire_commit_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_release_historical_bodies::producer_release_execution_relation_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "vstd::view::impl&%14::view": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::journal_issuance::issued_producer_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::producer_acquire_historical_bodies::producer_acquire_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::enrollment_plan_output_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::issuance::abort_decision_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    },
+    "context_owner_lifecycle_paired_v1::owner_retirement_model::retirement_producer_frame_v1": {
+      "obligation_proof_notes": [],
+      "failed_proof_notes": []
+    }
+  },
+  "verification-results": {
+    "encountered-error": true,
+    "encountered-vir-error": false,
+    "verified": 0,
+    "errors": 1,
+    "is-verifying-entire-crate": false
+  },
+  "verus": {
+    "profile": "release",
+    "version": "0.2026.08.09.92f466f",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64"
+    },
+    "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+    "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+  }
+}

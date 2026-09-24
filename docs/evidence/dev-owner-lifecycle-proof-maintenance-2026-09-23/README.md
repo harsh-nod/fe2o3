@@ -3,6 +3,22 @@
 Development log only. This is not a qualified evidence packet, a replacement for
 the failed inspection campaign, or native runtime qualification.
 
+The subsequent [source-bound lifecycle packet](../dev-owner-lifecycle-2026-09-23/README.md)
+now completes its 62-command proof/CPU campaign at signed source
+`0da85d666e17988d65cce7a30c7ee67319487e45`: both 1,240-obligation positives,
+49 strict logical negatives, all three inherited regressions, both tool-closure
+checks and the CPU inventory pass. Its independent packet audit passes 39
+rehashed record-corruption controls, two source-policy controls and bare Git
+replay. The final bounded audit uses `/usr/bin/python3 -I -B`; its receipt,
+runner and unchanged packet-input bracket are retained in
+[qualification-audit-final](qualification-audit-final/command/record.json).
+The earlier non-isolated audit remains in
+[qualification-audit](qualification-audit/command/record.json), with its exact
+pre-correction README and manifest in `qualification-audit/packet-docs`.
+Only the packet wording and replay command changed between audits; all 190 raw
+records and the auditor are unchanged. Neither audit reruns Verus or verifies
+signatures. Earlier development and failed records below remain separate.
+
 ## Lifecycle Scope
 
 Eleven new Verus sources compose constructor-origin owner traces. Separate
@@ -121,10 +137,13 @@ authoritative reads retain the restriction. Failed records and source snapshots
 remain unchanged. Independent recorder re-review found no remaining launch
 blocker after the import and Git-provenance corrections.
 
-A fresh lifecycle campaign must run the full positive, negative, regression,
-tool-closure and CPU inventory from signed source before publication as accepted
-evidence. No old failed campaign may be resumed into acceptance by rewriting its
-records or updating hashes.
+The fresh lifecycle campaign linked above ran the full positive, negative,
+regression, tool-closure and CPU inventory from signed source. It resumed only
+its own clean checkpoint after the first fourteen negatives. No old failed
+campaign was promoted, rewritten or rehashed into acceptance. The private Cargo
+target (approximately 703 MiB) was removed after successful completion; source
+snapshots, raw measurements and audit records remain retained. No remote host
+or GPU was used for this work.
 
 This work concerns proof decomposition and reproducibility, not runtime speed.
 Pending-producer native integration, physical ownership/unwind refinement,

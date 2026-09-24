@@ -1,0 +1,13 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-lifecycle.py",
+    "--selftest"
+  ],
+  "started_ns": 1790221656839609268,
+  "process_group": 1664113,
+  "group_absent": true,
+  "finished_ns": 1790221719848135739,
+  "status": 0
+}

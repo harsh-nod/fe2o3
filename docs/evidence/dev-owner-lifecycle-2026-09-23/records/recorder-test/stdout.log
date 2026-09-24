@@ -1,0 +1,10 @@
+PASS: lifecycle bootstrap; 18 helper controls, 5 ambient Git controls, replacement-ref isolation
+PASS: receipt and checkpoint replay checks; 29 malformed or conflicting operations rejected
+PASS: retirement negative diagnostic policy; 8 malformed cases rejected
+PASS: inspection wall-time budgets; 3 whole-root and 25 scoped command shapes checked; 5 malformed legacy prefixes rejected
+PASS: inspection diagnostic, independence, and source-auth checks; 36 malformed cases rejected; 25 scoped mutation anchors authenticated
+PASS: frozen inspection recorder; exact signed-parent sources and transcript; no process-group escape
+PASS: lifecycle inherited proof edits; 15 rehashed changes rejected; original contracts unchanged
+PASS: lifecycle source-policy controls; 19 rehashed changes rejected
+PASS: lifecycle inherited/root/checker/roster authentication; 6 changes rejected
+PASS: lifecycle logical mutation anchors; 49 scoped controls authenticated
