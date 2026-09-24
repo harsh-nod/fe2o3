@@ -4,7 +4,7 @@
 use super::*;
 use std::sync::Mutex;
 
-static NOTIFICATION_TEST_LOCK: Mutex<()> = Mutex::new(());
+pub(super) static NOTIFICATION_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn prepared() -> MetadataStorageV1 {
     MetadataStorageV1::prepare(b"synthetic ELF storage, not loader-admitted", -4096).unwrap()

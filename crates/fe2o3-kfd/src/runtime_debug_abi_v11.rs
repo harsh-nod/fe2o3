@@ -1,20 +1,17 @@
-//! Inert x86_64 little-endian layout for the ROCr-compatible debugger rendezvous.
+//! Private x86_64 little-endian ROCr-compatible debugger rendezvous layouts.
 //!
 //! This leaf does not enable a runtime, install a trap handler, advertise an
-//! active ABI version, own code, or confer pointer authority. Production uses
-//! only version-zero metadata shapes. Trap registration layouts remain test-only.
+//! active ABI version, own code, or confer pointer authority. The consuming
+//! no-queue owner derives every address for its private syscall adapter.
 //! Source revision pins are retained in the preparation delivery provenance.
 //! These are independently written ABI descriptions, not ROCr implementation code.
 
 use core::mem::{align_of, offset_of, size_of};
 
 /// A prospective version, not a statement about any live runtime.
-#[cfg(test)]
 pub(super) const REQUIRED_ROCR_DEBUG_VERSION_V11: i32 = 11;
 pub(super) const RT_CONSISTENT_V1: i32 = 0;
-#[cfg(test)]
 pub(super) const RT_ADD_V1: i32 = 1;
-#[cfg(test)]
 pub(super) const RT_DELETE_V1: i32 = 2;
 
 /// The host ELF rendezvous, not glibc's extended loader-namespace structure.
@@ -41,14 +38,22 @@ pub(super) struct LinkMapAbiV1 {
     pub(super) previous: u64,
 }
 
-/// SET_TRAP_HANDLER input shape only; not an ioctl wrapper or admitted address.
-#[cfg(test)]
+/// SET_TRAP_HANDLER input shape only; no public address constructor.
 #[repr(C)]
-pub(super) struct SetTrapHandlerAbiV1 {
-    pub(super) trap_base: u64,
-    pub(super) trap_memory: u64,
-    pub(super) gpu_id: u32,
-    pub(super) reserved: u32,
+pub(in super::super) struct SetTrapHandlerAbiV1 {
+    pub(in super::super) trap_base: u64,
+    pub(in super::super) trap_memory: u64,
+    pub(in super::super) gpu_id: u32,
+    pub(in super::super) reserved: u32,
+}
+
+/// Private debug-metadata runtime profile; leaves the public plain ABI unchanged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub(in super::super) struct RuntimeDebugEnableAbiV1 {
+    pub(in super::super) r_debug: u64,
+    pub(in super::super) mode_mask: u32,
+    pub(in super::super) capabilities_mask: u32,
 }
 
 #[cfg(test)]
@@ -76,8 +81,12 @@ const _: () = {
     assert!(offset_of!(LinkMapAbiV1, previous) == 32);
 };
 
-#[cfg(test)]
 const _: () = {
+    assert!(size_of::<RuntimeDebugEnableAbiV1>() == 16);
+    assert!(align_of::<RuntimeDebugEnableAbiV1>() == 8);
+    assert!(offset_of!(RuntimeDebugEnableAbiV1, r_debug) == 0);
+    assert!(offset_of!(RuntimeDebugEnableAbiV1, mode_mask) == 8);
+    assert!(offset_of!(RuntimeDebugEnableAbiV1, capabilities_mask) == 12);
     assert!(size_of::<SetTrapHandlerAbiV1>() == 24);
     assert!(align_of::<SetTrapHandlerAbiV1>() == 8);
     assert!(offset_of!(SetTrapHandlerAbiV1, trap_base) == 0);

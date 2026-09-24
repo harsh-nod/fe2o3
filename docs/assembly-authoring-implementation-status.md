@@ -1,5 +1,21 @@
 # Assembly authoring implementation status
 
+## Actual gfx950 no-queue metadata registration — 2026-09-24
+
+The [registration qualification](evidence/gfx950-debug-noqueue-20260924.md)
+records one supervised native registration and eight exact early refusals.
+The KFD gates pass 444/581 library tests (one ignored each), 6 inactive-cold
+and 14 no-queue example tests, 32 documentation tests and strict Clippy in
+both feature configurations.
+
+The separate unsafe consuming API retains actual custody until process exit.
+It registers a trap, enables the debug runtime and publishes version-11
+metadata, but creates no queue and dispatches no kernel. Trap/TMA execution,
+attached-debugger acceptance, physical capture and cleanup are unqualified.
+The [new tutorial](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/gfx950-noqueue-registration-v1.md)
+does not change the older inactive command. V4 remains open; accepted original
+exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Actual inactive gfx950 debug preparation — 2026-09-23
 
 The [cold preparation qualification](evidence/gfx950-cold-debug-preparation-20260923.md)

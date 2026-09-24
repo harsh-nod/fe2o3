@@ -37,7 +37,9 @@ mod debug_metadata;
 #[path = "engineering_gfx950_kernel_materialization.rs"]
 mod kernel_materialization;
 #[cfg(target_endian = "little")]
-pub use debug_cold::{Gfx950DebugColdOwnerV1, Gfx950DebugColdPreparationFactsV1};
+pub use debug_cold::{
+    Gfx950DebugColdOwnerV1, Gfx950DebugColdPreparationFactsV1, Gfx950DebugMetadataNoQueueOwnerV1,
+};
 
 #[path = "engineering_gfx950_dispatch_timestamps.rs"]
 mod dispatch_timestamps;

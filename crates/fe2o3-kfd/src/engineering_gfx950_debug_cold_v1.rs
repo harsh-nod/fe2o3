@@ -1,5 +1,6 @@
 //! One-shot real preparation for a disposable engineering process.
-//! No queue, trap registration, runtime enable or metadata publication exists.
+//! Preparation itself has no trap registration, runtime or metadata publication.
+//! The explicit consuming no-queue successor is a separate engineering API.
 
 use super::debug_metadata::{OwnedPreparedDebugMetadataV1, PreparedMetadataFactsV1};
 use super::{Allocation, Backend, Context, Kernel, PerformanceCountersV1, Result, explain};
@@ -13,10 +14,14 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "runtime_debug_cold_retention_v1.rs"]
-mod retention;
+pub(super) mod retention;
 #[path = "runtime_debug_trap_gfx942_v1.rs"]
 mod trap;
 use retention::RetainNativeOnDropV1;
+
+#[path = "engineering_gfx950_debug_noqueue_v1.rs"]
+mod noqueue;
+pub use noqueue::Gfx950DebugMetadataNoQueueOwnerV1;
 
 /// Immutable preparation facts, not a live debugger/queue/runtime capability.
 /// Digests establish content identity, not source authentication or execution.
@@ -65,8 +70,8 @@ struct ColdResourcesV1 {
 /// This is an explicit, one-shot, disposable-process preparation API. Once VM
 /// acquisition may have begun, every error, unwind or Drop retains all native
 /// resources until process teardown and poisons the exclusive process gate.
-/// There is deliberately no close/retry/activation/address API: no typed native
-/// teardown acknowledgment or trap/runtime activation has been implemented.
+/// There is deliberately no close/retry/address API or teardown acknowledgment.
+/// An explicit consuming method can register debug metadata without any queue.
 /// Merely preparing this value does NOT install or execute the retained trap.
 ///
 /// Available only on Linux x86_64 little-endian with engineering-gfx950.
