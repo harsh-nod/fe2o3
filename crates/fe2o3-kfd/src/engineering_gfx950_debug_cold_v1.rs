@@ -279,6 +279,11 @@ impl Context {
             performance: None,
             counters: PerformanceCountersV1::default(),
             ordered_batch_poisoned: false,
+            ordered64_wait_policy: super::Ordered64WaitPolicy::default(),
+            active_poll_counters: super::ActivePollCounters::default(),
+            token_program_enabled: false,
+            next_token_program: 1,
+            token_program: None,
         })
     }
 }

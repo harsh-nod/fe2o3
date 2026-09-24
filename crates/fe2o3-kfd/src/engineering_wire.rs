@@ -24,6 +24,15 @@ pub const MAX_ORDERED_BATCH64_DISPATCHES_V1: usize = 64;
 /// Conservative dispatch budget when hardware read-pointer reports never advance.
 pub const MAX_UNRETIRED_RING_PACKETS_V1: u64 = 131_072;
 
+#[path = "engineering_token_program.rs"]
+mod token_program;
+pub(crate) use token_program::ProgramTemplate;
+pub use token_program::{
+    MAX_TOKEN_PROGRAM_DEFINITION_BYTES_V1, MAX_TOKEN_PROGRAM_DISPATCHES_V1,
+    MAX_TOKEN_PROGRAM_SLOTS_V1, TokenProgramDefinitionV1, TokenProgramSlotV1, TokenProgramUpdateV1,
+    encode_token_program_v1,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BufferAccessV1 {
@@ -128,6 +137,22 @@ pub(crate) fn sequence_payload_bytes(dispatches: &[SequenceDispatchV1]) -> io::R
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CommandV1 {
+    /// Available only through the explicit diagnostic token-program process entry.
+    RegisterTokenProgram {
+        definition_bytes: u32,
+        kernarg_bytes: u32,
+    },
+    ExecuteTokenProgram {
+        program: u64,
+        expected_epoch: u64,
+        expected_completed_packets: u64,
+        timeout_ms: u32,
+        updates: Vec<TokenProgramUpdateV1>,
+    },
+    ReleaseTokenProgram {
+        program: u64,
+        expected_epoch: u64,
+    },
     /// Explicit engineering policy, accepted once before user resources exist.
     ConfigurePerformance {
         cache_kernel_admission: bool,
@@ -198,6 +223,25 @@ impl CommandV1 {
     /// Checks framing limits before allocating or reading any binary payload.
     pub fn payload_bytes(&self) -> io::Result<usize> {
         let length = match self {
+            Self::RegisterTokenProgram {
+                definition_bytes,
+                kernarg_bytes,
+            } => {
+                return token_program::token_program_payload_bytes(
+                    *definition_bytes,
+                    *kernarg_bytes,
+                );
+            }
+            Self::ExecuteTokenProgram {
+                timeout_ms,
+                updates,
+                ..
+            } if (1..=600_000).contains(timeout_ms)
+                && updates.len() <= MAX_TOKEN_PROGRAM_SLOTS_V1 =>
+            {
+                0
+            }
+            Self::ReleaseTokenProgram { .. } => 0,
             Self::DispatchSequence { dispatches } => return sequence_payload_bytes(dispatches),
             Self::DispatchOrderedBatch {
                 dispatches,
@@ -319,6 +363,26 @@ pub struct DispatchTimestampTicksV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
+    TokenProgramRegistered {
+        program: u64,
+        device_unique_id: u64,
+        queue_epoch: u64,
+        dispatches: u32,
+        slots: u32,
+    },
+    TokenProgramReleased {
+        program: u64,
+        queue_epoch: u64,
+    },
+    /// Aggregate acknowledgement only after every group and final fence retired.
+    TokenProgramCompleted {
+        program: u64,
+        device_unique_id: u64,
+        queue_epoch: u64,
+        completed_dispatches: u32,
+        completed_packets: u64,
+        elapsed_ns: u64,
+    },
     DispatchOrderedBatch64ProfiledCompleted {
         device_unique_id: u64,
         queue_epoch: u64,

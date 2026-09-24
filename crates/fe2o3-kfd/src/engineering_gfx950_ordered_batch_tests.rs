@@ -1,5 +1,11 @@
 use super::*;
 
+#[path = "engineering_gfx950_active_poll_tests.rs"]
+mod active_poll_tests;
+
+#[path = "engineering_gfx950_token_program_batch_tests.rs"]
+mod token_program_batch_tests;
+
 #[derive(Clone, Copy, Debug)]
 enum PreparationFault {
     Reset,
@@ -10,6 +16,7 @@ enum PreparationFault {
 
 #[derive(Default)]
 struct Fake {
+    deadlines: Vec<Instant>,
     events: Vec<String>,
     fail_at: Option<usize>,
     poisoned: bool,
@@ -142,7 +149,8 @@ impl OrderedBackend for Fake {
         }
         Ok(self.count)
     }
-    fn publish(&mut self, count: usize, _deadline: Instant) -> Result<usize> {
+    fn publish(&mut self, count: usize, deadline: Instant) -> Result<usize> {
+        self.deadlines.push(deadline);
         self.publication_start = self.events.len();
         self.event("ring_capacity_reservation".into())?;
         match count {
