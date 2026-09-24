@@ -951,3 +951,11 @@ pub use linux::physical_global_copy_debug_v21::{
     PhysicalGlobalCopyDebugInputErrorV21, PhysicalGlobalCopyDebugInputStorageV21,
     PhysicalGlobalCopyDebugInputV21, load_physical_global_copy_debug_input_v21,
 };
+
+#[cfg(target_os = "linux")]
+pub use linux::physical_lds_exchange_debug_v22::{
+    MAX_PHYSICAL_LDS_EXCHANGE_DEBUG_KIR_BYTES_V22,
+    MAX_PHYSICAL_LDS_EXCHANGE_DEBUG_REQUEST_BYTES_V22, PhysicalLdsExchangeDebugInputErrorV22,
+    PhysicalLdsExchangeDebugInputStorageV22, PhysicalLdsExchangeDebugInputV22,
+    load_physical_lds_exchange_debug_input_v22,
+};

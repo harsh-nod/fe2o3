@@ -1,0 +1,373 @@
+{
+  "schema": "fe2o3-rocgdb-producer-source-v1",
+  "upstream": {
+    "repository": "https://github.com/ROCm/ROCgdb",
+    "commit": "48b1d324e389d2ed5e19822d377ff9050770233d",
+    "license_source": "COPYING3",
+    "license_bytes": 35147,
+    "license_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+  },
+  "license": "GPL-3.0-or-later",
+  "stages": [
+    {
+      "name": "upstream",
+      "files": [
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+          "absent": true
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+          "absent": true
+        },
+        {
+          "path": "gdb/amd-dbgapi-target.c",
+          "bytes": 155030,
+          "sha256": "e079e695c578380c9cc0612bf9e26726fcb5723184e51790e11417eafb88a6dc"
+        },
+        {
+          "path": "gdb/interps.c",
+          "bytes": 14887,
+          "sha256": "6017ba42bf01191291e91fff4a0e315e9f240ab19f05aa0b4a292c4872e79577"
+        },
+        {
+          "path": "gdb/interps.h",
+          "bytes": 14184,
+          "sha256": "1b93b971b57b76fc818df8b9933d9968fce06fac43b53b2207842b9125d43dfa"
+        },
+        {
+          "path": "gdb/mi/mi-interp.c",
+          "bytes": 26327,
+          "sha256": "2cbb3a56d37a87cddbdfc73d7863a7aee9b288385fb9efa388ed6bd954a6efda"
+        },
+        {
+          "path": "gdb/mi/mi-interp.h",
+          "bytes": 4190,
+          "sha256": "077b1103aecac9495269dbe52a01ce72e2b253936bcb1b6050e326e42802ca96"
+        }
+      ]
+    },
+    {
+      "name": "native",
+      "files": [
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+          "bytes": 3956,
+          "sha256": "ba35a4c5d539236826a6b409d39587e8238278f2ddd72cdec16983d19dadf3b2"
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+          "bytes": 7932,
+          "sha256": "159889fb1dcaa2cc95c7d387c4e3cff8d6a8317dbb0c7eda829de97cf6ca4c26"
+        },
+        {
+          "path": "gdb/amd-dbgapi-target.c",
+          "bytes": 159847,
+          "sha256": "542cf37924a489f96a92ff777c6d5e84447ebb9c25b07cd61ba10164b617ac4a"
+        },
+        {
+          "path": "gdb/interps.c",
+          "bytes": 15053,
+          "sha256": "5a9ec3670240a5136666cdffac10c6d9859f2d30532cdbb6529f0f0cf0348426"
+        },
+        {
+          "path": "gdb/interps.h",
+          "bytes": 14578,
+          "sha256": "7cc8cab2472b5ed594f7189902fb334da3aea18de69640ee03b280e0989c6503"
+        },
+        {
+          "path": "gdb/mi/mi-interp.c",
+          "bytes": 27757,
+          "sha256": "52d4f29ebbda256aba13fef9ea1ef98b74952e76f8eb61d89a33b8e87a98bdb5"
+        },
+        {
+          "path": "gdb/mi/mi-interp.h",
+          "bytes": 4286,
+          "sha256": "3996698a326c84297e2501937278678ee89ab6cf1a66cb3a047e957b0a5c7127"
+        }
+      ]
+    },
+    {
+      "name": "mi-safe-points",
+      "files": [
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+          "bytes": 4195,
+          "sha256": "ccccb6f38280f42cef4b4f2568f53f908e9ca8ebf001e80fe1eb022ad1c651b3"
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+          "bytes": 8193,
+          "sha256": "4d42b0af5f50ed5a8d260c9734cec0f67d521936d63e17a768053d719288c2ef"
+        },
+        {
+          "path": "gdb/amd-dbgapi-target.c",
+          "bytes": 159847,
+          "sha256": "542cf37924a489f96a92ff777c6d5e84447ebb9c25b07cd61ba10164b617ac4a"
+        },
+        {
+          "path": "gdb/interps.c",
+          "bytes": 15053,
+          "sha256": "5a9ec3670240a5136666cdffac10c6d9859f2d30532cdbb6529f0f0cf0348426"
+        },
+        {
+          "path": "gdb/interps.h",
+          "bytes": 14578,
+          "sha256": "7cc8cab2472b5ed594f7189902fb334da3aea18de69640ee03b280e0989c6503"
+        },
+        {
+          "path": "gdb/mi/mi-interp.c",
+          "bytes": 27991,
+          "sha256": "260eb2b6da54f99212aaec23cb527b29adbdead89d69dbeec63ecc890c88b0b0"
+        },
+        {
+          "path": "gdb/mi/mi-interp.h",
+          "bytes": 4286,
+          "sha256": "3996698a326c84297e2501937278678ee89ab6cf1a66cb3a047e957b0a5c7127"
+        }
+      ]
+    },
+    {
+      "name": "lifecycle",
+      "files": [
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+          "bytes": 4195,
+          "sha256": "ccccb6f38280f42cef4b4f2568f53f908e9ca8ebf001e80fe1eb022ad1c651b3"
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+          "bytes": 8193,
+          "sha256": "4d42b0af5f50ed5a8d260c9734cec0f67d521936d63e17a768053d719288c2ef"
+        },
+        {
+          "path": "gdb/amd-dbgapi-target.c",
+          "bytes": 160504,
+          "sha256": "195578c9fbf97affb89e4cadb4774a3246a0fbf271679d8fae2ff2efa2d1c44a"
+        },
+        {
+          "path": "gdb/interps.c",
+          "bytes": 15053,
+          "sha256": "5a9ec3670240a5136666cdffac10c6d9859f2d30532cdbb6529f0f0cf0348426"
+        },
+        {
+          "path": "gdb/interps.h",
+          "bytes": 14578,
+          "sha256": "7cc8cab2472b5ed594f7189902fb334da3aea18de69640ee03b280e0989c6503"
+        },
+        {
+          "path": "gdb/mi/mi-interp.c",
+          "bytes": 27991,
+          "sha256": "260eb2b6da54f99212aaec23cb527b29adbdead89d69dbeec63ecc890c88b0b0"
+        },
+        {
+          "path": "gdb/mi/mi-interp.h",
+          "bytes": 4286,
+          "sha256": "3996698a326c84297e2501937278678ee89ab6cf1a66cb3a047e957b0a5c7127"
+        }
+      ]
+    }
+  ],
+  "patches": [
+    {
+      "path": "patches/0001-native-observation.patch",
+      "bytes": 28160,
+      "sha256": "ffb8b4751c821a1f88bc8e90bd17df9411b72159f99692a8243dc19d4a5e1789",
+      "changes": [
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+            "absent": true
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+            "bytes": 3956,
+            "sha256": "ba35a4c5d539236826a6b409d39587e8238278f2ddd72cdec16983d19dadf3b2"
+          }
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+            "absent": true
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+            "bytes": 7932,
+            "sha256": "159889fb1dcaa2cc95c7d387c4e3cff8d6a8317dbb0c7eda829de97cf6ca4c26"
+          }
+        },
+        {
+          "path": "gdb/amd-dbgapi-target.c",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-target.c",
+            "bytes": 155030,
+            "sha256": "e079e695c578380c9cc0612bf9e26726fcb5723184e51790e11417eafb88a6dc"
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-target.c",
+            "bytes": 159847,
+            "sha256": "542cf37924a489f96a92ff777c6d5e84447ebb9c25b07cd61ba10164b617ac4a"
+          }
+        },
+        {
+          "path": "gdb/interps.c",
+          "preimage": {
+            "path": "gdb/interps.c",
+            "bytes": 14887,
+            "sha256": "6017ba42bf01191291e91fff4a0e315e9f240ab19f05aa0b4a292c4872e79577"
+          },
+          "postimage": {
+            "path": "gdb/interps.c",
+            "bytes": 15053,
+            "sha256": "5a9ec3670240a5136666cdffac10c6d9859f2d30532cdbb6529f0f0cf0348426"
+          }
+        },
+        {
+          "path": "gdb/interps.h",
+          "preimage": {
+            "path": "gdb/interps.h",
+            "bytes": 14184,
+            "sha256": "1b93b971b57b76fc818df8b9933d9968fce06fac43b53b2207842b9125d43dfa"
+          },
+          "postimage": {
+            "path": "gdb/interps.h",
+            "bytes": 14578,
+            "sha256": "7cc8cab2472b5ed594f7189902fb334da3aea18de69640ee03b280e0989c6503"
+          }
+        },
+        {
+          "path": "gdb/mi/mi-interp.c",
+          "preimage": {
+            "path": "gdb/mi/mi-interp.c",
+            "bytes": 26327,
+            "sha256": "2cbb3a56d37a87cddbdfc73d7863a7aee9b288385fb9efa388ed6bd954a6efda"
+          },
+          "postimage": {
+            "path": "gdb/mi/mi-interp.c",
+            "bytes": 27757,
+            "sha256": "52d4f29ebbda256aba13fef9ea1ef98b74952e76f8eb61d89a33b8e87a98bdb5"
+          }
+        },
+        {
+          "path": "gdb/mi/mi-interp.h",
+          "preimage": {
+            "path": "gdb/mi/mi-interp.h",
+            "bytes": 4190,
+            "sha256": "077b1103aecac9495269dbe52a01ce72e2b253936bcb1b6050e326e42802ca96"
+          },
+          "postimage": {
+            "path": "gdb/mi/mi-interp.h",
+            "bytes": 4286,
+            "sha256": "3996698a326c84297e2501937278678ee89ab6cf1a66cb3a047e957b0a5c7127"
+          }
+        }
+      ]
+    },
+    {
+      "path": "patches/0002-mi-safe-points.patch",
+      "bytes": 1550,
+      "sha256": "55badd8a3c5691a6b4a6d7e9d28d262fef361185cc50d80df3b15c949f3faf38",
+      "changes": [
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+            "bytes": 3956,
+            "sha256": "ba35a4c5d539236826a6b409d39587e8238278f2ddd72cdec16983d19dadf3b2"
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+            "bytes": 4195,
+            "sha256": "ccccb6f38280f42cef4b4f2568f53f908e9ca8ebf001e80fe1eb022ad1c651b3"
+          }
+        },
+        {
+          "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+            "bytes": 7932,
+            "sha256": "159889fb1dcaa2cc95c7d387c4e3cff8d6a8317dbb0c7eda829de97cf6ca4c26"
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+            "bytes": 8193,
+            "sha256": "4d42b0af5f50ed5a8d260c9734cec0f67d521936d63e17a768053d719288c2ef"
+          }
+        },
+        {
+          "path": "gdb/mi/mi-interp.c",
+          "preimage": {
+            "path": "gdb/mi/mi-interp.c",
+            "bytes": 27757,
+            "sha256": "52d4f29ebbda256aba13fef9ea1ef98b74952e76f8eb61d89a33b8e87a98bdb5"
+          },
+          "postimage": {
+            "path": "gdb/mi/mi-interp.c",
+            "bytes": 27991,
+            "sha256": "260eb2b6da54f99212aaec23cb527b29adbdead89d69dbeec63ecc890c88b0b0"
+          }
+        }
+      ]
+    },
+    {
+      "path": "patches/0003-lifecycle-causes.patch",
+      "bytes": 1776,
+      "sha256": "92c6b12a928c3ad2fb5283f8629bf2cc8cc9a45bd6525edbf0fcafc8ca20d89c",
+      "changes": [
+        {
+          "path": "gdb/amd-dbgapi-target.c",
+          "preimage": {
+            "path": "gdb/amd-dbgapi-target.c",
+            "bytes": 159847,
+            "sha256": "542cf37924a489f96a92ff777c6d5e84447ebb9c25b07cd61ba10164b617ac4a"
+          },
+          "postimage": {
+            "path": "gdb/amd-dbgapi-target.c",
+            "bytes": 160504,
+            "sha256": "195578c9fbf97affb89e4cadb4774a3246a0fbf271679d8fae2ff2efa2d1c44a"
+          }
+        }
+      ]
+    }
+  ],
+  "postimages": [
+    {
+      "path": "gdb/amd-dbgapi-runtime-observation-hooks-v1.inc",
+      "bytes": 4195,
+      "sha256": "ccccb6f38280f42cef4b4f2568f53f908e9ca8ebf001e80fe1eb022ad1c651b3"
+    },
+    {
+      "path": "gdb/amd-dbgapi-runtime-observation-v1.h",
+      "bytes": 8193,
+      "sha256": "4d42b0af5f50ed5a8d260c9734cec0f67d521936d63e17a768053d719288c2ef"
+    },
+    {
+      "path": "gdb/amd-dbgapi-target.c",
+      "bytes": 160504,
+      "sha256": "195578c9fbf97affb89e4cadb4774a3246a0fbf271679d8fae2ff2efa2d1c44a"
+    },
+    {
+      "path": "gdb/interps.c",
+      "bytes": 15053,
+      "sha256": "5a9ec3670240a5136666cdffac10c6d9859f2d30532cdbb6529f0f0cf0348426"
+    },
+    {
+      "path": "gdb/interps.h",
+      "bytes": 14578,
+      "sha256": "7cc8cab2472b5ed594f7189902fb334da3aea18de69640ee03b280e0989c6503"
+    },
+    {
+      "path": "gdb/mi/mi-interp.c",
+      "bytes": 27991,
+      "sha256": "260eb2b6da54f99212aaec23cb527b29adbdead89d69dbeec63ecc890c88b0b0"
+    },
+    {
+      "path": "gdb/mi/mi-interp.h",
+      "bytes": 4286,
+      "sha256": "3996698a326c84297e2501937278678ee89ab6cf1a66cb3a047e957b0a5c7127"
+    }
+  ],
+  "source_checks_are_native_authority": false
+}

@@ -1,0 +1,819 @@
+--- /dev/null
++++ b/gdb/amd-dbgapi-runtime-observation-hooks-v1.inc
+@@ -0,0 +1,120 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Included once by amd-dbgapi-target.c after its actual inferior owner.
++   Private engineering producer V1.  No attach, poller, queue or command here. */
++namespace runtime_obs = amd_runtime_observation_v1;
++static runtime_obs::ledger runtime_observation;
++static program_space *runtime_observation_pspace = nullptr;
++
++static void
++flush_runtime_observation ()
++{
++  try
++    {
++      while (const auto *row = runtime_observation.next ())
++        interps_notify_amd_runtime_observation_v1 (*row);
++    }
++  catch (...)
++    {
++      runtime_observation.output_failed ();
++      throw;
++    }
++}
++
++static void
++invalidate_runtime_observation (runtime_obs::reason why) noexcept
++{
++  if (runtime_observation.bound ())
++    runtime_observation.invalidate (why);
++}
++
++static void
++check_runtime_observation_owner (amd_dbgapi_inferior_info &info)
++{
++  if (!runtime_observation.owns
++        (reinterpret_cast<std::uintptr_t> (&info), info.process_id.handle))
++    runtime_observation.invalidate (runtime_obs::reason::foreign_owner);
++}
++
++struct native_event_ack_v1
++{
++  amd_dbgapi_event_id_t event;
++  std::int64_t operator() () const noexcept
++  { return static_cast<std::int64_t> (amd_dbgapi_event_processed (event)); }
++};
++
++/* Construct the ack owner before querying the event, so query failure still
++   acknowledges exactly once and invalidates during unwinding. */
++class observed_native_event_v1
++{
++public:
++  observed_native_event_v1 (amd_dbgapi_inferior_info &info,
++                           amd_dbgapi_event_id_t event,
++                           amd_dbgapi_event_kind_t kind)
++    : m_event (event), m_kind (kind),
++      m_ack (runtime_observation, native_event_ack_v1 {event})
++  {
++    check_runtime_observation_owner (info);
++    amd_dbgapi_process_id_t process {};
++    amd_dbgapi_event_kind_t actual_kind {};
++    auto status = amd_dbgapi_event_get_info
++      (event, AMD_DBGAPI_EVENT_INFO_PROCESS, sizeof (process), &process);
++    if (status == AMD_DBGAPI_STATUS_SUCCESS)
++      status = amd_dbgapi_event_get_info
++        (event, AMD_DBGAPI_EVENT_INFO_KIND, sizeof (actual_kind), &actual_kind);
++    if (status != AMD_DBGAPI_STATUS_SUCCESS)
++      {
++        runtime_observation.invalidate (runtime_obs::reason::query_failed,
++                                        status);
++        error (_("runtime observation event query failed (%s)"),
++               get_status_string (status));
++      }
++    if (process != info.process_id || actual_kind != kind
++        || event == AMD_DBGAPI_EVENT_NONE)
++      {
++        runtime_observation.invalidate (runtime_obs::reason::event_identity);
++        error (_("runtime observation event owner/kind differs"));
++      }
++  }
++  observed_native_event_v1 (const observed_native_event_v1 &) = delete;
++  observed_native_event_v1 &operator= (const observed_native_event_v1 &) = delete;
++
++  void complete (runtime_obs::kind type, std::uint64_t runtime = 0)
++  {
++    auto status = finish ();
++    runtime_observation.completed (type, m_event.handle,
++                                  static_cast<std::uint64_t> (m_kind),
++                                  runtime, status);
++  }
++  std::int64_t finish ()
++  {
++    auto status = m_ack.finish ();
++    if (status != AMD_DBGAPI_STATUS_SUCCESS)
++      {
++        runtime_observation.invalidate
++          (runtime_obs::reason::acknowledgement, status);
++        warning (_("Failed to acknowledge amd-dbgapi event %" PRIu64),
++                 m_event.handle);
++      }
++    return status;
++  }
++private:
++  amd_dbgapi_event_id_t m_event;
++  amd_dbgapi_event_kind_t m_kind;
++  runtime_obs::event_ack<native_event_ack_v1> m_ack;
++};
++
++class observed_native_scope_v1
++{
++public:
++  explicit observed_native_scope_v1 (runtime_obs::reason failure)
++    : m_failure (failure) {}
++  ~observed_native_scope_v1 () noexcept
++  {
++    if (!m_done)
++      runtime_observation.invalidate (m_failure);
++  }
++  void done () noexcept { m_done = true; }
++private:
++  runtime_obs::reason m_failure;
++  bool m_done = false;
++};
+--- /dev/null
++++ b/gdb/amd-dbgapi-runtime-observation-v1.h
+@@ -0,0 +1,253 @@
++/* Bounded native ROCdbgapi observation facts, not acceptance authority.
++   SPDX-License-Identifier: GPL-3.0-or-later
++   This file is part of GDB; GPL version 3 or (at your option) any later version. */
++#ifndef GDB_AMD_DBGAPI_RUNTIME_OBSERVATION_V1_H
++#define GDB_AMD_DBGAPI_RUNTIME_OBSERVATION_V1_H
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++
++namespace amd_runtime_observation_v1
++{
++enum class kind : std::uint32_t
++{
++  attach_complete = 1,
++  runtime_complete = 2,
++  code_objects_complete = 3,
++  breakpoint_complete = 4,
++  invalidated = 5
++};
++enum class reason : std::uint32_t
++{
++  none = 0, foreign_owner = 1, capacity = 2, query_failed = 3,
++  event_identity = 4, handler_unwind = 5, acknowledgement = 6,
++  preloaded_runtime = 7, runtime_unloaded = 8, runtime_restriction = 9,
++  unsupported_event = 10, callback_identity = 11, callback_nested = 12,
++  detach = 13, inferior_exit = 14, inferior_exec = 15, inferior_fork = 16,
++  object_removed = 17, output_failure = 18, setup_failure = 19
++};
++
++/* No strings, pointers, physical registers, queue data or readiness bool.
++   Native identifiers describe this one debugger lifetime only. */
++struct record
++{
++  std::uint64_t sequence = 0;
++  std::uint64_t generation = 1;
++  std::uint64_t inferior = 0;
++  std::uint64_t pid = 0;
++  std::uint64_t process = 0;
++  std::uint64_t event = 0;
++  std::uint64_t event_kind = 0;
++  std::uint64_t runtime_state = 0;
++  std::uint64_t callback = 0;
++  std::uint64_t breakpoint = 0;
++  std::uint64_t thread = 0;
++  std::uint64_t action = 0;
++  std::int64_t status = 0;
++  kind type = kind::invalidated;
++  reason invalidation = reason::none;
++};
++
++/* One owner for the entire producer lifetime.  A second attach, even to a
++   recycled inferior address or PID, cannot restart a successful transcript.
++   Slot 32 is reserved for a terminal overflow refusal.  No destructor calls
++   output, allocates, throws, or dereferences the remembered owner address. */
++class ledger
++{
++public:
++  bool bind (std::uintptr_t owner, std::uint64_t inferior, std::uint64_t pid,
++             std::uint64_t process) noexcept
++  {
++    if (m_bound || owner == 0 || inferior == 0 || pid == 0 || process == 0)
++      {
++        invalidate (reason::foreign_owner);
++        return false;
++      }
++    m_bound = true;
++    m_owner = owner;
++    m_base.inferior = inferior;
++    m_base.pid = pid;
++    m_base.process = process;
++    return !m_invalid;
++  }
++
++  bool owns (std::uintptr_t owner, std::uint64_t process) const noexcept
++  { return m_bound && m_owner == owner && m_base.process == process; }
++
++  bool bound () const noexcept { return m_bound; }
++  bool invalid () const noexcept { return m_invalid; }
++  bool attaching () const noexcept { return m_attaching; }
++  std::uint64_t callback () const noexcept { return m_callback; }
++
++  void attached () noexcept
++  {
++    if (!m_bound || !m_attaching)
++      { invalidate (reason::foreign_owner); return; }
++    m_attaching = false;
++    append (kind::attach_complete);
++  }
++
++  void completed (kind type, std::uint64_t event, std::uint64_t event_kind,
++                  std::uint64_t runtime_state, std::int64_t status) noexcept
++  {
++    if (status != 0)
++      { invalidate (reason::acknowledgement, status); return; }
++    if (type == kind::runtime_complete && m_attaching)
++      { invalidate (reason::preloaded_runtime); return; }
++    record r;
++    r.type = type;
++    r.event = event;
++    r.event_kind = event_kind;
++    r.runtime_state = runtime_state;
++    r.status = status;
++    r.callback = m_callback;
++    push (r);
++  }
++
++  void begin_callback (std::uint64_t breakpoint, std::uint64_t thread) noexcept
++  {
++    if (m_callback != 0 || breakpoint == 0 || thread == 0)
++      { invalidate (reason::callback_nested); return; }
++    /* At most 31 ordinary records can exist.  Monotonic callback ordinals
++       nevertheless have their own finite bound, independent of flushing. */
++    if (++m_callbacks > 32)
++      { invalidate (reason::capacity); return; }
++    m_callback = m_callbacks;
++    m_breakpoint = breakpoint;
++    m_thread = thread;
++  }
++
++  void end_callback (std::uint64_t event, std::uint64_t event_kind,
++                     std::uint64_t action, std::int64_t status) noexcept
++  {
++    if (m_callback == 0)
++      { invalidate (reason::callback_identity); return; }
++    if (status != 0)
++      invalidate (reason::acknowledgement, status);
++    else
++      {
++        record r;
++        r.type = kind::breakpoint_complete;
++        r.event = event;
++        r.event_kind = event_kind;
++        r.callback = m_callback;
++        r.breakpoint = m_breakpoint;
++        r.thread = m_thread;
++        r.action = action;
++        push (r);
++      }
++    m_callback = 0;
++    m_breakpoint = 0;
++    m_thread = 0;
++  }
++
++  void invalidate (reason why, std::int64_t status = 0) noexcept
++  {
++    if (m_invalid)
++      return;
++    m_invalid = true;
++    record r;
++    r.type = kind::invalidated;
++    r.invalidation = why;
++    r.status = status;
++    push_terminal (r);
++  }
++
++  /* The caller outputs only at an ordinary safe point.  Marking a row sent
++     before invoking an output callback prevents replay after output throws.
++     Output exceptions must call output_failed and propagate; a truncated
++     stream is never accepted by the independent consumer. */
++  const record *next () noexcept
++  {
++    return m_sent < m_count ? &m_rows[m_sent++] : nullptr;
++  }
++  void output_failed () noexcept { invalidate (reason::output_failure); }
++  std::size_t count () const noexcept { return m_count; }
++  const record &at (std::size_t i) const noexcept { return m_rows[i]; }
++
++private:
++  void append (kind type) noexcept
++  { record r; r.type = type; push (r); }
++  void decorate (record &r) noexcept
++  {
++    r.sequence = m_count + 1;
++    r.generation = m_base.generation;
++    r.inferior = m_base.inferior;
++    r.pid = m_base.pid;
++    r.process = m_base.process;
++  }
++  void push (record r) noexcept
++  {
++    if (m_invalid)
++      return;
++    if (!m_bound)
++      { invalidate (reason::foreign_owner); return; }
++    if (r.event != 0)
++      for (std::size_t i = 0; i < m_count; ++i)
++        if (m_rows[i].event == r.event)
++          { invalidate (reason::event_identity); return; }
++    if (m_count >= m_rows.size () - 1)
++      { invalidate (reason::capacity); return; }
++    decorate (r);
++    m_rows[m_count++] = r;
++  }
++  void push_terminal (record r) noexcept
++  {
++    if (m_count < m_rows.size ())
++      { decorate (r); m_rows[m_count++] = r; }
++  }
++  std::array<record, 32> m_rows {};
++  record m_base {};
++  std::uintptr_t m_owner = 0;
++  std::size_t m_count = 0;
++  std::size_t m_sent = 0;
++  std::uint64_t m_callback = 0;
++  std::uint64_t m_callbacks = 0;
++  std::uint64_t m_breakpoint = 0;
++  std::uint64_t m_thread = 0;
++  bool m_bound = false;
++  bool m_attaching = true;
++  bool m_invalid = false;
++};
++
++static_assert (sizeof (record) <= 128, "fixed numeric record bound");
++static_assert (sizeof (ledger) <= 4096, "fixed lifetime record storage bound");
++
++/* The callable must perform exactly the existing native acknowledgment and
++   return its actual status; zero means AMD_DBGAPI_STATUS_SUCCESS.  finish is
++   never retried, including after failure.  Unwind fallback is diagnostic
++   refusal, even when its actual acknowledgment succeeds. */
++template<typename Acknowledge> class event_ack
++{
++public:
++  event_ack (ledger &events, Acknowledge acknowledge) noexcept
++    : m_events (events), m_acknowledge (acknowledge) {}
++  event_ack (const event_ack &) = delete;
++  event_ack &operator= (const event_ack &) = delete;
++  ~event_ack () noexcept
++  {
++    if (!m_attempted)
++      {
++        m_attempted = true;
++        m_status = m_acknowledge ();
++        m_events.invalidate (reason::handler_unwind, m_status);
++      }
++  }
++  std::int64_t finish () noexcept
++  {
++    if (!m_attempted)
++      {
++        m_attempted = true;
++        m_status = m_acknowledge ();
++      }
++    return m_status;
++  }
++private:
++  ledger &m_events;
++  Acknowledge m_acknowledge;
++  std::int64_t m_status = 0;
++  bool m_attempted = false;
++};
++}
++#endif
+--- a/gdb/amd-dbgapi-target.c
++++ b/gdb/amd-dbgapi-target.c
+@@ -38,6 +38,8 @@
+ #include "location.h"
+ #include "objfiles.h"
+ #include "observable.h"
++#include "interps.h"
++#include "amd-dbgapi-runtime-observation-v1.h"
+ #include "registry.h"
+ #include "solib.h"
+ #include "target.h"
+@@ -259,6 +261,8 @@
+     wave_info_map;
+ };
+ 
++#include "amd-dbgapi-runtime-observation-hooks-v1.inc"
++
+ static amd_dbgapi_event_id_t process_event_queue
+   (amd_dbgapi_inferior_info &info,
+    amd_dbgapi_event_kind_t until_event_kind = AMD_DBGAPI_EVENT_KIND_NONE);
+@@ -880,20 +884,41 @@
+ 
+   amd_dbgapi_breakpoint_id_t breakpoint_id { it->first };
+   amd_dbgapi_breakpoint_action_t action;
++  thread_info *callback_thread = inferior_thread ();
++  check_runtime_observation_owner (*info);
++  runtime_observation.begin_callback (breakpoint_id.handle,
++                                      callback_thread->global_num);
++  observed_native_scope_v1 callback_scope
++    (runtime_obs::reason::callback_identity);
+ 
+   status = amd_dbgapi_report_breakpoint_hit
+     (breakpoint_id,
+-     reinterpret_cast<amd_dbgapi_client_thread_id_t> (inferior_thread ()),
++     reinterpret_cast<amd_dbgapi_client_thread_id_t> (callback_thread),
+      &action);
+ 
+   if (status != AMD_DBGAPI_STATUS_SUCCESS)
+-    error (_("amd_dbgapi_report_breakpoint_hit failed for breakpoint %ld "
+-	     "at %s (%s)"),
+-	   breakpoint_id.handle, paddress (inf->arch (), bs->bp_location_at->address),
+-	   get_status_string (status));
++    {
++      runtime_observation.invalidate
++        (runtime_obs::reason::callback_identity, status);
++      error (_("amd_dbgapi_report_breakpoint_hit failed for breakpoint %ld "
++               "at %s (%s)"),
++             breakpoint_id.handle,
++             paddress (inf->arch (), bs->bp_location_at->address),
++             get_status_string (status));
++    }
+ 
+   if (action == AMD_DBGAPI_BREAKPOINT_ACTION_RESUME)
+-    return;
++    {
++      runtime_observation.end_callback (0, 0, action, status);
++      callback_scope.done ();
++      flush_runtime_observation ();
++      return;
++    }
++  if (action != AMD_DBGAPI_BREAKPOINT_ACTION_HALT)
++    {
++      runtime_observation.invalidate (runtime_obs::reason::callback_identity);
++      error (_("unexpected amd-dbgapi breakpoint action"));
++    }
+ 
+   require_forward_progress (*info, false);
+ 
+@@ -904,8 +929,14 @@
+ 
+   /* We should always get a breakpoint_resume event after processing all
+      events generated by reporting the breakpoint hit.  */
+-  gdb_assert (resume_event_id != AMD_DBGAPI_EVENT_NONE);
++  if (resume_event_id == AMD_DBGAPI_EVENT_NONE)
++    {
++      runtime_observation.invalidate (runtime_obs::reason::callback_identity);
++      error (_("missing expected AMD breakpoint resume event"));
++    }
+ 
++  observed_native_event_v1 resume_event
++    (*info, resume_event_id, AMD_DBGAPI_EVENT_KIND_BREAKPOINT_RESUME);
+   amd_dbgapi_breakpoint_id_t resume_breakpoint_id;
+   status = amd_dbgapi_event_get_info (resume_event_id,
+ 				      AMD_DBGAPI_EVENT_INFO_BREAKPOINT,
+@@ -923,7 +954,24 @@
+ 	      "Expected breakpoint_%ld, got breakpoint_%ld"),
+ 	   breakpoint_id.handle, resume_breakpoint_id.handle);
+ 
+-  amd_dbgapi_event_processed (resume_event_id);
++  amd_dbgapi_client_thread_id_t resume_thread {};
++  status = amd_dbgapi_event_get_info
++    (resume_event_id, AMD_DBGAPI_EVENT_INFO_CLIENT_THREAD,
++     sizeof (resume_thread), &resume_thread);
++  if (status != AMD_DBGAPI_STATUS_SUCCESS
++      || resume_thread != reinterpret_cast<amd_dbgapi_client_thread_id_t>
++                            (callback_thread))
++    {
++      runtime_observation.invalidate
++        (runtime_obs::reason::callback_identity, status);
++      error (_("breakpoint resume event client thread differs"));
++    }
++  auto ack_status = resume_event.finish ();
++  runtime_observation.end_callback
++    (resume_event_id.handle, AMD_DBGAPI_EVENT_KIND_BREAKPOINT_RESUME,
++     action, ack_status);
++  callback_scope.done ();
++  flush_runtime_observation ();
+ }
+ 
+ bool
+@@ -1251,8 +1299,11 @@
+ 	  && loc->pspace == info->inf->pspace)
+ 	{
+ 	  if (insert_one_watchpoint (info, loc->address, loc->length) != 0)
+-	    warning (_("Failed to insert existing watchpoint after loading "
+-		       "runtime."));
++            {
++              runtime_observation.invalidate (runtime_obs::reason::setup_failure);
++	      warning (_("Failed to insert existing watchpoint after loading "
++		         "runtime."));
++            }
+ 	}
+     };
+ }
+@@ -1623,28 +1674,6 @@
+ 	   get_status_string (status));
+ }
+ 
+-struct scoped_amd_dbgapi_event_processed
+-{
+-  scoped_amd_dbgapi_event_processed (amd_dbgapi_event_id_t event_id)
+-    : m_event_id (event_id)
+-  {
+-    gdb_assert (event_id != AMD_DBGAPI_EVENT_NONE);
+-  }
+-
+-  ~scoped_amd_dbgapi_event_processed ()
+-  {
+-    amd_dbgapi_status_t status = amd_dbgapi_event_processed (m_event_id);
+-    if (status != AMD_DBGAPI_STATUS_SUCCESS)
+-      warning (_("Failed to acknowledge amd-dbgapi event %" PRIu64),
+-	       m_event_id.handle);
+-  }
+-
+-  DISABLE_COPY_AND_ASSIGN (scoped_amd_dbgapi_event_processed);
+-
+-private:
+-  amd_dbgapi_event_id_t m_event_id;
+-};
+-
+ /* Called when a dbgapi notifier fd is readable.  CLIENT_DATA is the
+    amd_dbgapi_inferior_info object corresponding to the notifier.  */
+ 
+@@ -1682,14 +1711,20 @@
+ 	= amd_dbgapi_process_next_pending_event (info->process_id, &event_id,
+ 						 &event_kind);
+       if (status != AMD_DBGAPI_STATUS_SUCCESS)
+-	error (_("next_pending_event failed (%s)"), get_status_string (status));
++        {
++          runtime_observation.invalidate (runtime_obs::reason::query_failed, status);
++          error (_("next_pending_event failed (%s)"), get_status_string (status));
++        }
+ 
+       if (event_id == AMD_DBGAPI_EVENT_NONE)
+ 	return;
+ 
+-      gdb_assert (event_kind == AMD_DBGAPI_EVENT_KIND_RUNTIME);
+-
+-      scoped_amd_dbgapi_event_processed mark_event_processed (event_id);
++      observed_native_event_v1 mark_event_processed (*info, event_id, event_kind);
++      if (event_kind != AMD_DBGAPI_EVENT_KIND_RUNTIME)
++        {
++          runtime_observation.invalidate (runtime_obs::reason::unsupported_event);
++          error (_("unexpected event before AMD runtime activation"));
++        }
+ 
+       amd_dbgapi_runtime_state_t runtime_state;
+       status = amd_dbgapi_event_get_info (event_id,
+@@ -1741,6 +1776,14 @@
+ 		     "due to a restriction error"));
+ 	  break;
+ 	}
++      mark_event_processed.complete
++        (runtime_obs::kind::runtime_complete, runtime_state);
++      if (runtime_state != AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS)
++        runtime_observation.invalidate
++          (runtime_state == AMD_DBGAPI_RUNTIME_STATE_UNLOADED
++           ? runtime_obs::reason::runtime_unloaded
++           : runtime_obs::reason::runtime_restriction);
++      flush_runtime_observation ();
+     }
+ }
+ 
+@@ -1861,9 +1904,13 @@
+ 		   amd_dbgapi_event_kind_t event_kind)
+ {
+   /* Automatically mark this event processed when going out of scope.  */
+-  scoped_amd_dbgapi_event_processed mark_event_processed (event_id);
++  observed_native_event_v1 mark_event_processed (info, event_id, event_kind);
+ 
+   gdb_assert (info.inf != nullptr);
++  std::uint64_t observed_runtime_state = 0;
++  if (event_kind != AMD_DBGAPI_EVENT_KIND_CODE_OBJECT_LIST_UPDATED
++      && event_kind != AMD_DBGAPI_EVENT_KIND_RUNTIME)
++    runtime_observation.invalidate (runtime_obs::reason::unsupported_event);
+ 
+   switch (event_kind)
+     {
+@@ -1994,6 +2041,7 @@
+ 	  (info.runtime_state == AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS);
+ 
+ 	info.runtime_state = runtime_state;
++        observed_runtime_state = runtime_state;
+ 
+ 	gdb_assert (info.inf->target_is_pushed (&the_amd_dbgapi_target));
+ 	info.inf->unpush_target (&the_amd_dbgapi_target);
+@@ -2004,6 +2052,17 @@
+       error (_("event kind (%d) not supported"), event_kind);
+     }
+ 
++  if (event_kind == AMD_DBGAPI_EVENT_KIND_CODE_OBJECT_LIST_UPDATED)
++    mark_event_processed.complete (runtime_obs::kind::code_objects_complete);
++  else if (event_kind == AMD_DBGAPI_EVENT_KIND_RUNTIME)
++    {
++      mark_event_processed.complete (runtime_obs::kind::runtime_complete,
++                                     observed_runtime_state);
++      runtime_observation.invalidate (runtime_obs::reason::runtime_unloaded);
++    }
++  else
++    mark_event_processed.finish ();
++  flush_runtime_observation ();
+ }
+ 
+ /* Return a textual version of KIND.  */
+@@ -2050,9 +2109,15 @@
+   /* Pulling events with forward progress required may result in bad
+      performance, make sure it is not required.  */
+   gdb_assert (!info.forward_progress_required);
++  unsigned observation_drain_count = 0;
+ 
+   while (true)
+     {
++      if (observation_drain_count++ == 32)
++        {
++          runtime_observation.invalidate (runtime_obs::reason::capacity);
++          error (_("bounded AMD observation event drain exhausted"));
++        }
+       amd_dbgapi_event_id_t event_id;
+       amd_dbgapi_event_kind_t event_kind;
+ 
+@@ -2061,7 +2126,10 @@
+ 						 &event_kind);
+ 
+       if (status != AMD_DBGAPI_STATUS_SUCCESS)
+-	error (_("next_pending_event failed (%s)"), get_status_string (status));
++        {
++          runtime_observation.invalidate (runtime_obs::reason::query_failed, status);
++          error (_("next_pending_event failed (%s)"), get_status_string (status));
++        }
+ 
+       if (event_kind != AMD_DBGAPI_EVENT_KIND_NONE)
+ 	amd_dbgapi_debug_printf ("Pulled event from dbgapi: "
+@@ -2401,6 +2469,11 @@
+       return;
+     }
+ 
++  runtime_observation.bind (reinterpret_cast<std::uintptr_t> (info),
++                            inf->num, inf->pid, info->process_id.handle);
++  runtime_observation_pspace = inf->pspace;
++  observed_native_scope_v1 attach_scope (runtime_obs::reason::setup_failure);
++
+   if (amd_dbgapi_process_get_info (info->process_id,
+ 				   AMD_DBGAPI_PROCESS_INFO_NOTIFIER,
+ 				   sizeof (info->notifier), &info->notifier)
+@@ -2426,6 +2499,9 @@
+ 
+   add_file_handler (info->notifier, dbgapi_notifier_handler, info,
+ 		    "amd-dbgapi notifier");
++  runtime_observation.attached ();
++  attach_scope.done ();
++  flush_runtime_observation ();
+ }
+ 
+ static void maybe_reset_amd_dbgapi ();
+@@ -2446,6 +2522,7 @@
+   if (info->process_id == AMD_DBGAPI_PROCESS_NONE)
+     return;
+ 
++  invalidate_runtime_observation (runtime_obs::reason::detach);
+   info->runtime_state = AMD_DBGAPI_RUNTIME_STATE_UNLOADED;
+ 
+   amd_dbgapi_status_t status = amd_dbgapi_process_detach (info->process_id);
+@@ -2884,6 +2961,7 @@
+ static void
+ amd_dbgapi_inferior_execd (inferior *exec_inf, inferior *follow_inf)
+ {
++  invalidate_runtime_observation (runtime_obs::reason::inferior_exec);
+   /* The inferior has EXEC'd and the process image has changed.  The dbgapi is
+      attached to the old process image, so we need to detach and re-attach to
+      the new process image.  */
+@@ -2907,6 +2985,7 @@
+ amd_dbgapi_inferior_forked (inferior *parent_inf, inferior *child_inf,
+ 			    target_waitkind fork_kind)
+ {
++  invalidate_runtime_observation (runtime_obs::reason::inferior_fork);
+   if (child_inf != nullptr)
+     {
+       /* Copy precise-memory requested value from parent to child.  */
+@@ -2936,6 +3015,7 @@
+ static void
+ amd_dbgapi_inferior_exited (inferior *inf)
+ {
++  invalidate_runtime_observation (runtime_obs::reason::inferior_exit);
+   detach_amd_dbgapi (inf);
+ }
+ 
+@@ -4779,6 +4859,25 @@
+   /* Set the initial log level.  */
+   amd_dbgapi_set_log_level (get_debug_amd_dbgapi_lib_log_level ());
+ 
++  /* Native facts only.  No Python event, new command or separate client. */
++  gdb::observers::before_prompt.attach
++    ([] (const char *) { flush_runtime_observation (); },
++     "amd-runtime-observation-v1");
++  gdb::observers::inferior_removed.attach
++    ([] (inferior *) {
++      invalidate_runtime_observation (runtime_obs::reason::inferior_exit);
++    }, "amd-runtime-observation-v1");
++  gdb::observers::solib_unloaded.attach
++    ([] (program_space *pspace, const solib &) {
++      if (pspace == runtime_observation_pspace)
++        invalidate_runtime_observation (runtime_obs::reason::object_removed);
++    }, "amd-runtime-observation-v1");
++  gdb::observers::all_objfiles_removed.attach
++    ([] (program_space *pspace) {
++      if (pspace == runtime_observation_pspace)
++        invalidate_runtime_observation (runtime_obs::reason::object_removed);
++    }, "amd-runtime-observation-v1");
++
+   /* Install observers.  */
+   gdb::observers::breakpoint_created.attach (amd_dbgapi_target_breakpoint_fixup,
+ 					     "amd-dbgapi");
+--- a/gdb/interps.c
++++ b/gdb/interps.c
+@@ -592,3 +592,10 @@
+ and its arguments must be enclosed in double quotes."), &cmdlist);
+   set_cmd_completer (c, interpreter_completer);
+ }
++
++void
++interps_notify_amd_runtime_observation_v1
++  (const amd_runtime_observation_v1::record &row)
++{
++  interps_notify (&interp::on_amd_runtime_observation_v1, row);
++}
+--- a/gdb/interps.h
++++ b/gdb/interps.h
+@@ -33,6 +33,7 @@
+ struct inferior;
+ struct solib;
+ struct trace_state_variable;
++namespace amd_runtime_observation_v1 { struct record; }
+ 
+ typedef struct interp *(*interp_factory_func) (const char *name);
+ 
+@@ -53,6 +54,10 @@
+   explicit interp (const char *name);
+   virtual ~interp () = 0;
+ 
++  /* Read-only native facts from the same AMD client, not acceptance. */
++  virtual void on_amd_runtime_observation_v1
++    (const amd_runtime_observation_v1::record &) {}
++
+   virtual void init (bool top_level)
+   {}
+ 
+@@ -378,4 +383,9 @@
+ #define INTERP_TUI		"tui"
+ #define INTERP_INSIGHT		"insight"
+ 
++
++/* Private native observation protocol; no command surface. */
++extern void interps_notify_amd_runtime_observation_v1
++  (const amd_runtime_observation_v1::record &);
++
+ #endif /* GDB_INTERPS_H */
+--- a/gdb/mi/mi-interp.c
++++ b/gdb/mi/mi-interp.c
+@@ -20,6 +20,7 @@
+ 
+ 
+ #include "mi-interp.h"
++#include "amd-dbgapi-runtime-observation-v1.h"
+ 
+ #include "arch-utils.h"
+ #include "exceptions.h"
+@@ -958,3 +959,32 @@
+   interp_factory_register (INTERP_MI4, mi_interp_factory);
+   interp_factory_register (INTERP_MI, mi_interp_factory);
+ }
++
++/* Numeric-only async facts.  Runtime acceptance still requires the
++   launch-owned consumer's current host-stop/object/content joins. */
++void
++mi_interp::on_amd_runtime_observation_v1
++  (const amd_runtime_observation_v1::record &row)
++{
++  target_terminal::scoped_restore_terminal_state term_state;
++  target_terminal::ours_for_output ();
++  gdb_printf (event_channel, "amd-runtime-observation-v1");
++  ui_out_redirect_pop redir (mi_uiout, event_channel);
++  mi_uiout->field_unsigned ("version", 1);
++  mi_uiout->field_unsigned ("sequence", row.sequence);
++  mi_uiout->field_unsigned ("generation", row.generation);
++  mi_uiout->field_unsigned ("inferior", row.inferior);
++  mi_uiout->field_unsigned ("pid", row.pid);
++  mi_uiout->field_unsigned ("process", row.process);
++  mi_uiout->field_unsigned ("event", row.event);
++  mi_uiout->field_unsigned ("event-kind", row.event_kind);
++  mi_uiout->field_unsigned ("runtime-state", row.runtime_state);
++  mi_uiout->field_unsigned ("callback", row.callback);
++  mi_uiout->field_unsigned ("breakpoint", row.breakpoint);
++  mi_uiout->field_unsigned ("thread", row.thread);
++  mi_uiout->field_unsigned ("action", row.action);
++  mi_uiout->field_signed ("status", row.status);
++  mi_uiout->field_unsigned ("type", static_cast<unsigned> (row.type));
++  mi_uiout->field_unsigned ("reason", static_cast<unsigned> (row.invalidation));
++  gdb_flush (event_channel);
++}
+--- a/gdb/mi/mi-interp.h
++++ b/gdb/mi/mi-interp.h
+@@ -33,6 +33,8 @@
+     : interp (name)
+   {}
+ 
++  void on_amd_runtime_observation_v1
++    (const amd_runtime_observation_v1::record &) override;
+   void init (bool top_level) override;
+   void resume () override;
+   void suspend () override;

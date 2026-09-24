@@ -1,0 +1,41 @@
+--- a/gdb/amd-dbgapi-target.c
++++ b/gdb/amd-dbgapi-target.c
+@@ -2522,7 +2522,8 @@
+   if (info->process_id == AMD_DBGAPI_PROCESS_NONE)
+     return;
+ 
+-  invalidate_runtime_observation (runtime_obs::reason::detach);
++  /* Internal library teardown is not a GDB detach.  Its lifecycle caller
++     records the cause before teardown can run callbacks or reset INFO.  */
+   info->runtime_state = AMD_DBGAPI_RUNTIME_STATE_UNLOADED;
+ 
+   amd_dbgapi_status_t status = amd_dbgapi_process_detach (info->process_id);
+@@ -2555,6 +2556,9 @@
+ void
+ amd_dbgapi_target::mourn_inferior ()
+ {
++  /* Mourn removes an inferior, including kill/failed-attach cleanup.  This
++     invalidation alone does not establish a normal process exit.  */
++  invalidate_runtime_observation (runtime_obs::reason::inferior_exit);
+   detach_amd_dbgapi (current_inferior ());
+   beneath ()->mourn_inferior ();
+ }
+@@ -2562,6 +2566,8 @@
+ void
+ amd_dbgapi_target::detach (inferior *inf, int from_tty)
+ {
++  /* This target entry is a GDB detach, unlike detach_amd_dbgapi below.  */
++  invalidate_runtime_observation (runtime_obs::reason::detach);
+   /* We're about to resume the waves by detaching the dbgapi library from the
+      inferior, so we need to remove all breakpoints that are still inserted.
+ 
+@@ -3024,6 +3030,9 @@
+ static void
+ amd_dbgapi_inferior_pre_detach (inferior *inf)
+ {
++  /* Cover both pushed and unpushed targets before library teardown.  A
++     later inferior_exit notification must not replace this detach cause.  */
++  invalidate_runtime_observation (runtime_obs::reason::detach);
+   /* We need to amd-dbgapi-detach before we ptrace-detach.  If the amd-dbgapi
+      target isn't pushed, do that now.  If the amd-dbgapi target is pushed,
+      we'll do it in amd_dbgapi_target::detach.  */

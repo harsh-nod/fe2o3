@@ -18,6 +18,8 @@ mod profile;
 mod session_view;
 #[path = "diagnostic_kir_v21.rs"]
 mod v21;
+#[path = "diagnostic_kir_v22.rs"]
+mod v22;
 use profile::{Code, Profile};
 use session_view::{BindingView, RecordView, SessionView};
 #[path = "diagnostic_kir_v20_protocol.rs"]
@@ -156,6 +158,25 @@ fn configuration_for(
     request_bytes: usize,
     limits: fe2o3_kir_sim::SimulationLimitsV1,
 ) -> Result<OpaqueIdentityV1, &'static str> {
+    let hash = configuration_hash_for(
+        profile,
+        canonical_digest,
+        canonical_length,
+        request_digest,
+        request_bytes,
+        limits,
+    );
+    OpaqueIdentityV1::new(hash.finalize().into())
+        .map_err(|_| profile.code(Code::ConfigurationInvalid))
+}
+fn configuration_hash_for(
+    profile: Profile,
+    canonical_digest: &[u8; 32],
+    canonical_length: u64,
+    request_digest: &[u8; 32],
+    request_bytes: usize,
+    limits: fe2o3_kir_sim::SimulationLimitsV1,
+) -> Sha256 {
     let mut hash = Sha256::new();
     hash.update(profile.configuration_domain());
     hash.update(canonical_digest);
@@ -163,8 +184,20 @@ fn configuration_for(
     hash.update(request_digest);
     hash.update((request_bytes as u64).to_le_bytes());
     for n in [
-        LINE, RESPONSE, PAGE, COMMANDS, WORK, STORAGE, RECORDS, QUERY_WORK, CELL, SCRATCH, 1, 768,
-        8, 16384,
+        LINE,
+        RESPONSE,
+        PAGE,
+        COMMANDS,
+        WORK,
+        STORAGE,
+        profile.record_limit(),
+        QUERY_WORK,
+        CELL,
+        SCRATCH,
+        1,
+        768,
+        8,
+        16384,
     ] {
         hash.update((n as u64).to_le_bytes());
     }
@@ -193,8 +226,7 @@ fn configuration_for(
     ] {
         hash.update(n.to_le_bytes());
     }
-    OpaqueIdentityV1::new(hash.finalize().into())
-        .map_err(|_| profile.code(Code::ConfigurationInvalid))
+    hash
 }
 fn capture(input: &Input, ledger: Owned) -> Result<Backend, &'static str> {
     let configuration = configuration(input)?;
@@ -304,9 +336,16 @@ fn serve<S: SessionView>(backend: &mut Backend<S>) -> Result<(), &'static str> {
     let mut writer = BufWriter::with_capacity(4096, stdout.lock());
     protocol::run(backend, &mut reader, &mut writer, protocol_limits())
 }
+pub(super) fn run_v22(arguments: Vec<OsString>) -> ExitCode {
+    v22::run(arguments)
+}
 pub(super) fn run_v21(arguments: Vec<OsString>) -> ExitCode {
     v21::run(arguments)
 }
 #[cfg(test)]
 #[path = "diagnostic_kir_v20_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "diagnostic_physical_v22_compatibility_tests.rs"]
+mod v22_compatibility_tests;

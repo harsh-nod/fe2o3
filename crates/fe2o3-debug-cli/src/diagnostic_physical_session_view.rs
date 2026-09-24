@@ -1,4 +1,4 @@
-//! Read-only projections implemented only for the two real typed sessions.
+//! Read-only projections implemented only for the three real typed sessions.
 //! No trait object, owned transcript conversion, input constructor or resumption.
 use super::profile::Profile;
 use fe2o3_kernel_ir::{
@@ -6,12 +6,13 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_kir_debugger::{
     PhysicalEntryDebugNavigationV20 as Navigation, PhysicalEntryDebugSessionV20,
-    PhysicalGlobalCopyDebugSessionV21,
+    PhysicalGlobalCopyDebugSessionV21, PhysicalLdsExchangeDebugSessionV22,
 };
 use fe2o3_kir_sim::{
     PhysicalEntryDebugBindingRefV20, PhysicalEntryDebugCaptureStopV20 as Stop,
     PhysicalEntryDebugOutcomeV20 as Outcome, PhysicalEntryDebugRecordRefV20,
-    PhysicalGlobalCopyDebugBindingRefV21, PhysicalGlobalCopyDebugRecordRefV21, ScalarBitsV1,
+    PhysicalGlobalCopyDebugBindingRefV21, PhysicalGlobalCopyDebugRecordRefV21,
+    PhysicalLdsExchangeDebugBindingRefV22, PhysicalLdsExchangeDebugRecordRefV22, ScalarBitsV1,
     SimulationDebugCheckpointPhaseV1 as Phase, SimulationDebugSiteV1, SimulationInvocationV1,
 };
 pub(super) trait BindingView: Copy {
@@ -22,6 +23,7 @@ pub(super) trait BindingView: Copy {
     fn logical_pointer_address_space(self) -> Option<AddressSpace>;
 }
 pub(super) trait RecordView: Copy {
+    const PROFILE: Profile;
     type Binding: BindingView;
     fn invocation(self) -> SimulationInvocationV1;
     fn site(self) -> SimulationDebugSiteV1;
@@ -68,6 +70,7 @@ macro_rules! views {
             }
         }
         impl<'a> RecordView for $record<'a> {
+            const PROFILE: Profile = Profile::$profile;
             type Binding = $binding<'a>;
             fn invocation(self) -> SimulationInvocationV1 {
                 $record::invocation(self)
@@ -138,4 +141,11 @@ views!(
     PhysicalGlobalCopyDebugRecordRefV21,
     PhysicalGlobalCopyDebugBindingRefV21,
     GlobalCopyV21
+);
+
+views!(
+    PhysicalLdsExchangeDebugSessionV22,
+    PhysicalLdsExchangeDebugRecordRefV22,
+    PhysicalLdsExchangeDebugBindingRefV22,
+    LdsExchangeV22
 );

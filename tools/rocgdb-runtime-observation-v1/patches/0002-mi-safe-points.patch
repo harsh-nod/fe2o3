@@ -1,0 +1,56 @@
+--- a/gdb/amd-dbgapi-runtime-observation-hooks-v1.inc
++++ b/gdb/amd-dbgapi-runtime-observation-hooks-v1.inc
+@@ -20,6 +20,14 @@
+     }
+ }
+ 
++/* MI calls this explicitly after a complete stop record or before its prompt.
++   Reuse the same once-only ledger and existing output/error path. */
++void
++amd_runtime_observation_v1::flush_safe_point ()
++{
++  flush_runtime_observation ();
++}
++
+ static void
+ invalidate_runtime_observation (runtime_obs::reason why) noexcept
+ {
+--- a/gdb/amd-dbgapi-runtime-observation-v1.h
++++ b/gdb/amd-dbgapi-runtime-observation-v1.h
+@@ -10,6 +10,11 @@
+ 
+ namespace amd_runtime_observation_v1
+ {
++/* Drain the existing bounded numeric ledger at an ordinary interpreter safe
++   point. No lifecycle mutation, replay, target query or CLI observer dispatch.
++   Output failures retain the original sticky invalidation and propagate. */
++void flush_safe_point ();
++
+ enum class kind : std::uint32_t
+ {
+   attach_complete = 1,
+--- a/gdb/mi/mi-interp.c
++++ b/gdb/mi/mi-interp.c
+@@ -70,6 +70,10 @@
+ {
+   struct ui *ui = current_ui;
+ 
++#if HAVE_AMD_DBGAPI
++  amd_runtime_observation_v1::flush_safe_point ();
++#endif
++
+   gdb_puts ("(gdb) \n", mi->raw_stdout);
+   gdb_flush (mi->raw_stdout);
+   ui->prompt_state = PROMPTED;
+@@ -451,6 +455,11 @@
+   mi_print_timing_maybe (this->raw_stdout);
+   gdb_puts ("\n", this->raw_stdout);
+   gdb_flush (this->raw_stdout);
++
++#if HAVE_AMD_DBGAPI
++  /* The complete *stopped record is flushed and mi_uiout rewound first. */
++  amd_runtime_observation_v1::flush_safe_point ();
++#endif
+ }
+ 
+ void

@@ -182,7 +182,8 @@ fn physical_lds_exchange_context_v22<'a>(
             ));
         }
     }
-    // Debit fixed arrays and the complete bounded semantic census before traversal.
+    // Debit work for fixed-array initialization and the bounded semantic census.
+    // Stack scratch is outside this owner/correspondence payload storage account.
     budget.charge_work(argument_sum_v1(&[
         PHYSICAL_LDS_EXCHANGE_SOURCE_LOCAL_LIMIT,
         PHYSICAL_LDS_EXCHANGE_SOURCE_BLOCK_LIMIT,

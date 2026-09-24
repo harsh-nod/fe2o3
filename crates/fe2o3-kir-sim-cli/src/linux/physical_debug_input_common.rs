@@ -9,6 +9,7 @@ pub(super) const REQUEST_BYTES: usize = 16 * 1024;
 pub(super) enum Profile {
     EntryV20,
     GlobalCopyV21,
+    LdsExchangeV22,
 }
 pub(super) fn limits() -> SimulationLimitsV1 {
     SimulationLimitsV1 {
@@ -42,7 +43,11 @@ pub(super) fn envelope(header: usize) -> Result<usize, Resource> {
         .and_then(|n| n.checked_mul(4))
         .and_then(|n| n.checked_add(2 * (KIR_BYTES + 1)))
         .and_then(|n| n.checked_add(2 * (REQUEST_BYTES + 1)))
-        .and_then(|n| n.checked_add(header + 128 * 1024))
+        .and_then(|n| {
+            header
+                .checked_add(128 * 1024)
+                .and_then(|h| n.checked_add(h))
+        })
         .ok_or(Resource::Arithmetic)
 }
 pub(super) fn read_inputs(
@@ -55,6 +60,11 @@ pub(super) fn read_inputs(
             InputCode::KirV20,
             "diagnostic physical-entry KIR V20",
             "physical-entry simulation request",
+        ),
+        Profile::LdsExchangeV22 => (
+            InputCode::KirV22,
+            "diagnostic physical-LDS-exchange KIR V22",
+            "physical-LDS-exchange simulation request",
         ),
         Profile::GlobalCopyV21 => (
             InputCode::KirV21,
@@ -76,13 +86,18 @@ pub(super) fn parse_request(
     let parsed = prepare_request(document).map_err(|_| RequestRefused)?;
     let (arguments, buffers) = match profile {
         Profile::EntryV20 => (5, 1),
-        Profile::GlobalCopyV21 => (2, 2),
+        Profile::GlobalCopyV21 | Profile::LdsExchangeV22 => (2, 2),
     };
     if parsed.arguments.len() != arguments
         || parsed.shared_buffers.len() > buffers
         || parsed.grid.0[0] > 128
         || parsed.grid.0[1..] != [1, 1]
-        || parsed.workgroup.0 != [64, 1, 1]
+        || match profile {
+            Profile::EntryV20 | Profile::GlobalCopyV21 => parsed.workgroup.0 != [64, 1, 1],
+            Profile::LdsExchangeV22 => {
+                parsed.workgroup.0 != [128, 1, 1] || parsed.grid.0 != [128, 1, 1]
+            }
+        }
     {
         return Err(RequestRefused);
     }

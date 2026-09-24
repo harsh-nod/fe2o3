@@ -1,5 +1,60 @@
 # Assembly authoring implementation status
 
+## Actual native runtime-observer relation — 2026-09-24
+
+The [fresh fixed-host no-queue qualification](evidence/gfx950-native-runtime-observation-20260924.md)
+now joins six actual native records, runtime/publication acknowledgments, the same
+owned host-stop original ELF, separate normal MI exit and complete scoped cleanup.
+The independently reproducible GPL producer package is separate from core crates.
+This historical relation is not a portable live adapter, physical-register capture
+or GPU execution. Accepted original milestone exits remain 6/18.
+
+## Actual authored LDS source, checked continuation and static native evidence — 2026-09-24
+
+The bounded [LDS authoring source](physical-lds-exchange-source-v22.md) and
+[normal checked continuation](physical-lds-exchange-checked-v22.md) now have
+separately completed actual-source, CPU and static-native gates. The
+[dated qualification record](physical-lds-exchange-qualification-20260924.md)
+retains the exact observation and completed-command hashes.
+
+The pre-ranked source ladder passed 38 actual sessions across nineteen source
+variants, with 64 CPU positives, 12 CPU refusals, two barrier observations and
+34 exact source refusals. The normal checked-source ladder separately passed
+57 sessions, 64 CPU positives, 12 CPU refusals, 51 exact source refusals,
+142 actual-owner ABI mutation controls and eight resource denials. Counts
+belong to their respective gates and must not be added as disjoint coverage.
+
+The same actual MIR39 source owner materializes authored KIR22 SSA and retains
+the combined global, kernarg and LDS completion/publication report through
+mandatory ranked safety checks, exact four-slot ABI/descriptor preparation and
+normal inert LLVM/handoff. The original executable graph is not replaced by
+the conditional ranked projection. Runtime pointer/extent/permission,
+initialization, disjointness, kernarg lifetime/immutability and full-workgroup
+participation conditions remain unresolved.
+
+Specialized CPU capture passed two newly authenticated sessions, four captures
+and eight refusals. Captures retain three allocations, two logical waves,
+128 barrier arrivals and one release, plus global/LDS pending-to-ready
+transitions; two generic-debug attempts refused with zero records. Reverse
+navigation is observational, not resumed execution or physical GPU state.
+
+The separate unchanged-source static-native matrix passed both register
+layouts at O0/O3: four cases, sixteen input-pin refusals and 280 native mutation
+refusals. Each decoded entry has exactly 32 instructions / 168 bytes, no added
+executable setup/tail, seventeen metadata arguments, 512 bytes of static LDS
+and no scratch. O0/O3 HSACO bytes matched within each layout. Static descriptor
+register capacities are not physical samples, and the native input LLVM was
+not repaired or rewritten.
+
+The public source/checked wrappers now pass six completed shards plus aggregate:
+38 commands / 57 stages / 51 exact refusals. The public V22 CLI/index gate passes
+6 actual sessions, 96 transactional refusals, 13 bootstrap refusals and 8 byte-exact
+V20/V21 replays. Fresh wrapper identities stay separate from the sourceR7-derived
+CLI recordings. Final compiler/site publication remains a separate gate. No GPU execution, host admission,
+runtime-condition discharge, protected artifact/finalizer admission, physical
+register capture or broader memory/synchronization milestone completion is
+claimed. Original accepted exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Actual complete-body Rust source and CPU debugger — 2026-09-24
 
 The [source continuation qualification](evidence/complete-body-source-v19-20260924.md)

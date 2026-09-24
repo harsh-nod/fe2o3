@@ -1,8 +1,8 @@
-//! The original nine wire profiles keep their additive global-copy refusals.
+//! Original wire profiles keep their refusals; V22 owns its distinct profile refusal.
 use fe2o3_kir_sim::{
-    SimulationCapabilityDispositionV1 as Disposition, SimulationOperationSurfaceV1 as Surface,
-    SimulationUnsupportedReasonCodeV1 as Reason, UnsupportedFeatureV1,
-    semantic_capability_matrix_v1,
+    SimulationCapabilityDispositionV1 as Disposition, SimulationKirWireVersionV1 as Wire,
+    SimulationOperationSurfaceV1 as Surface, SimulationUnsupportedReasonCodeV1 as Reason,
+    UnsupportedFeatureV1, semantic_capability_matrix_v1,
 };
 
 #[test]
@@ -15,7 +15,7 @@ fn global_copy_rows_refuse_every_existing_profile_without_reassigning_old_ids() 
     let rows: Vec<_> = matrix
         .top_level_rows
         .iter()
-        .filter(|row| row.kir_wire_version != fe2o3_kir_sim::SimulationKirWireVersionV1::V21)
+        .filter(|row| row.kir_wire_version != Wire::V21 && row.kir_wire_version != Wire::V22)
         .filter(|row| {
             matches!(
                 row.operation,
@@ -40,11 +40,35 @@ fn global_copy_rows_refuse_every_existing_profile_without_reassigning_old_ids() 
         matrix
             .top_level_rows
             .iter()
-            .filter(
-                |row| row.kir_wire_version != fe2o3_kir_sim::SimulationKirWireVersionV1::V21
-                    && (row.operation as u8) < 44
-            )
+            .filter(|row| row.kir_wire_version != Wire::V21
+                && row.kir_wire_version != Wire::V22
+                && (row.operation as u8) < 44)
             .count(),
         44 * 4 * 9
     );
+}
+
+#[test]
+fn global_copy_rows_in_v22_use_the_exact_lds_profile_refusal() {
+    let matrix = semantic_capability_matrix_v1();
+    let rows: Vec<_> = matrix
+        .top_level_rows
+        .iter()
+        .filter(|row| {
+            row.kir_wire_version == Wire::V22
+                && matches!(
+                    row.operation,
+                    Surface::PhysicalGlobalCopyDeclaration | Surface::PhysicalGlobalCopyStep
+                )
+        })
+        .collect();
+    assert_eq!(rows.len(), 2 * 4);
+    for row in rows {
+        assert_eq!(
+            row.capability,
+            Disposition::Unsupported {
+                reason: Reason::PhysicalLdsExchangeProfile,
+            }
+        );
+    }
 }

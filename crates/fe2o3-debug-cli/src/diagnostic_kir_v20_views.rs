@@ -49,10 +49,11 @@ pub(super) fn capabilities() -> Vec<CapabilityViewV1> {
 }
 fn scope<R: RecordView>(record: R) -> ExecutionScopeV1 {
     let invocation = record.invocation();
+    let (wave, lane) = R::PROFILE.logical_wave_lane(invocation.local[0]);
     ExecutionScopeV1::Lane {
         workgroup: invocation.workgroup.map(|n| n as u32),
-        wave: 0,
-        lane: invocation.local[0] as u16,
+        wave,
+        lane,
         logical_workitem: invocation.global,
         active_mask: u64::MAX,
         wave_width: 64,

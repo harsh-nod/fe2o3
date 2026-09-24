@@ -3739,7 +3739,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("fb5338c85bc5110fade2dce0cadf905b2a94f23e15c7033ca951254e4d06a8ba")
+            digest("1e80b25587112d19ee4ede55ac86a50d77e3cbabb5503addd7ec7ac201f51535")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -4342,6 +4342,9 @@ mod tests {
             TrustedDeviceItem::AmdGpuPhysicalGlobalCopyBeginGfx942,
             TrustedDeviceItem::AmdGpuPhysicalGlobalCopyLabelGfx942,
             TrustedDeviceItem::AmdGpuPhysicalGlobalCopyStepGfx942,
+            TrustedDeviceItem::AmdGpuPhysicalLdsExchangeBeginGfx942,
+            TrustedDeviceItem::AmdGpuPhysicalLdsExchangeLabelGfx942,
+            TrustedDeviceItem::AmdGpuPhysicalLdsExchangeStepGfx942,
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),

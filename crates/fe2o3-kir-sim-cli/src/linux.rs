@@ -54,6 +54,7 @@ pub(super) mod diagnostic_kir_v19;
 mod physical_debug_input_common;
 pub(super) mod physical_entry_debug_v20;
 pub(super) mod physical_global_copy_debug_v21;
+pub(super) mod physical_lds_exchange_debug_v22;
 
 const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --kir-v12 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --diagnostic-kir-v19 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH] (diagnostic V16/V17/V19 do not support schedule options)";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
@@ -149,6 +150,7 @@ enum UnsupportedFeatureCode {
 enum InputCode {
     KirV20,
     KirV21,
+    KirV22,
     KirV7,
     KirV12,
     KirV16,
