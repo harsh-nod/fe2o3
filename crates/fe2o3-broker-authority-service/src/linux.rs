@@ -16,6 +16,7 @@ mod client_v2;
 mod continuity;
 mod native;
 mod native_io;
+mod service_native;
 
 pub use client_v2::{
     CURRENT_PROCESS_START_TIME_IO_STORAGE_V2, CURRENT_PROCESS_START_TIME_WORK_V2,
@@ -25,6 +26,9 @@ pub use client_v2::{
 pub use native::{
     ProtectedExternalAnchorServiceAdmissionV2, ProtectedExternalAnchorServiceErrorV2,
     ProtectedExternalAnchorServiceStorageV2,
+};
+pub use service_native::{
+    ProtectedServiceAdmissionErrorV2, ProtectedServiceAdmissionV2, ProtectedServiceStorageV2,
 };
 
 const DIRECTORY_PERMISSIONS: u32 = 0o700;
@@ -973,37 +977,57 @@ fn validate_root(
     service_uid: u32,
 ) -> Result<ObjectIdentityV1, ProtectedServiceAdmissionErrorV1> {
     let identity = ObjectIdentityV1::inspect(root, AdmissionErrorKindV1::InspectRoot, "root")?;
+    require_root_identity(identity, service_uid).map_err(|error| match error.kind() {
+        AdmissionErrorKindV1::RootOwner => ProtectedServiceAdmissionErrorV1::new(
+            error.kind(),
+            format!(
+                "supervisor directory owner UID {} differs from service UID {service_uid}",
+                identity.uid
+            ),
+        ),
+        AdmissionErrorKindV1::RootMode => ProtectedServiceAdmissionErrorV1::new(
+            error.kind(),
+            format!(
+                "supervisor directory mode is {:04o}, expected exactly 0700",
+                identity.mode & PERMISSION_AND_SPECIAL_BITS
+            ),
+        ),
+        _ => error.into(),
+    })?;
+    Ok(identity)
+}
+
+// The legacy adapter retains its formatted diagnostics; native callers use the
+// same ordered predicates without allocating a diagnostic String.
+fn require_root_identity(
+    identity: ObjectIdentityV1,
+    service_uid: u32,
+) -> Result<(), checks::CheckError> {
     if !rustix::fs::FileType::from_raw_mode(identity.mode).is_dir() {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
+        return Err(checks::CheckError::new(
             AdmissionErrorKindV1::RootNotDirectory,
             "supervisor-supplied root descriptor is not a directory",
         ));
     }
     if identity.uid != service_uid {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
+        return Err(checks::CheckError::new(
             AdmissionErrorKindV1::RootOwner,
-            format!(
-                "supervisor directory owner UID {} differs from service UID {service_uid}",
-                identity.uid
-            ),
+            "supervisor directory owner UID differs from service UID",
         ));
     }
     if identity.mode & PERMISSION_AND_SPECIAL_BITS != DIRECTORY_PERMISSIONS {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
+        return Err(checks::CheckError::new(
             AdmissionErrorKindV1::RootMode,
-            format!(
-                "supervisor directory mode is {:04o}, expected exactly 0700",
-                identity.mode & PERMISSION_AND_SPECIAL_BITS
-            ),
+            "supervisor directory mode is not exactly 0700",
         ));
     }
     if identity.links == 0 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
+        return Err(checks::CheckError::new(
             AdmissionErrorKindV1::RootUnlinked,
             "supervisor directory has st_nlink zero and is no longer linked",
         ));
     }
-    Ok(identity)
+    Ok(())
 }
 
 fn validate_peer_shape(
@@ -1021,9 +1045,9 @@ enum UnixAddressSideV1 {
 fn require_distinct_descriptors(
     root: ObjectIdentityV1,
     peer: ObjectIdentityV1,
-) -> Result<(), ProtectedServiceAdmissionErrorV1> {
+) -> Result<(), checks::CheckError> {
     if root.object() == peer.object() {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
+        return Err(checks::CheckError::new(
             AdmissionErrorKindV1::DuplicateDescriptors,
             "supervisor root and service peer resolve to the same object",
         ));
@@ -1035,9 +1059,9 @@ fn require_distinct_pidfd_descriptor(
     root: ObjectIdentityV1,
     peer: ObjectIdentityV1,
     pidfd: ObjectIdentityV1,
-) -> Result<(), ProtectedServiceAdmissionErrorV1> {
+) -> Result<(), checks::CheckError> {
     if pidfd.object() == root.object() || pidfd.object() == peer.object() {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
+        return Err(checks::CheckError::new(
             AdmissionErrorKindV1::DuplicateDescriptors,
             "client pidfd resolves to the same object as another retained service descriptor",
         ));
@@ -1109,7 +1133,7 @@ mod tests {
         rustix::io::fcntl_setfd(descriptor, flags).unwrap();
     }
 
-    fn accepted_named_connection(
+    pub(super) fn accepted_named_connection(
         server: &SocketAddrUnix,
         client_address: Option<&SocketAddrUnix>,
     ) -> (OwnedFd, OwnedFd) {
@@ -1137,7 +1161,7 @@ mod tests {
         (accepted, client)
     }
 
-    fn send_descriptor(socket: RawFd, descriptor: RawFd) -> io::Result<()> {
+    pub(super) fn send_descriptor(socket: RawFd, descriptor: RawFd) -> io::Result<()> {
         let mut byte = 0x46_u8;
         let mut io_vector = libc::iovec {
             iov_base: ptr::from_mut(&mut byte).cast(),
@@ -1168,7 +1192,7 @@ mod tests {
         }
     }
 
-    fn receive_descriptor(socket: RawFd) -> io::Result<OwnedFd> {
+    pub(super) fn receive_descriptor(socket: RawFd) -> io::Result<OwnedFd> {
         let mut byte = 0_u8;
         let mut io_vector = libc::iovec {
             iov_base: ptr::from_mut(&mut byte).cast(),
