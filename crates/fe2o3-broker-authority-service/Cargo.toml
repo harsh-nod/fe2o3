@@ -15,6 +15,7 @@ test-support = []
 fe2o3-artifact-transaction.workspace = true
 fe2o3-build-authority.workspace = true
 fe2o3-compiler-closure-capability.workspace = true
+fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-external-anchor-protocol.workspace = true
 fe2o3-host-link-closure = { path = "../fe2o3-host-link-closure" }
 fe2o3-kernel-ir.workspace = true

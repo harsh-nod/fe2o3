@@ -24,6 +24,16 @@ use rustix::fs::FileType;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
+#[path = "compiler_execution_issuer_native.rs"]
+mod native;
+#[path = "compiler_execution_issuer_native_checks.rs"]
+mod native_checks;
+pub use native::{
+    ProtectedCompilerExecutionIssuerAdmissionErrorV2, ProtectedCompilerExecutionIssuerAdmissionV2,
+    ProtectedCompilerExecutionIssuerStorageV2,
+};
+use native_checks::IssuerInspectionError;
+
 use crate::{
     ProtectedCompilerExecutionExternalAnchorV1, ProtectedServiceAdmissionErrorV1,
     ProtectedServiceAdmissionV1,
@@ -121,11 +131,11 @@ impl ProtectedIssuerProcessV1 {
         Ok(process)
     }
 
-    fn validate(&self) -> Result<(), ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+    fn validate(&self) -> Result<(), IssuerInspectionError> {
         let mut core = std::mem::MaybeUninit::<libc::rlimit>::uninit();
         // SAFETY: the pointer references writable storage for one rlimit result.
         if unsafe { libc::getrlimit(libc::RLIMIT_CORE, core.as_mut_ptr()) } != 0 {
-            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+            return Err(IssuerInspectionError::io(
                 IssuerAdmissionErrorKindV1::ProcessHardeningChanged,
                 "cannot revalidate issuer core-dump limits",
                 io::Error::last_os_error(),
@@ -138,14 +148,14 @@ impl ProtectedIssuerProcessV1 {
         // SAFETY: these documented scalar query operations use no pointer arguments.
         let no_new_privs = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
         if dumpable < 0 || no_new_privs < 0 {
-            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+            return Err(IssuerInspectionError::io(
                 IssuerAdmissionErrorKindV1::ProcessHardeningChanged,
                 "cannot revalidate issuer process security state",
                 io::Error::last_os_error(),
             ));
         }
         if core.rlim_cur != 0 || core.rlim_max != 0 || dumpable != 0 || no_new_privs != 1 {
-            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            return Err(IssuerInspectionError::new(
                 IssuerAdmissionErrorKindV1::ProcessHardeningChanged,
                 "issuer process security state changed after hardening",
             ));
@@ -173,12 +183,11 @@ impl FileSnapshotV1 {
     fn inspect(
         file: &impl AsFd,
         kind: IssuerAdmissionErrorKindV1,
-        label: &'static str,
-    ) -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+    ) -> Result<Self, IssuerInspectionError> {
         let stat = rustix::fs::fstat(file).map_err(|error| {
-            ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+            IssuerInspectionError::io(
                 kind,
-                format!("cannot inspect {label}"),
+                "cannot inspect running issuer executable",
                 io::Error::from(error),
             )
         })?;
@@ -190,10 +199,7 @@ impl FileSnapshotV1 {
             uid: stat.st_uid,
             gid: stat.st_gid,
             size: stat.st_size.try_into().map_err(|_| {
-                ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
-                    kind,
-                    format!("{label} has a negative size"),
-                )
+                IssuerInspectionError::new(kind, "running issuer executable has a negative size")
             })?,
             modified_seconds: stat.st_mtime,
             modified_nanoseconds: stat.st_mtime_nsec,
@@ -222,11 +228,7 @@ impl RetainedStaticIssuerExecutableV1 {
                 error,
             )
         })?;
-        require_close_on_exec(
-            &image,
-            IssuerAdmissionErrorKindV1::ExecutableCloseOnExec,
-            "issuer executable",
-        )?;
+        require_close_on_exec(&image, IssuerAdmissionErrorKindV1::ExecutableCloseOnExec)?;
         let snapshot = validate_executable_snapshot(&image)?;
         let measurements = measure_static_executable(&image, snapshot)?;
         let retained = Self {
@@ -242,7 +244,6 @@ impl RetainedStaticIssuerExecutableV1 {
         require_close_on_exec(
             &self.image,
             IssuerAdmissionErrorKindV1::ExecutableCloseOnExec,
-            "issuer executable",
         )?;
         let snapshot = validate_executable_snapshot(&self.image)?;
         if snapshot != self.snapshot {
@@ -267,22 +268,16 @@ pub fn current_static_issuer_measurements_v1()
     Ok(RetainedStaticIssuerExecutableV1::observe()?.measurements)
 }
 
-fn validate_executable_snapshot(
-    image: &File,
-) -> Result<FileSnapshotV1, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
-    let snapshot = FileSnapshotV1::inspect(
-        image,
-        IssuerAdmissionErrorKindV1::ExecutableInspect,
-        "running issuer executable",
-    )?;
+fn validate_executable_snapshot(image: &File) -> Result<FileSnapshotV1, IssuerInspectionError> {
+    let snapshot = FileSnapshotV1::inspect(image, IssuerAdmissionErrorKindV1::ExecutableInspect)?;
     if snapshot.file_type() != FileType::RegularFile || snapshot.mode & 0o111 == 0 {
-        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+        return Err(IssuerInspectionError::new(
             IssuerAdmissionErrorKindV1::ExecutableShape,
             "running issuer executable is not an executable regular file",
         ));
     }
     if snapshot.size == 0 || snapshot.size > MAX_COMPILER_EXECUTION_ISSUER_IMAGE_BYTES_V1 {
-        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+        return Err(IssuerInspectionError::new(
             IssuerAdmissionErrorKindV1::ExecutableSize,
             "running issuer executable has an invalid bounded size",
         ));
@@ -329,11 +324,7 @@ fn measure_static_executable(
             "issuer executable grew while it was measured",
         ));
     }
-    let after = FileSnapshotV1::inspect(
-        image,
-        IssuerAdmissionErrorKindV1::ExecutableInspect,
-        "running issuer executable",
-    )?;
+    let after = FileSnapshotV1::inspect(image, IssuerAdmissionErrorKindV1::ExecutableInspect)?;
     if after != before {
         return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
             IssuerAdmissionErrorKindV1::ExecutableChanged,
@@ -612,19 +603,18 @@ fn read_capability_signing_key(
 fn require_close_on_exec(
     descriptor: &impl AsFd,
     kind: IssuerAdmissionErrorKindV1,
-    label: &'static str,
-) -> Result<(), ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+) -> Result<(), IssuerInspectionError> {
     let flags = rustix::io::fcntl_getfd(descriptor).map_err(|error| {
-        ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+        IssuerInspectionError::io(
             kind,
-            format!("cannot inspect {label} descriptor flags"),
+            "cannot inspect issuer executable descriptor flags",
             io::Error::from(error),
         )
     })?;
     if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+        return Err(IssuerInspectionError::new(
             kind,
-            format!("{label} descriptor lacks FD_CLOEXEC"),
+            "issuer executable descriptor lacks FD_CLOEXEC",
         ));
     }
     Ok(())
