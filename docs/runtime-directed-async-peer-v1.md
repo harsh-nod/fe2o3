@@ -73,7 +73,8 @@ proof evidence. This adapter alone does not close A1/A2 or issue #182.
 
 ### Next Native Witness
 
-Add a new sibling of `gfx942-runtime-xgmi-segments-owner-smoke.rs`. Preserve
+The [new witness candidate](runtime-directed-owner-witness-v1.md) is a sibling
+of `gfx942-runtime-xgmi-segments-owner-smoke.rs`. Preserve
 that historical example and parser: they deliberately qualify refusal of
 pending dataflow, not this newly admitted profile. Reuse the existing
 `xgmi_segments_owner_campaign.py` / `xgmi_segments_owner_native.py` controller

@@ -1,0 +1,3 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [optimized] target(s) in 1.30s
+     Running unittests examples/gfx942-runtime-xgmi-directed-owner-smoke.rs (/home/harsh/.codex-tmp/fe2o3-directed-owner-20260924-mamEIcU0/target/debug/examples/gfx942_runtime_xgmi_directed_owner_smoke-54b8f34986477b4d)

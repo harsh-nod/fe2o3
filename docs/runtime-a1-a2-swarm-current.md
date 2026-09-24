@@ -1,5 +1,18 @@
 # Current Runtime Swarm Work Orders
 
+Latest native-witness preparation (2026-09-24): the
+[directed owner packet](evidence/dev-directed-owner-witness-cpu-2026-09-24/README.md)
+adds a four-copy native XGMI dependency-diamond example and source-bound sibling
+campaign. The owner releases producer events after tracked join admission and
+before progress, checks all five complete buffers, and always inspects explicit
+shutdown. Six example tests pass on both GNU and musl; fourteen Python tests
+include compiled invalid-CLI checks and mocked failure/postflight orchestration.
+Formatting, strict all-target Clippy, tool brackets and 3,902 unchanged inputs
+pass. Production runtime and historical witness/evidence sources are unchanged.
+Native execution and its sealed replay are next; fault, refinement, aggregate
+memory and matched performance gates remain open. Native R125, Admission R118B,
+Resources R116/V3 and A1/A2 acceptance are unchanged.
+
 Latest async integration (2026-09-24): the
 [directed async packet](evidence/dev-directed-async-peer-cpu-2026-09-24/README.md)
 adds ordinary and tracked peer-copy methods using the exact Context directed
