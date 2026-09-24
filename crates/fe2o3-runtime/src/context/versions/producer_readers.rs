@@ -1,4 +1,4 @@
-//! One exact pending input for the opt-in directed scalar copy profile.
+//! Exact pending inputs for explicitly success-gated copy and typed-launch profiles.
 
 use super::*;
 use crate::context::peer_custody::ScalarPeerDependencyV1;
@@ -8,11 +8,41 @@ use fe2o3_runtime_model::{
     ContextWriterKindV1,
 };
 
-pub(super) struct RetainedProducerReadV1 {
-    pub(super) source: ContextReadSourceV1,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::context) struct SubmissionProducerReaderMarkerV1 {
+    pub(in crate::context) first: ContextProducerReadReferenceV1,
+    pub(in crate::context) count: usize,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ProducerReadDomainV1 {
+    DirectedPeer,
+    Launch,
+}
+
+struct ProducerInputV1 {
+    source: ContextReadSourceV1,
     dependency: ScalarPeerDependencyV1,
     request: ContextProducerReadV1,
-    pub(super) reference: Option<ContextProducerReadReferenceV1>,
+}
+
+pub(super) struct RetainedProducerReadV1 {
+    domain: ProducerReadDomainV1,
+    inputs: Vec<ProducerInputV1>,
+    requests: Vec<ContextProducerReadV1>,
+    references: Vec<ContextProducerReadReferenceV1>,
+    pub(super) marker: Option<SubmissionProducerReaderMarkerV1>,
+}
+
+impl RetainedProducerReadV1 {
+    pub(super) fn sources(&self) -> impl Iterator<Item = &ContextReadSourceV1> {
+        self.inputs.iter().map(|input| &input.source)
+    }
+}
+
+pub(super) struct PreparedProducerReadsV1 {
+    root: RetainedProducerReadV1,
+    output: Vec<Option<ContextProducerReadReferenceV1>>,
 }
 
 #[cfg(test)]
@@ -23,58 +53,95 @@ impl ContextVersionsV1 {
     ) {
         self.producer_readers.remove(&id);
     }
+
+    pub(in crate::context) fn corrupt_producer_read_reference_for_test_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+        index: usize,
+    ) {
+        self.producer_readers.get_mut(&id).unwrap().references[index].incarnation += 1;
+    }
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
-    pub(super) fn prepare_producer_read_v1(
+    fn prepare_pending_input_v1(
         &mut self,
-        peer: Option<&PreparedPeerSubmissionV1>,
-    ) -> Result<Option<RetainedProducerReadV1>, RuntimeValidationErrorV1> {
-        self.guard_journal_unwind_v1(|context| {
-            let Some(root) = peer
-                .and_then(|peer| peer.scalar.as_ref())
-                .filter(|root| root.directed.is_some())
-            else {
-                return Ok(None);
-            };
-            let Some(versions) = &context.versions else {
-                return Ok(None);
-            };
-            let source = root.source;
-            let result = versions
-                .validate_live(source.region.allocation, &source.record)
-                .and_then(|allocation| {
-                    versions
-                        .journal
-                        .lookup_allocation(allocation)
-                        .map(|state| (allocation, state))
-                });
-            let (allocation, state) = context.journal_result_v1(result)?;
-            let Some(writer) = state.pending_writer else {
-                return Ok(None);
-            };
-            let result = context
-                .versions
-                .as_ref()
-                .expect("configured journal")
-                .retained_writer(writer);
-            if !matches!(
-                context.journal_result_v1(result)?,
-                fe2o3_runtime_model::ContextWriterStateV1::Pending { .. }
-            ) {
-                return Err(RuntimeValidationErrorV1::ContextReserved);
-            }
-            let dependency = root
-                .dependencies
-                .iter()
-                .find(|dependency| {
-                    writer.key.kind == ContextWriterKindV1::Submission
-                        && writer.key.context_generation == dependency.submission.context_generation
-                        && writer.key.local == dependency.submission.local
-                })
-                .copied()
+        source: ContextReadSourceV1,
+        dependencies: &[ScalarPeerDependencyV1],
+        launch: Option<&ProducerLaunchRootV1>,
+    ) -> Result<Option<ProducerInputV1>, RuntimeValidationErrorV1> {
+        if self.allocations.get(&source.region.allocation) != Some(&source.record)
+            || !self
+                .backend_allocations
+                .contains(&source.record.backend_allocation)
+            || !self
+                .allocation_admission
+                .has_expected_credit(source.region.allocation, source.record.device)
+        {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+        }
+        let Some(versions) = &self.versions else {
+            return Ok(None);
+        };
+        let result = versions
+            .validate_live(source.region.allocation, &source.record)
+            .and_then(|allocation| {
+                versions
+                    .journal
+                    .lookup_allocation(allocation)
+                    .map(|state| (allocation, state))
+            });
+        let (allocation, state) = self.journal_result_v1(result)?;
+        let Some(writer) = state.pending_writer else {
+            return Ok(None);
+        };
+        let result = self
+            .versions
+            .as_ref()
+            .expect("configured journal")
+            .retained_writer(writer);
+        if !matches!(
+            self.journal_result_v1(result)?,
+            fe2o3_runtime_model::ContextWriterStateV1::Pending { .. }
+        ) {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        let dependency = dependencies
+            .iter()
+            .find(|dependency| {
+                writer.key.kind == ContextWriterKindV1::Submission
+                    && writer.key.context_generation == dependency.submission.context_generation
+                    && writer.key.local == dependency.submission.local
+            })
+            .copied()
+            .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+        if let Some(consumer) = launch {
+            let producer = self
+                .producer_launches
+                .get(&dependency.submission)
                 .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
-            let producer = context
+            // Leases cover the allocation; native coverage must cover every original Read alias.
+            let mut found = false;
+            for binding in consumer
+                .bindings
+                .iter()
+                .filter(|binding| binding.region.allocation == source.region.allocation)
+            {
+                if binding.record != source.record
+                    || binding.region.access != RuntimeAccessV1::Read
+                    || !producer.covers_input_v1(*binding)
+                {
+                    return Err(RuntimeValidationErrorV1::ContextReserved);
+                }
+                found = true;
+            }
+            if !found {
+                return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+            }
+            let result = self.validate_pending_producer_launch_roots_v1(dependency.submission);
+            self.journal_result_v1(result)?;
+        } else {
+            let producer = self
                 .scalar_peer_copies
                 .get(&dependency.submission)
                 .filter(|producer| producer.directed.is_some())
@@ -97,74 +164,188 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             {
                 return Err(RuntimeValidationErrorV1::ContextReserved);
             }
-            let result = context.validate_pending_peer_copy_roots_v1(dependency.submission);
-            context.journal_result_v1(result)?;
-            if context.submissions[&dependency.submission].journal_writer != Some(writer) {
+            let result = self.validate_pending_peer_copy_roots_v1(dependency.submission);
+            self.journal_result_v1(result)?;
+        }
+        if self.submissions[&dependency.submission].journal_writer != Some(writer) {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        let request = ContextProducerReadV1 {
+            read: ContextAllocationReadV1 {
+                allocation,
+                device: state.device,
+                byte_extent: state.byte_extent,
+                byte_offset: source.region.byte_offset,
+                byte_len: source.region.byte_len,
+                attempt_epoch: state.attempt_epoch,
+                content_lineage: state.content_lineage,
+            },
+            producer: writer,
+        };
+        let result = self
+            .versions
+            .as_ref()
+            .expect("configured journal")
+            .journal
+            .validate_producer_read(&request);
+        match result {
+            Err(ContextVersionJournalErrorV1::AllocationBusy) => {
                 return Err(RuntimeValidationErrorV1::ContextReserved);
             }
-            let request = ContextProducerReadV1 {
-                read: ContextAllocationReadV1 {
-                    allocation,
-                    device: state.device,
-                    byte_extent: state.byte_extent,
-                    byte_offset: source.region.byte_offset,
-                    byte_len: source.region.byte_len,
-                    attempt_epoch: state.attempt_epoch,
-                    content_lineage: state.content_lineage,
-                },
-                producer: writer,
+            result => self.journal_result_v1(result)?,
+        }
+        Ok(Some(ProducerInputV1 {
+            source,
+            dependency,
+            request,
+        }))
+    }
+
+    fn prepare_producer_batch_v1(
+        &mut self,
+        inputs: Vec<ProducerInputV1>,
+        domain: ProducerReadDomainV1,
+    ) -> Result<Option<PreparedProducerReadsV1>, RuntimeValidationErrorV1> {
+        if inputs.is_empty() {
+            return Ok(None);
+        }
+        let result = self
+            .versions
+            .as_ref()
+            .expect("configured journal")
+            .journal
+            .validate_producer_read_capacity(inputs.len());
+        match result {
+            Err(
+                ContextVersionJournalErrorV1::MemberCapacity
+                | ContextVersionJournalErrorV1::EpochExhausted,
+            ) => return Err(RuntimeValidationErrorV1::Capacity),
+            result => self.journal_result_v1(result)?,
+        }
+        let mut requests = Vec::new();
+        let mut references = Vec::new();
+        let mut output = Vec::new();
+        requests
+            .try_reserve_exact(inputs.len())
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        references
+            .try_reserve_exact(inputs.len())
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        output
+            .try_reserve_exact(inputs.len())
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        requests.extend(inputs.iter().map(|input| input.request));
+        output.resize(inputs.len(), None);
+        self.versions
+            .as_mut()
+            .expect("configured journal")
+            .producer_readers
+            .try_reserve(1)
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        Ok(Some(PreparedProducerReadsV1 {
+            root: RetainedProducerReadV1 {
+                domain,
+                inputs,
+                requests,
+                references,
+                marker: None,
+            },
+            output,
+        }))
+    }
+
+    pub(super) fn prepare_producer_read_v1(
+        &mut self,
+        peer: Option<&PreparedPeerSubmissionV1>,
+    ) -> Result<Option<PreparedProducerReadsV1>, RuntimeValidationErrorV1> {
+        self.guard_journal_unwind_v1(|context| {
+            let Some(root) = peer
+                .and_then(|peer| peer.scalar.as_ref())
+                .filter(|root| root.directed.is_some())
+            else {
+                return Ok(None);
             };
-            let versions = context.versions.as_ref().expect("configured journal");
-            let result = versions
-                .journal
-                .validate_producer_read_capacity(1)
-                .and_then(|()| versions.journal.validate_producer_read(&request));
-            match result {
-                Err(
-                    ContextVersionJournalErrorV1::MemberCapacity
-                    | ContextVersionJournalErrorV1::EpochExhausted,
-                ) => return Err(RuntimeValidationErrorV1::Capacity),
-                Err(ContextVersionJournalErrorV1::AllocationBusy) => {
-                    return Err(RuntimeValidationErrorV1::ContextReserved);
-                }
-                result => context.journal_result_v1(result)?,
-            }
-            context
-                .versions
-                .as_mut()
-                .expect("configured journal")
-                .producer_readers
-                .try_reserve(1)
+            let mut inputs = Vec::new();
+            inputs
+                .try_reserve_exact(1)
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-            Ok(Some(RetainedProducerReadV1 {
-                source,
-                dependency,
-                request,
-                reference: None,
-            }))
+            if let Some(input) =
+                context.prepare_pending_input_v1(root.source, &root.dependencies, None)?
+            {
+                inputs.push(input);
+            }
+            context.prepare_producer_batch_v1(inputs, ProducerReadDomainV1::DirectedPeer)
+        })
+    }
+
+    pub(super) fn prepare_launch_inputs_v1(
+        &mut self,
+        root: &ProducerLaunchRootV1,
+        sources: &[ContextReadSourceV1],
+    ) -> Result<
+        (
+            Option<PreparedSubmissionReadersV1>,
+            Option<PreparedProducerReadsV1>,
+        ),
+        RuntimeValidationErrorV1,
+    > {
+        self.guard_journal_unwind_v1(|context| {
+            let versions = context
+                .versions
+                .as_ref()
+                .ok_or(RuntimeValidationErrorV1::Unsupported)?;
+            if versions.journal.remaining_read_slots() < sources.len() {
+                return Err(RuntimeValidationErrorV1::Capacity);
+            }
+            let mut stable = Vec::new();
+            let mut pending = Vec::new();
+            stable
+                .try_reserve_exact(sources.len())
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            pending
+                .try_reserve_exact(sources.len())
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            let mut previous = None;
+            for source in sources {
+                if previous.is_some_and(|previous| previous >= source.region.allocation) {
+                    return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+                }
+                previous = Some(source.region.allocation);
+                match context.prepare_pending_input_v1(*source, &root.dependencies, Some(root))? {
+                    Some(input) => pending.push(input),
+                    None => stable.push(*source),
+                }
+            }
+            let reads = context.prepare_submission_readers_v1(&stable)?;
+            let producers =
+                context.prepare_producer_batch_v1(pending, ProducerReadDomainV1::Launch)?;
+            Ok((reads, producers))
         })
     }
 
     pub(super) fn begin_producer_read_v1(
         &mut self,
         id: RuntimeSubmissionIdV1,
-        prepared: Option<RetainedProducerReadV1>,
-    ) -> Result<Option<ContextProducerReadReferenceV1>, RuntimeValidationErrorV1> {
-        let Some(root) = prepared else {
+        prepared: Option<PreparedProducerReadsV1>,
+    ) -> Result<Option<SubmissionProducerReaderMarkerV1>, RuntimeValidationErrorV1> {
+        let Some(mut prepared) = prepared else {
             return Ok(None);
         };
         self.guard_journal_unwind_v1(|context| {
             let result = (|| {
+                let launch = context.producer_launches.contains_key(&id);
                 let versions = context
                     .versions
                     .as_mut()
                     .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
                 if versions.producer_readers.contains_key(&id)
-                    || versions.submission_readers.contains_key(&id)
+                    || launch != (prepared.root.domain == ProducerReadDomainV1::Launch)
+                    || !launch && versions.submission_readers.contains_key(&id)
                     || versions
                         .submission_writers
                         .get(&id)
-                        .is_none_or(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
+                        .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
+                    || !launch && !versions.submission_writers.contains_key(&id)
                 {
                     return Err(ContextVersionJournalErrorV1::InvalidReference);
                 }
@@ -172,22 +353,35 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     versions.producer_readers.len() < versions.producer_readers.capacity(),
                     "preallocated producer root"
                 );
-                versions.producer_readers.insert(id, root);
+                versions.producer_readers.insert(id, prepared.root);
                 let root = versions
                     .producer_readers
                     .get_mut(&id)
-                    .expect("retained producer input");
+                    .expect("retained producer inputs");
                 let consumer = ContextWriterKeyV1 {
                     context_generation: id.context_generation,
                     local: id.local,
                     kind: ContextWriterKindV1::Submission,
                 };
-                let mut output = [None];
-                versions
-                    .journal
-                    .acquire_producer_reads(consumer, &[root.request], &mut output)?;
-                root.reference = Some(output[0].expect("complete producer reservation"));
-                Ok(root.reference)
+                versions.journal.acquire_producer_reads(
+                    consumer,
+                    &root.requests,
+                    &mut prepared.output,
+                )?;
+                assert!(
+                    root.references.capacity() >= prepared.output.len(),
+                    "preallocated producer references"
+                );
+                for reference in prepared.output {
+                    root.references
+                        .push(reference.expect("complete producer reservations"));
+                }
+                let marker = SubmissionProducerReaderMarkerV1 {
+                    first: root.references[0],
+                    count: root.references.len(),
+                };
+                root.marker = Some(marker);
+                Ok(Some(marker))
             })();
             context.journal_result_v1(result)
         })
@@ -211,67 +405,112 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let Some(root) = versions.producer_readers.get(&id) else {
             return absent;
         };
-        let reference = root.reference.ok_or(E::InvalidReference)?;
-        let peer = self
-            .scalar_peer_copies
-            .get(&id)
-            .ok_or(E::InvalidReference)?;
-        let source = root.source;
-        let read = root.request.read;
-        if versions.submission_readers.contains_key(&id)
+        let marker = root.marker.ok_or(E::InvalidReference)?;
+        let launch = root.domain == ProducerReadDomainV1::Launch;
+        let consumer = ContextWriterKeyV1 {
+            context_generation: id.context_generation,
+            local: id.local,
+            kind: ContextWriterKindV1::Submission,
+        };
+        if marker.count == 0
+            || marker.count != root.inputs.len()
+            || marker.count != root.references.len()
+            || marker.count != root.requests.len()
+            || marker.first != root.references[0]
+            || !launch && versions.submission_readers.contains_key(&id)
             || record.is_some_and(|record| {
-                !record.directed_peer_copy
-                    || record.journal_read.is_some()
-                    || expected != Some(reference)
+                record.producer_launch != launch
+                    || !launch && (!record.directed_peer_copy || record.journal_read.is_some())
+                    || expected != Some(marker)
                     || record.journal_writer
                         != versions.submission_writers.get(&id).map(|root| root.writer)
             })
-            || peer.directed.is_none()
-            || !peer.dependencies_held
-            || peer.source.region != source.region
-            || peer.source.record != source.record
-            || !peer.dependencies.contains(&root.dependency)
-            || reference.consumer
-                != (ContextWriterKeyV1 {
-                    context_generation: id.context_generation,
-                    local: id.local,
-                    kind: ContextWriterKindV1::Submission,
-                })
-            || root.request.producer.key
-                != (ContextWriterKeyV1 {
-                    context_generation: root.dependency.submission.context_generation,
-                    local: root.dependency.submission.local,
-                    kind: ContextWriterKindV1::Submission,
-                })
-            || root.dependency.submission.local >= id.local
             || versions
                 .submission_writers
                 .get(&id)
-                .is_none_or(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
-            || self.allocations.get(&source.region.allocation) != Some(&source.record)
-            || !self
-                .backend_allocations
-                .contains(&source.record.backend_allocation)
-            || !self
-                .allocation_admission
-                .has_expected_credit(source.region.allocation, source.record.device)
-            || versions.validate_live(source.region.allocation, &source.record)? != read.allocation
-            || read.device
-                != enrollment(
-                    source.region.allocation,
-                    source.record.device,
-                    source.record.byte_len,
-                )
-                .device
-            || read.byte_extent != source.record.byte_len
-            || read.byte_offset != source.region.byte_offset
-            || read.byte_len != source.region.byte_len
-            || versions.journal.lookup_producer_read(reference)? != root.request
+                .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
+            || !launch && !versions.submission_writers.contains_key(&id)
         {
             return Err(E::InvalidReference);
         }
-        // Resolved reservations outlive their writer slot. Never revalidate admission here.
-        Ok(Some(versions.journal.producer_read_status(reference)?))
+        let mut aggregate = ContextProducerReadStatusV1::Success;
+        for (index, ((input, request), reference)) in root
+            .inputs
+            .iter()
+            .zip(&root.requests)
+            .zip(&root.references)
+            .enumerate()
+        {
+            let source = input.source;
+            let read = request.read;
+            let bound = if launch {
+                self.producer_launches.get(&id).is_some_and(|launch| {
+                    launch.dependencies_held
+                        && launch.dependencies.contains(&input.dependency)
+                        && launch.sources.iter().any(|original| {
+                            original.region == source.region && original.record == source.record
+                        })
+                })
+            } else {
+                self.scalar_peer_copies.get(&id).is_some_and(|peer| {
+                    peer.directed.is_some()
+                        && peer.dependencies_held
+                        && peer.dependencies.contains(&input.dependency)
+                        && peer.source.region == source.region
+                        && peer.source.record == source.record
+                })
+            };
+            if !bound
+                || *request != input.request
+                || reference.consumer != consumer
+                || marker.first.incarnation.checked_add(index as u64) != Some(reference.incarnation)
+                || request.producer.key
+                    != (ContextWriterKeyV1 {
+                        context_generation: input.dependency.submission.context_generation,
+                        local: input.dependency.submission.local,
+                        kind: ContextWriterKindV1::Submission,
+                    })
+                || input.dependency.submission.local >= id.local
+                || index > 0
+                    && root.inputs[index - 1].source.region.allocation >= source.region.allocation
+                || self.allocations.get(&source.region.allocation) != Some(&source.record)
+                || !self
+                    .backend_allocations
+                    .contains(&source.record.backend_allocation)
+                || !self
+                    .allocation_admission
+                    .has_expected_credit(source.region.allocation, source.record.device)
+                || versions.validate_live(source.region.allocation, &source.record)?
+                    != read.allocation
+                || read.device
+                    != enrollment(
+                        source.region.allocation,
+                        source.record.device,
+                        source.record.byte_len,
+                    )
+                    .device
+                || read.byte_extent != source.record.byte_len
+                || read.byte_offset != source.region.byte_offset
+                || read.byte_len != source.region.byte_len
+                || versions.journal.lookup_producer_read(*reference)? != *request
+            {
+                return Err(E::InvalidReference);
+            }
+            // Resolved reservations outlive their writer slot; never revalidate admission.
+            let status = versions.journal.producer_read_status(*reference)?;
+            aggregate = match (aggregate, status) {
+                (ContextProducerReadStatusV1::Unknown, _)
+                | (_, ContextProducerReadStatusV1::Unknown) => ContextProducerReadStatusV1::Unknown,
+                (ContextProducerReadStatusV1::NoEffect, _)
+                | (_, ContextProducerReadStatusV1::NoEffect) => {
+                    ContextProducerReadStatusV1::NoEffect
+                }
+                (ContextProducerReadStatusV1::Pending, _)
+                | (_, ContextProducerReadStatusV1::Pending) => ContextProducerReadStatusV1::Pending,
+                _ => ContextProducerReadStatusV1::Success,
+            };
+        }
+        Ok(Some(aggregate))
     }
 
     pub(in crate::context) fn directed_input_status_v1(
@@ -299,18 +538,22 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
             }
         };
+        // Validate both complete rosters before releasing either class of input.
+        self.release_submission_readers_v1(id)?;
         if !producer {
-            return self.release_submission_readers_v1(id);
+            return Ok(());
         }
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let versions = self.versions.as_mut().expect("validated producer input");
-            let reference = versions.producer_readers[&id]
-                .reference
-                .expect("validated reservation");
-            let consumer = reference.consumer;
+            let versions = self.versions.as_mut().expect("validated producer inputs");
+            let root = &versions.producer_readers[&id];
+            let consumer = root
+                .marker
+                .expect("validated producer marker")
+                .first
+                .consumer;
             versions.journal.release_producer_reads(
                 consumer,
-                &[reference],
+                &root.references,
                 &ContextReadQuiescenceEvidenceV1 { consumer },
             )?;
             versions.producer_readers.remove(&id);

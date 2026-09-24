@@ -90,6 +90,108 @@ impl ContextVersionsV1 {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    pub(in crate::context) fn validate_pending_producer_launch_roots_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        use fe2o3_runtime_model::ContextWriterStateV1;
+        self.validate_producer_launch_custody_v1(id)
+            .map_err(|_| E::InvalidReference)?;
+        let record = self.submissions.get(&id).ok_or(E::InvalidReference)?;
+        let launch = self.producer_launches.get(&id).ok_or(E::InvalidReference)?;
+        if !record.producer_launch
+            || record.quiescent
+            || record.status != RuntimeCompletionStatusV1::Pending
+        {
+            return Err(E::InvalidState);
+        }
+        let versions = self.versions.as_ref().ok_or(E::InvalidReference)?;
+        let stable = self.validate_submission_readers_v1(id, SubmissionWriterDomainV1::Ordinary)?;
+        self.validate_producer_read_v1(id)?;
+        let pending = versions.producer_readers.get(&id);
+        let count = stable.map_or(0, |root| root.sources.len())
+            + pending.map_or(0, |root| root.sources().count());
+        if count != launch.sources.len() {
+            return Err(E::InvalidReference);
+        }
+        for source in &launch.sources {
+            let stable_count = stable.map_or(0, |root| {
+                root.sources
+                    .iter()
+                    .filter(|retained| {
+                        retained.region == source.region && retained.record == source.record
+                    })
+                    .count()
+            });
+            let pending_count = pending.map_or(0, |root| {
+                root.sources()
+                    .filter(|retained| {
+                        retained.region == source.region && retained.record == source.record
+                    })
+                    .count()
+            });
+            if stable_count + pending_count != 1 {
+                return Err(E::InvalidReference);
+            }
+        }
+        let Some(root) = versions.submission_writers.get(&id) else {
+            return if launch.destinations.is_empty() && record.journal_writer.is_none() {
+                Ok(())
+            } else {
+                Err(E::InvalidReference)
+            };
+        };
+        let writer = root.writer;
+        if root.domain != SubmissionWriterDomainV1::Ordinary
+            || record.journal_writer != Some(writer)
+            || launch.destinations.is_empty()
+            || root.allocations.len() != launch.destinations.len()
+            || root.members.len() != root.allocations.len()
+            || root.disposal_started
+            || root.disposed_count != 0
+            || root.journal_disposed
+            || writer.key
+                != (ContextWriterKeyV1 {
+                    context_generation: id.context_generation,
+                    local: id.local,
+                    kind: ContextWriterKindV1::Submission,
+                })
+            || versions.retained_writer(writer)?
+                != (ContextWriterStateV1::Pending {
+                    member_count: root.members.len(),
+                })
+        {
+            return Err(E::InvalidReference);
+        }
+        for ((allocation, member), expected) in root
+            .allocations
+            .iter()
+            .zip(&root.members)
+            .zip(&launch.destinations)
+        {
+            if allocation.disposed
+                || allocation.id != *expected
+                || self.allocations.get(&allocation.id) != Some(&allocation.record)
+                || !self
+                    .backend_allocations
+                    .contains(&allocation.record.backend_allocation)
+                || !self
+                    .allocation_admission
+                    .has_expected_credit(allocation.id, allocation.record.device)
+                || versions.whole_allocation(allocation.id, &allocation.record)? != *member
+                || versions
+                    .journal
+                    .lookup_allocation(member.allocation)?
+                    .pending_writer
+                    != Some(writer)
+            {
+                return Err(E::InvalidAllocationReference);
+            }
+        }
+        Ok(())
+    }
+
     pub(in crate::context) fn validate_pending_peer_copy_roots_v1(
         &self,
         id: RuntimeSubmissionIdV1,
@@ -437,11 +539,23 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
         }
         for root in versions.producer_readers.values() {
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                self.allocation_admission
-                    .quarantine(root.source.region.allocation);
-            })) {
-                core::mem::forget(payload);
+            for source in root.sources() {
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    self.allocation_admission
+                        .quarantine(source.region.allocation);
+                })) {
+                    core::mem::forget(payload);
+                }
+            }
+        }
+        for root in self.producer_launches.values() {
+            for binding in &root.bindings {
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    self.allocation_admission
+                        .quarantine(binding.region.allocation);
+                })) {
+                    core::mem::forget(payload);
+                }
             }
         }
     }
@@ -450,7 +564,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         call: impl FnOnce(&mut B) -> Result<T, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<T, RuntimeBackendFailureV1<B::Error>> {
-        if self.versions.is_none() && self.scalar_peer_copies.is_empty() {
+        if self.versions.is_none()
+            && self.scalar_peer_copies.is_empty()
+            && self.producer_launches.is_empty()
+        {
             return call(&mut self.backend);
         }
         match catch_unwind(AssertUnwindSafe(|| call(&mut self.backend))) {
@@ -467,16 +584,28 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         stream: RuntimeStreamIdV1,
         stream_record: StreamRecordV1,
         destinations: &[RuntimeAllocationIdV1],
-        peer: Option<PreparedPeerSubmissionV1>,
+        custody: Option<PreparedSubmissionCustodyV1>,
         sources: &[ContextReadSourceV1],
         submit: impl FnOnce(&mut B) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>> {
         let prepared = self.prepare_submission_writer_v1(destinations)?;
-        let producer = self.prepare_producer_read_v1(peer.as_ref())?;
-        let reads = if producer.is_some() {
-            None
-        } else {
-            self.prepare_submission_readers_v1(sources)?
+        let (reads, producer) = match &custody {
+            Some(PreparedSubmissionCustodyV1::Launch(root)) => {
+                self.prepare_launch_inputs_v1(root, sources)?
+            }
+            other => {
+                let peer = match other {
+                    Some(PreparedSubmissionCustodyV1::Peer(peer)) => Some(peer),
+                    _ => None,
+                };
+                let producer = self.prepare_producer_read_v1(peer)?;
+                let reads = if producer.is_some() {
+                    None
+                } else {
+                    self.prepare_submission_readers_v1(sources)?
+                };
+                (reads, producer)
+            }
         };
         self.submissions
             .try_reserve(1)
@@ -485,20 +614,33 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .try_reserve(1)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+        let peer = match &custody {
+            Some(PreparedSubmissionCustodyV1::Peer(peer)) => Some(peer),
+            _ => None,
+        };
+        let peer_transfer = peer.map(|peer| peer.mechanism);
+        let scalar_peer_copy = peer.is_some_and(|peer| peer.scalar.is_some());
+        let directed_peer_copy = peer
+            .and_then(|peer| peer.scalar.as_ref())
+            .is_some_and(|root| root.directed.is_some());
+        let producer_launch = matches!(&custody, Some(PreparedSubmissionCustodyV1::Launch(_)));
+        // Retain all original footprints and dependencies before acquiring any journal lease.
+        match custody {
+            Some(PreparedSubmissionCustodyV1::Launch(root)) => {
+                self.begin_producer_launch_custody_v1(id, root)
+            }
+            Some(PreparedSubmissionCustodyV1::Peer(peer)) => {
+                if let Some(root) = peer.scalar {
+                    self.begin_scalar_peer_custody_v1(id, root);
+                }
+            }
+            None => {}
+        }
         let journal_writer =
             self.begin_submission_writer_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)?;
         let journal_read =
             self.begin_submission_readers_v1(id, reads, SubmissionWriterDomainV1::Ordinary)?;
         let journal_producer_read = self.begin_producer_read_v1(id, producer)?;
-        let peer_transfer = peer.as_ref().map(|peer| peer.mechanism);
-        let scalar_peer_copy = peer.as_ref().is_some_and(|peer| peer.scalar.is_some());
-        let directed_peer_copy = peer
-            .as_ref()
-            .and_then(|peer| peer.scalar.as_ref())
-            .is_some_and(|root| root.directed.is_some());
-        if let Some(root) = peer.and_then(|peer| peer.scalar) {
-            self.begin_scalar_peer_custody_v1(id, root);
-        }
         let result = self.invoke_journal_backend_v1(submit);
         let backend_submission = match result {
             Ok(handle) => handle,
@@ -511,12 +653,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 } else {
                     SubmissionWriterOutcomeV1::Unknown
                 };
-                if self.check_scalar_peer_custody_v1(id).is_ok()
+                if self.check_operation_custody_v1(id).is_ok()
                     && self.release_submission_inputs_v1(id).is_ok()
                     && self.settle_submission_writer_v1(id, outcome).is_ok()
-                    && self.release_scalar_peer_dependencies_v1(id).is_ok()
+                    && self.release_operation_dependencies_v1(id).is_ok()
                 {
                     self.scalar_peer_copies.remove(&id);
+                    self.producer_launches.remove(&id);
                 }
                 return self.backend_result(Err(failure));
             }
@@ -528,6 +671,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         // Both indexes have headroom before backend entry. Root the returned
         // handle even if the backend violated zero/duplicate-handle rules.
         if let Some(root) = self.scalar_peer_copies.get_mut(&id) {
+            root.backend_submission = Some(backend_submission);
+        }
+        if let Some(root) = self.producer_launches.get_mut(&id) {
             root.backend_submission = Some(backend_submission);
         }
         self.submissions.insert(
@@ -543,6 +689,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 journal_producer_read,
                 scalar_peer_copy,
                 directed_peer_copy,
+                producer_launch,
                 dependency_retains: 0,
             },
         );

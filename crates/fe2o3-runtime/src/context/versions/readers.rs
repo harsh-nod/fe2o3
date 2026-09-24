@@ -42,7 +42,7 @@ impl ContextVersionsV1 {
             + self
                 .producer_readers
                 .values()
-                .filter(|root| root.reference.is_none())
+                .filter(|root| root.marker.is_none())
                 .count()
     }
 
@@ -222,6 +222,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
                 if versions.submission_readers.contains_key(&id)
                     || versions.producer_readers.contains_key(&id)
+                        && !(domain == SubmissionWriterDomainV1::Ordinary
+                            && context.producer_launches.contains_key(&id))
                     || versions
                         .submission_writers
                         .get(&id)
@@ -295,8 +297,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let Some(root) = versions.submission_readers.get(&id) else {
             return absent;
         };
-        if versions.producer_readers.contains_key(&id)
-            || record.is_some_and(|record| record.journal_producer_read.is_some())
+        if (versions.producer_readers.contains_key(&id)
+            || record.is_some_and(|record| record.journal_producer_read.is_some()))
+            && !(domain == SubmissionWriterDomainV1::Ordinary
+                && self.producer_launches.contains_key(&id)
+                && record.is_none_or(|record| record.producer_launch))
         {
             return Err(E::InvalidReference);
         }

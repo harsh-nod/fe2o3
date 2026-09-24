@@ -88,12 +88,14 @@ impl<B: RuntimeDirectedScalarPeerCopyBackendV1> RuntimeContextV1<B> {
             stream,
             prepared.stream_record,
             &[destination.allocation],
-            Some(PreparedPeerSubmissionV1 {
-                mechanism: PeerTransferMechanismV1::DeclaredPeerCopy {
-                    contract_identity: peer_copy_contract_identity(stream, source, destination),
+            Some(PreparedSubmissionCustodyV1::Peer(
+                PreparedPeerSubmissionV1 {
+                    mechanism: PeerTransferMechanismV1::DeclaredPeerCopy {
+                        contract_identity: peer_copy_contract_identity(stream, source, destination),
+                    },
+                    scalar: Some(root),
                 },
-                scalar: Some(root),
-            }),
+            )),
             &[prepared.journal_source],
             |backend| {
                 backend.submit_directed_scalar_peer_copy_v1(BackendDirectedScalarPeerCopyV1 {

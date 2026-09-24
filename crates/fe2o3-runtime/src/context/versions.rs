@@ -14,7 +14,10 @@ mod readers;
 mod submission_disposal;
 mod submissions;
 mod writers;
-pub(super) use readers::{ContextReadSourceV1, SubmissionReaderMarkerV1};
+pub(super) use producer_readers::SubmissionProducerReaderMarkerV1;
+pub(super) use readers::{
+    ContextReadSourceV1, PreparedSubmissionReadersV1, SubmissionReaderMarkerV1,
+};
 pub(super) use submissions::{SubmissionWriterDomainV1, SubmissionWriterOutcomeV1};
 
 /// Bounded journal metadata counts, not residency, initializedness or data versions.
@@ -244,7 +247,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         operation: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        if self.versions.is_none() && self.scalar_peer_copies.is_empty() {
+        if self.versions.is_none()
+            && self.scalar_peer_copies.is_empty()
+            && self.producer_launches.is_empty()
+        {
             return operation(self);
         }
         match catch_unwind(AssertUnwindSafe(|| operation(self))) {

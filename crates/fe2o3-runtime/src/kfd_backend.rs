@@ -74,16 +74,17 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     AuthenticatedKfdRuntimeDispatchTimestampsV1, AuthenticatedKfdRuntimeDispatchTimestampsV2,
-    BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
-    BackendPollV1, BackendSemanticLaunchV1, KfdRuntimeProfileRecorderV1,
-    KfdRuntimeProfileWithSemanticSidecarV1, KfdRuntimeProfilerConfigV1,
-    MAX_RUNTIME_DEPENDENCIES_V1, MAX_RUNTIME_EVENTS_V1, MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1,
-    MAX_RUNTIME_STREAMS_V1, MAX_RUNTIME_SUBMISSIONS_V1, RuntimeAccessV1, RuntimeAsyncCopyBackendV1,
-    RuntimeAtomicBackendV1, RuntimeAtomicLaunchContractV1, RuntimeAtomicOperationV1,
-    RuntimeBackendAllocationOutcomeV1, RuntimeBackendFailureV1, RuntimeBackendV1,
-    RuntimeCancellationBackendV1, RuntimeCapabilitiesV1, RuntimeCollectiveBackendV1,
-    RuntimeCollectiveLaunchContractV1, RuntimeExecutionCapabilitiesV1, RuntimeFlushBackendV1,
-    RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
+    BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchProducerV1, BackendLaunchV1,
+    BackendMemoryRegionV1, BackendPollV1, BackendProducerAwareLaunchV1, BackendSemanticLaunchV1,
+    KfdRuntimeProfileRecorderV1, KfdRuntimeProfileWithSemanticSidecarV1,
+    KfdRuntimeProfilerConfigV1, MAX_RUNTIME_DEPENDENCIES_V1, MAX_RUNTIME_EVENTS_V1,
+    MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1, MAX_RUNTIME_STREAMS_V1, MAX_RUNTIME_SUBMISSIONS_V1,
+    RuntimeAccessV1, RuntimeAsyncCopyBackendV1, RuntimeAtomicBackendV1,
+    RuntimeAtomicLaunchContractV1, RuntimeAtomicOperationV1, RuntimeBackendAllocationOutcomeV1,
+    RuntimeBackendFailureV1, RuntimeBackendV1, RuntimeCancellationBackendV1, RuntimeCapabilitiesV1,
+    RuntimeCollectiveBackendV1, RuntimeCollectiveLaunchContractV1, RuntimeExecutionCapabilitiesV1,
+    RuntimeFlushBackendV1, RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
+    RuntimeProducerAwareLaunchBackendV1,
 };
 
 mod allocation_table;
@@ -123,6 +124,8 @@ mod generated_preparation;
 mod generated_shells;
 pub(crate) use generated_shells::{GeneratedShellBindingV1, GeneratedShellPlanV1};
 mod native_budget;
+#[cfg(test)]
+mod producer_launch_tests;
 #[cfg(feature = "hardware-qualification")]
 mod qualification_coexistence;
 #[cfg(feature = "hardware-qualification")]
@@ -799,6 +802,16 @@ struct SubmissionRecordV1 {
 #[derive(Clone, Copy, Debug)]
 struct EventRecordV1 {
     submission: u64,
+}
+
+enum ComputeDependencyRosterV1<'a> {
+    Events(&'a [u64]),
+    Exact(&'a [BackendLaunchProducerV1]),
+}
+
+struct CollectedComputeDependenciesV1 {
+    ordered_predecessor: Option<u64>,
+    explicit_success_dependencies: Box<[u64]>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5661,6 +5674,234 @@ fn duration_nanoseconds_v1(duration: Duration) -> u64 {
 }
 
 impl KfdRuntimeBackendV1 {
+    fn preflight_compute_v1(
+        &self,
+        launch: BackendLaunchV1<'_>,
+        dependencies: ComputeDependencyRosterV1<'_>,
+    ) -> Result<CollectedComputeDependenciesV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
+        self.require_live()?;
+        self.require_no_generated_stream_v1(launch.stream)?;
+        for binding in launch.bindings {
+            self.allocations
+                .reject_generated(binding.region.allocation)?;
+        }
+        if self.queue_retired || !self.native_available {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "the admitted KFD queue lifecycle has already retired",
+            ));
+        }
+        self.validate_semantic_launch_v1(launch.semantic_launch, launch.geometry)?;
+        self.require_submission_capacity_v1()?;
+        let ordered_predecessor = self.stream_submission_tails.get(&launch.stream).copied();
+        let explicit_success_dependencies = match dependencies {
+            ComputeDependencyRosterV1::Events(events) => {
+                self.collect_compute_dependencies_v1(events)?
+            }
+            ComputeDependencyRosterV1::Exact(dependencies) => {
+                self.collect_exact_compute_dependencies_v1(dependencies)?
+            }
+        };
+        Ok(CollectedComputeDependenciesV1 {
+            ordered_predecessor,
+            explicit_success_dependencies,
+        })
+    }
+
+    fn submit_collected_compute_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+        ordered_predecessor: Option<u64>,
+        explicit_success_dependencies: Box<[u64]>,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let dependency_depth = self
+            .next_dependency_depth_v1(ordered_predecessor, &explicit_success_dependencies)
+            .map_err(|error| {
+                let detail = match error {
+                    DirectSdmaDependencyDepthErrorV1::Overflow => {
+                        "KFD compute dependency depth overflow"
+                    }
+                    DirectSdmaDependencyDepthErrorV1::LimitExceeded => {
+                        "KFD compute dependency depth capacity exceeded"
+                    }
+                };
+                Self::capacity(detail)
+            })?;
+        self.validate_compute_launch_v1(&launch, &explicit_success_dependencies)?;
+
+        let explicit_kernarg = try_copy_vec_v1(
+            launch.explicit_kernarg,
+            "KFD pending kernarg custody allocation failed",
+        )?
+        .into_boxed_slice();
+        let mut bindings = Vec::new();
+        bindings
+            .try_reserve_exact(launch.bindings.len())
+            .map_err(|_| Self::capacity("KFD pending binding custody allocation failed"))?;
+        bindings.extend_from_slice(launch.bindings);
+        let mut retained_allocations = Vec::new();
+        retained_allocations
+            .try_reserve_exact(bindings.len())
+            .map_err(|_| Self::capacity("KFD retained-allocation roster allocation failed"))?;
+        for binding in &bindings {
+            if !retained_allocations.contains(&binding.region.allocation) {
+                retained_allocations.push(binding.region.allocation);
+            }
+        }
+        let new_allocation_custody = self.reserve_allocation_custody_v1(&retained_allocations)?;
+        let module = self
+            .kernels
+            .get(&launch.kernel)
+            .expect("validated compute kernel remains indexed")
+            .module;
+        if !self.compute_module_retain_counts.contains_key(&module) {
+            self.compute_module_retain_counts
+                .try_reserve(1)
+                .map_err(|_| Self::capacity("KFD module-retain index growth failed"))?;
+        }
+        if self
+            .compute_module_retain_counts
+            .get(&module)
+            .is_some_and(|count| *count == usize::MAX)
+        {
+            return Err(Self::capacity("KFD module retain count overflow"));
+        }
+        let next_completion_reservations = self
+            .compute_completion_reservations
+            .checked_add(1)
+            .ok_or_else(|| Self::capacity("KFD compute completion reservation overflow"))?;
+        let total_completion_reservations = next_completion_reservations
+            .checked_add(self.sdma_completion_reservations)
+            .ok_or_else(|| Self::capacity("KFD completion reservation overflow"))?;
+        self.submissions
+            .try_reserve(total_completion_reservations)
+            .map_err(|_| Self::capacity("KFD submission-table growth failed"))?;
+        self.pending_compute
+            .try_reserve(1)
+            .map_err(|_| Self::capacity("KFD pending-compute ledger growth failed"))?;
+        if !self.pending_compute_streams.contains_key(&launch.stream) {
+            self.pending_compute_streams
+                .try_reserve(1)
+                .map_err(|_| Self::capacity("KFD compute stream-FIFO index growth failed"))?;
+        }
+        if !self.stream_submission_tails.contains_key(&launch.stream) {
+            self.stream_submission_tails
+                .try_reserve(1)
+                .map_err(|_| Self::capacity("KFD stream-tail index growth failed"))?;
+        }
+        if !self.stream_compute_lanes.contains_key(&launch.stream) {
+            self.stream_compute_lanes
+                .try_reserve(1)
+                .map_err(|_| Self::capacity("KFD compute-lane lease index growth failed"))?;
+        }
+        let retained_dependencies = explicit_success_dependencies.iter().copied().chain(
+            ordered_predecessor
+                .filter(|predecessor| !explicit_success_dependencies.contains(predecessor)),
+        );
+        let new_dependency_entries = retained_dependencies
+            .clone()
+            .filter(|submission| {
+                !self
+                    .compute_dependency_retain_counts
+                    .contains_key(submission)
+            })
+            .count();
+        self.compute_dependency_retain_counts
+            .try_reserve(new_dependency_entries)
+            .map_err(|_| Self::capacity("KFD compute dependency-retain growth failed"))?;
+        if retained_dependencies.clone().any(|submission| {
+            self.compute_dependency_retain_counts
+                .get(&submission)
+                .is_some_and(|count| *count == usize::MAX)
+        }) {
+            return Err(Self::capacity(
+                "KFD compute dependency retain count overflow",
+            ));
+        }
+        if self.next_handle == u64::MAX {
+            return Err(Self::capacity("backend handle space exhausted"));
+        }
+        let mut new_stream_queue = None;
+        if let Some(stream_queue) = self.pending_compute_streams.get_mut(&launch.stream) {
+            stream_queue
+                .try_reserve(1)
+                .map_err(|_| Self::capacity("KFD compute stream FIFO growth failed"))?;
+        } else {
+            let mut stream_queue = VecDeque::new();
+            stream_queue
+                .try_reserve(1)
+                .map_err(|_| Self::capacity("KFD compute stream FIFO growth failed"))?;
+            new_stream_queue = Some(stream_queue);
+        }
+        let id = self.next_id()?;
+        self.retain_allocation_custody_v1(
+            &retained_allocations,
+            RuntimeAllocationCustodyOwnerV1 {
+                submission: id,
+                stream: launch.stream,
+                kind: RuntimeAllocationCustodyKindV1::Compute,
+            },
+            new_allocation_custody,
+        );
+        *self.compute_module_retain_counts.entry(module).or_insert(0) += 1;
+        for dependency in retained_dependencies {
+            *self
+                .compute_dependency_retain_counts
+                .entry(dependency)
+                .or_insert(0) += 1;
+        }
+        self.compute_completion_reservations = next_completion_reservations;
+        self.stream_submission_tails.insert(launch.stream, id);
+        if let Some(mut stream_queue) = new_stream_queue {
+            stream_queue.push_back(id);
+            self.pending_compute_streams
+                .insert(launch.stream, stream_queue);
+        } else {
+            self.pending_compute_streams
+                .get_mut(&launch.stream)
+                .expect("reserved compute stream FIFO remains indexed")
+                .push_back(id);
+        }
+        self.pending_compute.insert(
+            id,
+            PendingComputeSubmissionV1 {
+                id,
+                module,
+                launch: Arc::new(OwnedComputeLaunchV1 {
+                    stream: launch.stream,
+                    kernel: launch.kernel,
+                    explicit_kernarg,
+                    bindings: bindings.into_boxed_slice(),
+                    geometry: launch.geometry,
+                    semantic_launch: launch.semantic_launch,
+                }),
+                retained_allocations: retained_allocations.into_boxed_slice(),
+                ordered_predecessor,
+                explicit_success_dependencies,
+                explicit_dependency_cursor: 0,
+                dependency_depth,
+            },
+        );
+        if self.pending_compute_can_publish_under_deadline_v1(id) {
+            let pending = self
+                .pending_compute
+                .remove(&id)
+                .expect("accepted clean compute remains pending before first progress");
+            self.progress_pending_compute_v1(pending)
+                .map_err(|failure| {
+                    if let RuntimeBackendFailureV1::Rejected(mut error) = failure {
+                        self.poison_terminal_v1();
+                        error.kind = KfdRuntimeBackendErrorKindV1::Terminal;
+                        RuntimeBackendFailureV1::Terminal(error)
+                    } else {
+                        failure
+                    }
+                })?;
+        }
+        Ok(id)
+    }
+
     fn wait_published_sdma_v1(
         &mut self,
         submission: u64,
@@ -6465,208 +6706,15 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         &mut self,
         launch: BackendLaunchV1<'_>,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-        self.require_live()?;
-        self.require_no_generated_stream_v1(launch.stream)?;
-        for binding in launch.bindings {
-            self.allocations
-                .reject_generated(binding.region.allocation)?;
-        }
-        if self.queue_retired || !self.native_available {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Unsupported,
-                "the admitted KFD queue lifecycle has already retired",
-            ));
-        }
-        self.validate_semantic_launch_v1(launch.semantic_launch, launch.geometry)?;
-        self.require_submission_capacity_v1()?;
-        let ordered_predecessor = self.stream_submission_tails.get(&launch.stream).copied();
-        let explicit_success_dependencies =
-            self.collect_compute_dependencies_v1(launch.dependencies)?;
-        let dependency_depth = self
-            .next_dependency_depth_v1(ordered_predecessor, &explicit_success_dependencies)
-            .map_err(|error| {
-                let detail = match error {
-                    DirectSdmaDependencyDepthErrorV1::Overflow => {
-                        "KFD compute dependency depth overflow"
-                    }
-                    DirectSdmaDependencyDepthErrorV1::LimitExceeded => {
-                        "KFD compute dependency depth capacity exceeded"
-                    }
-                };
-                Self::capacity(detail)
-            })?;
-        self.validate_compute_launch_v1(&launch, &explicit_success_dependencies)?;
-
-        let explicit_kernarg = try_copy_vec_v1(
-            launch.explicit_kernarg,
-            "KFD pending kernarg custody allocation failed",
-        )?
-        .into_boxed_slice();
-        let mut bindings = Vec::new();
-        bindings
-            .try_reserve_exact(launch.bindings.len())
-            .map_err(|_| Self::capacity("KFD pending binding custody allocation failed"))?;
-        bindings.extend_from_slice(launch.bindings);
-        let mut retained_allocations = Vec::new();
-        retained_allocations
-            .try_reserve_exact(bindings.len())
-            .map_err(|_| Self::capacity("KFD retained-allocation roster allocation failed"))?;
-        for binding in &bindings {
-            if !retained_allocations.contains(&binding.region.allocation) {
-                retained_allocations.push(binding.region.allocation);
-            }
-        }
-        let new_allocation_custody = self.reserve_allocation_custody_v1(&retained_allocations)?;
-        let module = self
-            .kernels
-            .get(&launch.kernel)
-            .expect("validated compute kernel remains indexed")
-            .module;
-        if !self.compute_module_retain_counts.contains_key(&module) {
-            self.compute_module_retain_counts
-                .try_reserve(1)
-                .map_err(|_| Self::capacity("KFD module-retain index growth failed"))?;
-        }
-        if self
-            .compute_module_retain_counts
-            .get(&module)
-            .is_some_and(|count| *count == usize::MAX)
-        {
-            return Err(Self::capacity("KFD module retain count overflow"));
-        }
-        let next_completion_reservations = self
-            .compute_completion_reservations
-            .checked_add(1)
-            .ok_or_else(|| Self::capacity("KFD compute completion reservation overflow"))?;
-        let total_completion_reservations = next_completion_reservations
-            .checked_add(self.sdma_completion_reservations)
-            .ok_or_else(|| Self::capacity("KFD completion reservation overflow"))?;
-        self.submissions
-            .try_reserve(total_completion_reservations)
-            .map_err(|_| Self::capacity("KFD submission-table growth failed"))?;
-        self.pending_compute
-            .try_reserve(1)
-            .map_err(|_| Self::capacity("KFD pending-compute ledger growth failed"))?;
-        if !self.pending_compute_streams.contains_key(&launch.stream) {
-            self.pending_compute_streams
-                .try_reserve(1)
-                .map_err(|_| Self::capacity("KFD compute stream-FIFO index growth failed"))?;
-        }
-        if !self.stream_submission_tails.contains_key(&launch.stream) {
-            self.stream_submission_tails
-                .try_reserve(1)
-                .map_err(|_| Self::capacity("KFD stream-tail index growth failed"))?;
-        }
-        if !self.stream_compute_lanes.contains_key(&launch.stream) {
-            self.stream_compute_lanes
-                .try_reserve(1)
-                .map_err(|_| Self::capacity("KFD compute-lane lease index growth failed"))?;
-        }
-        let retained_dependencies = explicit_success_dependencies.iter().copied().chain(
-            ordered_predecessor
-                .filter(|predecessor| !explicit_success_dependencies.contains(predecessor)),
-        );
-        let new_dependency_entries = retained_dependencies
-            .clone()
-            .filter(|submission| {
-                !self
-                    .compute_dependency_retain_counts
-                    .contains_key(submission)
-            })
-            .count();
-        self.compute_dependency_retain_counts
-            .try_reserve(new_dependency_entries)
-            .map_err(|_| Self::capacity("KFD compute dependency-retain growth failed"))?;
-        if retained_dependencies.clone().any(|submission| {
-            self.compute_dependency_retain_counts
-                .get(&submission)
-                .is_some_and(|count| *count == usize::MAX)
-        }) {
-            return Err(Self::capacity(
-                "KFD compute dependency retain count overflow",
-            ));
-        }
-        if self.next_handle == u64::MAX {
-            return Err(Self::capacity("backend handle space exhausted"));
-        }
-        let mut new_stream_queue = None;
-        if let Some(stream_queue) = self.pending_compute_streams.get_mut(&launch.stream) {
-            stream_queue
-                .try_reserve(1)
-                .map_err(|_| Self::capacity("KFD compute stream FIFO growth failed"))?;
-        } else {
-            let mut stream_queue = VecDeque::new();
-            stream_queue
-                .try_reserve(1)
-                .map_err(|_| Self::capacity("KFD compute stream FIFO growth failed"))?;
-            new_stream_queue = Some(stream_queue);
-        }
-        let id = self.next_id()?;
-        self.retain_allocation_custody_v1(
-            &retained_allocations,
-            RuntimeAllocationCustodyOwnerV1 {
-                submission: id,
-                stream: launch.stream,
-                kind: RuntimeAllocationCustodyKindV1::Compute,
-            },
-            new_allocation_custody,
-        );
-        *self.compute_module_retain_counts.entry(module).or_insert(0) += 1;
-        for dependency in retained_dependencies {
-            *self
-                .compute_dependency_retain_counts
-                .entry(dependency)
-                .or_insert(0) += 1;
-        }
-        self.compute_completion_reservations = next_completion_reservations;
-        self.stream_submission_tails.insert(launch.stream, id);
-        if let Some(mut stream_queue) = new_stream_queue {
-            stream_queue.push_back(id);
-            self.pending_compute_streams
-                .insert(launch.stream, stream_queue);
-        } else {
-            self.pending_compute_streams
-                .get_mut(&launch.stream)
-                .expect("reserved compute stream FIFO remains indexed")
-                .push_back(id);
-        }
-        self.pending_compute.insert(
-            id,
-            PendingComputeSubmissionV1 {
-                id,
-                module,
-                launch: Arc::new(OwnedComputeLaunchV1 {
-                    stream: launch.stream,
-                    kernel: launch.kernel,
-                    explicit_kernarg,
-                    bindings: bindings.into_boxed_slice(),
-                    geometry: launch.geometry,
-                    semantic_launch: launch.semantic_launch,
-                }),
-                retained_allocations: retained_allocations.into_boxed_slice(),
-                ordered_predecessor,
-                explicit_success_dependencies,
-                explicit_dependency_cursor: 0,
-                dependency_depth,
-            },
-        );
-        if self.pending_compute_can_publish_under_deadline_v1(id) {
-            let pending = self
-                .pending_compute
-                .remove(&id)
-                .expect("accepted clean compute remains pending before first progress");
-            self.progress_pending_compute_v1(pending)
-                .map_err(|failure| {
-                    if let RuntimeBackendFailureV1::Rejected(mut error) = failure {
-                        self.poison_terminal_v1();
-                        error.kind = KfdRuntimeBackendErrorKindV1::Terminal;
-                        RuntimeBackendFailureV1::Terminal(error)
-                    } else {
-                        failure
-                    }
-                })?;
-        }
-        Ok(id)
+        let collected = self.preflight_compute_v1(
+            launch,
+            ComputeDependencyRosterV1::Events(launch.dependencies),
+        )?;
+        self.submit_collected_compute_v1(
+            launch,
+            collected.ordered_predecessor,
+            collected.explicit_success_dependencies,
+        )
     }
 
     fn poll_v1(
@@ -7020,6 +7068,32 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             KfdRuntimeBackendErrorKindV1::Unsupported,
             "peer copy requires an admitted multi-device copy path",
         ))
+    }
+}
+
+impl RuntimeProducerAwareLaunchBackendV1 for KfdRuntimeBackendV1 {
+    fn submit_producer_aware_launch_v1(
+        &mut self,
+        request: BackendProducerAwareLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        let launch = BackendLaunchV1 {
+            stream: request.stream,
+            kernel: request.kernel,
+            explicit_kernarg: request.explicit_kernarg,
+            bindings: request.bindings,
+            dependencies: &[],
+            geometry: request.geometry,
+            semantic_launch: BackendSemanticLaunchV1::Ordinary,
+        };
+        let collected = self.preflight_compute_v1(
+            launch,
+            ComputeDependencyRosterV1::Exact(request.dependencies),
+        )?;
+        self.submit_collected_compute_v1(
+            launch,
+            collected.ordered_predecessor,
+            collected.explicit_success_dependencies,
+        )
     }
 }
 
@@ -8283,6 +8357,65 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "copy dependency belongs to another KFD device",
             )),
         }
+    }
+
+    fn exact_launch_dependency_for_child(
+        &self,
+        dependency: BackendLaunchProducerV1,
+        child: usize,
+    ) -> Result<BackendLaunchProducerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let event = self.events.get(&dependency.event).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown multi-device KFD event",
+            )
+        })?;
+        let (event_route, event_submission) = match event {
+            RoutedEventV1::Native { route, submission } => (route, submission),
+            RoutedEventV1::CooperativeCopy { .. } => {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "producer-aware launch requires a native KFD event",
+                ));
+            }
+        };
+        if event_submission != dependency.producer_submission {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "multi-device KFD event does not name the expected producer",
+            ));
+        }
+        if event_route.child != child {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "producer-aware launch dependency belongs to another KFD device",
+            ));
+        }
+        let producer_route = match self.submissions.get(&dependency.producer_submission) {
+            Some(RoutedSubmissionV1::Native { route, .. }) => *route,
+            Some(RoutedSubmissionV1::CooperativeCopy(_)) => {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "producer-aware launch requires a native KFD producer",
+                ));
+            }
+            None => {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                    "multi-device KFD event refers to an unknown producer",
+                ));
+            }
+        };
+        if producer_route.child != child {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "producer-aware launch producer belongs to another KFD device",
+            ));
+        }
+        Ok(BackendLaunchProducerV1 {
+            event: event_route.local,
+            producer_submission: producer_route.local,
+        })
     }
 
     fn peer_dependency_submission(
@@ -11955,6 +12088,138 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         dependencies: &[u64],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.submit_cooperative_copy(stream, source, destination, dependencies, true)
+    }
+}
+
+impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+    fn submit_producer_aware_launch_v1(
+        &mut self,
+        request: BackendProducerAwareLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        self.require_submission_capacity_v1()?;
+        let stream = Self::route(
+            &self.streams,
+            request.stream,
+            "unknown multi-device KFD stream",
+        )?;
+        let kernel = Self::route(
+            &self.kernels,
+            request.kernel,
+            "unknown multi-device KFD kernel",
+        )?;
+        if stream.child != kernel.child {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "kernel and stream belong to different KFD devices",
+            ));
+        }
+        if self.stream_has_pending_cooperative_copy_v1(request.stream) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "mixed cooperative/native stream ordering requires quiescing prior cooperative work",
+            ));
+        }
+        if request.bindings.len() > fe2o3_host_api::MAX_DISPATCH_BINDINGS_V1 {
+            return Err(KfdRuntimeBackendV1::capacity(
+                "KFD binding roster exceeds the host dispatch admission bound",
+            ));
+        }
+        let mut bindings = Vec::new();
+        bindings
+            .try_reserve_exact(request.bindings.len())
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("multi-device binding translation failed")
+            })?;
+        for binding in request.bindings {
+            let allocation = Self::route(
+                &self.allocations,
+                binding.region.allocation,
+                "unknown multi-device KFD allocation",
+            )?;
+            if allocation.child != stream.child {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::WrongDevice,
+                    "kernel binding belongs to another KFD device",
+                ));
+            }
+            if self.allocation_retained_by_cooperative_copy(allocation) {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "kernel binding is retained by a pending cooperative copy",
+                ));
+            }
+            bindings.push(BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation: allocation.local,
+                    access: binding.region.access,
+                    byte_offset: binding.region.byte_offset,
+                    byte_len: binding.region.byte_len,
+                },
+                kernarg_byte_offset: binding.kernarg_byte_offset,
+            });
+        }
+        if request.dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
+            return Err(KfdRuntimeBackendV1::capacity(
+                "KFD compute dependency capacity exceeded",
+            ));
+        }
+        let mut dependencies = Vec::new();
+        dependencies
+            .try_reserve_exact(request.dependencies.len())
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("multi-device dependency translation failed")
+            })?;
+        for dependency in request.dependencies {
+            let dependency = self.exact_launch_dependency_for_child(*dependency, stream.child)?;
+            if dependencies.iter().any(|prior: &BackendLaunchProducerV1| {
+                prior.producer_submission == dependency.producer_submission
+            }) {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    "KFD compute dependencies must name distinct submissions",
+                ));
+            }
+            dependencies.push(dependency);
+        }
+        let child_launch = BackendLaunchV1 {
+            stream: stream.local,
+            kernel: kernel.local,
+            explicit_kernarg: request.explicit_kernarg,
+            bindings: &bindings,
+            dependencies: &[],
+            geometry: request.geometry,
+            semantic_launch: BackendSemanticLaunchV1::Ordinary,
+        };
+        let child_preflight = self.children[stream.child].preflight_compute_v1(
+            child_launch,
+            ComputeDependencyRosterV1::Exact(&dependencies),
+        );
+        let collected = self.latch(child_preflight)?;
+        self.reserve_native_stream_submission_v1(request.stream)?;
+        Self::reserve_route(
+            &mut self.submissions,
+            "multi-device submission route allocation failed",
+        )?;
+        let id = self.next_id()?;
+        let result = self.children[stream.child].submit_collected_compute_v1(
+            child_launch,
+            collected.ordered_predecessor,
+            collected.explicit_success_dependencies,
+        );
+        let local = self.latch(result)?;
+        self.submissions.insert(
+            id,
+            RoutedSubmissionV1::Native {
+                route: RoutedHandleV1 {
+                    child: stream.child,
+                    local,
+                },
+                stream: request.stream,
+            },
+        );
+        self.retain_native_stream_submission_v1(request.stream);
+        Ok(id)
     }
 }
 

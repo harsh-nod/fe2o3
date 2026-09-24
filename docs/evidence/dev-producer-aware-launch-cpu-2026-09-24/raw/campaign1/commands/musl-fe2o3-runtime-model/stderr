@@ -1,0 +1,3 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized] target(s) in 33.85s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-producer-launch-20260924-hceIpJpk/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime_model-1a88892f4cf1f2ea)

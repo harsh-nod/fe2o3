@@ -1,5 +1,6 @@
-//! Bounded logical reconciliation after a directed backend reports success.
+//! Shared bounded reconciliation for explicitly success-gated backend profiles.
 
+use super::peer_custody::ScalarPeerDependencyV1;
 use super::*;
 use fe2o3_runtime_model::ContextProducerReadStatusV1;
 
@@ -19,16 +20,42 @@ enum CompletionStepV1 {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    fn producer_completion_parts_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Option<(&[ScalarPeerDependencyV1], &DirectedPeerStateV1)> {
+        if let Some(root) = self.producer_launches.get(&id) {
+            Some((&root.dependencies, &root.state))
+        } else {
+            self.scalar_peer_copies.get(&id).and_then(|root| {
+                root.directed
+                    .as_ref()
+                    .map(|state| (root.dependencies.as_slice(), state))
+            })
+        }
+    }
+
+    fn producer_completion_state_mut_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Option<&mut DirectedPeerStateV1> {
+        if let Some(root) = self.producer_launches.get_mut(&id) {
+            Some(&mut root.state)
+        } else {
+            self.scalar_peer_copies
+                .get_mut(&id)
+                .and_then(|root| root.directed.as_mut())
+        }
+    }
+
     fn invalid_directed_v1<T>(&mut self) -> Result<T, RuntimeValidationErrorV1> {
         self.quarantine_after_async_command_panic_v1();
         Err(RuntimeValidationErrorV1::InvalidBackendDescription)
     }
 
     pub(super) fn retained_directed_success_v1(&self, id: RuntimeSubmissionIdV1) -> bool {
-        self.scalar_peer_copies
-            .get(&id)
-            .and_then(|root| root.directed.as_ref())
-            .is_some_and(|state| state.terminal == Some(BackendPollV1::Succeeded))
+        self.producer_completion_parts_v1(id)
+            .is_some_and(|(_, state)| state.terminal == Some(BackendPollV1::Succeeded))
     }
 
     pub(super) fn retain_directed_observation_v1(
@@ -36,12 +63,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         id: RuntimeSubmissionIdV1,
         observation: BackendPollV1,
     ) -> Result<bool, RuntimeValidationErrorV1> {
-        self.check_scalar_peer_custody_v1(id)?;
-        let Some(state) = self
-            .scalar_peer_copies
-            .get_mut(&id)
-            .and_then(|root| root.directed.as_mut())
-        else {
+        self.check_operation_custody_v1(id)?;
+        let Some(state) = self.producer_completion_state_mut_v1(id) else {
             return Ok(false);
         };
         if let Some(prior) = state.terminal {
@@ -59,17 +82,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         id: RuntimeSubmissionIdV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
-        let Some(root) = self
-            .scalar_peer_copies
-            .get(&id)
-            .filter(|root| root.directed.is_some())
-        else {
+        self.check_operation_custody_v1(id)?;
+        let Some((dependencies, state)) = self.producer_completion_parts_v1(id) else {
             return Ok(());
         };
-        let state = root.directed.as_ref().expect("directed root");
         if state.terminal != Some(BackendPollV1::Succeeded)
-            || state.cursor != root.dependencies.len()
-            || root.dependencies.iter().any(|dep| {
+            || state.cursor != dependencies.len()
+            || dependencies.iter().any(|dep| {
                 self.submissions
                     .get(&dep.submission)
                     .is_none_or(|record| record.status != RuntimeCompletionStatusV1::Succeeded)
@@ -102,9 +121,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;
             if validated != Some(id) {
                 self.require_ordinary_submission_v1(id)?;
-                self.check_scalar_peer_custody_v1(id)?;
+                self.check_operation_custody_v1(id)?;
                 if !record.status.is_terminal() && record.directed_peer_copy {
                     let result = self.validate_pending_peer_copy_roots_v1(id);
+                    self.journal_result_v1(result)?;
+                }
+                if !record.status.is_terminal() && record.producer_launch {
+                    let result = self.validate_pending_producer_launch_roots_v1(id);
                     self.journal_result_v1(result)?;
                 }
                 validated = Some(id);
@@ -118,11 +141,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 validated = None;
                 continue;
             }
-            let Some(root) = self
-                .scalar_peer_copies
-                .get(&id)
-                .filter(|root| root.directed.is_some())
-            else {
+            let Some((dependencies, state)) = self.producer_completion_parts_v1(id) else {
                 if length != 0 {
                     return self.invalid_directed_v1();
                 }
@@ -131,7 +150,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     backend: record.backend_submission,
                 });
             };
-            let state = *root.directed.as_ref().expect("directed root");
+            let state = *state;
             match state.terminal {
                 None => {
                     return Ok(CompletionStepV1::Observe {
@@ -142,15 +161,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 Some(BackendPollV1::Succeeded) => {}
                 _ => return self.invalid_directed_v1(),
             }
-            if let Some(dependency) = root.dependencies.get(state.cursor).copied() {
+            if let Some(dependency) = dependencies.get(state.cursor).copied() {
                 match self.submissions[&dependency.submission].status {
                     RuntimeCompletionStatusV1::Succeeded => {
-                        self.scalar_peer_copies
-                            .get_mut(&id)
-                            .expect("retained root")
-                            .directed
-                            .as_mut()
-                            .expect("directed root")
+                        self.producer_completion_state_mut_v1(id)
+                            .expect("retained success-gated state")
                             .cursor += 1;
                     }
                     RuntimeCompletionStatusV1::Pending => {

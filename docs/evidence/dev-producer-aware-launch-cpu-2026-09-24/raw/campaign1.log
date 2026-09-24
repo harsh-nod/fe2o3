@@ -1,0 +1,34 @@
+rustc
+{"phase": "rustc", "exit": 0, "error": null, "group_absent": true}
+cargo
+{"phase": "cargo", "exit": 0, "error": null, "group_absent": true}
+format
+{"phase": "format", "exit": 0, "error": null, "group_absent": true}
+clippy
+{"phase": "clippy", "exit": 0, "error": null, "group_absent": true}
+gnu-default-check
+{"phase": "gnu-default-check", "exit": 0, "error": null, "group_absent": true}
+gnu-focused
+{"phase": "gnu-focused", "exit": 0, "error": null, "group_absent": true}
+gnu-fe2o3-runtime
+{"phase": "gnu-fe2o3-runtime", "exit": 0, "error": null, "group_absent": true}
+gnu-fe2o3-kfd
+{"phase": "gnu-fe2o3-kfd", "exit": 0, "error": null, "group_absent": true}
+gnu-fe2o3-runtime-model
+{"phase": "gnu-fe2o3-runtime-model", "exit": 0, "error": null, "group_absent": true}
+musl-default-check
+{"phase": "musl-default-check", "exit": 0, "error": null, "group_absent": true}
+musl-focused
+{"phase": "musl-focused", "exit": 0, "error": null, "group_absent": true}
+musl-fe2o3-runtime
+{"phase": "musl-fe2o3-runtime", "exit": 0, "error": null, "group_absent": true}
+musl-fe2o3-kfd
+{"phase": "musl-fe2o3-kfd", "exit": 0, "error": null, "group_absent": true}
+musl-fe2o3-runtime-model
+{"phase": "musl-fe2o3-runtime-model", "exit": 0, "error": null, "group_absent": true}
+docs
+{"phase": "docs", "exit": 0, "error": null, "group_absent": true}
+after-rustc
+{"phase": "after-rustc", "exit": 0, "error": null, "group_absent": true}
+after-cargo
+{"phase": "after-cargo", "exit": 0, "error": null, "group_absent": true}

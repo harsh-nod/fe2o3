@@ -231,6 +231,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 journal_writer,
                 journal_read,
                 journal_producer_read: None,
+                producer_launch: false,
             },
         );
         assert!(self.backend_submissions.insert(backend_submission));

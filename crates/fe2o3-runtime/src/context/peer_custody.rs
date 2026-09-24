@@ -56,6 +56,29 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .get(&destination.allocation)
                 .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?,
         };
+        let roster = self.prepare_dependency_roster_v1(dependencies)?;
+        self.scalar_peer_copies
+            .try_reserve(1)
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        Ok(ScalarPeerCopyRootV1 {
+            stream,
+            backend_stream: stream_record.backend_stream,
+            source,
+            destination,
+            dependencies: roster,
+            backend_submission: None,
+            dependencies_held: true,
+            directed: None,
+        })
+    }
+
+    pub(super) fn prepare_dependency_roster_v1(
+        &self,
+        dependencies: &[RuntimeEventIdV1],
+    ) -> Result<Vec<ScalarPeerDependencyV1>, RuntimeValidationErrorV1> {
+        if dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
+            return Err(RuntimeValidationErrorV1::TooManyDependencies);
+        }
         let mut roster = Vec::new();
         roster
             .try_reserve_exact(dependencies.len())
@@ -95,19 +118,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .checked_add(group.len())
                 .ok_or(RuntimeValidationErrorV1::Capacity)?;
         }
-        self.scalar_peer_copies
-            .try_reserve(1)
-            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-        Ok(ScalarPeerCopyRootV1 {
-            stream,
-            backend_stream: stream_record.backend_stream,
-            source,
-            destination,
-            dependencies: roster,
-            backend_submission: None,
-            dependencies_held: true,
-            directed: None,
-        })
+        Ok(roster)
     }
 
     pub(super) fn begin_scalar_peer_custody_v1(

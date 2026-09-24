@@ -167,11 +167,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(E::InvalidReference);
         }
         if self.submissions.get(&id).is_some_and(|record| {
-            record.directed_peer_copy || record.journal_producer_read.is_some()
-        }) || self
-            .versions
-            .as_ref()
-            .is_some_and(|versions| versions.producer_readers.contains_key(&id))
+            record.directed_peer_copy
+                || record.producer_launch
+                || record.journal_producer_read.is_some()
+        }) || self.producer_launches.contains_key(&id)
+            || self
+                .versions
+                .as_ref()
+                .is_some_and(|versions| versions.producer_readers.contains_key(&id))
         {
             return Err(E::InvalidReference);
         }

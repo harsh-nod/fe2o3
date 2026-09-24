@@ -319,6 +319,73 @@ pub(super) fn resident_data_needs_host_overwrite_v1(
 }
 
 impl KfdRuntimeBackendV1 {
+    fn compute_dependency_submission_v1(
+        &self,
+        event_handle: u64,
+        expected_submission: Option<u64>,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let event = self.events.get(&event_handle).ok_or_else(|| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown KFD event dependency",
+            )
+        })?;
+        if expected_submission.is_some_and(|expected| expected != event.submission) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "KFD event dependency does not name the expected producer",
+            ));
+        }
+        let status = self
+            .submissions
+            .get(&event.submission)
+            .map(|record| record.status)
+            .or_else(|| {
+                (self.active_compute_lane_v1(event.submission).is_some()
+                    || self.pending_compute.contains_key(&event.submission)
+                    || self.active_sdma.contains_key(&event.submission))
+                .then_some(BackendPollV1::Pending)
+            });
+        match status {
+            Some(BackendPollV1::Succeeded | BackendPollV1::Pending) => Ok(event.submission),
+            Some(BackendPollV1::Failed { .. }) => Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "event dependency completed with failure",
+            )),
+            None => Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "event refers to an unknown submission",
+            )),
+        }
+    }
+
+    pub(super) fn collect_exact_compute_dependencies_v1(
+        &self,
+        dependencies: &[BackendLaunchProducerV1],
+    ) -> Result<Box<[u64]>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
+            return Err(Self::capacity("KFD compute dependency capacity exceeded"));
+        }
+        let mut submissions = Vec::new();
+        submissions
+            .try_reserve_exact(dependencies.len())
+            .map_err(|_| Self::capacity("KFD compute dependency allocation failed"))?;
+        for dependency in dependencies {
+            let submission = self.compute_dependency_submission_v1(
+                dependency.event,
+                Some(dependency.producer_submission),
+            )?;
+            if submissions.contains(&submission) {
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    "KFD compute dependencies must name distinct submissions",
+                ));
+            }
+            submissions.push(submission);
+        }
+        Ok(submissions.into_boxed_slice())
+    }
+
     pub(super) fn collect_compute_dependencies_v1(
         &self,
         dependencies: &[u64],
@@ -331,44 +398,14 @@ impl KfdRuntimeBackendV1 {
             .try_reserve_exact(dependencies.len())
             .map_err(|_| Self::capacity("KFD compute dependency allocation failed"))?;
         for event_handle in dependencies {
-            let event = self.events.get(event_handle).ok_or_else(|| {
-                Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::UnknownHandle,
-                    "unknown KFD event dependency",
-                )
-            })?;
-            if submissions.contains(&event.submission) {
+            let submission = self.compute_dependency_submission_v1(*event_handle, None)?;
+            if submissions.contains(&submission) {
                 return Err(Self::rejected(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                     "KFD compute dependencies must name distinct submissions",
                 ));
             }
-            let status = self
-                .submissions
-                .get(&event.submission)
-                .map(|record| record.status)
-                .or_else(|| {
-                    (self.active_compute_lane_v1(event.submission).is_some()
-                        || self.pending_compute.contains_key(&event.submission)
-                        || self.active_sdma.contains_key(&event.submission))
-                    .then_some(BackendPollV1::Pending)
-                });
-            match status {
-                Some(BackendPollV1::Succeeded | BackendPollV1::Pending) => {}
-                Some(BackendPollV1::Failed { .. }) => {
-                    return Err(Self::rejected(
-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                        "event dependency completed with failure",
-                    ));
-                }
-                None => {
-                    return Err(Self::rejected(
-                        KfdRuntimeBackendErrorKindV1::UnknownHandle,
-                        "event refers to an unknown submission",
-                    ));
-                }
-            }
-            submissions.push(event.submission);
+            submissions.push(submission);
         }
         Ok(submissions.into_boxed_slice())
     }

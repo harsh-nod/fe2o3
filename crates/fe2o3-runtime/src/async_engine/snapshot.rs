@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     RuntimeArgumentsV1, RuntimeBindingV1, RuntimeLaunchGeometryV1, RuntimePeerCopySegmentV1,
-    RuntimeSubmissionV1, TypedRuntimeKernelV1,
+    RuntimeProducerAwareLaunchBackendV1, RuntimeSubmissionV1, TypedRuntimeKernelV1,
 };
 use std::sync::atomic::AtomicUsize;
 
@@ -202,6 +202,20 @@ impl<A: RuntimeArgumentsV1> RuntimeAsyncLaunchRequestV1<A> {
             &self.dependencies,
         )
     }
+
+    fn submit_producer<B: RuntimeProducerAwareLaunchBackendV1>(
+        &self,
+        context: &mut RuntimeContextV1<B>,
+    ) -> Result<RuntimeSubmissionV1<A>, RuntimeErrorV1<B::Error>> {
+        context.launch_producer_snapshot_v1(
+            self.stream,
+            &self.kernel,
+            &self.bytes,
+            &self.bindings,
+            self.geometry,
+            &self.dependencies,
+        )
+    }
 }
 
 impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
@@ -257,6 +271,66 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         self.enqueue_observed_event_operation(
             stream,
             Box::new(move |context| request.with(|r| r.submit(context))),
+        )
+    }
+}
+
+impl<B: RuntimeProducerAwareLaunchBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
+    /// Enqueues a frozen ordinary launch under the explicit producer-aware profile.
+    /// The owner validates its journal and exact producer/input roster at admission.
+    /// Snapshot credit ends at submission/disposal, not at observer Drop; Context
+    /// retains the admitted input and producer custody through conclusive settlement.
+    pub fn enqueue_producer_launch<A: RuntimeArgumentsV1>(
+        &self,
+        request: RuntimeAsyncLaunchRequestV1<A>,
+    ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        if self.observer.rejects_async_enqueue() {
+            return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+        }
+        let stream = request.stream;
+        let bytes = request.snapshot_bytes();
+        let request = self.observer.snapshot_budget.charge(request, bytes)?;
+        self.enqueue_operation(
+            stream,
+            Box::new(move |context| request.with(|r| r.submit_producer(context))),
+        )
+    }
+
+    /// Producer-aware frozen launch with local pre-submission cancellation and
+    /// observation timeout controls. Neither control releases admitted native custody.
+    pub fn enqueue_producer_launch_tracked<A: RuntimeArgumentsV1>(
+        &self,
+        request: RuntimeAsyncLaunchRequestV1<A>,
+    ) -> Result<RuntimeAsyncTrackedOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        if self.observer.rejects_async_enqueue() {
+            return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+        }
+        let stream = request.stream;
+        let bytes = request.snapshot_bytes();
+        let request = self.observer.snapshot_budget.charge(request, bytes)?;
+        self.enqueue_tracked_operation(
+            stream,
+            Box::new(move |context| request.with(|r| r.submit_producer(context))),
+        )
+    }
+
+    /// Producer-aware frozen launch with separate early-event and completion replies.
+    /// Keep dependency events live until consumer admission, not merely enqueue.
+    /// Event recording occupies its own owner advance; its failure does not cancel
+    /// an accepted launch or authorize resubmission.
+    pub fn enqueue_producer_launch_with_event<A: RuntimeArgumentsV1>(
+        &self,
+        request: RuntimeAsyncLaunchRequestV1<A>,
+    ) -> Result<RuntimeAsyncEventOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        if self.observer.rejects_async_enqueue() {
+            return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+        }
+        let stream = request.stream;
+        let bytes = request.snapshot_bytes();
+        let request = self.observer.snapshot_budget.charge(request, bytes)?;
+        self.enqueue_observed_event_operation(
+            stream,
+            Box::new(move |context| request.with(|r| r.submit_producer(context))),
         )
     }
 }

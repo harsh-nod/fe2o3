@@ -1,5 +1,22 @@
 # Current Runtime Swarm Work Orders
 
+Latest typed-launch CPU qualification (2026-09-24): the
+[producer-aware launch packet](evidence/dev-producer-aware-launch-cpu-2026-09-24/README.md)
+passes all seventeen stages. GNU/musl each pass 27 focused, 1,392 runtime,
+1,561 KFD and 1,021 model tests, retaining twenty hardware-only runtime ignores
+and eighteen manual performance/scale model ignores. All 100 doctests, static
+checks and 3,960 unchanged source inputs pass. Context and the frozen async
+owner retain exact event/producer dependencies, mixed stable/pending input leases
+and original binding coverage through bounded producer-first reconciliation.
+Single-/multi-device KFD authenticate the same identities without adding an
+executor or Worker protocol. Byte-exact evidence replay and eleven verifier-test
+groups pass. The original collector's final-receipt failure is preserved;
+separate non-deleting recovery verifies cache absence after 1,366,761,472 owned
+allocated bytes were removed. Native chains, active-producer backing admission,
+mixed-transaction/reconciliation proofs, generated graphs, aggregate memory and
+matched performance remain open. Native R125, Admission R118B C1/C2/C3,
+Resources R116/V3 and A1/A2 acceptance are unchanged.
+
 Latest native runtime qualification (2026-09-24): the
 [current-source matrix](evidence/dev-runtime-native-matrix-mi300x-2026-09-24/README.md)
 passes all 22 test commands across two campaigns from signed `354032512`.

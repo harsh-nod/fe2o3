@@ -26,6 +26,11 @@ mod peer_directed;
 pub use peer_directed::*;
 mod peer_directed_context;
 mod peer_reconciliation;
+mod producer_launch;
+pub use producer_launch::{
+    BackendLaunchProducerV1, BackendProducerAwareLaunchV1, RuntimeProducerAwareLaunchBackendV1,
+};
+use producer_launch::{PreparedSubmissionCustodyV1, ProducerLaunchRootV1};
 mod peer_segments;
 pub use peer_segments::*;
 mod unpublished;
@@ -933,6 +938,8 @@ pub struct RuntimeCleanupReportV1<E> {
     writer_journal_records: usize,
     reader_journal_records: usize,
     scalar_peer_copy_records: usize,
+    // The submission admission bound fits u32; keep shutdown errors inline.
+    producer_launch_records: u32,
 }
 
 impl<E> RuntimeCleanupReportV1<E> {
@@ -957,6 +964,7 @@ impl<E> RuntimeCleanupReportV1<E> {
             && self.writer_journal_records == 0
             && self.reader_journal_records == 0
             && self.scalar_peer_copy_records == 0
+            && self.producer_launch_records == 0
     }
 
     pub const fn is_graph_reserved(&self) -> bool {
@@ -988,6 +996,11 @@ impl<E> RuntimeCleanupReportV1<E> {
     /// Completed roots are metadata only; they are removed with their submission.
     pub const fn scalar_peer_copy_records_v1(&self) -> usize {
         self.scalar_peer_copy_records
+    }
+
+    /// Retained producer-aware launch roots, including attempts without a handle.
+    pub const fn producer_launch_records_v1(&self) -> usize {
+        self.producer_launch_records as usize
     }
 }
 
@@ -1044,9 +1057,10 @@ struct SubmissionRecordV1 {
     status: RuntimeCompletionStatusV1,
     journal_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
     journal_read: Option<SubmissionReaderMarkerV1>,
-    journal_producer_read: Option<fe2o3_runtime_model::ContextProducerReadReferenceV1>,
+    journal_producer_read: Option<versions::SubmissionProducerReaderMarkerV1>,
     scalar_peer_copy: bool,
     directed_peer_copy: bool,
+    producer_launch: bool,
     dependency_retains: usize,
 }
 
@@ -1095,6 +1109,7 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     submissions: HashMap<RuntimeSubmissionIdV1, SubmissionRecordV1>,
     backend_submissions: HashSet<u64>,
     scalar_peer_copies: HashMap<RuntimeSubmissionIdV1, ScalarPeerCopyRootV1>,
+    producer_launches: HashMap<RuntimeSubmissionIdV1, ProducerLaunchRootV1>,
     generated_issues: HashMap<RuntimeStreamIdV1, generated_issue::GeneratedIssueV1>,
     completion_callbacks: HashMap<RuntimeSubmissionIdV1, Vec<RuntimeCompletionCallbackV1>>,
     completion_callback_count: usize,
@@ -1127,6 +1142,7 @@ pub(crate) struct PreparedContextLaunchV1 {
     backend_bindings: Vec<BackendBindingV1>,
     journal_destinations: Vec<RuntimeAllocationIdV1>,
     journal_sources: Vec<ContextReadSourceV1>,
+    producer_bindings: Vec<ContextReadSourceV1>,
     backend_dependencies: Vec<u64>,
     geometry: RuntimeLaunchGeometryV1,
     semantic_launch: BackendSemanticLaunchV1,
@@ -1275,6 +1291,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             generated_issues: HashMap::new(),
             backend_submissions: HashSet::new(),
             scalar_peer_copies: HashMap::new(),
+            producer_launches: HashMap::new(),
             completion_callbacks: HashMap::new(),
             completion_callback_count: 0,
             completion_callback_panic_count: 0,
@@ -1427,7 +1444,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 submissions_released = false;
                 continue;
             }
-            if self.check_scalar_peer_custody_v1(id).is_err() {
+            if self.check_operation_custody_v1(id).is_err() {
                 return self.cleanup_report(failures);
             }
             match self.invoke_journal_backend_v1(|backend| {
@@ -1436,6 +1453,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 Ok(()) => {
                     self.submissions.remove(&id);
                     self.scalar_peer_copies.remove(&id);
+                    self.producer_launches.remove(&id);
                     self.backend_submissions.remove(&record.backend_submission);
                     debug_assert!(!self.completion_callbacks.contains_key(&id));
                 }
@@ -1562,6 +1580,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .as_ref()
                 .map_or(0, ContextVersionsV1::retained_readers),
             scalar_peer_copy_records: self.scalar_peer_copies.len(),
+            producer_launch_records: u32::try_from(self.producer_launches.len())
+                .expect("bounded producer-launch registry"),
         }
     }
 
@@ -1617,13 +1637,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.status.is_terminal() || !status.is_terminal() {
             return Ok(record.status);
         }
-        self.check_scalar_peer_custody_v1(submission)?;
+        if record.producer_launch {
+            let result = self.validate_pending_producer_launch_roots_v1(submission);
+            self.journal_result_v1(result)?;
+        }
+        self.check_operation_custody_v1(submission)?;
         if status == RuntimeCompletionStatusV1::Succeeded {
             self.require_directed_success_v1(submission)?;
         }
         self.release_submission_inputs_v1(submission)?;
         self.settle_submission_writer_v1(submission, outcome)?;
-        self.release_scalar_peer_dependencies_v1(submission)?;
+        self.release_operation_dependencies_v1(submission)?;
         self.publish_submission_status_v1(submission, status)
     }
 
@@ -2191,6 +2215,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         module: RuntimeModuleIdV1,
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
         self.require_live()?;
+        if self.producer_launch_retains_module_v1(module) {
+            return Err(RuntimeValidationErrorV1::ContextReserved.into());
+        }
         let record = *self
             .modules
             .get(&module)
@@ -2322,6 +2349,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         request: ContextLaunchRequestV1<'_, A>,
         access: Option<ContextGraphReservationV1>,
     ) -> Result<PreparedContextLaunchV1, RuntimeErrorV1<B::Error>> {
+        self.prepare_context_launch_profile_v1(request, access, false)
+    }
+
+    fn prepare_context_launch_profile_v1<A: RuntimeArgumentsV1>(
+        &self,
+        request: ContextLaunchRequestV1<'_, A>,
+        access: Option<ContextGraphReservationV1>,
+        producer_aware: bool,
+    ) -> Result<PreparedContextLaunchV1, RuntimeErrorV1<B::Error>> {
         let ContextLaunchRequestV1 {
             stream,
             kernel,
@@ -2380,6 +2416,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::TooManyBindings.into());
         }
         let mut backend_bindings = Vec::with_capacity(bindings.len());
+        let mut producer_bindings = Vec::new();
+        if producer_aware {
+            producer_bindings
+                .try_reserve_exact(bindings.len())
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        }
         let read_bindings = bindings
             .iter()
             .filter(|binding| binding.region.access == RuntimeAccessV1::Read)
@@ -2443,6 +2485,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 },
                 kernarg_byte_offset: binding.kernarg_byte_offset,
             });
+            if producer_aware {
+                producer_bindings.push(ContextReadSourceV1 {
+                    region,
+                    record: allocation,
+                });
+            }
             if matches!(
                 region.access,
                 RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
@@ -2492,6 +2540,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_bindings,
             journal_destinations,
             journal_sources,
+            producer_bindings,
             backend_dependencies,
             geometry,
             semantic_launch,
@@ -2502,6 +2551,22 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         prepared: PreparedContextLaunchV1,
         access: Option<ContextGraphReservationV1>,
+        submit: F,
+    ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>>
+    where
+        F: for<'launch> FnOnce(
+            &mut B,
+            BackendLaunchV1<'launch>,
+        ) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
+    {
+        self.submit_prepared_launch_with_custody_v1(prepared, access, None, submit)
+    }
+
+    fn submit_prepared_launch_with_custody_v1<M, F>(
+        &mut self,
+        prepared: PreparedContextLaunchV1,
+        access: Option<ContextGraphReservationV1>,
+        custody: Option<PreparedSubmissionCustodyV1>,
         submit: F,
     ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>>
     where
@@ -2523,6 +2588,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_bindings,
             journal_destinations,
             journal_sources,
+            producer_bindings: _,
             backend_dependencies,
             geometry,
             semantic_launch,
@@ -2531,7 +2597,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             stream,
             stream_record,
             &journal_destinations,
-            None,
+            custody,
             &journal_sources,
             |backend| {
                 submit(
@@ -2911,7 +2977,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.dependency_retains != 0 {
             return Err(RuntimeValidationErrorV1::SubmissionRetainedByDependency.into());
         }
-        self.check_scalar_peer_custody_v1(submission.id)?;
+        self.check_operation_custody_v1(submission.id)?;
         if self
             .events
             .values()
@@ -2931,6 +2997,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.backend_result(result)?;
         self.submissions.remove(&submission.id);
         self.scalar_peer_copies.remove(&submission.id);
+        self.producer_launches.remove(&submission.id);
         self.backend_submissions.remove(&record.backend_submission);
         debug_assert!(!self.completion_callbacks.contains_key(&submission.id));
         Ok(())
@@ -3082,12 +3149,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             stream,
             prepared.stream_record,
             &[destination.allocation],
-            Some(PreparedPeerSubmissionV1 {
-                mechanism: PeerTransferMechanismV1::DeclaredPeerCopy {
-                    contract_identity: peer_copy_contract_identity(stream, source, destination),
+            Some(PreparedSubmissionCustodyV1::Peer(
+                PreparedPeerSubmissionV1 {
+                    mechanism: PeerTransferMechanismV1::DeclaredPeerCopy {
+                        contract_identity: peer_copy_contract_identity(stream, source, destination),
+                    },
+                    scalar: Some(custody),
                 },
-                scalar: Some(custody),
-            }),
+            )),
             &[prepared.journal_source],
             |backend| {
                 backend.peer_copy_v1(
@@ -3374,9 +3443,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.require_live()?;
         let record = self.submission_record(submission)?;
         self.require_retained_submission_unheld_v1(&record)?;
-        self.check_scalar_peer_custody_v1(submission.id)?;
+        self.check_operation_custody_v1(submission.id)?;
         if !record.quiescent && record.directed_peer_copy {
             let result = self.validate_pending_peer_copy_roots_v1(submission.id);
+            self.journal_result_v1(result)?;
+        }
+        if !record.quiescent && record.producer_launch {
+            let result = self.validate_pending_producer_launch_roots_v1(submission.id);
             self.journal_result_v1(result)?;
         }
         if record.quiescent || self.retained_directed_success_v1(submission.id) {
@@ -3654,6 +3727,7 @@ mod tests {
     mod peer_custody_tests;
     mod peer_directed_tests;
     mod peer_segments_tests;
+    mod producer_launch_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
 
@@ -3758,6 +3832,7 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct MockBackend {
+        producer_launch: producer_launch_tests::MockProducerLaunchState,
         next: u64,
         enumeration_calls: usize,
         allocation_calls: usize,
@@ -3986,6 +4061,9 @@ mod tests {
         }
 
         fn finish_submission(&mut self, submission: u64, success: bool) {
+            if self.finish_producer_launch_test_v1(submission, success) {
+                return;
+            }
             if let Some(pending) = self.pending_peer_segments.remove(&submission)
                 && success
             {
@@ -4279,6 +4357,9 @@ mod tests {
             submission: u64,
         ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
             self.poll_call_count += 1;
+            if self.is_producer_launch_test_v1(submission) {
+                return self.observe_producer_launch_test_v1("poll", submission);
+            }
             if self.directed_routes.contains_key(&submission) {
                 return self.observe_directed_test_v1("poll", submission);
             }
@@ -4303,6 +4384,9 @@ mod tests {
             }
             self.last_waited_submission = Some(submission);
             self.wait_deadlines.push(deadline);
+            if self.is_producer_launch_test_v1(submission) {
+                return self.observe_producer_launch_test_v1("wait", submission);
+            }
             if self.wait_call_count == 1 {
                 match self.first_wait_failure {
                     MockWaitFailure::None => {}
@@ -4338,6 +4422,7 @@ mod tests {
             assert!(!self.pending_copies.contains_key(&submission));
             assert!(!self.pending_peer_segments.contains_key(&submission));
             assert!(!self.pending_kernel_reads.contains_key(&submission));
+            self.release_producer_launch_test_v1(submission);
             self.cleanup_log
                 .push((MockCleanupKind::Submission, submission));
             self.polls.remove(&submission);
@@ -4350,7 +4435,9 @@ mod tests {
             submission: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
             self.last_recorded_event = Some((stream, submission));
-            Ok(self.handle(MockHandleKind::Event))
+            let event = self.handle(MockHandleKind::Event);
+            self.record_producer_launch_event_test_v1(event, submission);
+            Ok(event)
         }
 
         fn release_event_v1(
@@ -4365,6 +4452,7 @@ mod tests {
             if self.cleanup_failure == MockCleanupFailure::TerminalEvent {
                 return Err(RuntimeBackendFailureV1::Terminal(MockError("lost")));
             }
+            self.release_producer_launch_event_test_v1(event);
             Ok(())
         }
 

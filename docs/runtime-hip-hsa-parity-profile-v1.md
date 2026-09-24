@@ -710,6 +710,16 @@ and separate owned cleanup. It adds no native fault or performance evidence.
 Aggregate memory, generated execution,
 production-code proof correspondence and complete parity gates remain open.
 
+The additive [producer-aware typed-launch integration](runtime-producer-aware-typed-launch-v1.md)
+extends ordinary same-device launches and the existing async owner with exact
+event/producer pairs, mixed stable/pending input custody and producer-first
+logical reconciliation. This is not protected generated execution or new
+atomic/collective authority. The R57 persistent backend still rejects consumer
+admission after the producer takes shared backing into active-compute custody;
+queued-producer support must not be reported as active-producer support.
+New native witnesses and mixed-transaction/reconciliation correspondence remain
+required. This integration does not close G2, G6, G7 or A1/A2.
+
 ### G1: API and ownership
 
 All public handles are context-generation bound. A live submission or event

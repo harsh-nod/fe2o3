@@ -1,0 +1,9 @@
+{
+  "cache_path": "/home/harsh/.codex-tmp/fe2o3-producer-launch-20260924-hceIpJpk/target",
+  "command_groups_absent": true,
+  "deletion_repeated": false,
+  "initial_receipt_sha256": "68780043a34b188ae7610b0c8282f7413c01fb60fc089f12a22fd09998387ea3",
+  "observation": "owned-cache-absent",
+  "original_collection": "failed-final-receipt-exclusive-create",
+  "original_collector_sha256": "3be22b5ad7ed86cc9e5d7ed76063edee16b41b39c4f71a7c7d6245730cd80f24"
+}

@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicUsize;
 
 mod directed;
 mod peer_segments;
+mod producer_launch;
 
 #[derive(Clone)]
 struct Args {

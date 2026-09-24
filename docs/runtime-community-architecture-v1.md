@@ -200,6 +200,16 @@ error. Pending directed chains can be composed through receipts without adding
 a second graph scheduler or weakening single-device graph identities. Input
 events must remain live through every consumer's admission, not just enqueue.
 
+The additive [producer-aware typed-launch profile](runtime-producer-aware-typed-launch-v1.md)
+uses that same driver and Context lifecycle for ordinary same-device kernels.
+It binds each event to an exact producer, retains mixed stable/pending input
+leases and original binding ranges, and reconciles producer success before
+publishing logical consumer success. Read-only consumers need no output writer.
+The backend contract is explicit; neither metadata nor a capability bit enables
+it. This does not change protected Worker, atomic or collective authority, and
+does not yet remove the R57 active-producer backing restriction or establish
+native/proof/performance qualification.
+
 `query_stream` aggregates every retained submission by typed status and reports
 the first failure deterministically by submission identity. `synchronize_stream`
 waits once for each pending submission using one shared monotonic deadline and

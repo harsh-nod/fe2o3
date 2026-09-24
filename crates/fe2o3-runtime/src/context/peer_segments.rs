@@ -101,12 +101,14 @@ impl<B: RuntimePeerCopySegmentsBackendV1> RuntimeContextV1<B> {
             stream,
             prepared.stream_record,
             &[destination.allocation],
-            Some(PreparedPeerSubmissionV1 {
-                mechanism: PeerTransferMechanismV1::DeclaredPeerCopy {
-                    contract_identity: identity,
+            Some(PreparedSubmissionCustodyV1::Peer(
+                PreparedPeerSubmissionV1 {
+                    mechanism: PeerTransferMechanismV1::DeclaredPeerCopy {
+                        contract_identity: identity,
+                    },
+                    scalar: None,
                 },
-                scalar: None,
-            }),
+            )),
             &[prepared.journal_source],
             |backend| {
                 backend.peer_copy_segments_v1(
