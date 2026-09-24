@@ -63,6 +63,7 @@ fn assert_wrapped_source<E: StdError + Into<Error> + 'static>(source: E) {
 
 #[test]
 fn wait_limits_accept_exact_endpoints_and_reject_outside_values() {
+    assert_eq!(Wait::ATTEMPT_WORK, 4 * 1024 + 8 * 193 + 256);
     for (count, timeout) in [
         (1, Duration::from_nanos(1)),
         (Wait::MAX_ATTEMPTS, Wait::MAX_TIMEOUT),
@@ -99,6 +100,41 @@ fn wait_deadline_is_derived_from_timeout_and_preserves_boundary() {
             before_deadline(expired, boundary),
             Err(Error::Timeout(actual)) if actual == boundary
         ));
+    }
+}
+
+#[test]
+fn namespace_frame_and_eof_use_separate_finite_attempts() {
+    for count in [1, 2] {
+        let limits = Wait::new(count, Wait::MAX_TIMEOUT).unwrap();
+        let mut report = ProfileReportRead::new();
+        let mut calls = 0;
+        let result = attempts(
+            limits,
+            limits.deadline().unwrap(),
+            Boundary::Profile,
+            || {
+                report
+                    .observe(|out| {
+                        calls += 1;
+                        if calls == 1 {
+                            out[..CHILD_NAMESPACE_REPORT_BYTES].fill(0x41);
+                            Ok(CHILD_NAMESPACE_REPORT_BYTES)
+                        } else {
+                            Ok(0)
+                        }
+                    })
+                    .map_err(|error| ChildProcessError::from(error).into())
+            },
+        );
+        assert_eq!(calls, count);
+        if count == 1 {
+            assert!(matches!(result, Err(Error::Attempts(Boundary::Profile))));
+            assert!(report.report().is_err());
+        } else {
+            result.unwrap();
+            assert_eq!(report.report().unwrap().len(), CHILD_NAMESPACE_REPORT_BYTES);
+        }
     }
 }
 

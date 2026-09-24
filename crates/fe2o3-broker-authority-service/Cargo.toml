@@ -30,5 +30,6 @@ zeroize = "=1.9.0"
 [dev-dependencies]
 fe2o3-compiler-ffi.workspace = true
 fe2o3-compiler-lineage.workspace = true
+rustix = { workspace = true, features = ["event"] }
 serde = "=1.0.229"
 tempfile = "=3.21.0"

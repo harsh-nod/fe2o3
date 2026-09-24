@@ -41,6 +41,42 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The gated namespace collector in `child_namespace_report.rs` uses six unsafe
+blocks and one private syscall function because post-clone observation cannot
+use allocating or TLS-dependent wrappers. Its x86-64 stat buffer layout and
+syscall clobbers are explicit; static NUL-terminated paths, exclusive writable
+outputs and single-close descriptor ownership bound the raw accesses. Every
+syscall failure is tested. The report is inert without private-pipe provenance,
+EOF, retained pidfd custody and the exec gate.
+
+The synthetic native consuming fixture has seven process-bootstrap blocks and
+sixteen static-issuer I/O blocks. Bootstrap drops credentials/capabilities only
+in the disposable child. I/O adopts fixed inherited descriptors once, checks
+initialization before reading syscall outputs, uses finite nonblocking operations
+over live buffers, and never retries close. The profile integration fixture's
+fifteen blocks cover the same isolated credential setup plus a non-leader UTS
+namespace and raw clone3 child, with exclusive pipe/pidfd custody and bounded
+reaping. These are test-only privileges and operations, not production authority.
+The four consuming cases passed under the exact locked profile on MI350; they
+do not establish signing, durable recovery, protected proofs or GPU execution.
+
+The inherited broker test that closed a still-owned descriptor before borrowing
+it again has been removed: `forget` after validation cannot repair that I/O
+ownership violation. Existing descriptor-substitution and flag-mutation tests
+keep every owner valid while checking continuity refusal. The audit inventory
+also accounts for moved socket/pidfd inspection sites without treating relocation
+as removal of their safety obligations.
+
+The native profile and compiler-execution subject test allocators forward all
+pointer/layout operations unchanged to `System`. Their thread-local counters
+use saturating increments so exhaustion cannot unwind through `GlobalAlloc`;
+deterministic maximum-count tests check saturation and restoration. Ancillary
+custody retains separate ownership for rustix's SCM_RIGHTS descriptors and the
+guard's SCM_PIDFD descriptors. Its initialized aligned backing, checked record
+bounds, one-shot adoption and unwind cleanup remain required despite extraction
+into shared modules. The two KFD debug-metadata stores counted here are test-only
+exclusive writes to retained aligned storage, not production GPU registration.
+
 The source-safety fixture `owned_unsafe_closure.rs` deliberately contains one
 empty unsafe block inside an owned `FnOnce` closure. It exercises rooted source
 rejection even when MIR optimization removes the empty block. There is no unsafe

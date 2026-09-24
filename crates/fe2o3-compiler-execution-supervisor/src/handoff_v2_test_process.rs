@@ -1,9 +1,13 @@
 //! Actual same-UID submitter/client and distinct-UID supervisor fixture roles.
 use crate::authority_v2_test_process::*;
+use crate::native_consuming_test_process::{
+    Case as ConsumingCase, LIFECYCLE_TIMEOUT, MeasuredImage,
+};
 use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V2 as READY_BYTES,
     CompilerExecutionClientProcessIdentityV1 as Client,
     CompilerExecutionExternalAnchorServiceIdentityV1 as Anchor,
-    CompilerExecutionServiceLaunchManifestV2 as Manifest,
+    CompilerExecutionServiceLaunchManifestV2 as Manifest, CompilerExecutionServiceReadyV2 as Ready,
     CompilerExecutionSupervisorHandoffV2 as Handoff,
 };
 use fe2o3_kernel_ir::{
@@ -22,6 +26,21 @@ const UID: u32 = 65_532;
 fn submitter_process_helper() {
     require_child_credentials("submitter", UID);
     let control = inherited_control();
+    run_submitter(control, None);
+}
+
+#[test]
+#[ignore = "private submitter role for the real native consuming fixture"]
+fn native_consuming_submitter_process_helper() {
+    require_child_credentials("native-consuming-submitter", UID);
+    let control = inherited_control();
+    let (request, []) = receive_packet::<0>(&control, Instant::now() + IO_TIMEOUT).unwrap();
+    assert_eq!(&request[..4], b"NCF2");
+    let case = ConsumingCase::from_id(u32::from_le_bytes(request[4..].try_into().unwrap()));
+    run_submitter(control, Some(case));
+}
+
+fn run_submitter(control: std::os::fd::OwnedFd, consuming: Option<ConsumingCase>) {
     let (client_control, child_input) = pair();
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
@@ -45,7 +64,11 @@ fn submitter_process_helper() {
         receive_packet::<2>(&client_control, Instant::now() + IO_TIMEOUT).unwrap();
     let pid = child.0.id();
     assert_eq!(payload, frame(b"CLI2", pid));
-    let fixture = crate::tests::Fixture::new("handoff-submitter");
+    let fixture = consuming
+        .is_none()
+        .then(|| crate::tests::Fixture::new("handoff-submitter"));
+    let issuer =
+        consuming.map(|case| MeasuredImage::from_env(case.image_env()).issuer_measurement());
     let mut held_control = None;
     let mut anchor_pid = 0;
     loop {
@@ -62,11 +85,19 @@ fn submitter_process_helper() {
         let case = u32::from_le_bytes(request[4..].try_into().unwrap());
         let mut work = Work::new(10_000_000_000);
         let mut budget = Budget::new(&mut work, 10_000_000);
-        let policy = crate::authority_v2::tests::policy(
-            &fixture,
-            if case == 1 { 8 } else { 7 },
-            &mut budget,
-        );
+        let policy = if let Some(issuer) = issuer {
+            assert_eq!(
+                case, 0,
+                "consuming fixture uses an unmodified valid handoff"
+            );
+            crate::authority_v2::tests::measured_policy(issuer, 7, &mut budget)
+        } else {
+            crate::authority_v2::tests::policy(
+                fixture.as_ref().unwrap(),
+                if case == 1 { 8 } else { 7 },
+                &mut budget,
+            )
+        };
         let other_pid = (1..=4)
             .find(|candidate| ![pid, std::process::id(), anchor_pid].contains(candidate))
             .unwrap();
@@ -152,6 +183,35 @@ fn submitter_process_helper() {
         }
         held_control = Some(held);
         send_packet(&control, &frame(b"HOF2", pid), &[sent.as_fd()]).unwrap();
+        if consuming == Some(ConsumingCase::Ready) {
+            let (request, []) =
+                receive_packet::<0>(&control, Instant::now() + LIFECYCLE_TIMEOUT).unwrap();
+            assert_eq!(&request[..4], b"PUB2");
+            let issuer_pid = u32::from_le_bytes(request[4..].try_into().unwrap());
+            let (published, []) = receive_sized_packet::<READY_BYTES, 0>(
+                held_control.as_ref().unwrap(),
+                Instant::now() + IO_TIMEOUT,
+            )
+            .unwrap();
+            budget.reserve_storage(published.len()).unwrap();
+            let (ready, delta) = Ready::decode(&published, &mut budget).unwrap();
+            budget.reserve_storage(delta.additional_storage()).unwrap();
+            assert!(
+                ready
+                    .matches_launch(issuer_pid, handoff.launch_manifest(), &policy, &mut budget)
+                    .unwrap()
+            );
+            // Return the packet actually received from the public publication
+            // path; the supervisor compares these bytes with its native owner.
+            send_packet(&control, &published, &[]).unwrap();
+            let (request, []) = receive_packet::<0>(&control, Instant::now() + IO_TIMEOUT).unwrap();
+            assert_eq!(request, frame(b"FIN2", issuer_pid));
+            send_packet(&client_control, &frame(b"FIN2", pid), &[]).unwrap();
+            let (completed, []) =
+                receive_packet::<0>(&client_control, Instant::now() + IO_TIMEOUT).unwrap();
+            assert_eq!(completed, frame(b"FIN2", pid));
+            send_packet(&control, &frame(b"FIN2", issuer_pid), &[]).unwrap();
+        }
     }
     drop(held_control);
     send_packet(&client_control, &frame(b"STOP", pid), &[]).unwrap();
@@ -183,8 +243,23 @@ fn client_process_helper() {
     )
     .unwrap();
     drop((service_peer, pidfd));
-    let (request, []) =
+    let (mut request, []) =
         receive_packet::<0>(&control, Instant::now() + Duration::from_secs(45)).unwrap();
+    if request == frame(b"FIN2", pid) {
+        // Inert fixture stop byte, sent only after the submitter verified the
+        // actual readiness publication. The issuer's service peer is fd 4.
+        assert_eq!(
+            rustix::net::send(
+                &held_peer,
+                &[0x01],
+                rustix::net::SendFlags::DONTWAIT | rustix::net::SendFlags::NOSIGNAL,
+            )
+            .unwrap(),
+            1
+        );
+        send_packet(&control, &frame(b"FIN2", pid), &[]).unwrap();
+        (request, []) = receive_packet::<0>(&control, Instant::now() + IO_TIMEOUT).unwrap();
+    }
     assert_eq!(request, frame(b"STOP", pid));
     drop(held_peer);
 }

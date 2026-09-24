@@ -4,6 +4,10 @@
 mod native;
 pub use native::*;
 
+#[path = "process_profile_report.rs"]
+mod profile_report;
+use profile_report::{ProfileReportRead, ReportError};
+
 use core::ffi::{c_char, c_int, c_long, c_void};
 use std::error::Error;
 use std::fmt;
@@ -15,6 +19,10 @@ use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionServiceLaunchManifestV1, CompilerExecutionServiceReadyErrorV1,
     CompilerExecutionServiceReadyV1,
+};
+use fe2o3_protected_service_profile::observations::{
+    CHILD_NAMESPACE_REPORT_BYTES, CHILD_NAMESPACE_REPORT_CAPTURE_WORK,
+    capture_child_namespace_report_pre_exec,
 };
 use fe2o3_protected_service_profile::{
     ProtectedServiceNamespaceSetV1 as NamespaceSetV1,
@@ -67,7 +75,6 @@ const PR_CAP_AMBIENT: c_int = 47;
 const PR_CAP_AMBIENT_IS_SET: c_int = 1;
 const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
-const PROFILE_READY_V1: u8 = 0xa5;
 const GATE_RELEASE_V1: u8 = 0x5a;
 const MAX_CHILD_GATE_ATTEMPTS: usize = 64;
 const MAX_LAUNCH_WAIT_V1: Duration = Duration::from_secs(120);
@@ -648,8 +655,8 @@ impl ProtectedIssuerSupervisorV1 {
     /// Production launch requires the calling supervisor thread to already
     /// possess the complete locked service profile. The child inherits that
     /// profile, verifies it with direct syscalls while gated, and cannot execute
-    /// the launcher until the parent independently checks procfs and every
-    /// namespace. The returned value is not ready issuer authority.
+    /// the launcher until the parent checks procfs and its private report of
+    /// every child namespace. The returned value is not ready issuer authority.
     pub fn launch(
         &self,
         prepared: PreparedProtectedIssuerLaunchV1,
@@ -708,6 +715,9 @@ impl ProtectedIssuerSupervisorV1 {
             cap_last_cap: profile.cap_last_cap(),
         });
         let expected_parent_pid = prepared.static_manifest().parent_pid();
+        let parent = rustix::process::Pid::from_raw(expected_parent_pid).ok_or(
+            ProtectedIssuerLaunchErrorV1::InvalidProcessState("invalid launch parent PID"),
+        )?;
         let launch_manifest = prepared.service_manifest().clone();
         let policy = self.policy().clone();
 
@@ -724,6 +734,7 @@ impl ProtectedIssuerSupervisorV1 {
                 profile_ready_reader.as_raw_fd(),
                 gate_writer.as_raw_fd(),
                 exec_status_reader.as_raw_fd(),
+                profile_ready_writer.as_raw_fd(),
             ],
             reap_slot,
             spawn_lease,
@@ -741,7 +752,7 @@ impl ProtectedIssuerSupervisorV1 {
         drop(staged);
 
         let result = (|| {
-            await_profile_ready(
+            let report = await_profile_ready(
                 &profile_ready_reader,
                 &exec_status_reader,
                 &process,
@@ -749,7 +760,7 @@ impl ProtectedIssuerSupervisorV1 {
             )?;
             namespaces.revalidate_self().map_err(map_profile_error)?;
             namespaces
-                .revalidate_process(pid)
+                .require_child_report(pid, parent, report.report().map_err(map_child_error)?)
                 .map_err(map_profile_error)?;
             if let Some(profile) = &profile {
                 profile.revalidate_current().map_err(map_profile_error)?;
@@ -801,7 +812,7 @@ fn spawn_child(
     staged: &StagedLaunchV1,
     child_profile: Option<ChildProfileV1>,
     expected_parent_pid: i32,
-    close_in_child: [i32; 3],
+    close_in_child: [i32; 4],
     reap_slot: ReapSlotV1<'static>,
     spawn_lease: fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1,
 ) -> Result<IssuerChild, ChildProcessError> {
@@ -849,6 +860,7 @@ fn spawn_child(
                 close_in_child[0],
                 close_in_child[1],
                 close_in_child[2],
+                close_in_child[3],
             )
         }
     }
@@ -876,17 +888,19 @@ fn spawn_child(
 /// Conservative prepayment for child_exec through execveat or failure write/exit.
 ///
 /// Each operation reserves 1024 syscall units plus 64 scalar/field-work units;
-/// 256 additional units cover stack records and fixed control flow. Count three
-/// closes, all 64 signal slots (including the two skipped signals), signal-mask
+/// 256 additional units cover stack records and fixed control flow. Count five
+/// endpoint closes (including both report writers), all 64 signal slots
+/// (including the two skipped signals), signal-mask
 /// reset, four parent-death checks, readiness write, every gate read attempt,
 /// close_range, three stdio and SOURCE_COUNT_V1 + 2 descriptor installs, execveat,
-/// and failure write + exit. A profile adds eleven fixed syscalls and two for
+/// and failure write + exit. Fresh child namespace collection is prepaid using
+/// its exported bound. A profile adds eleven fixed syscalls and two for
 /// every capability in 0..=cap_last_cap, including all associated field checks.
 /// Checked arithmetic fails closed to usize::MAX even for unsupported ceilings.
 /// This is logical work, not a bound on syscall latency or executed launcher work.
 fn child_work(profile: Option<ChildProfileV1>) -> usize {
     const OPERATION_WORK: usize = 1024 + 64;
-    const FIXED_OPERATIONS: usize = 3
+    const FIXED_OPERATIONS: usize = 5
         + KERNEL_SIGNAL_COUNT as usize
         + 1
         + 4
@@ -910,6 +924,7 @@ fn child_work(profile: Option<ChildProfileV1>) -> usize {
         .and_then(|operations| operations.checked_add(FIXED_OPERATIONS))
         .and_then(|operations| operations.checked_mul(OPERATION_WORK))
         .and_then(|work| work.checked_add(256))
+        .and_then(|work| work.checked_add(CHILD_NAMESPACE_REPORT_CAPTURE_WORK))
         .unwrap_or(usize::MAX)
 }
 
@@ -945,12 +960,16 @@ unsafe fn child_exec(
     profile_ready_reader: c_int,
     gate_writer: c_int,
     exec_status_reader: c_int,
+    original_profile_writer: c_int,
 ) -> ! {
     // SAFETY: every call in this block is a direct Linux syscall over preallocated storage.
     unsafe {
         close(profile_ready_reader);
         close(gate_writer);
         close(exec_status_reader);
+        if close(original_profile_writer) != 0 {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 12);
+        }
         if normalize_signal_state() != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 1);
         }
@@ -962,14 +981,20 @@ unsafe fn child_exec(
         {
             child_fail(staged.exec_status_writer.as_raw_fd(), 3);
         }
-        let ready = PROFILE_READY_V1;
+        let mut report = [0; CHILD_NAMESPACE_REPORT_BYTES];
+        if capture_child_namespace_report_pre_exec(expected_parent_pid, &mut report).is_err() {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 11);
+        }
         if write(
             staged.profile_ready_writer.as_raw_fd(),
-            (&raw const ready).cast(),
-            1,
-        ) != 1
+            report.as_ptr().cast(),
+            report.len(),
+        ) != CHILD_NAMESPACE_REPORT_BYTES as isize
         {
             child_fail(staged.exec_status_writer.as_raw_fd(), 4);
+        }
+        if close(staged.profile_ready_writer.as_raw_fd()) != 0 {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 12);
         }
         let release = match read_child_gate(|release| {
             let count = syscall(
@@ -1183,18 +1208,20 @@ fn await_profile_ready(
     exec_status: &OwnedFd,
     process: &IssuerChild,
     deadline: Instant,
-) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-    let mut record = [0_u8; 2];
+) -> Result<ProfileReportRead, ProtectedIssuerLaunchErrorV1> {
+    let mut report = ProfileReportRead::new();
     loop {
-        match rustix::io::read(ready, &mut record) {
-            Ok(1) if record[0] == PROFILE_READY_V1 => return Ok(()),
-            Ok(0) => return exec_failure_or_exit(exec_status, process, "profile observation"),
-            Ok(_) => {
-                return Err(ProtectedIssuerLaunchErrorV1::ProcessProfile(
-                    "child emitted a noncanonical profile record",
-                ));
+        if Instant::now() >= deadline {
+            return Err(ProtectedIssuerLaunchErrorV1::Timeout(
+                "gated child profile observation",
+            ));
+        }
+        match report.observe(|bytes| rustix::io::read(ready, bytes)) {
+            Ok(Some(())) => return Ok(report),
+            Err(ReportError::Truncated) => {
+                return exec_failure_or_exit(exec_status, process, "profile observation");
             }
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+            Ok(None) => {
                 if !process.is_live()? {
                     return exec_failure_or_exit(exec_status, process, "profile observation");
                 }
@@ -1205,9 +1232,7 @@ fn await_profile_ready(
                 }
                 std::thread::sleep(POLL_INTERVAL_V1);
             }
-            Err(source) => {
-                return Err(io_error("read gated child profile", source.into()));
-            }
+            Err(error) => return Err(map_child_error(error.into())),
         }
     }
 }
@@ -1256,11 +1281,11 @@ fn await_exec_status(
     }
 }
 
-fn exec_failure_or_exit(
+fn exec_failure_or_exit<T>(
     status: &OwnedFd,
     process: &IssuerChild,
     boundary: &'static str,
-) -> Result<(), ProtectedIssuerLaunchErrorV1> {
+) -> Result<T, ProtectedIssuerLaunchErrorV1> {
     let mut record = [0_u8; 2];
     match rustix::io::read(status, &mut record) {
         Ok(1) => Err(ProtectedIssuerLaunchErrorV1::ChildStage(record[0])),

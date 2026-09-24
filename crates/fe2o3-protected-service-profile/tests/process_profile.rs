@@ -11,9 +11,10 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_protected_service_profile::{
     PROTECTED_SERVICE_SECUREBITS_V1, ProtectedServiceCredentialProfileV1 as Credentials,
+    ProtectedServiceNamespaceSetV1 as LegacyNamespaces,
     ProtectedServiceNamespaceSetV2 as Namespaces, ProtectedServiceProcessProfileV2 as Profile,
-    ProtectedServiceProfileErrorV2 as Error, require_owned_sigchld_v2,
-    validate_current_protected_service_profile_v1,
+    ProtectedServiceProfileErrorV1 as LegacyError, ProtectedServiceProfileErrorV2 as Error,
+    observations, require_owned_sigchld_v2, validate_current_protected_service_profile_v1,
 };
 use std::io;
 use std::os::unix::process::CommandExt;
@@ -204,6 +205,30 @@ fn exercise_lifetime(credentials: Credentials) {
     namespaces
         .revalidate_process(rustix::process::getpid(), &mut b)
         .unwrap();
+    let parent = rustix::process::getppid().unwrap();
+    let mut report = [0; observations::CHILD_NAMESPACE_REPORT_BYTES];
+    b.reserve_storage(report.len()).unwrap();
+    b.with_prepaid_scope::<(), Error>(
+        b.storage(),
+        0,
+        observations::CHILD_NAMESPACE_REPORT_CAPTURE_WORK,
+        observations::CHILD_NAMESPACE_REPORT_CAPTURE_SCRATCH,
+        |_| {
+            Ok(observations::capture_child_namespace_report_pre_exec(
+                parent.as_raw_pid(),
+                &mut report,
+            )?)
+        },
+    )
+    .unwrap();
+    namespaces
+        .require_child_report(rustix::process::getpid(), parent, &report, &mut b)
+        .unwrap();
+    LegacyNamespaces::capture_self()
+        .unwrap()
+        .require_child_report(rustix::process::getpid(), parent, &report)
+        .unwrap();
+    b.release_storage(report.len()).unwrap();
     require_owned_sigchld_v2(&mut b).unwrap();
     drop(namespaces);
     b.release_storage(storage.additional_storage()).unwrap();
@@ -249,4 +274,268 @@ fn exercise_short_revalidation(credentials: Credentials) {
     drop(profile);
     b.release_storage(storage.additional_storage()).unwrap();
     assert_eq!(b.storage(), 0);
+}
+
+const THREAD_OPT_IN: &str = "FE2O3_RUN_THREAD_NAMESPACE_FIXTURE";
+const THREAD_CHILD: &str = "FE2O3_THREAD_NAMESPACE_CHILD";
+
+#[test]
+#[ignore = "isolated Docker only; needs SYS_ADMIN and unshare/clone3 permission"]
+fn calling_thread_namespace_fixture() {
+    assert_eq!(std::env::var(THREAD_OPT_IN).as_deref(), Ok("1"));
+    assert!(std::path::Path::new("/.dockerenv").exists());
+    assert!(rustix::process::geteuid().is_root());
+    let before = LegacyNamespaces::capture_self().unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "calling_thread_namespace_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(THREAD_CHILD, "1")
+        .env_remove(THREAD_OPT_IN);
+    let mut child = ChildGuard(command.spawn().unwrap());
+    assert!(child.wait(Duration::from_secs(30)).unwrap().success());
+    before.revalidate_self().unwrap();
+}
+
+#[test]
+#[ignore = "private helper; run through calling_thread_namespace_fixture"]
+fn calling_thread_namespace_child() {
+    // This diagnostic observes real caller/leader divergence and child inheritance.
+    // Bootstrap capabilities remain here; it is not locked-profile launch evidence.
+    assert_eq!(std::env::var(THREAD_CHILD).as_deref(), Ok("1"));
+    assert!(std::path::Path::new("/.dockerenv").exists());
+    assert!(rustix::process::geteuid().is_root());
+    std::thread::spawn(exercise_calling_thread_namespace)
+        .join()
+        .unwrap();
+}
+
+fn exercise_calling_thread_namespace() {
+    let parent = rustix::process::getpid();
+    assert_ne!(
+        rustix::thread::gettid(),
+        parent,
+        "test must execute on a non-leader thread"
+    );
+    let leader = LegacyNamespaces::capture_self().unwrap();
+    leader.revalidate_process(parent).unwrap();
+    // SAFETY: this opt-in subprocess thread gets a NEW UTS namespace; no
+    // namespace is entered or changed in the outer runner or host.
+    assert_eq!(
+        unsafe { libc::syscall(libc::SYS_unshare, libc::CLONE_NEWUTS) },
+        0,
+        "fixture requires permission to create a UTS namespace"
+    );
+    let caller = LegacyNamespaces::capture_self().unwrap();
+    assert!(matches!(
+        caller.revalidate_process(parent),
+        Err(LegacyError::Namespace("uts"))
+    ));
+    assert!(matches!(
+        leader.revalidate_self(),
+        Err(LegacyError::Namespace("uts"))
+    ));
+    leader.revalidate_process(parent).unwrap();
+
+    let mut w = Work::new(1_000_000);
+    let mut b = Budget::new(&mut w, 1_000_000);
+    let (native, receipt) = Namespaces::capture_self(&mut b).unwrap();
+    b.reserve_storage(receipt.additional_storage()).unwrap();
+    b.reserve_storage(
+        observations::CHILD_NAMESPACE_REPORT_BYTES
+            + 1
+            + observations::CHILD_NAMESPACE_REPORT_CAPTURE_SCRATCH,
+    )
+    .unwrap();
+    b.charge_work(observations::CHILD_NAMESPACE_REPORT_CAPTURE_WORK)
+        .unwrap();
+    let mut pipe = [-1; 2];
+    // SAFETY: pipe is writable two-fd storage, and both fds become locally owned.
+    assert_eq!(
+        unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) },
+        0
+    );
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    // SAFETY: successful pipe2 returned two distinct newly owned fds.
+    let reader = unsafe { OwnedFd::from_raw_fd(pipe[0]) };
+    let writer = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
+    let mut pidfd = -1_i32;
+    let args = [
+        libc::CLONE_PIDFD as u64 | 0x1_0000_0000, // CLONE_CLEAR_SIGHAND
+        (&raw mut pidfd) as u64,
+        0,
+        0,
+        libc::SIGCHLD as u64,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ];
+    // SAFETY: exact 88-byte clone3 ABI, with no shared VM/files/threads/stack.
+    // The child takes only the syscall-only branch and never returns to Rust Drop.
+    let pid = unsafe {
+        libc::syscall(
+            libc::SYS_clone3,
+            args.as_ptr(),
+            std::mem::size_of_val(&args),
+        )
+    };
+    if pid == 0 {
+        // SAFETY: child owns its fd table and fixed stack buffers. No allocation,
+        // assertions, Rust cleanup or unwinding occurs in this branch.
+        unsafe {
+            libc::syscall(libc::SYS_close, reader.as_raw_fd());
+            if libc::syscall(
+                libc::SYS_prctl,
+                libc::PR_SET_PDEATHSIG,
+                libc::SIGKILL,
+                0,
+                0,
+                0,
+            ) != 0
+            {
+                libc::_exit(2);
+            }
+            let mut report = [0; observations::CHILD_NAMESPACE_REPORT_BYTES];
+            if observations::capture_child_namespace_report_pre_exec(
+                parent.as_raw_pid(),
+                &mut report,
+            )
+            .is_err()
+            {
+                libc::_exit(3);
+            }
+            if libc::syscall(
+                libc::SYS_write,
+                writer.as_raw_fd(),
+                report.as_ptr(),
+                report.len(),
+            ) != report.len() as libc::c_long
+            {
+                libc::_exit(4);
+            }
+            if libc::syscall(libc::SYS_close, writer.as_raw_fd()) != 0 {
+                libc::_exit(5);
+            }
+            libc::_exit(0);
+        }
+    }
+    assert!(
+        pid >= 0,
+        "fixture requires clone3; no fork fallback: {}",
+        io::Error::last_os_error()
+    );
+    let mut child = NamespaceChild {
+        pid: pid as i32,
+        pidfd,
+        reaped: false,
+    };
+    assert!(pidfd >= 0);
+    drop(writer);
+    let mut bytes = [0; observations::CHILD_NAMESPACE_REPORT_BYTES + 1];
+    let mut used = 0;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(Instant::now() < deadline, "namespace report timed out");
+        match rustix::io::read(&reader, &mut bytes[used..]) {
+            Ok(0) => break,
+            Ok(count) => {
+                used += count;
+                assert!(used <= observations::CHILD_NAMESPACE_REPORT_BYTES);
+            }
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("namespace report read failed: {error}"),
+        }
+    }
+    assert_eq!(used, observations::CHILD_NAMESPACE_REPORT_BYTES);
+    let pid = rustix::process::Pid::from_raw(child.pid).unwrap();
+    caller
+        .require_child_report(pid, parent, &bytes[..used])
+        .unwrap();
+    native
+        .require_child_report(pid, parent, &bytes[..used], &mut b)
+        .unwrap();
+    assert!(matches!(
+        leader.require_child_report(pid, parent, &bytes[..used]),
+        Err(LegacyError::Namespace("uts"))
+    ));
+    native.revalidate_self(&mut b).unwrap();
+    let status = child.wait(Duration::from_secs(5)).unwrap();
+    assert!(libc::WIFEXITED(status));
+    assert_eq!(libc::WEXITSTATUS(status), 0);
+    drop(native);
+    b.release_storage(
+        receipt.additional_storage()
+            + observations::CHILD_NAMESPACE_REPORT_BYTES
+            + 1
+            + observations::CHILD_NAMESPACE_REPORT_CAPTURE_SCRATCH,
+    )
+    .unwrap();
+    assert_eq!(b.storage(), 0);
+}
+
+struct NamespaceChild {
+    pid: i32,
+    pidfd: i32,
+    reaped: bool,
+}
+
+impl NamespaceChild {
+    fn wait(&mut self, timeout: Duration) -> io::Result<i32> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let mut status = 0;
+            // SAFETY: pid is this fixture's unreaped direct child; status is writable.
+            let result = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
+            if result == self.pid {
+                self.reaped = true;
+                return Ok(status);
+            }
+            if result < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if Instant::now() >= deadline {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+impl Drop for NamespaceChild {
+    fn drop(&mut self) {
+        if !self.reaped {
+            // SAFETY: pidfd identifies our direct child. The fallback is only
+            // for a malformed clone result; this unreaped child PID cannot recycle.
+            unsafe {
+                if self.pidfd >= 0 {
+                    libc::syscall(
+                        libc::SYS_pidfd_send_signal,
+                        self.pidfd,
+                        libc::SIGKILL,
+                        std::ptr::null::<libc::siginfo_t>(),
+                        0,
+                    );
+                } else {
+                    libc::kill(self.pid, libc::SIGKILL);
+                }
+            }
+            if let Err(error) = self.wait(Duration::from_secs(5)) {
+                eprintln!("namespace fixture exact reap failed: {error}");
+            }
+        }
+        if self.pidfd >= 0 {
+            // SAFETY: this fixture uniquely owns the pidfd and closes it once.
+            unsafe { libc::close(self.pidfd) };
+        }
+    }
 }

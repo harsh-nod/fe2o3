@@ -199,6 +199,15 @@ impl fmt::Debug for ProtectedServiceProcessProfileV2 {
 /// fn duplicate(namespaces: ProtectedServiceNamespaceSetV2) { let _ = namespaces.clone(); }
 /// ```
 /// ```compile_fail
+/// use fe2o3_protected_service_profile::ProtectedServiceNamespaceSetV2;
+/// fn requires_copy<T: Copy>() {}
+/// requires_copy::<ProtectedServiceNamespaceSetV2>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_profile::ProtectedServiceNamespaceSetV2;
+/// fn admit(bytes: [u8; 192]) -> ProtectedServiceNamespaceSetV2 { bytes.into() }
+/// ```
+/// ```compile_fail
 /// use fe2o3_protected_service_profile::{ProtectedServiceNamespaceSetV1, ProtectedServiceNamespaceSetV2};
 /// fn upgrade(old: ProtectedServiceNamespaceSetV1) -> ProtectedServiceNamespaceSetV2 {
 ///     old.into()
@@ -231,6 +240,15 @@ impl ProtectedServiceNamespaceSetV2 {
     pub const REVALIDATE_PROCESS_SCRATCH: usize =
         scratch(observations::NAMESPACE_PROCESS_SCRATCH, Self::RETAINED);
 
+    /// Full fixed report-validation work, including entry admission.
+    pub const REQUIRE_CHILD_REPORT_WORK: usize =
+        ENTRY_WORK + observations::CHILD_NAMESPACE_REPORT_CHECK_WORK;
+    /// Additional report-validation staging above prepaid owners and input bytes.
+    pub const REQUIRE_CHILD_REPORT_SCRATCH: usize = scratch(
+        observations::CHILD_NAMESPACE_REPORT_CHECK_SCRATCH,
+        Self::RETAINED,
+    );
+
     /// Captures the shared namespace observations without privilege changes.
     pub fn capture_self(budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
         scope(budget, 0, Self::CAPTURE_WORK, Self::CAPTURE_SCRATCH, || {
@@ -261,6 +279,32 @@ impl ProtectedServiceNamespaceSetV2 {
             Self::REVALIDATE_PROCESS_WORK,
             Self::REVALIDATE_PROCESS_SCRATCH,
             || Ok(self.0.revalidate_process(pid)?),
+        )
+    }
+
+    /// Requires canonical contents and exact PID/namespace matches, not authority.
+    /// Private-channel provenance, child custody, liveness, and EOF remain caller
+    /// obligations. Keep this owner and exact-size input bytes prepaid; invalid
+    /// sizes are rejected without scanning or requiring their storage floor.
+    /// Returns no owner or storage delta and restores entry storage on all exits.
+    pub fn require_child_report(
+        &self,
+        child: Pid,
+        parent: Pid,
+        bytes: &[u8],
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        let input = if bytes.len() == observations::CHILD_NAMESPACE_REPORT_BYTES {
+            observations::CHILD_NAMESPACE_REPORT_BYTES
+        } else {
+            0
+        };
+        scope(
+            budget,
+            Self::RETAINED + input,
+            Self::REQUIRE_CHILD_REPORT_WORK,
+            Self::REQUIRE_CHILD_REPORT_SCRATCH,
+            || Ok(self.0.require_child_report(child, parent, bytes)?),
         )
     }
 

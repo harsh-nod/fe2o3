@@ -37,6 +37,10 @@ const WORK_LIMIT: usize = 100_000_000_000;
 const STORAGE_LIMIT: usize = 10_000_000;
 const EXTRA: usize = 19;
 
+#[path = "native_consuming_tests.rs"]
+mod consuming;
+pub(crate) use consuming::exercise as exercise_consuming;
+
 #[derive(Debug, Eq, PartialEq)]
 struct FdIdentity {
     object: (u64, u64, u32),
@@ -267,6 +271,10 @@ fn expected_work(fixture: &crate::tests::Fixture) -> (usize, usize) {
 }
 
 fn prepared_witnesses(owner: &Prepared) -> Vec<Witness> {
+    prepared_witnesses_with_readiness(owner, true)
+}
+
+fn prepared_witnesses_with_readiness(owner: &Prepared, pin_readiness_writer: bool) -> Vec<Witness> {
     let mut witnesses = vec![
         Witness::new(&owner.launcher, 1),
         Witness::new(&owner.issuer, 1),
@@ -277,7 +285,8 @@ fn prepared_witnesses(owner: &Prepared) -> Vec<Witness> {
         if matches!(
             index,
             CLIENT_PIDFD_SOURCE_INDEX | EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX
-        ) {
+        ) || (index == READINESS_SOURCE_INDEX && !pin_readiness_writer)
+        {
             continue;
         }
         let owned = match index {

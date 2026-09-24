@@ -62,8 +62,10 @@ The session exclusively borrows the original request ledger until its final Drop
 See the [consuming-launch contract](../../docs/compiler-execution-consuming-launch-v2.md).
 
 Production native issuer/service/recovery integration and producer activation
-remain open. The new lifecycle is not yet validated by a full isolated native
-child-to-readiness run. Every nested check uses the caller's ledger. Logical
+remain open. Four isolated distinct-UID synthetic consuming cases passed on
+MI350: ready/publication/natural exit, missing EOF, trailing bytes, and
+Drop-before-readiness cleanup through the actual static launcher.
+Every nested check uses the caller's ledger. Logical
 work/retained/scratch charges are not wall-time, RSS, kernel-memory or
 generated-stack bounds. See the
 [prepared-launch contract](../../docs/compiler-execution-prepared-launch-v2.md),
@@ -132,9 +134,11 @@ Production launch consumes that prepared state through one `clone3` call with
 exactly `CLONE_PIDFD | CLONE_CLEAR_SIGHAND` and `SIGCHLD`. Every launcher input
 is first duplicated above FD 215. The direct-syscall child resets signals,
 arms and verifies `PDEATHSIG=SIGKILL`, self-checks the inherited service
-profile, reports through a private gate, and cannot execute until the parent
-independently rechecks the profile, all ten namespaces, and the complete
-prepared authority set. It then isolates standard streams, installs the
+profile, freshly observes all ten namespaces, and emits one fixed private report.
+Both report writers are closed before the gate wait. It cannot execute until the
+parent requires report EOF, exact PID and calling-thread namespace matches, proc-visible profile
+checks, and the complete prepared authority set. No tracing privilege or
+dumpability relaxation is needed. It then isolates standard streams, installs the
 manifest at FD 198, issuer at FD 199, sources at FDs `200..211`, and executes
 the authenticated static launcher with one fixed argument and an empty
 environment.

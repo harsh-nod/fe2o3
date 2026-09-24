@@ -1,5 +1,8 @@
 //! Native consuming custody over the one clone/pidfd/cleanup engine.
-use super::{ChildProfileV1, IssuerChild, StagedLaunchV1, child_work, spawn_child};
+use super::{
+    ChildProcessError, ChildProfileV1, IssuerChild, ProfileReportRead, ReportError, StagedLaunchV1,
+    child_work, spawn_child,
+};
 use crate::{
     PreparedProtectedIssuerLaunchV2 as Prepared, ProtectedIssuerCleanupServiceV2 as Cleanup,
     ProtectedIssuerSupervisorV2 as Supervisor, launch_v2::LaunchedInputsV2,
@@ -12,6 +15,9 @@ use fe2o3_compiler_execution_protocol::{
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+};
+use fe2o3_protected_service_profile::observations::{
+    CHILD_NAMESPACE_REPORT_BYTES, CHILD_NAMESPACE_REPORT_CAPTURE_SCRATCH,
 };
 use fe2o3_protected_service_profile::{
     ProtectedServiceNamespaceSetV2 as Namespaces, ProtectedServiceProcessProfileV2 as Profile,
@@ -49,6 +55,8 @@ pub const PROTECTED_ISSUER_LAUNCH_SCRATCH_V2: usize = 8 * size_of::<Session<'sta
     + 4 * size_of::<StagedLaunchV1>()
     + 4 * size_of::<Profile>()
     + 4 * size_of::<Namespaces>()
+    + CHILD_NAMESPACE_REPORT_CAPTURE_SCRATCH
+    + 4 * size_of::<ProfileReportRead>()
     + 16 * size_of::<OwnedFd>()
     + 8192;
 const SESSION_SCRATCH: usize = 4 * size_of::<Session<'static, 'static>>() + 4 * READY_BYTES + 4096;
@@ -485,9 +493,9 @@ impl Supervisor {
     /// retired or transferred. An invalid incoming floor is left unchanged.
     /// Cleanup's independent
     /// persistent account must be pumped explicitly by its service controller.
-    /// Cross-process namespace observation under the nondumpable, capability-free
-    /// profile is an unresolved prerequisite; a positive native launch has not
-    /// been established. This API never relaxes that profile on observation failure.
+    /// The gated child reports freshly observed namespaces through its private
+    /// pipe. Exact framing, EOF and PID/baseline matching are required before
+    /// gate release; the locked profile is never relaxed to inspect the child.
     ///
     /// Parent protocol attempts and the complete direct-child syscall allowance
     /// are debited before clone. Mutex, scheduler and kernel wait latency are not
@@ -564,15 +572,19 @@ impl Supervisor {
                 let spawn_lease =
                     fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1()
                         .map_err(|_| Error::State("artifact spawn coordinator is full"))?;
+                let expected_parent_pid = prepared.static_manifest().parent_pid();
+                let parent = rustix::process::Pid::from_raw(expected_parent_pid)
+                    .ok_or(Error::State("invalid native launch parent PID"))?;
                 before_deadline(deadline, Boundary::Profile)?;
                 let process = spawn_child(
                     &staged,
                     Some(child_profile),
-                    prepared.static_manifest().parent_pid(),
+                    expected_parent_pid,
                     [
                         profile_reader.as_raw_fd(),
                         gate_writer.as_raw_fd(),
                         exec_reader.as_raw_fd(),
+                        profile_writer.as_raw_fd(),
                     ],
                     reservation.into_slot(),
                     spawn_lease,
@@ -583,22 +595,19 @@ impl Supervisor {
                 drop(exec_writer);
                 drop(staged);
                 b.release_storage(staged_storage)?;
+                let mut report = ProfileReportRead::new();
                 attempts(limits, deadline, Boundary::Profile, || {
                     live(&process, Boundary::Profile)?;
-                    let mut record = [0; 2];
-                    match rustix::io::read(&profile_reader, &mut record) {
-                        Ok(1) if record[0] == super::PROFILE_READY_V1 => Ok(Some(())),
-                        Ok(0) => child_failure(&exec_reader, Boundary::Profile),
-                        Ok(_) => Err(Error::State("noncanonical native child profile record")),
-                        Err(Errno::AGAIN | Errno::INTR) => Ok(None),
-                        Err(errno) => Err(Error::Io {
-                            operation: "read native child profile",
-                            errno,
-                        }),
+                    match report.observe(|bytes| rustix::io::read(&profile_reader, bytes)) {
+                        Ok(progress) => Ok(progress),
+                        Err(ReportError::Truncated) => {
+                            child_failure(&exec_reader, Boundary::Profile)
+                        }
+                        Err(error) => Err(ChildProcessError::from(error).into()),
                     }
                 })?;
                 namespaces.revalidate_self(b)?;
-                namespaces.revalidate_process(process.pid, b)?;
+                namespaces.require_child_report(process.pid, parent, report.report()?, b)?;
                 profile.revalidate_current(b)?;
                 profile.revalidate_process(process.pid, b)?;
                 self.revalidate(b)?;

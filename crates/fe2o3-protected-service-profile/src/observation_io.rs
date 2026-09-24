@@ -2,7 +2,7 @@ use super::{Error, io_error};
 use rustix::{io::Errno, path::DecInt, process::Pid};
 use std::ffi::CStr;
 
-// /proc/ + signed i32 PID + /ns/ + time_for_children + NUL fits in 39 bytes.
+// Both a signed i32 PID and thread-self with ns/time_for_children fit in 64 bytes.
 pub(super) const PROC_PATH_BYTES: usize = 64;
 
 pub(super) struct ProcPath {
@@ -16,7 +16,7 @@ impl ProcPath {
         let identity = if pid.is_some() {
             decimal.as_bytes()
         } else {
-            b"self"
+            b"thread-self"
         };
         let mut path = Self {
             bytes: [0; PROC_PATH_BYTES],

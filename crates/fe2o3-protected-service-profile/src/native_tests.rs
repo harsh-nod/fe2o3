@@ -195,6 +195,144 @@ fn namespace_revalidation_enforces_full_owner_floor_work_and_peak() {
     }
 }
 
+fn current_child_report() -> (Pid, [u8; observations::CHILD_NAMESPACE_REPORT_BYTES]) {
+    // These exercise content admission, not channel provenance or a real child.
+    let parent = Pid::from_raw(1).unwrap();
+    (
+        parent,
+        observations::current_namespace_report_for_test(getpid(), parent),
+    )
+}
+
+#[test]
+fn child_report_enforces_exact_owner_input_work_and_scratch_without_allocations() {
+    let namespaces = capture_namespaces();
+    let (parent, bytes) = current_child_report();
+    for case in OWNER_BOUNDARIES {
+        boundary(
+            namespaces.retained_storage() + bytes.len(),
+            Namespaces::REQUIRE_CHILD_REPORT_WORK,
+            Namespaces::REQUIRE_CHILD_REPORT_SCRATCH,
+            case,
+            |budget| namespaces.require_child_report(getpid(), parent, &bytes, budget),
+            |result| result.unwrap(),
+        );
+    }
+    let mut changed = bytes;
+    changed[32] ^= 1;
+    boundary(
+        namespaces.retained_storage() + changed.len(),
+        Namespaces::REQUIRE_CHILD_REPORT_WORK,
+        Namespaces::REQUIRE_CHILD_REPORT_SCRATCH,
+        Boundary::Exact,
+        |budget| namespaces.require_child_report(getpid(), parent, &changed, budget),
+        |result| {
+            assert_eq!(
+                result,
+                Err(Error::Observation(observations::Error::Namespace("user")))
+            )
+        },
+    );
+}
+
+#[test]
+fn child_report_bad_lengths_need_only_owner_floor_and_still_prepay_full_check() {
+    let namespaces = capture_namespaces();
+    let (parent, bytes) = current_child_report();
+    let oversized = [0; observations::CHILD_NAMESPACE_REPORT_BYTES + 1];
+    for bad in [&bytes[..0], &bytes[..bytes.len() - 1], &oversized[..]] {
+        for case in OWNER_BOUNDARIES {
+            boundary(
+                namespaces.retained_storage(),
+                Namespaces::REQUIRE_CHILD_REPORT_WORK,
+                Namespaces::REQUIRE_CHILD_REPORT_SCRATCH,
+                case,
+                |budget| namespaces.require_child_report(getpid(), parent, bad, budget),
+                |result| {
+                    assert_eq!(
+                        result,
+                        Err(Error::Observation(observations::Error::InvalidState(
+                            "namespace-report length differs",
+                        )))
+                    )
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn child_report_constants_receipt_and_original_ledger_chain_are_preserved() {
+    let retained = size_of::<(Namespaces, Storage)>();
+    assert_eq!(Namespaces::REQUIRE_CHILD_REPORT_WORK, 6408);
+    assert_eq!(
+        Namespaces::REQUIRE_CHILD_REPORT_SCRATCH,
+        observations::CHILD_NAMESPACE_REPORT_CHECK_SCRATCH + 4 * retained + 4 * size_of::<Error>()
+    );
+    let (parent, bytes) = current_child_report();
+    let work = Namespaces::CAPTURE_WORK + 2 * Namespaces::REQUIRE_CHILD_REPORT_WORK;
+    let peak = EXTRA
+        + Namespaces::CAPTURE_SCRATCH
+            .max(retained + bytes.len() + Namespaces::REQUIRE_CHILD_REPORT_SCRATCH);
+    let mut w = Work::new(work);
+    let mut b = Budget::new(&mut w, peak);
+    b.reserve_storage(EXTRA).unwrap();
+    let ledger = b.work_ledger_identity_v1();
+    let (namespaces, receipt) = Namespaces::capture_self(&mut b).unwrap();
+    assert_eq!(receipt.additional_storage(), retained);
+    assert_eq!(b.storage(), EXTRA);
+    b.reserve_storage(retained + bytes.len()).unwrap();
+    namespaces
+        .require_child_report(getpid(), parent, &bytes, &mut b)
+        .unwrap();
+    let mut changed = bytes;
+    changed[32] ^= 1;
+    assert!(
+        namespaces
+            .require_child_report(getpid(), parent, &changed, &mut b)
+            .is_err()
+    );
+    assert_eq!(b.work(), work);
+    assert_eq!(b.storage(), EXTRA + retained + bytes.len());
+    assert_eq!(b.peak_storage(), peak);
+    assert!(b.work_ledger_identity_v1() == ledger);
+    drop(namespaces);
+    b.release_storage(retained + bytes.len()).unwrap();
+    assert_eq!(b.storage(), EXTRA);
+}
+
+#[test]
+fn child_report_nested_unwind_restores_storage_and_keeps_denial_history() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let namespaces = capture_namespaces();
+    let (parent, bytes) = current_child_report();
+    let floor = namespaces.retained_storage() + bytes.len() + EXTRA;
+    let scratch = Namespaces::REQUIRE_CHILD_REPORT_SCRATCH;
+    let work = 3 + Namespaces::REQUIRE_CHILD_REPORT_WORK;
+    let mut w = Work::new(work);
+    assert!(w.charge_work(work + 1).is_err());
+    {
+        let mut b = Budget::new(&mut w, floor + 64 + scratch);
+        b.reserve_storage(floor).unwrap();
+        assert!(b.reserve_storage(65 + scratch).is_err());
+        let denial = b.failed_storage();
+        let ledger = b.work_ledger_identity_v1();
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            let _: Result<()> = b.with_prepaid_scope(floor, 1, 3, 64, |inner| {
+                namespaces.require_child_report(getpid(), parent, &bytes, inner)?;
+                panic!("test unwind after prepaid child report");
+            });
+        }));
+        assert!(caught.is_err());
+        assert_eq!(b.storage(), floor);
+        assert_eq!(b.peak_storage(), floor + 64 + scratch);
+        assert_eq!(b.failed_storage(), denial);
+        assert_eq!(b.work(), work);
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
+    assert_eq!(w.failed_work(), Some(work + 1));
+}
+
 #[test]
 fn namespace_capture_receipt_is_unreserved_and_chain_preserves_unrelated_owners() {
     let retained = size_of::<(Namespaces, Storage)>();
@@ -452,7 +590,7 @@ fn resource_and_observation_errors_preserve_fixed_sources_without_allocation() {
 }
 
 #[allow(unsafe_code)]
-mod allocation {
+pub(crate) mod allocation {
     use std::{
         alloc::{GlobalAlloc, Layout, System},
         cell::Cell,
@@ -470,7 +608,7 @@ mod allocation {
     fn record() {
         let _ = COUNT.try_with(|count| {
             if let Some(value) = count.get() {
-                count.set(Some(value + 1));
+                count.set(Some(value.saturating_add(1)));
             }
         });
     }
@@ -502,7 +640,7 @@ mod allocation {
         }
     }
 
-    pub(super) fn count<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    pub(crate) fn count<T>(operation: impl FnOnce() -> T) -> (T, usize) {
         struct Reset;
         impl Drop for Reset {
             fn drop(&mut self) {
@@ -513,5 +651,17 @@ mod allocation {
         let _reset = Reset;
         let result = operation();
         (result, COUNT.with(|count| count.get().unwrap()))
+    }
+
+    #[test]
+    fn exhausted_counter_saturates_and_resets() {
+        let (_, observed) = count(|| {
+            COUNT.with(|count| count.set(Some(usize::MAX)));
+            record();
+        });
+        assert_eq!(observed, usize::MAX);
+        assert_eq!(COUNT.with(Cell::get), None);
+        assert_eq!(count(record).1, 1);
+        assert_eq!(COUNT.with(Cell::get), None);
     }
 }

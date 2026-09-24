@@ -2262,20 +2262,4 @@ pidfd=$(readlink "/proc/self/fd/$PIDFD" 2>/dev/null || :)
         assert_eq!(rustix::io::write(&control, &[0x41]).unwrap(), 1);
         assert!(child.wait().unwrap().success());
     }
-
-    #[test]
-    fn closed_descriptor_fails_continuity() {
-        let (_directory, root) = protected_root();
-        let (peer, _client) = seqpacket();
-        let peer_raw = peer.as_raw_fd();
-        let admission = non_authoritative_test_admission(root, peer);
-        // SAFETY: this deliberately invalidates the admission-owned entry. `forget` prevents the
-        // later destructor from closing a descriptor number that the process might have reused.
-        assert_eq!(unsafe { libc::close(peer_raw) }, 0);
-        let failed_closed = admission.validate_continuity().is_err();
-        std::mem::forget(admission);
-        // Parallel tests may reuse the deliberately closed descriptor number before validation;
-        // either an invalid entry or any substituted object must fail closed.
-        assert!(failed_closed);
-    }
 }

@@ -499,7 +499,7 @@ mod allocation {
     fn record() {
         let _ = COUNT.try_with(|c| {
             if let Some(n) = c.get() {
-                c.set(Some(n + 1));
+                c.set(Some(n.saturating_add(1)));
             }
         });
     }
@@ -535,5 +535,17 @@ mod allocation {
         let _reset = Reset;
         let result = f();
         (result, COUNT.with(|c| c.get().unwrap()))
+    }
+
+    #[test]
+    fn exhausted_counter_saturates_and_resets() {
+        let (_, observed) = count(|| {
+            COUNT.with(|count| count.set(Some(usize::MAX)));
+            record();
+        });
+        assert_eq!(observed, usize::MAX);
+        assert_eq!(COUNT.with(Cell::get), None);
+        assert_eq!(count(record).1, 1);
+        assert_eq!(COUNT.with(Cell::get), None);
     }
 }

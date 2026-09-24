@@ -195,9 +195,16 @@ pub(crate) fn receive_packet<const N: usize>(
     control: &OwnedFd,
     deadline: Instant,
 ) -> io::Result<([u8; 8], [OwnedFd; N])> {
+    receive_sized_packet::<8, N>(control, deadline)
+}
+
+pub(crate) fn receive_sized_packet<const BYTES: usize, const N: usize>(
+    control: &OwnedFd,
+    deadline: Instant,
+) -> io::Result<([u8; BYTES], [OwnedFd; N])> {
     loop {
         wait_readable(control, deadline)?;
-        let mut payload = [0; 8];
+        let mut payload = [0; BYTES];
         let mut vectors = [IoSliceMut::new(&mut payload)];
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut space);

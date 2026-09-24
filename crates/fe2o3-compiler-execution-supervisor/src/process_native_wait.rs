@@ -2,10 +2,16 @@ use super::*;
 use rustix::event::{Timespec, poll};
 use std::time::{Duration, Instant};
 
+const WAIT_RECORD_BYTES: usize = if CHILD_NAMESPACE_REPORT_BYTES > READY_BYTES {
+    CHILD_NAMESPACE_REPORT_BYTES + 1
+} else {
+    READY_BYTES + 1
+};
+
 /// Inert name of a finite native process-protocol boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtectedIssuerBoundaryV2 {
-    /// Direct child profile acknowledgement before gate release.
+    /// Direct child namespace report and EOF before gate release.
     Profile,
     /// Static-launcher exec-status pipe completion, not issuer readiness.
     Exec,
@@ -20,6 +26,7 @@ pub enum ProtectedIssuerBoundaryV2 {
 /// Finite attempt count and deadline; neither grants process authority.
 ///
 /// EINTR, EAGAIN, short reads, and pending observations consume attempts.
+/// A queued complete namespace report needs two reads: its bytes, then EOF.
 /// These are logical operation bounds, not kernel scheduling/latency guarantees.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProtectedIssuerWaitV2 {
@@ -32,8 +39,8 @@ impl ProtectedIssuerWaitV2 {
     /// Longest accepted observation deadline per boundary.
     pub const MAX_TIMEOUT: Duration = Duration::from_secs(120);
     /// Four weighted syscalls cover read/send/wait, liveness, a failure probe and
-    /// optional poll; byte/field work includes the complete fixed readiness frame.
-    pub const ATTEMPT_WORK: usize = 4 * 1024 + 8 * READY_BYTES + 256;
+    /// optional poll; byte/field work covers the largest frame and its sentinel.
+    pub const ATTEMPT_WORK: usize = 4 * 1024 + 8 * WAIT_RECORD_BYTES + 256;
 
     /// Admits bounded inert limits without any I/O or budget creation.
     pub fn new(attempts: usize, timeout: Duration) -> Result<Self> {

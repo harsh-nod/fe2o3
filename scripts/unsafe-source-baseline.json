@@ -108,6 +108,11 @@
   "crates/fe2o3-artifact-transaction/src/attempt_scoped_hsaco_publication.rs": {
     "function": 1
   },
+  "crates/fe2o3-artifact-transaction/src/compiler_execution_subject_v2_tests.rs": {
+    "block": 4,
+    "function": 4,
+    "impl": 1
+  },
   "crates/fe2o3-artifact-transaction/src/compiler_module_handoff.rs": {
     "block": 6
   },
@@ -151,13 +156,25 @@
     "block": 4
   },
   "crates/fe2o3-broker-authority-service/src/linux.rs": {
-    "block": 24
+    "block": 19
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/checks.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/continuity.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/native_io.rs": {
+    "block": 1
   },
   "crates/fe2o3-compiler-closure-capability/src/compiler_execution_policy.rs": {
     "block": 1
   },
   "crates/fe2o3-compiler-closure-capability/src/sealed_image.rs": {
     "block": 5
+  },
+  "crates/fe2o3-compiler-closure-capability/src/sealed_image/native.rs": {
+    "block": 3
   },
   "crates/fe2o3-compiler-execution-client/src/bin/compiler-execution-client-check.rs": {
     "block": 1
@@ -189,14 +206,35 @@
   "crates/fe2o3-compiler-execution-coordinator/src/provisioning_entrypoint.rs": {
     "block": 5
   },
+  "crates/fe2o3-compiler-execution-issuer/examples/native_ready_fixture/io.rs": {
+    "block": 16
+  },
+  "crates/fe2o3-compiler-execution-issuer/src/launch_inputs_v2_tests.rs": {
+    "block": 3
+  },
   "crates/fe2o3-compiler-execution-issuer/src/lib.rs": {
     "block": 15
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/authority_v2_test_process.rs": {
+    "block": 4
   },
   "crates/fe2o3-compiler-execution-supervisor/src/deployment.rs": {
     "block": 8
   },
+  "crates/fe2o3-compiler-execution-supervisor/src/handoff_ancillary.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/handoff_ancillary_tests.rs": {
+    "block": 7
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/handoff_v2_test_process.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/native_consuming_test_process.rs": {
+    "block": 7
+  },
   "crates/fe2o3-compiler-execution-supervisor/src/process.rs": {
-    "block": 28,
+    "block": 25,
     "extern_block": 1,
     "function": 5
   },
@@ -737,6 +775,9 @@
   "crates/fe2o3-kfd/src/queue_submit.rs": {
     "block": 7
   },
+  "crates/fe2o3-kfd/src/runtime_debug_metadata_storage_v1.rs": {
+    "block": 2
+  },
   "crates/fe2o3-kfd/src/stopped_state_v1.rs": {
     "block": 2
   },
@@ -806,9 +847,23 @@
   "crates/fe2o3-protected-publisher/src/store.rs": {
     "block": 6
   },
+  "crates/fe2o3-protected-service-profile/src/child_namespace_report.rs": {
+    "block": 6,
+    "function": 1
+  },
   "crates/fe2o3-protected-service-profile/src/lib.rs": {
-    "block": 2,
     "extern_block": 1
+  },
+  "crates/fe2o3-protected-service-profile/src/native_tests.rs": {
+    "block": 4,
+    "function": 4,
+    "impl": 1
+  },
+  "crates/fe2o3-protected-service-profile/src/observations.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-protected-service-profile/tests/process_profile.rs": {
+    "block": 15
   },
   "crates/fe2o3-protected-service-spawn/src/syscall.rs": {
     "block": 37,

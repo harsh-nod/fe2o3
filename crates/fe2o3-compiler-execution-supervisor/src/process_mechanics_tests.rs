@@ -48,8 +48,11 @@ fn gate_eof_invalid_length_or_permanent_failure_never_retries() {
 fn child_work_prepays_full_gate_signal_descriptor_and_failure_paths() {
     // Independently count the longest profile-free child path, including the
     // final failed exec followed by the failure report and exit.
-    let syscall_attempts = 3 + 62 + 1 + 4 + 1 + 64 + 1 + 3 + 14 + 1 + 2;
-    assert!(child_work(None) >= syscall_attempts * (1024 + 64) + 256);
+    let syscall_attempts = 5 + 62 + 1 + 4 + 1 + 64 + 1 + 3 + 14 + 1 + 2;
+    assert!(
+        child_work(None)
+            >= syscall_attempts * (1024 + 64) + 256 + CHILD_NAMESPACE_REPORT_CAPTURE_WORK
+    );
 }
 
 #[test]

@@ -37,6 +37,8 @@ mod launch;
 mod launch_checks;
 mod launch_v2;
 mod listener;
+#[cfg(test)]
+mod native_consuming_test_process;
 #[allow(unsafe_code)]
 mod process;
 mod process_cleanup;

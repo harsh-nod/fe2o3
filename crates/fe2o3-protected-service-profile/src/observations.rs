@@ -16,8 +16,18 @@ use std::{fmt, mem::size_of};
 
 #[path = "observation_io.rs"]
 mod bounded_io;
+#[path = "child_namespace_report.rs"]
+mod child_report;
 #[path = "observation_status.rs"]
 mod status;
+
+#[cfg(test)]
+pub(crate) use child_report::current_namespace_report_for_test;
+pub use child_report::{
+    CHILD_NAMESPACE_REPORT_BYTES, CHILD_NAMESPACE_REPORT_CAPTURE_SCRATCH,
+    CHILD_NAMESPACE_REPORT_CAPTURE_WORK, CHILD_NAMESPACE_REPORT_CHECK_SCRATCH,
+    CHILD_NAMESPACE_REPORT_CHECK_WORK, capture_child_namespace_report_pre_exec,
+};
 
 use bounded_io::{PROC_PATH_BYTES, ProcPath};
 use status::{ProcStatusProfile, read_proc_status};
@@ -27,6 +37,7 @@ pub const MAX_PROC_STATUS_BYTES: usize = 64 * 1024;
 /// Maximum accepted capability ceiling text, including whitespace and newline.
 pub const MAX_CAP_LAST_CAP_BYTES: usize = 64;
 const MAX_CAPABILITY_NUMBER: u32 = 63;
+const CURRENT_STATUS_PATH: &std::ffi::CStr = c"/proc/thread-self/status";
 
 // One logical syscall attempt has weight 1024, independent of its latency.
 // A bounded N-byte file needs at most N+1 reads, plus open and close.
@@ -170,7 +181,7 @@ impl ProcessProfile {
     }
 
     pub fn revalidate_current(&self) -> Result<(), Error> {
-        read_proc_status(c"/proc/self/status")?.require(self.credentials)?;
+        read_proc_status(CURRENT_STATUS_PATH)?.require(self.credentials)?;
         let capabilities = rustix::thread::capabilities(None)
             .map_err(|source| io_error("inspect service capabilities", source))?;
         if !capabilities.effective.is_empty()
@@ -219,6 +230,7 @@ pub struct NamespaceSet {
 }
 
 impl NamespaceSet {
+    /// Observes the calling thread, including its pending child namespaces.
     pub fn capture_self() -> Result<Self, Error> {
         let mut identities = [NamespaceIdentity {
             device: 0,
@@ -239,6 +251,13 @@ impl NamespaceSet {
 
     pub fn revalidate_process(&self, pid: Pid) -> Result<(), Error> {
         self.revalidate(Some(pid))
+    }
+
+    /// Checks inert report contents only. Private-channel provenance, child
+    /// custody, liveness, and EOF must be established independently by the caller.
+    /// Prepay CHILD_NAMESPACE_REPORT_CHECK_WORK and its scratch before calling.
+    pub fn require_child_report(&self, child: Pid, parent: Pid, bytes: &[u8]) -> Result<(), Error> {
+        child_report::require(self, child, parent, bytes)
     }
 
     fn revalidate(&self, pid: Option<Pid>) -> Result<(), Error> {

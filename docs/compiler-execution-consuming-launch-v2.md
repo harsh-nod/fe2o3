@@ -6,7 +6,8 @@ Native admission never constructs an admitted V1 owner or falls back to V1 on
 refusal. Shared V1-named static wire and termination records are inert data.
 
 This is a library lifecycle, not activation of the native production issuer or
-service. A full isolated native child-to-readiness run remains required.
+service. All four isolated distinct-UID synthetic consuming fixtures passed on
+MI350 under Ubuntu 24.04/Linux 6.8.0-124-generic through the actual static launcher.
 Protected proof execution, GPU qualification, M0-M7 acceptance and 47/47 completion
 are not established by this implementation or its deterministic unit tests.
 
@@ -16,8 +17,9 @@ are not established by this implementation or its deterministic unit tests.
    native process profile, owned SIGCHLD disposition and namespaces; prepay
    parent/child protocol work and cleanup capacity before clone. Stage descriptors
    once and adopt the atomic pidfd, slot and original spawn lease immediately.
-2. **Gated child:** observe profile acknowledgement, revalidate child/parent
-   profiles, namespaces and prepared authority, then release the exec gate.
+2. **Gated child:** require its complete private namespace report and EOF,
+   revalidate child/parent profiles, namespaces and prepared authority, then
+   release the exec gate.
    Exec-status EOF is not issuer readiness and does not release the spawn lease.
 3. **Ready:** receive exactly one 120-byte native readiness frame followed by EOF,
    revalidate capability and supervisor, and match the exact PID, manifest and
@@ -67,6 +69,9 @@ attempts and a positive timeout up to 120 seconds. EINTR, EAGAIN, partial reads
 and pending observations consume finite attempts. Four weighted syscall units
 per parent attempt cover I/O, liveness, failure probes and optional polling.
 Child prepayment includes all 64 gate attempts and bounded capability checks.
+It also includes the fresh child's ten open/stat/close namespace observations,
+PID observations and report staging. Each parent attempt reads at most once;
+even a queued complete report requires a separate attempt to observe EOF.
 Native observation and authority revalidation costs are additional nested costs,
 not hidden inside the outer launch constant.
 
@@ -78,21 +83,67 @@ Other observations remain subject to post-observation deadlines.
 These are logical resource bounds, not instruction, allocator, generated-stack,
 RSS, kernel-memory, scheduler, mutex latency or wall-time guarantees.
 
-## Remaining Production Work
+## Namespace Observation
 
-**Known launch prerequisite:** the gated cross-process namespace observation
-conflicts with the locked profile. It requires a nondumpable child and an
-unprivileged supervisor, but opening `/proc/<child>/ns/*` requires
-ptrace-style access. Linux applies that check in its
-[namespace-link implementation](https://github.com/torvalds/linux/blob/master/fs/proc/namespaces.c).
-An isolated Ubuntu 24.04/Linux 6.8 diagnostic reproduced `EACCES` (13) with
-UID/GID 65533, securebits 239, empty capability sets, nondumpability and
-no-new-privileges. Parent and child self-observations succeeded and matched;
-the parent's child-namespace open failed. The child was reaped and isolation
-removed. This is an OS-boundary diagnostic, not a complete native launch test.
-A reviewed observation mechanism preserving the locked profile is still required.
-Do not make the child dumpable, retain ptrace privileges or bypass the check to
-claim success. Existing self-process profile fixtures do not exercise this boundary.
+The locked profile makes the child nondumpable and the supervisor unprivileged.
+Direct parent access to `/proc/<child>/ns/*` can therefore fail the kernel's
+ptrace-style permission check. An isolated Ubuntu 24.04/Linux 6.8 diagnostic
+reproduced `EACCES` while parent and child self-observations succeeded and matched.
+
+The shared direct-child stub now freshly opens all ten namespace links under
+`/proc/thread-self` after its exact profile check. A fixed 192-byte little-endian
+report binds child and parent PIDs and every namespace device/inode pair. Both
+the original and staged pipe writers close before the gate wait. The parent
+requires exact framing, EOF, unchanged PID/time child namespaces, exact PID
+bindings and equality with its freshly revalidated calling-thread baseline.
+Current profile status also uses `/proc/thread-self/status`, not the group leader.
+The proc-visible child profile checks remain in place.
+
+Report bytes alone grant no authority: trusted pre-exec code, a private pipe,
+atomic pidfd custody, the closed gate and the coordinated spawn contract supply
+their provenance. An extra writer or incomplete observation causes bounded
+refusal. No tracing capability, dumpability relaxation, legacy fallback, new
+process engine or replacement request ledger is introduced. Explicit remote
+namespace APIs retain their existing permission checks and refusal behavior.
+
+## Isolated Validation
+
+The four opt-in `native_consuming_test_process::native_consuming_` tests exercise
+the public native lifecycle with separately measured, sealed static test issuers:
+
+- Exact child-produced readiness, publication to the real submitter, a client
+  stop packet and natural exit with status zero.
+- A complete readiness frame without EOF, refused at the readiness bound.
+- Trailing readiness bytes, refused before a ready owner exists.
+- Dropping launched custody before a silent child produces readiness.
+
+Every case checks original-ledger continuity, funded cleanup, descriptor and
+pidfd restoration, terminal reaping and all fixture-role completion packets.
+The isolated run uses distinct UIDs 65532/65533/65534, one CPU, no network or GPU
+devices, and unconfined container seccomp for clone3. The supervisor and child
+still enforce the exact locked process profile. Container and private scratch
+removal are checked afterward. This does not qualify a deployment seccomp policy.
+
+Build the four fixtures with `bash scripts/build-native-ready-fixture.sh DIR`,
+where `DIR` is an existing empty caller-owned mode-0700 directory. The script
+prints the four `FE2O3_NATIVE_READY_FIXTURE_*` paths. Supply those paths and
+`FE2O3_STATIC_PREEXEC_LAUNCHER` to the supervisor test executable in a disposable
+root container with KILL/SETUID/SETGID/SETPCAP bootstrap capabilities, then run:
+
+```sh
+FE2O3_RUN_NATIVE_CONSUMING_SUPERVISOR_V2_TEST=1 "$SUPERVISOR_TEST_BIN" \
+  native_consuming_test_process::native_consuming_ \
+  --ignored --nocapture --test-threads=1
+```
+
+These test issuers never sign, compile requests, create durable state or recover
+a service. Positive fixture stages allow 30 seconds because unoptimized custody
+repeatedly measures full static images; the initial five-second fixture deadline
+expired at the exec boundary. Successful gated launch took 5.8-5.9 seconds on the
+one-CPU run. Production limits, exact profile checks and finite attempt budgets
+were unchanged. The missing-EOF case retains its separate 200ms refusal bound.
+
+## Remaining Production Work
 
 The deployed issuer and service still use the previous family. Native inherited
 admission, readiness production, service/durable handlers, independent broker
@@ -104,5 +155,8 @@ See [prepared custody](compiler-execution-prepared-launch-v2.md),
 
 Deterministic coverage checks fixed framing, finite attempt schedules, committed
 outcomes, budget refusal, nested restoration, owner moves/unwind and single-step
-mechanics. It is not a substitute for executing the complete native lifecycle
-under distinct credentials and the enforced production process profile.
+mechanics. Separate locked-profile and calling-thread/leader namespace fixtures
+also pass, but do not establish their combined divergent-thread consuming case.
+Malformed gated-child report and post-clone budget-failure cleanup need additional
+process integration coverage. Neither these fixtures nor their unit tests replace
+protected source/proof, production service/recovery or GPU qualification.

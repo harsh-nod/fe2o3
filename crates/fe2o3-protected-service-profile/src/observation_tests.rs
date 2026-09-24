@@ -483,7 +483,15 @@ fn fixed_paths_include_full_pid_and_longest_namespace() {
     );
     assert_eq!(
         ProcPath::new(None, "status").unwrap().as_c_str().unwrap(),
-        c"/proc/self/status"
+        c"/proc/thread-self/status"
+    );
+    assert_eq!(CURRENT_STATUS_PATH, c"/proc/thread-self/status");
+    assert_eq!(
+        ProcPath::new(None, "ns/time_for_children")
+            .unwrap()
+            .as_c_str()
+            .unwrap(),
+        c"/proc/thread-self/ns/time_for_children"
     );
     assert_eq!(
         ProcPath::new(None, "sta\0tus").unwrap().as_c_str(),

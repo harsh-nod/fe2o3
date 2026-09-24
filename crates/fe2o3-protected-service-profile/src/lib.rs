@@ -233,6 +233,19 @@ impl ProtectedServiceNamespaceSetV1 {
             .revalidate_process(pid)
             .map_err(map_observation_error)
     }
+
+    /// Requires exact inert child-report contents, not provenance or authority.
+    /// The caller must separately own the child and authenticate its private pipe.
+    pub fn require_child_report(
+        &self,
+        child: rustix::process::Pid,
+        parent: rustix::process::Pid,
+        bytes: &[u8],
+    ) -> Result<(), ProtectedServiceProfileErrorV1> {
+        self.observation
+            .require_child_report(child, parent, bytes)
+            .map_err(map_observation_error)
+    }
 }
 
 /// Validates the complete current locked service profile.
