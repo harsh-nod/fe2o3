@@ -1106,6 +1106,7 @@ def monitor_target(
     command: Sequence[str],
     kfd_proc_root: pathlib.Path,
     proc_root: pathlib.Path,
+    retain_rejected_output: bool = False,
     clock: Callable[[], int] = _raw_monotonic_ns,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> str:
@@ -1304,7 +1305,8 @@ def monitor_target(
         except BaseException as error:
             cleanup_error = error
         finally:
-            if target_output_created:
+            # Retained failure bytes are raw evidence, never a clean monitor record.
+            if target_output_created and not retain_rejected_output:
                 try:
                     target_output.unlink()
                 except FileNotFoundError:
@@ -1352,6 +1354,11 @@ def _build_parser() -> argparse.ArgumentParser:
     monitor.add_argument("--observer-cpu", type=int, required=True)
     monitor.add_argument("--target-output", type=pathlib.Path, required=True)
     monitor.add_argument(
+        "--retain-rejected-output",
+        action="store_true",
+        help="retain unqualified raw target stdout on failure; rejection and cleanup are unchanged",
+    )
+    monitor.add_argument(
         "--kfd-proc-root",
         type=pathlib.Path,
         default=pathlib.Path("/sys/class/kfd/kfd/proc"),
@@ -1383,6 +1390,7 @@ def _run(arguments: argparse.Namespace) -> str:
         command=command,
         kfd_proc_root=arguments.kfd_proc_root,
         proc_root=arguments.proc_root,
+        retain_rejected_output=arguments.retain_rejected_output,
     )
 
 

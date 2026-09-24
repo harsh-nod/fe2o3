@@ -2088,6 +2088,7 @@ class MonitorCommandTests(unittest.TestCase):
         kfd_root: pathlib.Path,
         output: pathlib.Path,
         command: list[str],
+        retain_rejected_output: bool = False,
     ) -> list[str]:
         observer_cpu = min(os.sched_getaffinity(0))
         program = """
@@ -2115,9 +2116,10 @@ try:
         selected_gpu_id=28851,
         observer_cpu=int(sys.argv[4]),
         target_output=pathlib.Path(sys.argv[3]),
-        command=sys.argv[5:],
+        command=sys.argv[6:],
         kfd_proc_root=pathlib.Path(sys.argv[2]),
         proc_root=pathlib.Path("/proc"),
+        retain_rejected_output=sys.argv[5] == "1",
         clock=clock,
     ))
 except guard.GuardError as error:
@@ -2132,6 +2134,7 @@ except guard.GuardError as error:
             str(kfd_root),
             str(output),
             str(observer_cpu),
+            str(int(retain_rejected_output)),
             *command,
         ]
 
@@ -2141,6 +2144,7 @@ except guard.GuardError as error:
         command: list[str],
         *,
         target_observed: bool = True,
+        retain_rejected_output: bool = False,
     ) -> str:
         kfd_root = temporary / "kfd-proc"
         kfd_root.mkdir()
@@ -2183,6 +2187,7 @@ except guard.GuardError as error:
                 command=command,
                 kfd_proc_root=kfd_root,
                 proc_root=pathlib.Path("/proc"),
+                retain_rejected_output=retain_rejected_output,
                 clock=deterministic_clock,
             )
 
@@ -3110,7 +3115,101 @@ except guard.GuardError as error:
             output_exists = (root / "target.out").exists()
         self.assertFalse(output_exists)
 
+    def test_rejected_output_retention_is_explicit_in_cli(self) -> None:
+        common = [
+            "monitor",
+            "--gpu-id", "28851",
+            "--observer-cpu", "0",
+            "--target-output", "/unused/target.out",
+        ]
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                options = ["--retain-rejected-output"] if enabled else []
+                arguments = GUARD._build_parser().parse_args(
+                    [*common, *options, "--", "/unused/target"]
+                )
+                with mock.patch.object(
+                    GUARD, "monitor_target", return_value="record"
+                ) as monitor:
+                    self.assertEqual(GUARD._run(arguments), "record")
+                self.assertIs(monitor.call_args.kwargs["retain_rejected_output"], enabled)
+                self.assertEqual(monitor.call_args.kwargs["command"], ["/unused/target"])
+
+    def test_nonzero_target_retains_exact_unqualified_bytes_when_requested(self) -> None:
+        payload = b"backend=kfd\n\x00partial\n\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            with mock.patch.object(
+                GUARD, "_terminate_process_group", wraps=GUARD._terminate_process_group
+            ) as terminate:
+                with self.assertRaisesRegex(GUARD.GuardError, "status 3"):
+                    self.monitor_direct(
+                        root,
+                        [
+                            sys.executable, "-c",
+                            "import os,time; time.sleep(0.02); "
+                            f"os.write(1, {payload!r}); raise SystemExit(3)",
+                        ],
+                        retain_rejected_output=True,
+                    )
+                terminate.assert_called_once()
+            self.assertEqual((root / "target.out").read_bytes(), payload)
+            self.assertEqual((root / "target.out").stat().st_mode & 0o777, 0o600)
+
+    def test_output_validation_failure_retains_unqualified_bytes_when_requested(self) -> None:
+        payload = b"backend=kfd\n\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            with mock.patch.object(
+                GUARD, "_hash_file", side_effect=GUARD.GuardError("invalid output")
+            ):
+                with self.assertRaisesRegex(GUARD.GuardError, "invalid output"):
+                    self.monitor_direct(
+                        root,
+                        [
+                            sys.executable, "-c",
+                            "import os,time; time.sleep(0.02); "
+                            f"os.write(1, {payload!r})",
+                        ],
+                        retain_rejected_output=True,
+                    )
+            self.assertEqual((root / "target.out").read_bytes(), payload)
+
+    def test_cleanup_failure_retains_unqualified_bytes_without_hiding_error(self) -> None:
+        payload = b"failed\n\n"
+        terminate = GUARD._terminate_process_group
+
+        def terminate_then_fail(process: subprocess.Popen[bytes]) -> None:
+            terminate(process)
+            raise GUARD.GuardError("cleanup observation failed")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            with mock.patch.object(
+                GUARD, "_terminate_process_group", side_effect=terminate_then_fail
+            ):
+                with self.assertRaisesRegex(
+                    GUARD.GuardError,
+                    "target cleanup failed.*cleanup observation failed",
+                ):
+                    self.monitor_direct(
+                        root,
+                        [
+                            sys.executable, "-c",
+                            "import os,time; time.sleep(0.02); "
+                            f"os.write(1, {payload!r}); raise SystemExit(3)",
+                        ],
+                        retain_rejected_output=True,
+                    )
+            self.assertEqual((root / "target.out").read_bytes(), payload)
+
     def test_termination_cleans_target_group_and_buffered_output(self) -> None:
+        self.check_termination_retention(False)
+
+    def test_termination_retains_evidence_but_still_cleans_target_group(self) -> None:
+        self.check_termination_retention(True)
+
+    def check_termination_retention(self, retain_rejected_output: bool) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             kfd_root = root / "kfd-proc"
@@ -3123,6 +3222,7 @@ except guard.GuardError as error:
                 (
                     "import os,pathlib,signal,time; "
                     "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                    "os.write(1, b'partial\\n\\n'); "
                     f"ready=pathlib.Path({str(pid_file.with_suffix('.pending'))!r}); "
                     "ready.write_text(str(os.getpid())); "
                     f"ready.replace({str(pid_file)!r}); "
@@ -3131,7 +3231,8 @@ except guard.GuardError as error:
             ]
             monitor = subprocess.Popen(
                 self.deterministic_monitor_argv(
-                    kfd_root=kfd_root, output=output, command=command
+                    kfd_root=kfd_root, output=output, command=command,
+                    retain_rejected_output=retain_rejected_output,
                 ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -3182,11 +3283,15 @@ except guard.GuardError as error:
                             os.waitpid(target_pid, 0)
                         except ChildProcessError:
                             pass
+            if retain_rejected_output:
+                retained_output = output.read_bytes()
         self.assertEqual(monitor.returncode, 2)
         self.assertEqual(stdout, "")
         self.assertIn("interrupted by signal", stderr)
-        self.assertFalse(output_exists)
+        self.assertEqual(output_exists, retain_rejected_output)
         self.assertFalse(target_exists)
+        if retain_rejected_output:
+            self.assertEqual(retained_output, b"partial\n\n")
 
 
 if __name__ == "__main__":

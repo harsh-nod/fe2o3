@@ -547,6 +547,14 @@ selected-GPU queues. This is bounded sampled interference detection, not proof
 that no queue existed between censuses or that a process cannot escape the
 monitored process group.
 
+New evidence campaigns can invoke the monitor with `--retain-rejected-output`
+to keep raw target stdout at its private `--target-output` path after rejection
+or interruption. This opt-in changes neither rejection nor process-group
+cleanup and never emits a clean monitor record for a failed attempt. Retained
+bytes are unqualified evidence, not releasable benchmark results; each attempt
+needs a fresh output path. The default still removes rejected target stdout.
+Existing runners and archived campaigns are unchanged.
+
 The runner writes nothing durable on an incomplete or failed run. On success it
 revalidates staged copies of all three logs, byte-compares the regenerated set
 report, and atomically publishes one external evidence directory. The output
