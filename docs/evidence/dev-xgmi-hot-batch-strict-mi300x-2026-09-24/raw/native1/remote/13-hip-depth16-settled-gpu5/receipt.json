@@ -1,0 +1,37 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "benchmarks/runtime_gfx942/copy-host-observe.py",
+    "--gpu-index",
+    "5",
+    "--pci-bdf",
+    "0000:a6:00.0",
+    "--unique-id",
+    "0xb7baafd0fb173d8e"
+  ],
+  "cwd": "/home/harsh/fe2o3-hot-batch-20260924.ef9cdc0354f8f05b/source",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/fe2o3-hot-batch-20260924.ef9cdc0354f8f05b/target",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/opt/rocm/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "TMPDIR": "/home/harsh/fe2o3-hot-batch-20260924.ef9cdc0354f8f05b/tmp",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790267645618930668,
+  "group_absent": true,
+  "pid": 2668442,
+  "started_ns": 1790267643444736823,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "03dc8b14b32ef302499fdd7510443622227c06fc42ba3f4146ed332df23be3c2",
+  "timeout_seconds": 100
+}

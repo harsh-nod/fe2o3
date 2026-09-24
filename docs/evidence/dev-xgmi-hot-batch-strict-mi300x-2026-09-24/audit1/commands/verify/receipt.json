@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-xgmi-hot-batch-strict-mi300x-2026-09-24/packet.py",
+    "verify"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790267932243701121,
+  "group_absent": true,
+  "pid": 867513,
+  "started_ns": 1790267930063183105,
+  "stderr_sha256": "5bdeea9aff46b0132a4643ad2c89b26889720ab5afe57a658d1f4343f4844dda",
+  "stdin_sha256": null,
+  "stdout_sha256": "7221a9cfd0677b275497bb53a49069e74fd8143cc772ec3c09ad404d566871b5",
+  "timeout_seconds": 900
+}

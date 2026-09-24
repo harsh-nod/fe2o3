@@ -1,0 +1,41 @@
+{
+  "command": [
+    "/usr/bin/git",
+    "--no-replace-objects",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.untrackedCache=false",
+    "archive",
+    "--format=tar.gz",
+    "--output=/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/native2/build-source.tar.gz",
+    "8dc128357ecd55e1ba4f2866eb075899481f9aa0",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "crates",
+    "examples",
+    "benchmarks/runtime_gfx942",
+    "scripts/unsafe-source-baseline.json",
+    "docs/runtime-primary-queue-release-v1.md"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790266819362294796,
+  "group_absent": true,
+  "pid": 670599,
+  "started_ns": 1790266816180467623,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}

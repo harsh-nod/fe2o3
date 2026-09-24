@@ -1,0 +1,36 @@
+{
+  "command": [
+    "/home/harsh/fe2o3-hot-batch-20260924.ef9cdc0354f8f05b/kfd",
+    "0xb7baafd0fb173d8e",
+    "0x10a254ce4987e716",
+    "1048576",
+    "32",
+    "10",
+    "30",
+    "--aggregate-peer-batch-hot-only"
+  ],
+  "cwd": "/home/harsh/fe2o3-hot-batch-20260924.ef9cdc0354f8f05b/source",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/fe2o3-hot-batch-20260924.ef9cdc0354f8f05b/target",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/opt/rocm/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "TMPDIR": "/home/harsh/fe2o3-hot-batch-20260924.ef9cdc0354f8f05b/tmp",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790267397004711887,
+  "group_absent": true,
+  "pid": 2646395,
+  "started_ns": 1790267371268866655,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "7e7347b8d0aca249c797f809b2dfe1d302e8be8dde7b443b7a0f84694678cbcb",
+  "timeout_seconds": 300
+}

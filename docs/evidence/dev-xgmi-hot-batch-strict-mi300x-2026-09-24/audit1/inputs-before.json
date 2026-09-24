@@ -1,0 +1,16 @@
+{
+  "PROTOCOL.md": "419caf06d8e95ec20bc6de2b25b30fea2e29f40dd91750dd71b0a07c9e2f7930",
+  "README.md": "02c93ad647e1dcc082b0d495e903c6b6c3f721e503f6b5f50bcc9416343e3ed7",
+  "artifacts.json": "5b8307faa9d34cf499155d61ecfb44a9e45d094f926bc8320d943d7339c61255",
+  "audit.py": "304fa68619e5154d6523f7dfd2bbd54f63b2e5c7d5489c1dc12575be1592061a",
+  "campaign.py": "a6b2f42beb687b82bc9f8207acc034df6003c598eb7dc8308447024ef421f940",
+  "native.py": "e71091bc83cbe9c254650479e68c3e3110d3d6ca7561cdc4a8fbaed9ba564302",
+  "packet.py": "3e8199081a7ea66058ec4f3bcffffd5dd4a0def68add8e01a156c2311f25dbe7",
+  "prior/package.py": "c83d5a05fb8baf8904eb4a9f49c8d5f07906762aa7ea0cfc5c07ad9e51583466",
+  "prior/test_package.py": "fa5f3282ae77f1ea1daefae989f53a145292ddaa89cd186894305d65b03a2fd5",
+  "prior/test_verify.py": "dd0ea3848e9ee6a61263ca9d6df75e809f35d7860084e21fd4311f3b29cbc229",
+  "prior/verify.py": "9e146af4578d82ae148b664c264090977e8d7558665b41a6ec72f6011c74637e",
+  "qualify.py": "ff97caf0159dee991c6827a7913e02659f0821b326fbdbfafb384a3604ca5416",
+  "test_campaign.py": "62ec7edad69b4f05a864beca0ced516659c8c0f8b474bad5b0d828e72538c931",
+  "test_packet.py": "b623609ccb3f5cc3e54e065c2357b4c0c083e6e971c1d09f161703edd988b130"
+}

@@ -82,3 +82,21 @@ roots, per-publication fences, no intermediate success and final full close.
 Neither design can silently reuse a previous batch's topology observation or
 change ordinary aggregate completion semantics. This is a source-inspection
 finding and proposed direction, not a new proof or performance result.
+
+The [fresh strict depth-1/16/32 campaign](evidence/dev-xgmi-hot-batch-strict-mi300x-2026-09-24/README.md)
+now qualifies the unchanged benchmark source on GPUs 5/6. At depth 32 KFD
+whole-batch p50 is 15.427-15.540 ms, HSA 1.065-1.087 ms and HIP 1.015-1.041 ms.
+The retained per-process/direction summaries show amortization, not parity;
+host boundaries and engine selection still differ. This does not qualify the
+later link-directory source candidate or supply an A7 threshold pass.
+
+A separately named retained-session profile could instead aim to preserve
+execution-relevant authority with cheaper guards. It cannot claim to reproduce
+the current full-host snapshot: topology generation alone does not establish
+whole-host render/PCI/partition observations, process XNACK/apertures, successful
+sysfs access, or every live device field. Such a profile needs reviewed driver
+lifetime/invalidation contracts, wrap/ABA handling, exact session ownership and
+proofs connecting guard validity to publication/completion/reuse authority.
+Existing operational-fence proofs consume contracted observations; they do not
+derive full currentness from a generation counter. This is an open architecture
+direction, not permission to replace the present checks.

@@ -1,5 +1,19 @@
 # Current Runtime Swarm Work Orders
 
+Latest strict native characterization (2026-09-24): the
+[fresh hot-batch campaign](evidence/dev-xgmi-hot-batch-strict-mi300x-2026-09-24/README.md)
+passes all eighteen depth-1/16/32 processes, 134 remote commands, 108 strict
+endpoint observations and nineteen local commands on GPUs 5/6. Byte-exact
+collection, all three retained ELFs, owned remote removal, independent absence
+and strict replay pass. KFD depth-32 whole-batch p50 is 15.427-15.540 ms, versus
+HSA 1.065-1.087 ms and HIP 1.015-1.041 ms, with different host timing boundaries.
+KFD useful-byte throughput rises to 2.159-2.175 GB/s through batching, but remains
+well below the comparators. This is shared-host characterization, not an A7
+threshold pass or isolated engine bandwidth. Local cleanup reclaims 424,538,112
+bytes. The prior SSH-failed campaign stays rejected. All broader accepted lane
+checkpoints and A1/A2 remain unchanged; matched candidate optimization and the
+generated-execution/resource/proof gates remain open.
+
 Latest recovered native evidence (2026-09-24): the
 [matched hot-batch attempt](evidence/dev-xgmi-hot-batch-mi300x-2026-09-24/README.md)
 is rejected by its strict controller gate after SSH timeout and temporary DNS

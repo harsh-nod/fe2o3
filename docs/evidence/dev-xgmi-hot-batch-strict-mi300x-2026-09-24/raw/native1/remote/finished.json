@@ -1,0 +1,8 @@
+{
+  "commit": "8dc128357ecd55e1ba4f2866eb075899481f9aa0",
+  "exclusive_reservation": false,
+  "failures": [],
+  "formal_refinement": false,
+  "native_execution": true,
+  "performance_acceptance": false
+}
