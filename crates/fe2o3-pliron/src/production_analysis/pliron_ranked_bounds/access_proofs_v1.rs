@@ -307,7 +307,7 @@ mod observed_presburger_tests {
         (context, function, index)
     }
 
-    fn run(launch: u64, extent: u64) -> (Query, RankedBoundsReportV1, Receipt) {
+    fn run(launch: u64, extent: u64) -> (Query, RankedBoundsReportV1, Receipt<'static>) {
         let (context, function, index) = fixture(launch, extent);
         let mut baseline = PlironAnalysisManagerV1::new(&function);
         baseline.prepare_sparse_indices(&context, &function);

@@ -8747,6 +8747,7 @@ include!("production_argument_correspondence_v1.rs");
 include!("production_argument_view_v1.rs");
 include!("production_conditional_output_binding_v1.rs");
 include!("production_conditional_source_translation_v1.rs");
+include!("production_conditional_continuation_v1.rs");
 #[path = "production_conditional_ranked_output_v1.rs"]
 mod production_conditional_ranked_output_v1;
 pub use production_conditional_ranked_output_v1::{

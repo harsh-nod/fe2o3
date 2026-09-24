@@ -67,7 +67,7 @@ mod observed_witness {
         (p, m, report)
     }
 
-    fn reserve(m: &mut M) -> (Receipt, B) {
+    fn reserve(m: &mut M) -> (Receipt<'static>, B) {
         let h = preflight_production_analysis_witness_resource_upper_bound_v1(
             KernelCheckPassKindV1::MemoryBounds,
             m.input_census().unwrap(),

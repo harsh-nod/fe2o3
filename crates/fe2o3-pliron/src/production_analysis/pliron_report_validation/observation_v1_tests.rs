@@ -22,7 +22,7 @@ mod observed_validation_boundaries {
         L::production_hard_ceiling()
     }
 
-    fn seed<'a>(c: &'a Context, f: &'a FuncOp) -> (LivePassSession<'a>, M, Receipt) {
+    fn seed<'a>(c: &'a Context, f: &'a FuncOp) -> (LivePassSession<'a>, M, Receipt<'static>) {
         seed_with_floor(c, f, B::default())
     }
 
@@ -30,7 +30,7 @@ mod observed_validation_boundaries {
         c: &'a Context,
         f: &'a FuncOp,
         floor: B,
-    ) -> (LivePassSession<'a>, M, Receipt) {
+    ) -> (LivePassSession<'a>, M, Receipt<'static>) {
         let mut receipt = Receipt::new(floor, hard()).unwrap();
         let phase = receipt.phase(P::StructuralIdentity, 0).unwrap();
         let preservation = begin_pass(
@@ -64,7 +64,10 @@ mod observed_validation_boundaries {
         (preservation, analyses, receipt)
     }
 
-    fn start<'a>(c: &'a Context, f: &'a FuncOp) -> (LivePassSession<'a>, M, V<'a>, Receipt) {
+    fn start<'a>(
+        c: &'a Context,
+        f: &'a FuncOp,
+    ) -> (LivePassSession<'a>, M, V<'a>, Receipt<'static>) {
         start_with_floor(c, f, B::default())
     }
 
@@ -72,7 +75,7 @@ mod observed_validation_boundaries {
         c: &'a Context,
         f: &'a FuncOp,
         floor: B,
-    ) -> (LivePassSession<'a>, M, V<'a>, Receipt) {
+    ) -> (LivePassSession<'a>, M, V<'a>, Receipt<'static>) {
         let (preservation, mut analyses, mut receipt) = seed_with_floor(c, f, floor);
         let phase = receipt.phase(RV, 0).unwrap();
         let validation = begin_production_analysis_report_validation_with_observation_v1(

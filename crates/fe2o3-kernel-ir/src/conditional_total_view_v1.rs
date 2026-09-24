@@ -16,7 +16,7 @@ use std::{
 };
 
 use crate::{
-    AccessMode, AddressSpace, Axis, BlockId,
+    AccessMode, AddressSpace, Axis, BinaryOp, BlockId,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as ResourceError, CastKind, ComparePredicate,
     Constant, ControlFlowError, ControlFlowLimits, Function, FunctionOperationLocation, IndexKind,
@@ -98,6 +98,56 @@ pub enum ConditionalTotalViewAddressDomainV1 {
     GlobalLaunch,
 }
 
+/// An exact input read and the two distinct domains required by its execution.
+/// `access_domain` requires readable elements; `address_domain` only requires
+/// representable address formation. Neither implies allocation of a launch tail.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConditionalTotalViewReadV1 {
+    parameter: u32,
+    slice: ValueId,
+    pointer: ValueId,
+    index: ValueId,
+    value: ValueId,
+    location: FunctionOperationLocation,
+    access_domain: ConditionalTotalViewAddressDomainV1,
+    address_domain: ConditionalTotalViewAddressDomainV1,
+    element_bytes: u64,
+    alignment: u32,
+}
+
+impl ConditionalTotalViewReadV1 {
+    pub const fn parameter(self) -> u32 {
+        self.parameter
+    }
+    pub const fn slice(self) -> ValueId {
+        self.slice
+    }
+    pub const fn pointer(self) -> ValueId {
+        self.pointer
+    }
+    pub const fn index(self) -> ValueId {
+        self.index
+    }
+    pub const fn value(self) -> ValueId {
+        self.value
+    }
+    pub const fn location(self) -> FunctionOperationLocation {
+        self.location
+    }
+    pub const fn access_domain(self) -> ConditionalTotalViewAddressDomainV1 {
+        self.access_domain
+    }
+    pub const fn address_domain(self) -> ConditionalTotalViewAddressDomainV1 {
+        self.address_domain
+    }
+    pub const fn element_bytes(self) -> u64 {
+        self.element_bytes
+    }
+    pub const fn alignment(self) -> u32 {
+        self.alignment
+    }
+}
+
 /// Typed failures from the caller's shared ledger or the existing bounded CFG.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ConditionalTotalViewErrorV1 {
@@ -146,6 +196,7 @@ pub struct ConditionalTotalViewFactsV1<'module> {
     store_location: FunctionOperationLocation,
     element_bytes: u64,
     alignment: u32,
+    reads: usize,
 }
 
 impl fmt::Debug for ConditionalTotalViewFactsV1<'_> {
@@ -225,6 +276,32 @@ impl<'module> ConditionalTotalViewFactsV1<'module> {
     }
     pub const fn alignment(&self) -> u32 {
         self.alignment
+    }
+
+    pub const fn read_count(&self) -> usize {
+        self.reads
+    }
+
+    /// Replays the same borrowed graph and visits each derived input obligation.
+    /// No caller-provided read roster or second graph is accepted. A visitor's
+    /// retained allocations must be admitted separately on this same ledger.
+    pub fn visit_reads_v1(
+        &self,
+        budget: &mut Budget<'_>,
+        mut visit: impl FnMut(ConditionalTotalViewReadV1) -> Result<(), ResourceError>,
+    ) -> Result<(), ConditionalTotalViewErrorV1> {
+        let floor = budget.storage_checkpoint();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            derive(self.module, &self.kernel().id, budget, &mut visit)
+        }));
+        budget.rollback_storage(floor)?;
+        match result {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(Failure::Error(error))) => Err(error),
+            // An immutable successfully derived subject cannot change fragments.
+            Ok(Err(Failure::Unsupported(_))) => Err(ResourceError::Accounting.into()),
+            Err(payload) => resume_unwind(payload),
+        }
     }
 }
 
@@ -373,6 +450,7 @@ fn derive<'module>(
     module: &'module Module,
     kernel_id: &KernelId,
     budget: &mut Budget<'_>,
+    visit_read: &mut dyn FnMut(ConditionalTotalViewReadV1) -> Result<(), ResourceError>,
 ) -> Derived<ConditionalTotalViewFactsV1<'module>> {
     let mut kernel_ordinal = None;
     for (ordinal, kernel) in module.kernels.iter().enumerate() {
@@ -463,6 +541,9 @@ fn derive<'module>(
                 | OperationKind::SliceLength { .. }
                 | OperationKind::SliceData { .. }
                 | OperationKind::GetElementPointer { .. }
+                | OperationKind::Load { .. }
+                | OperationKind::GuardedLoad { .. }
+                | OperationKind::Binary { .. }
                 | OperationKind::Store { .. }
                 | OperationKind::GuardedStore { .. } => {}
                 _ => return refuse(Unsupported::Operation { location }),
@@ -645,6 +726,7 @@ fn derive<'module>(
         store_location: store.location,
         element_bytes: u64::from(bits / 8),
         alignment: store.access.alignment,
+        reads: 0,
     };
     facts.address_domain = check_paths(
         function,
@@ -656,11 +738,58 @@ fn derive<'module>(
         selected_predicate.is_some(),
         budget,
     )?;
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        for (ordinal, operation) in block.operations.iter().enumerate() {
+            budget.charge_work(2)?;
+            if matches!(operation.kind, OperationKind::GetElementPointer { .. })
+                && !operation
+                    .results
+                    .iter()
+                    .any(|result| result.id == facts.pointer)
+            {
+                let [pointer] = operation.results.as_slice() else {
+                    return refuse(Unsupported::Operation {
+                        location: FunctionOperationLocation::new(block.id, ordinal),
+                    });
+                };
+                let mut used_by_read = false;
+                for row in &definitions {
+                    budget.charge_work(2)?;
+                    used_by_read |= matches!(row.operation.kind,
+                        OperationKind::Load { pointer: value, .. }
+                        | OperationKind::GuardedLoad { pointer: value, .. } if value == pointer.id);
+                }
+                if !used_by_read {
+                    return refuse(Unsupported::Address { value: pointer.id });
+                }
+            }
+            if matches!(
+                operation.kind,
+                OperationKind::Load { .. } | OperationKind::GuardedLoad { .. }
+            ) {
+                let read = derive_read(
+                    operation,
+                    FunctionOperationLocation::new(block.id, ordinal),
+                    &definitions,
+                    &facts,
+                    flow,
+                    &states,
+                    block_index,
+                    budget,
+                )?;
+                visit_read(read)?;
+                facts.reads = facts
+                    .reads
+                    .checked_add(1)
+                    .ok_or(ResourceError::Arithmetic)?;
+            }
+        }
+    }
     // All scratch owners drop before the outer scope restores the storage floor.
     Ok(facts)
 }
 
-fn allowed_operation(operation: &Operation, facts: &ConditionalTotalViewFactsV1<'_>) -> bool {
+fn allowed_operation(operation: &Operation) -> bool {
     match &operation.kind {
         OperationKind::Constant(_) | OperationKind::Compare { .. } => true,
         OperationKind::Intrinsic(intrinsic) => {
@@ -690,12 +819,117 @@ fn allowed_operation(operation: &Operation, facts: &ConditionalTotalViewFactsV1<
         ),
         OperationKind::SliceLength { .. } | OperationKind::SliceData { .. } => true,
         OperationKind::GetElementPointer { .. } => {
-            matches!(operation.results.as_slice(), [result] if result.id == facts.pointer)
+            matches!(operation.results.as_slice(), [_])
+        }
+        OperationKind::Load { .. } | OperationKind::GuardedLoad { .. } => true,
+        OperationKind::Binary { op, .. } => {
+            matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Subtract
+                    | BinaryOp::Multiply
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+            ) && matches!(operation.results.as_slice(), [result] if
+                matches!(result.ty, Type::Scalar(scalar) if scalar != ScalarType::Index))
         }
         OperationKind::Store { .. } | OperationKind::GuardedStore { .. } => true,
         // Even pure calls need completion evidence; arithmetic needs totality/no-wrap facts.
         _ => false,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_read(
+    operation: &Operation,
+    location: FunctionOperationLocation,
+    definitions: &[Definition<'_>],
+    facts: &ConditionalTotalViewFactsV1<'_>,
+    flow: &IndexedControlFlow,
+    states: &[BlockState],
+    block: usize,
+    budget: &mut Budget<'_>,
+) -> Derived<ConditionalTotalViewReadV1> {
+    budget.charge_work(16)?;
+    let (pointer, access, guarded) = match operation.kind {
+        OperationKind::Load { pointer, access } => (pointer, access, false),
+        OperationKind::GuardedLoad {
+            pointer,
+            access,
+            predicate,
+            ..
+        } if predicate == facts.predicate => (pointer, access, true),
+        _ => return refuse(Unsupported::Operation { location }),
+    };
+    if access.volatile || access.address_space != AddressSpace::Global {
+        return refuse(Unsupported::Operation { location });
+    }
+    let address = definition(definitions, pointer, budget)?;
+    let OperationKind::GetElementPointer { base, offset } = address.operation.kind else {
+        return refuse(Unsupported::Address { value: pointer });
+    };
+    if offset != facts.index {
+        return refuse(Unsupported::Index { value: offset });
+    }
+    let data = definition(definitions, base, budget)?;
+    let OperationKind::SliceData { slice } = data.operation.kind else {
+        return refuse(Unsupported::Address { value: base });
+    };
+    let body = facts
+        .function()
+        .body
+        .as_ref()
+        .ok_or(ResourceError::Accounting)?;
+    let mut parameter = None;
+    for (ordinal, value) in body.parameters.iter().enumerate() {
+        budget.charge_work(2)?;
+        if *value == slice {
+            parameter = Some(ordinal);
+        }
+    }
+    let parameter = parameter.ok_or(Failure::Unsupported(Unsupported::Signature))?;
+    let Some(Type::Slice(ty)) = facts.function().signature.parameters.get(parameter) else {
+        return refuse(Unsupported::Signature);
+    };
+    let [result] = operation.results.as_slice() else {
+        return refuse(Unsupported::Operation { location });
+    };
+    let Type::Scalar(scalar) = result.ty else {
+        return refuse(Unsupported::Operation { location });
+    };
+    let bits = scalar
+        .bit_width()
+        .ok_or(Failure::Unsupported(Unsupported::Signature))?;
+    if ty.address_space != AddressSpace::Global
+        || ty.access != AccessMode::ReadOnly
+        || *ty.element != result.ty
+        || bits == 0
+        || bits % 8 != 0
+    {
+        return refuse(Unsupported::Operation { location });
+    }
+    let address_block = position(flow, address.location.block, budget)?;
+    Ok(ConditionalTotalViewReadV1 {
+        parameter: u32::try_from(parameter).map_err(|_| ResourceError::Arithmetic)?,
+        slice,
+        pointer,
+        index: offset,
+        value: result.id,
+        location,
+        access_domain: if !guarded && states[block].counts[0] != 0 {
+            ConditionalTotalViewAddressDomainV1::GlobalLaunch
+        } else {
+            ConditionalTotalViewAddressDomainV1::GuardedOutput
+        },
+        address_domain: if states[address_block].counts[0] != 0 {
+            ConditionalTotalViewAddressDomainV1::GlobalLaunch
+        } else {
+            ConditionalTotalViewAddressDomainV1::GuardedOutput
+        },
+        element_bytes: u64::from(bits / 8),
+        alignment: access.alignment,
+    })
 }
 
 fn switch_predicate(
@@ -798,7 +1032,7 @@ fn check_paths(
         for (ordinal, operation) in block.operations.iter().enumerate() {
             budget.charge_work(8)?;
             let location = FunctionOperationLocation::new(block.id, ordinal);
-            if !allowed_operation(operation, facts) {
+            if !allowed_operation(operation) {
                 return refuse(Unsupported::Operation { location });
             }
             if location == pointer_location && !selected_offset && counts[0] != 0 {
@@ -894,7 +1128,7 @@ pub fn derive_conditional_total_view_from_verified_v1<'module>(
         budget.reserve_storage(
             size_of::<ConditionalTotalViewFactsV1<'_>>() + 3 * size_of::<Vec<()>>(),
         )?;
-        derive(verified.module(), kernel, budget)
+        derive(verified.module(), kernel, budget, &mut |_| Ok(()))
     }));
     budget.rollback_storage(floor)?;
     match outcome {

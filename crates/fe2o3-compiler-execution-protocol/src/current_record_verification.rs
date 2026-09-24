@@ -10,6 +10,9 @@ use fe2o3_external_anchor_protocol::{
 };
 use sha2::{Digest, Sha256};
 
+#[path = "current_record_native.rs"]
+mod native;
+
 use crate::{
     CompilerExecutionExternalAnchorTransactionErrorV1,
     CompilerExecutionExternalAnchorTransactionV1, CompilerExecutionIssuerPolicyV1,
@@ -469,6 +472,14 @@ impl CompilerExecutionCurrentRecordAttestationV3 {
             return Err(CompilerExecutionCurrentRecordVerificationErrorV3::SigningKeyMismatch);
         }
         verification.verify_expected_carriage(policy, expected_carriage, challenge)?;
+        Self::sign_checked(verification, challenge, signing_key)
+    }
+
+    fn sign_checked(
+        verification: CompilerExecutionCurrentRecordVerificationV3,
+        challenge: [u8; SHA256_BYTES],
+        signing_key: &SigningKey,
+    ) -> Result<Self, CompilerExecutionCurrentRecordVerificationErrorV3> {
         let verifying_key = signing_key.verifying_key().to_bytes();
         let mut bytes = encode_attestation_prefix(challenge, &verification, verifying_key);
         let message = attestation_signature_message(&bytes[..ATTESTATION_SIGNED_PREFIX_BYTES]);
@@ -785,6 +796,24 @@ fn validate_external_anchor_commit_receipt(
 ) -> Result<(), CompilerExecutionCurrentRecordVerificationErrorV3> {
     let sequence = carriage.acknowledgment().sequence();
     reverify_external_anchor_receipt(*carriage.policy().external_anchor_verifying_key(), receipt)?;
+    validate_external_anchor_commit_position(sequence, receipt)?;
+    let transaction = CompilerExecutionExternalAnchorTransactionV1::new(
+        carriage.policy().clone(),
+        carriage.request().clone(),
+        carriage.publication().clone(),
+    )?;
+    if receipt.challenge().transaction() != transaction.external_anchor_digest() {
+        return Err(
+            CompilerExecutionCurrentRecordVerificationErrorV3::ExternalAnchorReceiptMismatch,
+        );
+    }
+    Ok(())
+}
+
+fn validate_external_anchor_commit_position(
+    sequence: u64,
+    receipt: &AnchorTransitionReceiptV1,
+) -> Result<(), CompilerExecutionCurrentRecordVerificationErrorV3> {
     let challenge = receipt.challenge();
     if receipt.position() != AnchorPositionV1::Proposed
         || challenge.kind() != ChallengeKindV1::Advance
@@ -792,16 +821,6 @@ fn validate_external_anchor_commit_receipt(
         || ((sequence == 1)
             != (challenge.prior_head() == HashChainHeadV1::from_bytes([0; SHA256_BYTES])))
     {
-        return Err(
-            CompilerExecutionCurrentRecordVerificationErrorV3::ExternalAnchorReceiptMismatch,
-        );
-    }
-    let transaction = CompilerExecutionExternalAnchorTransactionV1::new(
-        carriage.policy().clone(),
-        carriage.request().clone(),
-        carriage.publication().clone(),
-    )?;
-    if receipt.challenge().transaction() != transaction.external_anchor_digest() {
         return Err(
             CompilerExecutionCurrentRecordVerificationErrorV3::ExternalAnchorReceiptMismatch,
         );
@@ -839,10 +858,24 @@ fn build_external_anchor_currentness_challenge(
     commit_receipt: &AnchorTransitionReceiptV1,
     verification_challenge: [u8; SHA256_BYTES],
 ) -> Result<AnchorChallengeV1, CompilerExecutionCurrentRecordVerificationErrorV3> {
+    build_external_anchor_currentness_challenge_for(
+        *carriage.identity().as_bytes(),
+        *carriage.policy().external_anchor_verifying_key(),
+        commit_receipt,
+        verification_challenge,
+    )
+}
+
+fn build_external_anchor_currentness_challenge_for(
+    carriage_identity: [u8; 32],
+    anchor_key: [u8; 32],
+    commit_receipt: &AnchorTransitionReceiptV1,
+    verification_challenge: [u8; 32],
+) -> Result<AnchorChallengeV1, CompilerExecutionCurrentRecordVerificationErrorV3> {
     if verification_challenge == [0; SHA256_BYTES] {
         return Err(CompilerExecutionCurrentRecordVerificationErrorV3::ZeroChallenge);
     }
-    let key = PinnedAnchorKeyV1::from_bytes(*carriage.policy().external_anchor_verifying_key())?;
+    let key = PinnedAnchorKeyV1::from_bytes(anchor_key)?;
     let commit = commit_receipt.challenge();
     let prepared = PreparedAnchorAdvanceV1::recover_from_local_state(
         commit.expected_sequence(),
@@ -855,7 +888,7 @@ fn build_external_anchor_currentness_challenge(
     digest.update(EXTERNAL_CURRENTNESS_NONCE_DOMAIN);
     digest.update(VERSION.to_le_bytes());
     digest.update(verification_challenge);
-    digest.update(carriage.identity().as_bytes());
+    digest.update(carriage_identity);
     digest.update(commit_receipt.identity().as_bytes());
     let nonce = CallerNonceV1::from_bytes(digest.finalize().into());
     Ok(prepared.begin_recovery(nonce, &key)?.challenge().clone())

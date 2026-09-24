@@ -355,7 +355,7 @@ fn observe_and_commit(receipt: &mut InvocationReceiptV1, value: Bound) -> Bound 
     phase.commit(value).unwrap()
 }
 
-fn prepared(limits: Limits) -> InvocationReceiptV1 {
+fn prepared(limits: Limits) -> InvocationReceiptV1<'static> {
     let mut receipt = InvocationReceiptV1::new(bound(10, 4, 6), limits).unwrap();
     observe_and_commit(&mut receipt, bound(7, 3, 5));
     receipt

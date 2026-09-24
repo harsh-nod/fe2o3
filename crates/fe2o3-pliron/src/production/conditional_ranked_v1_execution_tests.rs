@@ -353,6 +353,11 @@ pub(super) mod source259_execution {
         use fe2o3_functional_proof::*;
         use fe2o3_proof_contracts::DigestV1;
 
+        mod aggregate_continuation {
+            use super::*;
+            include!("conditional_aggregate_v1_tests.rs");
+        }
+
         fn digest(value: u8) -> DigestV1 {
             DigestV1::from_untrusted_bytes([value; 32])
         }
@@ -371,14 +376,29 @@ pub(super) mod source259_execution {
 
         // This test key supplies internal-policy metadata, not verifier authority.
         fn stage(mut kernel: ProductionRankedKernelV1) -> ProductionConstructionV1 {
+            let (block, operation) = kernel
+                .blocks()
+                .iter()
+                .enumerate()
+                .find_map(|(b, block)| {
+                    block
+                        .operations()
+                        .iter()
+                        .enumerate()
+                        .find_map(|(o, operation)| {
+                            matches!(operation, O::RequestEffectRefinement { .. }).then_some((b, o))
+                        })
+                })
+                .expect("one test effect request");
             let O::RequestEffectRefinement { contract, subjects } =
-                &kernel.blocks()[1].operations()[1]
+                &kernel.blocks()[block as usize].operations()[operation as usize]
             else {
                 panic!()
             };
-            let obligation =
-                normalized_effect_refinement_hash_for_kernel_v2(&kernel, 1, 1, contract, *subjects)
-                    .unwrap();
+            let obligation = normalized_effect_refinement_hash_for_kernel_v2(
+                &kernel, block, operation, contract, *subjects,
+            )
+            .unwrap();
             let binding =
                 FunctionalRefinementBindingV2::from_subjects(*subjects, obligation).unwrap();
             let signing = SigningKey::from_bytes(&[91; 32]);
@@ -415,8 +435,8 @@ pub(super) mod source259_execution {
                 .unwrap();
             kernel = kernel
                 .bind_functional_refinement_request_v2(
-                    1,
-                    1,
+                    block,
+                    operation,
                     ProductionReferenceProofV2::request_exact(imported.receipt_identity(), binding),
                 )
                 .unwrap();

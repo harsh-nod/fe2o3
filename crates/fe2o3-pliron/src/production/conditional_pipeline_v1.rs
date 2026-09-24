@@ -5,6 +5,17 @@ use crate::production_analysis::{
     },
     run_conditional_production_checks_with_observation_v1,
 };
+use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as CanonicalBudget;
+use std::cell::{Cell, RefCell};
+
+type CanonicalAccountV1<'a, 'work> = RefCell<&'a mut CanonicalBudget<'work>>;
+
+fn canonical_limit_v1(phase: Phase) -> ProductionAnalysisResourceLimitV1 {
+    ProductionAnalysisResourceLimitV1 {
+        phase,
+        resource: "original canonical conditional ledger",
+    }
+}
 
 // The constructor is private to the consuming pending owner. A fresh pipeline
 // must still compare its initial snapshot and epoch against this retained input.
@@ -74,9 +85,18 @@ impl ConditionalPipelineSubjectV1<'_> {
 }
 
 impl ProductionConditionalRankedAnalysisV1 {
+    #[cfg(test)]
     fn prepare_pipeline_subject_v1(
         &self,
         resources: &mut ProductionAnalysisResourceContractV1,
+    ) -> Result<ConditionalPipelineSubjectV1<'_>, ProductionSessionErrorV1> {
+        self.prepare_pipeline_subject_with_budget_v1(resources, None)
+    }
+
+    fn prepare_pipeline_subject_with_budget_v1(
+        &self,
+        resources: &mut ProductionAnalysisResourceContractV1,
+        canonical: Option<&CanonicalAccountV1<'_, '_>>,
     ) -> Result<ConditionalPipelineSubjectV1<'_>, ProductionSessionErrorV1> {
         use crate::production_analysis::conditional_execution_v1::OccurrenceV1;
         let phase = Phase::PipelineVerification;
@@ -115,6 +135,15 @@ impl ProductionConditionalRankedAnalysisV1 {
                 n.checked_add(std::mem::size_of::<ProductionConditionalPipelineAnalysisV1>())
             })
             .ok_or_else(failure)?;
+        if let Some(account) = canonical {
+            let mut budget = account.borrow_mut();
+            budget
+                .charge_work(work)
+                .map_err(|_| resource(canonical_limit_v1(phase)))?;
+            budget
+                .reserve_storage(storage)
+                .map_err(|_| resource(canonical_limit_v1(phase)))?;
+        }
         resources
             .admit_retained(
                 phase,
@@ -162,9 +191,18 @@ impl ProductionConditionalRankedAnalysisV1 {
         {
             return Err(ProductionSessionErrorV1::RankedGraphChanged);
         }
-        let exact = middle_end_evidence_v4::derive_exact_ranked_graph_identity_with_resources_v1(
-            recipe, resources,
-        )
+        let exact = match canonical {
+            Some(account) => {
+                middle_end_evidence_v4::derive_exact_ranked_graph_identity_with_canonical_budget_v1(
+                    recipe,
+                    resources,
+                    &mut account.borrow_mut(),
+                )
+            }
+            None => middle_end_evidence_v4::derive_exact_ranked_graph_identity_with_resources_v1(
+                recipe, resources,
+            ),
+        }
         .map(ProductionExactGraphIdentityV1)
         .map_err(resource)?;
         if Some(exact) != record.exact_graph_identity {
@@ -260,6 +298,51 @@ impl ProductionConditionalPipelineAnalysisV1 {
     pub fn pending_analysis(&self) -> &ProductionConditionalRankedAnalysisV1 {
         &self.pending
     }
+
+    pub fn retained_analysis_storage_v1(&self) -> usize {
+        self.resources.retained_storage_upper_bound()
+    }
+
+    /// Rechecks the original final graph, occurrence bindings and mutation epoch.
+    /// This neither reruns a transform nor upgrades ordinary report counters.
+    pub fn require_current_graph_v1(
+        &self,
+        budget: &mut CanonicalBudget<'_>,
+    ) -> Result<(), ProductionSessionErrorV1> {
+        if self.caught_panic
+            || self.first.is_none()
+            || self.replay.is_some()
+            || self.input.is_none()
+            || self.observations.iter().any(Option::is_none)
+        {
+            return Err(ProductionSessionErrorV1::RankedGraphChanged);
+        }
+        let floor = budget.storage();
+        let account = RefCell::new(budget);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let mut resources = ProductionAnalysisResourceContractV1::new(
+                self.pending._session.analysis_resource_limits(),
+            );
+            resources
+                .admit_retained(Phase::PipelineVerification, self.resources)
+                .map_err(resource)?;
+            self.pending
+                .prepare_pipeline_subject_with_budget_v1(&mut resources, Some(&account))
+                .map(drop)
+        }));
+        let mut budget = account.borrow_mut();
+        let released = budget
+            .storage()
+            .checked_sub(floor)
+            .ok_or_else(|| resource(canonical_limit_v1(Phase::PipelineVerification)))?;
+        budget
+            .release_storage(released)
+            .map_err(|_| resource(canonical_limit_v1(Phase::PipelineVerification)))?;
+        match result {
+            Ok(result) => result,
+            Err(_) => Err(ProductionSessionErrorV1::RankedGraphChanged),
+        }
+    }
 }
 
 /// Keeps the original pending owner and any completed diagnostic reports alive.
@@ -338,11 +421,33 @@ impl ProductionConditionalRankedAnalysisV1 {
         self.check_pipeline_with_limits_v1(limits)
     }
 
+    /// Adds all new pipeline work to the original canonical ledger before it
+    /// executes. The caller already retains this pending owner's storage floor.
+    #[allow(clippy::result_large_err)]
+    pub fn check_pipeline_with_budget_v1(
+        self,
+        budget: &mut CanonicalBudget<'_>,
+    ) -> Result<ProductionConditionalPipelineAnalysisV1, ProductionConditionalPipelineErrorV1> {
+        let limits = self._session.analysis_resource_limits();
+        self.check_pipeline_accounted_v1(limits, Some(budget))
+    }
+
     #[allow(clippy::result_large_err)]
     fn check_pipeline_with_limits_v1(
         self,
         limits: ProductionAnalysisResourceLimitsV1,
     ) -> Result<ProductionConditionalPipelineAnalysisV1, ProductionConditionalPipelineErrorV1> {
+        self.check_pipeline_accounted_v1(limits, None)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn check_pipeline_accounted_v1(
+        self,
+        limits: ProductionAnalysisResourceLimitsV1,
+        canonical: Option<&mut CanonicalBudget<'_>>,
+    ) -> Result<ProductionConditionalPipelineAnalysisV1, ProductionConditionalPipelineErrorV1> {
+        let canonical_floor = canonical.as_ref().map(|budget| budget.storage());
+        let canonical = canonical.map(RefCell::new);
         #[cfg(all(test, feature = "internal-proof-staging"))]
         let replay_fault = replay_test_v1::take();
         let retained = self.analysis._analyses.resource_upper_bound();
@@ -360,11 +465,16 @@ impl ProductionConditionalRankedAnalysisV1 {
         let result = catch_unwind(AssertUnwindSafe(
             || -> Result<(), ConditionalPipelineFailureV1> {
                 let phase = Phase::PipelineVerification;
+                if canonical_floor
+                    .is_some_and(|floor| floor < retained.retained_storage_upper_bound())
+                {
+                    return Err(canonical_limit_v1(phase).into());
+                }
                 resources.admit_retained(phase, retained)?;
                 admitted_pending = true;
                 let input = analysis
                     .pending
-                    .prepare_pipeline_subject_v1(&mut resources)
+                    .prepare_pipeline_subject_with_budget_v1(&mut resources, canonical.as_ref())
                     .map_err(ConditionalPipelineFailureV1::Session)?;
                 run_owned_conditional_invocation_v1(
                     &input,
@@ -373,6 +483,7 @@ impl ProductionConditionalRankedAnalysisV1 {
                     Bound::default(),
                     &mut analysis.first,
                     &mut analysis.observations[0],
+                    canonical.as_ref(),
                     #[cfg(all(test, feature = "internal-proof-staging"))]
                     None,
                 )?;
@@ -398,6 +509,7 @@ impl ProductionConditionalRankedAnalysisV1 {
                     comparison,
                     &mut analysis.replay,
                     &mut analysis.observations[1],
+                    canonical.as_ref(),
                     #[cfg(all(test, feature = "internal-proof-staging"))]
                     replay_fault.map(|fault| (fault, first.resource_upper_bound)),
                 )?;
@@ -419,6 +531,12 @@ impl ProductionConditionalRankedAnalysisV1 {
                     _ => {}
                 }
                 // Both reports are alive here. Admission precedes even resource Eq.
+                if let Some(account) = &canonical {
+                    account
+                        .borrow_mut()
+                        .charge_work(comparison.work_upper_bound())
+                        .map_err(|_| canonical_limit_v1(phase))?;
+                }
                 resources.admit_retained(phase, comparison)?;
                 let replay = analysis
                     .replay
@@ -455,6 +573,32 @@ impl ProductionConditionalRankedAnalysisV1 {
         if analysis.caught_panic {
             analysis.pending._session.poisoned = true;
         }
+        let result = match (result, canonical.as_ref(), canonical_floor) {
+            (result, Some(account), Some(floor)) => {
+                let mut budget = account.borrow_mut();
+                let settle = budget
+                    .storage()
+                    .checked_sub(floor)
+                    .and_then(|held| {
+                        analysis
+                            .resources
+                            .retained_storage_upper_bound()
+                            .checked_sub(retained.retained_storage_upper_bound())
+                            .and_then(|needed| held.checked_sub(needed))
+                    })
+                    .ok_or_else(|| canonical_limit_v1(Phase::PipelineVerification))
+                    .and_then(|release| {
+                        budget
+                            .release_storage(release)
+                            .map_err(|_| canonical_limit_v1(Phase::PipelineVerification))
+                    });
+                match settle {
+                    Ok(()) => result,
+                    Err(error) => Ok(Err(error.into())),
+                }
+            }
+            (result, _, _) => result,
+        };
         match result {
             Ok(Ok(())) => Ok(analysis),
             Ok(Err(failure)) => Err(ProductionConditionalPipelineErrorV1 { failure, analysis }),
@@ -494,6 +638,7 @@ fn run_owned_conditional_invocation_v1(
     reserved_after: Bound,
     report: &mut Option<ConditionalPipelineOutcomeV1>,
     observation: &mut Option<ConditionalInvocationHistoryV1>,
+    canonical: Option<&CanonicalAccountV1<'_, '_>>,
     #[cfg(all(test, feature = "internal-proof-staging"))] replay_fault: Option<(
         replay_test_v1::Fault,
         Bound,
@@ -514,7 +659,31 @@ fn run_owned_conditional_invocation_v1(
         ),
         _ => local,
     };
-    let mut receipt = InvocationReceiptV1::new(floor, limits)?;
+    let paid_work = Cell::new(0usize);
+    let held_storage = Cell::new(0usize);
+    let admit = |phase, prefix: Bound| {
+        if let Some(account) = canonical {
+            let mut budget = account.borrow_mut();
+            let work = prefix
+                .work_upper_bound()
+                .checked_sub(paid_work.get())
+                .ok_or_else(|| canonical_limit_v1(phase))?;
+            budget
+                .charge_work(work)
+                .map_err(|_| canonical_limit_v1(phase))?;
+            paid_work.set(prefix.work_upper_bound());
+            let storage = prefix
+                .peak_storage_upper_bound()
+                .checked_sub(held_storage.get())
+                .ok_or_else(|| canonical_limit_v1(phase))?;
+            budget
+                .reserve_storage(storage)
+                .map_err(|_| canonical_limit_v1(phase))?;
+            held_storage.set(prefix.peak_storage_upper_bound());
+        }
+        Ok(())
+    };
+    let mut receipt = InvocationReceiptV1::with_admission(floor, limits, &admit)?;
     let result = catch_unwind(AssertUnwindSafe(|| {
         #[cfg(all(test, feature = "internal-proof-staging"))]
         if matches!(replay_fault, Some((replay_test_v1::Fault::Panic, _))) {

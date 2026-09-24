@@ -329,6 +329,126 @@ fn as_u64(value: usize) -> Result<u64, ProductionTotalOutputStagingErrorV2> {
     u64::try_from(value).map_err(|_| ProductionTotalOutputStagingErrorV2::CounterOverflow)
 }
 
+/// Conditional staging keeps ordinary counters and evidence entirely separate.
+/// The consuming owner has already run and replayed every mandatory graph pass.
+pub(super) fn require_conditional_total_output_staging_v1(
+    graph: &super::ProductionConditionalFinalGraphV1<'_>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<(), super::ProductionConditionalAggregateErrorV1> {
+    use super::{ProductionConditionalAggregateErrorV1 as E, ProductionRankedOperationV1 as Op};
+    let commitments = graph
+        .typed_root_commitments()
+        .ok_or(E::Subject("missing conditional semantic report"))?;
+    if commitments.is_empty() || graph.outputs().is_empty() || graph.retained_staging().is_empty() {
+        return Err(E::Subject(
+            "missing typed roots, output, or source-reference staging",
+        ));
+    }
+    let mut roots = 0usize;
+    let mut effects = 0usize;
+    for block in graph.kernel().blocks() {
+        for operation in block.operations() {
+            budget.charge_work(4)?;
+            match operation {
+                Op::SemanticExpression {
+                    expression,
+                    numerical_contract,
+                    ..
+                } => {
+                    // The shared hash traversal meters every node before the
+                    // existing bounded type/domain validation visits it again.
+                    charge_conditional_expression_v1(expression, 0, budget)?;
+                    expression
+                        .validate()
+                        .map_err(|_| E::Subject("typed expression"))?;
+                    expression
+                        .validate_static_domains()
+                        .map_err(|_| E::Subject("undefined scalar operation"))?;
+                    if !numerical_contract.admits_expression(expression) {
+                        return Err(E::Subject("numerical policy"));
+                    }
+                    let digest = expression
+                        .materialized_transcript_with_budget_v1(*numerical_contract, budget)
+                        .map_err(|_| E::Subject("metered live typed-root commitment"))?;
+                    let words: [u64; 4] = std::array::from_fn(|i| {
+                        u64::from_le_bytes(
+                            digest[i * 8..(i + 1) * 8].try_into().expect("digest word"),
+                        )
+                    });
+                    if commitments.get(roots) != Some(&words) {
+                        return Err(E::Subject("recipe/live typed-root mismatch"));
+                    }
+                    roots += 1;
+                }
+                Op::RequireEffectRefinement { contract, proof } => {
+                    effects += 1;
+                    let mut matched = 0usize;
+                    for receipt in graph.retained_staging() {
+                        budget.charge_work(4)?;
+                        if receipt.binding() == proof.binding() && receipt.receipt_identity() == proof.receipt_identity()
+                            && receipt.boundary() == fe2o3_functional_proof::FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir
+                        { matched += 1; }
+                    }
+                    if matched != 1
+                        || !graph
+                            .outputs()
+                            .iter()
+                            .any(|output| output.write() == contract.gpu_write_site())
+                    {
+                        return Err(E::Subject("exact source-reference receipt/effect join"));
+                    }
+                }
+                Op::RequestEffectRefinement { .. }
+                | Op::RequestAuthenticatedReferenceEquivalent { .. }
+                | Op::RequestNumericalRefinement { .. }
+                | Op::RequestTensorRefinement { .. } => {
+                    return Err(E::Subject("unbound refinement request"));
+                }
+                _ => {}
+            }
+        }
+    }
+    if roots != commitments.len() || effects != graph.outputs().len() {
+        return Err(E::Subject("complete conditional output/typed-root roster"));
+    }
+    Ok(())
+}
+
+fn charge_conditional_expression_v1(
+    expression: &super::ProductionSemanticExpressionV2,
+    depth: usize,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<(), super::ProductionConditionalAggregateErrorV1> {
+    use super::ProductionSemanticExpressionV2 as E;
+    budget.charge_work(128)?;
+    if depth > super::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+        return Err(super::ProductionConditionalAggregateErrorV1::Subject(
+            "expression depth",
+        ));
+    }
+    match expression {
+        E::Unary { operand, .. } | E::Cast { operand, .. } => {
+            charge_conditional_expression_v1(operand, depth + 1, budget)?
+        }
+        E::Binary { lhs, rhs, .. } | E::Compare { lhs, rhs, .. } => {
+            charge_conditional_expression_v1(lhs, depth + 1, budget)?;
+            charge_conditional_expression_v1(rhs, depth + 1, budget)?;
+        }
+        E::Select {
+            condition,
+            when_true,
+            when_false,
+            ..
+        } => {
+            charge_conditional_expression_v1(condition, depth + 1, budget)?;
+            charge_conditional_expression_v1(when_true, depth + 1, budget)?;
+            charge_conditional_expression_v1(when_false, depth + 1, budget)?;
+        }
+        E::Constant { .. } | E::Symbol { .. } | E::Load(_) => {}
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

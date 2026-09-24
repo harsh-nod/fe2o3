@@ -15,14 +15,15 @@ pub(crate) struct InvocationObservationV1 {
     pub(crate) caught_panic: bool,
 }
 
-pub(crate) struct InvocationReceiptV1 {
+pub(crate) struct InvocationReceiptV1<'budget> {
     state: Cell<InvocationObservationV1>,
     floor: Bound,
     limits: Limits,
+    admission: Option<&'budget dyn Fn(Phase, Bound) -> Result<(), Limit>>,
 }
 
 pub(crate) struct InvocationPhaseV1<'r> {
-    receipt: &'r mut InvocationReceiptV1,
+    receipt: &'r InvocationReceiptV1<'r>,
     anchor: Bound,
     replaced: usize,
     owner: Phase,
@@ -70,14 +71,27 @@ pub(crate) enum InvocationReceiptFailureV1 {
     CaughtPanic,
 }
 
-impl InvocationReceiptV1 {
+impl<'budget> InvocationReceiptV1<'budget> {
     pub(crate) fn new(floor: Bound, limits: Limits) -> Result<Self, Limit> {
         limits.require(Phase::PipelineVerification, floor)?;
         Ok(Self {
             state: Cell::new(InvocationObservationV1::default()),
             floor,
             limits,
+            admission: None,
         })
+    }
+
+    /// The hook admits each complete invocation prefix before the producer runs.
+    /// It may debit an enclosing ledger, but cannot replace observed history.
+    pub(crate) fn with_admission(
+        floor: Bound,
+        limits: Limits,
+        admission: &'budget dyn Fn(Phase, Bound) -> Result<(), Limit>,
+    ) -> Result<Self, Limit> {
+        let mut receipt = Self::new(floor, limits)?;
+        receipt.admission = Some(admission);
+        Ok(receipt)
     }
 
     pub(crate) fn snapshot(&self) -> InvocationObservationV1 {
@@ -210,6 +224,9 @@ impl<'r> InvocationPhaseV1<'r> {
                 .checked_then_retain(held, leaf)
                 .and_then(|total| self.receipt.limits.require(leaf, total)),
         )?;
+        if let Some(admission) = self.receipt.admission {
+            self.receipt.watch(admission(leaf, held))?;
+        }
         state.current = held;
         self.receipt.state.set(state);
         self.observed.set(true);
@@ -324,7 +341,7 @@ pub(crate) fn observe_resource_preflight_v1<T>(
     result
 }
 
-struct InvocationPanicGuardV1<'a>(&'a InvocationReceiptV1);
+struct InvocationPanicGuardV1<'a>(&'a InvocationReceiptV1<'a>);
 
 impl Drop for InvocationPanicGuardV1<'_> {
     fn drop(&mut self) {

@@ -697,7 +697,7 @@ mod observed_ownership_coverage_tests {
         (context, function)
     }
 
-    fn run(extents: Vec<u64>) -> (HierarchicalOwnershipReportV1, Receipt) {
+    fn run(extents: Vec<u64>) -> (HierarchicalOwnershipReportV1, Receipt<'static>) {
         let (context, function) = fixture(extents);
         let ordinary = {
             let mut manager = PlironAnalysisManagerV1::new(&function);

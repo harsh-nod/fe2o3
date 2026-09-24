@@ -16,6 +16,12 @@ mod external_anchor_deployment;
 mod external_anchor_provisioning;
 mod external_anchor_service;
 mod external_anchor_transaction;
+mod external_anchor_transaction_v2;
+pub use external_anchor_transaction_v2::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V2,
+    CompilerExecutionExternalAnchorTransactionIdentityV2,
+    CompilerExecutionExternalAnchorTransactionV2, CompilerExecutionNativeJournalErrorV2,
+};
 mod issuer_policy_codec;
 mod issuer_policy_v2;
 mod launch_manifest;

@@ -15,8 +15,11 @@ use dialect_kernel::{
     MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
     RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
     SemanticConstantOp, SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr,
-    SemanticNumericalPolicyAttr, SemanticScalarType, SemanticSymbolOp, SemanticTypedConstantOp,
-    SemanticTypedExpressionRootOp, SemanticTypedScalarV1, SemanticTypedSymbolOp, TrapOp,
+    SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticScalarType, SemanticSymbolOp,
+    SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp, SemanticTypedCastOp,
+    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
+    SemanticTypedScalarV1, SemanticTypedSelectOp, SemanticTypedSymbolOp,
+    SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TrapOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
@@ -430,8 +433,9 @@ impl<'a> LiveReader<'a> {
         self.shape(site, 0, 1, 0, 3, meter)?;
         self.result_is::<SemanticScalarType, _>(site, meter)?;
         if let Some(op) = Operation::get_op::<SemanticTypedSymbolOp>(site.pointer(), self.context) {
-            let symbol = op.symbol(self.context).ok_or(Fault::Coordinate)?;
-            require(symbol < PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2)?;
+            // Reserved load symbols are bound by the constructor/source replay
+            // and mandatory semantic analysis, not treated as coverage proofs.
+            op.symbol(self.context).ok_or(Fault::Coordinate)?;
             return op
                 .scalar(self.context)
                 .ok_or_else(|| Fault::Coordinate.into());
@@ -442,6 +446,31 @@ impl<'a> LiveReader<'a> {
         let bits = op.bits(self.context).ok_or(Fault::Coordinate)?;
         require(scalar.bits() == 64 || bits < (1_u64 << scalar.bits()))?;
         Ok(scalar)
+    }
+
+    fn typed_scalar<M: Meter>(
+        &self,
+        site: OpSite,
+        meter: &mut M,
+    ) -> CheckResult<SemanticTypedScalarV1, M::Error> {
+        meter.charge(8)?;
+        let pointer = site.pointer();
+        let context = self.context;
+        let scalar = if let Some(op) = Operation::get_op::<SemanticTypedBinaryOp>(pointer, context)
+        {
+            op.scalar(context)
+        } else if let Some(op) = Operation::get_op::<SemanticTypedUnaryOp>(pointer, context) {
+            op.scalar(context)
+        } else if Operation::is_op::<SemanticTypedCompareOp>(pointer, context) {
+            SemanticTypedScalarV1::new(dialect_kernel::SemanticScalarKindAttr::Bool, 1)
+        } else if let Some(op) = Operation::get_op::<SemanticTypedSelectOp>(pointer, context) {
+            op.scalar(context)
+        } else if let Some(op) = Operation::get_op::<SemanticTypedCastOp>(pointer, context) {
+            op.target(context)
+        } else {
+            return self.typed_leaf(site, meter);
+        };
+        scalar.ok_or_else(|| Fault::Coordinate.into())
     }
 
     fn decode_operation<M: Meter>(
@@ -474,9 +503,9 @@ impl<'a> LiveReader<'a> {
             require(raw.get_num_operands() != 0)?;
             let view = self.view_info(raw.get_operand(0), meter)?;
             self.shape(site, view.rank + 1, 0, 0, 1, meter)?;
+            let kind = op.kind(context).ok_or(Fault::Coordinate)?;
             require(
-                view.writable
-                    && op.kind(context) == Some(AccessKindAttr::Write)
+                (kind == AccessKindAttr::Read || (view.writable && kind == AccessKindAttr::Write))
                     && op.atomic_ordering(context).is_none()
                     && op.atomic_scope(context).is_none(),
             )?;
@@ -484,7 +513,11 @@ impl<'a> LiveReader<'a> {
                 meter.charge(1)?;
                 self.value_is::<IndexType, _>(raw.get_operand(index), meter)?;
             }
-            return Ok(OperationView::Write);
+            return Ok(if kind == AccessKindAttr::Read {
+                OperationView::Read
+            } else {
+                OperationView::Write
+            });
         } else if let Some(op) = Operation::get_op::<OwnershipContractOp>(pointer, context) {
             self.shape(site, 1, 0, 0, 2, meter)?;
             require(op.coverage(context).is_some() && op.partition(context).is_some())?;
@@ -505,6 +538,60 @@ impl<'a> LiveReader<'a> {
             || Operation::is_op::<SemanticTypedSymbolOp>(pointer, context)
         {
             self.typed_leaf(site, meter)?;
+        } else if let Some(op) = Operation::get_op::<SemanticTypedBinaryOp>(pointer, context) {
+            self.shape(site, 2, 1, 0, 4, meter)?;
+            self.result_is::<SemanticScalarType, _>(site, meter)?;
+            require(
+                op.scalar(context).is_some()
+                    && op.overflow(context) == Some(SemanticOverflowAttr::Wrapping)
+                    && matches!(
+                        op.kind(context),
+                        Some(
+                            SemanticTypedBinaryKindAttr::Add
+                                | SemanticTypedBinaryKindAttr::Subtract
+                                | SemanticTypedBinaryKindAttr::Multiply
+                                | SemanticTypedBinaryKindAttr::BitAnd
+                                | SemanticTypedBinaryKindAttr::BitOr
+                                | SemanticTypedBinaryKindAttr::BitXor
+                        )
+                    ),
+            )?;
+            for index in 0..2 {
+                self.value_is::<SemanticScalarType, _>(raw.get_operand(index), meter)?;
+            }
+        } else if let Some(op) = Operation::get_op::<SemanticTypedUnaryOp>(pointer, context) {
+            self.shape(site, 1, 1, 0, 3, meter)?;
+            self.result_is::<SemanticScalarType, _>(site, meter)?;
+            self.value_is::<SemanticScalarType, _>(raw.get_operand(0), meter)?;
+            let scalar = op.scalar(context).ok_or(Fault::Coordinate)?;
+            require(
+                op.kind(context) == Some(SemanticTypedUnaryKindAttr::Not)
+                    || (op.kind(context) == Some(SemanticTypedUnaryKindAttr::Negate)
+                        && scalar.is_float()),
+            )?;
+        } else if let Some(op) = Operation::get_op::<SemanticTypedCompareOp>(pointer, context) {
+            self.shape(site, 2, 1, 0, 3, meter)?;
+            self.result_is::<SemanticScalarType, _>(site, meter)?;
+            require(op.kind(context).is_some() && op.operand_scalar(context).is_some())?;
+            for index in 0..2 {
+                self.value_is::<SemanticScalarType, _>(raw.get_operand(index), meter)?;
+            }
+        } else if let Some(op) = Operation::get_op::<SemanticTypedSelectOp>(pointer, context) {
+            self.shape(site, 3, 1, 0, 2, meter)?;
+            self.result_is::<SemanticScalarType, _>(site, meter)?;
+            require(op.scalar(context).is_some())?;
+            for index in 0..3 {
+                self.value_is::<SemanticScalarType, _>(raw.get_operand(index), meter)?;
+            }
+        } else if let Some(op) = Operation::get_op::<SemanticTypedCastOp>(pointer, context) {
+            self.shape(site, 1, 1, 0, 5, meter)?;
+            self.result_is::<SemanticScalarType, _>(site, meter)?;
+            self.value_is::<SemanticScalarType, _>(raw.get_operand(0), meter)?;
+            require(
+                op.kind(context).is_some()
+                    && op.source(context).is_some()
+                    && op.target(context).is_some(),
+            )?;
         } else if let Some(op) =
             Operation::get_op::<SemanticTypedExpressionRootOp>(pointer, context)
         {
@@ -516,7 +603,7 @@ impl<'a> LiveReader<'a> {
             let leaf_site = self.find_operation(definition, meter)?;
             let leaf_raw = self.raw(leaf_site, meter)?;
             require(leaf_raw.get_num_results() == 1 && leaf_raw.get_result(0) == operand)?;
-            let scalar = self.typed_leaf(leaf_site, meter)?;
+            let scalar = self.typed_scalar(leaf_site, meter)?;
             let policy = if scalar.is_float() {
                 SemanticNumericalPolicyAttr::ExactIeeeNearestTiesToEvenPreserveBits
             } else {

@@ -96,24 +96,18 @@ impl CompilerExecutionExternalAnchorTransactionV1 {
             .verify(&policy, &request, prior_rollback_anchor)?;
         let current_rollback_anchor = receipt.next_rollback_anchor();
 
-        let mut canonical_bytes = [0_u8; COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V1];
-        let mut offset = encode_header(&mut canonical_bytes);
-        put(&mut canonical_bytes, &mut offset, policy.canonical_bytes());
-        put(&mut canonical_bytes, &mut offset, request.canonical_bytes());
-        put(
-            &mut canonical_bytes,
-            &mut offset,
-            publication.canonical_bytes(),
+        let (canonical_bytes, identity) = encode_transaction(
+            TRANSACTION_MAGIC,
+            VERSION_V1,
+            TRANSACTION_IDENTITY_DOMAIN,
+            [
+                policy.canonical_bytes(),
+                request.canonical_bytes(),
+                publication.canonical_bytes(),
+            ],
+            (sequence, prior_rollback_anchor, current_rollback_anchor),
         );
-        put(&mut canonical_bytes, &mut offset, &sequence.to_le_bytes());
-        put(&mut canonical_bytes, &mut offset, &prior_rollback_anchor);
-        put(&mut canonical_bytes, &mut offset, &current_rollback_anchor);
-        debug_assert_eq!(offset, TRANSACTION_PREIMAGE_BYTES);
-        let identity = CompilerExecutionExternalAnchorTransactionIdentityV1(transaction_identity(
-            &canonical_bytes[..offset],
-        ));
-        put(&mut canonical_bytes, &mut offset, identity.as_bytes());
-        debug_assert_eq!(offset, canonical_bytes.len());
+        let identity = CompilerExecutionExternalAnchorTransactionIdentityV1(identity);
 
         Ok(Self {
             policy,
@@ -301,20 +295,6 @@ impl From<CompilerExecutionReceiptPublicationErrorV1>
     }
 }
 
-fn encode_header(output: &mut [u8]) -> usize {
-    let mut offset = 0;
-    put(output, &mut offset, &TRANSACTION_MAGIC);
-    put(output, &mut offset, &VERSION_V1.to_le_bytes());
-    put(output, &mut offset, &0_u16.to_le_bytes());
-    put(
-        output,
-        &mut offset,
-        &(COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V1 as u64).to_le_bytes(),
-    );
-    put(output, &mut offset, &0_u32.to_le_bytes());
-    offset
-}
-
 fn decode_header(
     reader: &mut Reader<'_>,
 ) -> Result<(), CompilerExecutionExternalAnchorTransactionErrorV1> {
@@ -361,6 +341,33 @@ fn transaction_identity(preimage: &[u8]) -> [u8; SHA256_BYTES] {
     digest.update(TRANSACTION_IDENTITY_DOMAIN);
     digest.update(preimage);
     digest.finalize().into()
+}
+
+/// Policy-neutral byte layout shared by independently admitted protocol families.
+pub(super) fn encode_transaction<const N: usize>(
+    magic: [u8; 8],
+    version: u16,
+    domain: &[u8],
+    parts: [&[u8]; 3],
+    position: (u64, [u8; 32], [u8; 32]),
+) -> ([u8; N], [u8; 32]) {
+    let mut bytes = [0; N];
+    let mut offset = crate::service::encode_versioned_header(&mut bytes, magic, version, 0, N);
+    for part in parts {
+        put(&mut bytes, &mut offset, part);
+    }
+    put(&mut bytes, &mut offset, &position.0.to_le_bytes());
+    put(&mut bytes, &mut offset, &position.1);
+    put(&mut bytes, &mut offset, &position.2);
+    // Both callers supply their fixed policy/request/publication arrays; N is
+    // the matching header + three leaf widths + position + identity constant.
+    debug_assert_eq!(offset, N - 32);
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(&bytes[..offset]);
+    let identity: [u8; 32] = digest.finalize().into();
+    put(&mut bytes, &mut offset, &identity);
+    (bytes, identity)
 }
 
 fn put(output: &mut [u8], offset: &mut usize, bytes: &[u8]) {

@@ -26,6 +26,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const MAX_TEMP_ATTEMPTS: u64 = 128;
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
+#[path = "retained_durable_directory_native.rs"]
+mod native;
+pub use native::{MeteredRetainedDurableDirectoryV2, RetainedDurableDirectoryErrorV2};
+
+/// Only byte transfer differs; both callers use the same durable namespace transitions.
+#[derive(Clone, Copy)]
+enum RecordIo {
+    Legacy,
+    Native,
+}
+
 /// Whether a deterministic fault occurs immediately before or after one durable operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetainedDurableFaultTimingV1 {
@@ -128,6 +139,7 @@ impl RetainedDurableDirectoryHooksV1 for NoRetainedDurableDirectoryHooksV1 {}
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RetainedDurableDirectoryErrorV1 {
+    Resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     Filesystem(EmitError),
     UnsafeEntry { entry: String, reason: String },
     InvalidName { entry: String },
@@ -141,6 +153,7 @@ pub enum RetainedDurableDirectoryErrorV1 {
 impl fmt::Display for RetainedDurableDirectoryErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Resource(error) => error.fmt(formatter),
             Self::Filesystem(error) => write!(formatter, "durable directory I/O failed: {error}"),
             Self::UnsafeEntry { entry, reason } => {
                 write!(formatter, "unsafe durable entry {entry}: {reason}")
@@ -174,6 +187,7 @@ impl fmt::Display for RetainedDurableDirectoryErrorV1 {
 impl std::error::Error for RetainedDurableDirectoryErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Resource(error) => Some(error),
             Self::Filesystem(error) => Some(error),
             _ => None,
         }
@@ -325,6 +339,16 @@ impl RetainedDurableDirectoryV1 {
         maximum_bytes: usize,
         mode: ManagedMode,
     ) -> Result<Option<Vec<u8>>, RetainedDurableDirectoryErrorV1> {
+        self.read_managed_using(entry, maximum_bytes, mode, RecordIo::Legacy)
+    }
+
+    fn read_managed_using(
+        &self,
+        entry: &str,
+        maximum_bytes: usize,
+        mode: ManagedMode,
+        io: RecordIo,
+    ) -> Result<Option<Vec<u8>>, RetainedDurableDirectoryErrorV1> {
         self.verify()?;
         validate_name(entry)?;
         let fd = match openat(
@@ -337,7 +361,37 @@ impl RetainedDurableDirectoryV1 {
             Err(error) if error == rustix::io::Errno::NOENT => return Ok(None),
             Err(error) => return Err(io::Error::from(error).into()),
         };
-        validate_managed_file(&fd, entry, self.service_uid, mode)?;
+        let before = validate_managed_file(&fd, entry, self.service_uid, mode)?;
+        if matches!(io, RecordIo::Native) {
+            let length = usize::try_from(before.st_size).map_err(|_| {
+                Self::unsafe_entry(entry, "negative or unrepresentable record length")
+            })?;
+            if length > maximum_bytes {
+                return Err(RetainedDurableDirectoryErrorV1::Size {
+                    actual: length,
+                    maximum: maximum_bytes,
+                });
+            }
+            let mut bytes = Vec::new();
+            bytes.try_reserve_exact(length).map_err(|_| {
+                RetainedDurableDirectoryErrorV1::Resource(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Allocation,
+                )
+            })?;
+            bytes.resize(length, 0);
+            let count = rustix::io::pread(&fd, &mut bytes, 0).map_err(io::Error::from)?;
+            let mut eof = [0; 1];
+            let tail = rustix::io::pread(&fd, &mut eof, length as u64).map_err(io::Error::from)?;
+            if count != length || tail != 0 {
+                return Err(Self::unsafe_entry(entry, "short or changing native record"));
+            }
+            let after = validate_managed_file(&fd, entry, self.service_uid, mode)?;
+            let named = statat(&self.output.fd, entry, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(io::Error::from)?;
+            require_unchanged_managed_name(&before, &after, &named, entry)?;
+            self.verify()?;
+            return Ok(Some(bytes));
+        }
         let mut bytes = Vec::new();
         fs::File::from(fd)
             .take((maximum_bytes.saturating_add(1)) as u64)
@@ -360,6 +414,25 @@ impl RetainedDurableDirectoryV1 {
         maximum_bytes: usize,
         hooks: &mut impl RetainedDurableDirectoryHooksV1,
     ) -> Result<(), RetainedDurableDirectoryErrorV1> {
+        self.commit_record_using(
+            canonical,
+            redo,
+            bytes,
+            maximum_bytes,
+            hooks,
+            RecordIo::Legacy,
+        )
+    }
+
+    fn commit_record_using(
+        &self,
+        canonical: &str,
+        redo: &str,
+        bytes: &[u8],
+        maximum_bytes: usize,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+        io: RecordIo,
+    ) -> Result<(), RetainedDurableDirectoryErrorV1> {
         self.verify()?;
         validate_name(canonical)?;
         validate_name(redo)?;
@@ -368,15 +441,17 @@ impl RetainedDurableDirectoryV1 {
                 entry: canonical.to_owned(),
             });
         }
-        let expected_canonical = self.read_private(canonical, maximum_bytes)?;
-        self.stage_record_redo(redo, bytes, maximum_bytes, hooks)?;
-        self.promote_validated_redo(
+        let expected_canonical =
+            self.read_managed_using(canonical, maximum_bytes, ManagedMode::Private, io)?;
+        self.stage_record_redo_using(redo, bytes, maximum_bytes, hooks, io)?;
+        self.promote_validated_redo_using(
             canonical,
             redo,
             expected_canonical.as_deref(),
             bytes,
             maximum_bytes,
             hooks,
+            io,
         )
     }
 
@@ -391,6 +466,17 @@ impl RetainedDurableDirectoryV1 {
         bytes: &[u8],
         maximum_bytes: usize,
         hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<(), RetainedDurableDirectoryErrorV1> {
+        self.stage_record_redo_using(redo, bytes, maximum_bytes, hooks, RecordIo::Legacy)
+    }
+
+    fn stage_record_redo_using(
+        &self,
+        redo: &str,
+        bytes: &[u8],
+        maximum_bytes: usize,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+        io: RecordIo,
     ) -> Result<(), RetainedDurableDirectoryErrorV1> {
         self.verify()?;
         validate_name(redo)?;
@@ -408,7 +494,15 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableRecordBoundaryV1::WriteTemp,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        temporary.write_all(bytes)?;
+        match io {
+            RecordIo::Legacy => temporary.write_all(bytes)?,
+            RecordIo::Native => {
+                let written = rustix::io::pwrite(&temporary, bytes, 0).map_err(io::Error::from)?;
+                if written != bytes.len() {
+                    return Err(Self::unsafe_entry(redo, "short native journal write"));
+                }
+            }
+        }
         hit_record(
             hooks,
             RetainedDurableRecordBoundaryV1::WriteTemp,
@@ -419,7 +513,10 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableRecordBoundaryV1::SyncTemp,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        temporary.sync_all()?;
+        match io {
+            RecordIo::Legacy => temporary.sync_all()?,
+            RecordIo::Native => fsync(&temporary).map_err(io::Error::from)?,
+        }
         hit_record(
             hooks,
             RetainedDurableRecordBoundaryV1::SyncTemp,
@@ -468,8 +565,31 @@ impl RetainedDurableDirectoryV1 {
         maximum_bytes: usize,
         hooks: &mut impl RetainedDurableDirectoryHooksV1,
     ) -> Result<(), RetainedDurableDirectoryErrorV1> {
-        let canonical_now = self.read_private(canonical, maximum_bytes)?;
-        let redo_now = self.read_private(redo, maximum_bytes)?;
+        self.promote_validated_redo_using(
+            canonical,
+            redo,
+            expected_canonical,
+            expected_redo,
+            maximum_bytes,
+            hooks,
+            RecordIo::Legacy,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn promote_validated_redo_using(
+        &self,
+        canonical: &str,
+        redo: &str,
+        expected_canonical: Option<&[u8]>,
+        expected_redo: &[u8],
+        maximum_bytes: usize,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+        io: RecordIo,
+    ) -> Result<(), RetainedDurableDirectoryErrorV1> {
+        let canonical_now =
+            self.read_managed_using(canonical, maximum_bytes, ManagedMode::Private, io)?;
+        let redo_now = self.read_managed_using(redo, maximum_bytes, ManagedMode::Private, io)?;
         if canonical_now.as_deref() != expected_canonical
             || redo_now.as_deref() != Some(expected_redo)
         {
@@ -519,6 +639,25 @@ impl RetainedDurableDirectoryV1 {
         maximum_bytes: usize,
         hooks: &mut impl RetainedDurableDirectoryHooksV1,
     ) -> Result<Vec<u8>, RetainedDurableDirectoryErrorV1> {
+        self.establish_recovered_record_durability_using(
+            canonical,
+            redo,
+            expected_canonical,
+            maximum_bytes,
+            hooks,
+            RecordIo::Legacy,
+        )
+    }
+
+    fn establish_recovered_record_durability_using(
+        &self,
+        canonical: &str,
+        redo: &str,
+        expected_canonical: &[u8],
+        maximum_bytes: usize,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+        io: RecordIo,
+    ) -> Result<Vec<u8>, RetainedDurableDirectoryErrorV1> {
         self.verify()?;
         validate_name(canonical)?;
         validate_name(redo)?;
@@ -533,8 +672,8 @@ impl RetainedDurableDirectoryV1 {
                 maximum: maximum_bytes,
             });
         }
-        require_exact_private(self, canonical, expected_canonical, maximum_bytes)?;
-        require_missing_private(self, redo, maximum_bytes)?;
+        require_exact_private_using(self, canonical, expected_canonical, maximum_bytes, io)?;
+        require_missing_private_using(self, redo, maximum_bytes, io)?;
         hit_recovery_mutation(
             hooks,
             RetainedDurableRecoveryMutationBoundaryV1::RenameCanonicalToRecovery,
@@ -565,15 +704,16 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableFaultTimingV1::After,
         )?;
         self.verify()?;
-        require_missing_private(self, canonical, maximum_bytes)?;
-        require_exact_private(self, redo, expected_canonical, maximum_bytes)?;
-        self.promote_validated_redo(
+        require_missing_private_using(self, canonical, maximum_bytes, io)?;
+        require_exact_private_using(self, redo, expected_canonical, maximum_bytes, io)?;
+        self.promote_validated_redo_using(
             canonical,
             redo,
             None,
             expected_canonical,
             maximum_bytes,
             hooks,
+            io,
         )?;
         hit_recovery(
             hooks,
@@ -587,8 +727,8 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableFaultTimingV1::After,
         )?;
         let canonical_after =
-            require_exact_private(self, canonical, expected_canonical, maximum_bytes)?;
-        require_missing_private(self, redo, maximum_bytes)?;
+            require_exact_private_using(self, canonical, expected_canonical, maximum_bytes, io)?;
+        require_missing_private_using(self, redo, maximum_bytes, io)?;
         self.verify()?;
         Ok(canonical_after)
     }
@@ -1225,17 +1365,18 @@ fn require_absent(directory: &OwnedFd, entry: &str) -> Result<(), RetainedDurabl
     }
 }
 
-fn require_exact_private(
+fn require_exact_private_using(
     store: &RetainedDurableDirectoryV1,
     entry: &str,
     expected: &[u8],
     maximum_bytes: usize,
+    io: RecordIo,
 ) -> Result<Vec<u8>, RetainedDurableDirectoryErrorV1> {
-    let actual = store.read_private(entry, maximum_bytes)?.ok_or_else(|| {
-        RetainedDurableDirectoryErrorV1::MissingEntry {
+    let actual = store
+        .read_managed_using(entry, maximum_bytes, ManagedMode::Private, io)?
+        .ok_or_else(|| RetainedDurableDirectoryErrorV1::MissingEntry {
             entry: entry.to_owned(),
-        }
-    })?;
+        })?;
     if actual != expected {
         return Err(RetainedDurableDirectoryErrorV1::ContentMismatch {
             entry: entry.to_owned(),
@@ -1244,12 +1385,16 @@ fn require_exact_private(
     Ok(actual)
 }
 
-fn require_missing_private(
+fn require_missing_private_using(
     store: &RetainedDurableDirectoryV1,
     entry: &str,
     maximum_bytes: usize,
+    io: RecordIo,
 ) -> Result<(), RetainedDurableDirectoryErrorV1> {
-    if store.read_private(entry, maximum_bytes)?.is_some() {
+    if store
+        .read_managed_using(entry, maximum_bytes, ManagedMode::Private, io)?
+        .is_some()
+    {
         return Err(RetainedDurableDirectoryErrorV1::ExistingEntry {
             entry: entry.to_owned(),
         });
@@ -1328,23 +1473,7 @@ mod tests {
         }
     }
 
-    struct AmbiguousCommitHook;
-
-    impl RetainedDurableDirectoryHooksV1 for AmbiguousCommitHook {
-        fn record(
-            &mut self,
-            boundary: RetainedDurableRecordBoundaryV1,
-            timing: RetainedDurableFaultTimingV1,
-        ) -> io::Result<()> {
-            if boundary == RetainedDurableRecordBoundaryV1::SyncCanonicalName
-                && timing == RetainedDurableFaultTimingV1::Before
-            {
-                Err(io::Error::other("ambiguous canonical rename"))
-            } else {
-                Ok(())
-            }
-        }
-    }
+    include!("retained_durable_directory_native_tests.rs");
 
     #[derive(Default)]
     struct ArtifactRecoveryHook {
