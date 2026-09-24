@@ -950,88 +950,29 @@ fn validate_protected_v3_lineage(
         ));
     }
 
-    if nested.target().to_string() != source.plan().target().to_string()
-        || map_compiler_code_object_version(nested.code_object_version())
-            != decode_link_options(source.plan().options())
-                .map_err(|_| WorkerV3HsacoInspectionError::LinkPolicy)?
-                .0
-    {
-        return Err(WorkerV3HsacoInspectionError::LineageMismatch(
-            "strict V3 compiler envelope target/code-object version",
-        ));
+    use crate::worker_hsaco_lineage::{WorkerArtifactExchange, WorkerArtifactLineage};
+    WorkerArtifactLineage {
+        module: nested,
+        plan: source.plan(),
+        measurement: source.worker_measurement(),
+        exchanges: [
+            WorkerArtifactExchange {
+                request: source.bootstrap_request_bytes(),
+                response: source.bootstrap().response(),
+                executable: source.bootstrap().worker_executable(),
+            },
+            WorkerArtifactExchange {
+                request: source.exact_replay_request_bytes(),
+                response: source.exact_replay().response(),
+                executable: source.exact_replay().worker_executable(),
+            },
+        ],
+        output: source.output_bytes(),
     }
-    let gfx942_ffi = validate_strict_v3_gfx942_device_ffi(nested)?;
-    let gfx950_ffi = validate_strict_v3_gfx950_device_ffi(nested)?;
-    let directional = nested.envelope().directional_symbols();
-    if !nested
-        .symbol_manifest()
-        .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
-        .eq(directional.imports())
-    {
-        return Err(WorkerV3HsacoInspectionError::CompilerEnvelopeImportRoleMismatch);
-    }
-    if !nested
-        .symbol_manifest()
-        .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
-        .eq(directional.exports())
-    {
-        return Err(WorkerV3HsacoInspectionError::CompilerEnvelopeExportRoleMismatch);
-    }
-
-    let expected_envelope = nested.envelope().identity();
-    let bootstrap = source.bootstrap();
-    let replay = source.exact_replay();
-    validate_strict_v3_gfx942_provider_exchanges(source, gfx942_ffi, bootstrap, replay)?;
-    validate_strict_v3_gfx950_provider_exchanges(source, gfx950_ffi, bootstrap, replay)?;
-    for execution in [bootstrap, replay] {
-        let response = execution.response();
-        if source.worker_measurement().executable() != execution.worker_executable()
-            || source.worker_measurement().worker_build_identity()
-                != response.worker_build_identity()
-        {
-            return Err(WorkerV3HsacoInspectionError::LineageMismatch(
-                "strict V3 worker measurement",
-            ));
-        }
-        if response.compiler_envelope_identity().as_bytes() != expected_envelope.as_bytes() {
-            return Err(WorkerV3HsacoInspectionError::LineageMismatch(
-                "strict V3 compiler envelope identity",
-            ));
-        }
-        let output = response
-            .output()
-            .ok_or(WorkerV3HsacoInspectionError::LineageMismatch(
-                "missing strict V3 linked output",
-            ))?;
-        if output.identity() != source.output_identity()
-            || output.request_identity() != response.request_identity()
-            || output.compiler_envelope_identity() != response.compiler_envelope_identity()
-        {
-            return Err(WorkerV3HsacoInspectionError::LineageMismatch(
-                "strict V3 sealed request/response/output identity",
-            ));
-        }
-    }
-
-    let bootstrap_output = bootstrap
-        .response()
-        .output()
-        .expect("strict V3 bootstrap output checked above");
-    let replay_output = replay
-        .response()
-        .output()
-        .expect("strict V3 replay output checked above");
-    if bootstrap_output.bytes() != replay_output.bytes()
-        || replay_output.bytes() != source.output_bytes()
-    {
-        return Err(WorkerV3HsacoInspectionError::LineageMismatch(
-            "strict V3 reproducible output bytes",
-        ));
-    }
-    Ok(())
+    .validate()
 }
 
-fn validate_strict_v3_gfx942_device_ffi(
+pub(crate) fn validate_strict_v3_gfx942_device_ffi(
     nested: &CompilerModuleHandoffV2,
 ) -> Result<ProductionGfx942CompilerFfiEnvelopeKindV1, WorkerV3HsacoInspectionError> {
     if nested.target().to_string() != PRODUCTION_GFX942_TARGET {
@@ -1089,41 +1030,7 @@ const GFX942_OCML_PROVIDER_FILES_V1: [(&str, &str); 4] = [
     ),
 ];
 
-fn validate_strict_v3_gfx942_provider_exchanges(
-    source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
-    kind: ProductionGfx942CompilerFfiEnvelopeKindV1,
-    bootstrap: &crate::InertProtectedCompilerHandoffExecutionV3,
-    replay: &crate::InertProtectedCompilerHandoffExecutionV3,
-) -> Result<(), WorkerV3HsacoInspectionError> {
-    if source.handoff().module_handoff().target().to_string() != PRODUCTION_GFX942_TARGET {
-        return Ok(());
-    }
-    let bootstrap_exchange = InertDecodedWorkerExchangeV2::decode(
-        source.bootstrap_request_bytes(),
-        bootstrap.response().canonical_bytes(),
-    )
-    .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch)?;
-    let replay_exchange = InertDecodedWorkerExchangeV2::decode(
-        source.exact_replay_request_bytes(),
-        replay.response().canonical_bytes(),
-    )
-    .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch)?;
-
-    for exchange in [&bootstrap_exchange, &replay_exchange] {
-        validate_strict_v3_gfx942_provider_exchange(kind, exchange)?;
-    }
-    if matches!(
-        kind,
-        ProductionGfx942CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. }
-    ) && bootstrap_exchange.response().device_library_provider()
-        != replay_exchange.response().device_library_provider()
-    {
-        return Err(WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch);
-    }
-    Ok(())
-}
-
-fn validate_strict_v3_gfx942_provider_exchange(
+pub(crate) fn validate_strict_v3_gfx942_provider_exchange(
     kind: ProductionGfx942CompilerFfiEnvelopeKindV1,
     exchange: &InertDecodedWorkerExchangeV2,
 ) -> Result<(), WorkerV3HsacoInspectionError> {
@@ -1187,7 +1094,7 @@ fn validate_gfx942_ocml_provider_evidence(
     Ok(())
 }
 
-fn validate_strict_v3_gfx950_device_ffi(
+pub(crate) fn validate_strict_v3_gfx950_device_ffi(
     nested: &CompilerModuleHandoffV2,
 ) -> Result<ProductionGfx950CompilerFfiEnvelopeKindV1, WorkerV3HsacoInspectionError> {
     if nested.target().to_string() != PRODUCTION_GFX950_TARGET {
@@ -1260,50 +1167,7 @@ const GFX950_OCML_PROVIDER_FILES_V1: [(&str, &str); 9] = [
     ),
 ];
 
-fn validate_strict_v3_gfx950_provider_exchanges(
-    source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
-    kind: ProductionGfx950CompilerFfiEnvelopeKindV1,
-    bootstrap: &crate::InertProtectedCompilerHandoffExecutionV3,
-    replay: &crate::InertProtectedCompilerHandoffExecutionV3,
-) -> Result<(), WorkerV3HsacoInspectionError> {
-    if source.handoff().module_handoff().target().to_string() != PRODUCTION_GFX950_TARGET {
-        return Ok(());
-    }
-    let bootstrap_exchange = InertDecodedWorkerExchangeV2::decode(
-        source.bootstrap_request_bytes(),
-        bootstrap.response().canonical_bytes(),
-    )
-    .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)?;
-    let replay_exchange = InertDecodedWorkerExchangeV2::decode(
-        source.exact_replay_request_bytes(),
-        replay.response().canonical_bytes(),
-    )
-    .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)?;
-
-    match kind {
-        ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi => {
-            for exchange in [&bootstrap_exchange, &replay_exchange] {
-                validate_strict_v3_gfx950_provider_exchange(kind, exchange)?;
-            }
-            Ok(())
-        }
-        ProductionGfx950CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. } => {
-            for exchange in [&bootstrap_exchange, &replay_exchange] {
-                validate_strict_v3_gfx950_provider_exchange(kind, exchange)?;
-            }
-            if bootstrap_exchange.response().device_library_provider()
-                != replay_exchange.response().device_library_provider()
-            {
-                return Err(
-                    WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
-                );
-            }
-            Ok(())
-        }
-    }
-}
-
-fn validate_strict_v3_gfx950_provider_exchange(
+pub(crate) fn validate_strict_v3_gfx950_provider_exchange(
     kind: ProductionGfx950CompilerFfiEnvelopeKindV1,
     exchange: &InertDecodedWorkerExchangeV2,
 ) -> Result<(), WorkerV3HsacoInspectionError> {
@@ -1860,7 +1724,9 @@ const fn map_code_object_version(version: InspectedCodeObjectVersion) -> CodeObj
     }
 }
 
-const fn map_compiler_code_object_version(version: CompilerCodeObjectVersion) -> CodeObjectVersion {
+pub(crate) const fn map_compiler_code_object_version(
+    version: CompilerCodeObjectVersion,
+) -> CodeObjectVersion {
     match version {
         CompilerCodeObjectVersion::V4 => CodeObjectVersion::V4,
         CompilerCodeObjectVersion::V5 => CodeObjectVersion::V5,

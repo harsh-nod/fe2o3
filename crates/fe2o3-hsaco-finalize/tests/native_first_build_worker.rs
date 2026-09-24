@@ -57,15 +57,15 @@ use rustix::fs::{Mode, OFlags, open, openat};
 
 const FIXTURE_ENV: &str = "FE2O3_NATIVE_WORKER_FIXTURE_DIR";
 const MAX_FIXTURE_BYTES: usize = 16 * 1024 * 1024;
-const WORK_LIMIT: usize = 4_000_000_000;
-const WORKER_ID: &str = "fixture-worker-v3";
-const LLVM_ID: &str = "fixture-llvm-v1";
+pub(crate) const WORK_LIMIT: usize = 4_000_000_000;
+pub(crate) const WORKER_ID: &str = "fixture-worker-v3";
+pub(crate) const LLVM_ID: &str = "fixture-llvm-v1";
 const OUTPUT: &[u8] = b"fixture-output";
 // The existing fixture executable recognizes this marker anywhere in its input.
 // It is deliberately in an inert provider, never patched into the signed module.
 const PROVIDER: &[u8] = b"workflow_kernel native V4 CPU structural provider";
 const OUTPUT_BOUND: u64 = 4096;
-const CASES: [(bool, Profile, &str); 4] = [
+pub(crate) const CASES: [(bool, Profile, &str); 4] = [
     (false, Profile::Gfx942, "direct-gfx942.v4"),
     (false, Profile::Gfx950, "direct-gfx950.v4"),
     (true, Profile::Gfx942, "erased-gfx942.v4"),
@@ -73,9 +73,9 @@ const CASES: [(bool, Profile, &str); 4] = [
 ];
 type Token = CompilerModuleHandoffConsumptionTokenV4<Recovered>;
 
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(pub(crate) PathBuf);
 impl Scratch {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = env::temp_dir().join(format!(
@@ -93,9 +93,9 @@ impl Drop for Scratch {
     }
 }
 
-struct Fixtures(File);
+pub(crate) struct Fixtures(File);
 impl Fixtures {
-    fn open() -> Self {
+    pub(crate) fn open() -> Self {
         let path = PathBuf::from(env::var_os(FIXTURE_ENV).unwrap_or_else(|| {
             panic!(
                 "{FIXTURE_ENV} is required; run export_native_first_build_worker_v4_fixtures first"
@@ -156,15 +156,20 @@ impl Fixtures {
     }
 }
 
-struct Ready {
+pub(crate) struct Ready {
     lease: CompilerModuleHandoffCurrentnessLeaseV4,
-    receipt: CompilerModuleHandoffReceiptV4,
+    pub(crate) receipt: CompilerModuleHandoffReceiptV4,
     producer: ProducerIdentity,
     attempt: BuildAttempt,
     directory: Scratch,
 }
 impl Ready {
-    fn publish(fixtures: &Fixtures, name: &str, seed: u8, budget: &mut Budget<'_>) -> Self {
+    pub(crate) fn publish(
+        fixtures: &Fixtures,
+        name: &str,
+        seed: u8,
+        budget: &mut Budget<'_>,
+    ) -> Self {
         let directory = Scratch::new();
         let producer = ProducerIdentity::from_codegen(
             "native_worker_structural",
@@ -222,7 +227,7 @@ impl Ready {
         }
     }
 
-    fn recover(&self, budget: &mut Budget<'_>) -> Token {
+    pub(crate) fn recover(&self, budget: &mut Budget<'_>) -> Token {
         let floor = budget.storage();
         let ledger = budget.work_ledger_identity_v1();
         let (token, storage) = self.lease.acquire_current_token(budget).unwrap();
@@ -247,7 +252,7 @@ impl Ready {
         token
     }
 
-    fn consume(
+    pub(crate) fn consume(
         &self,
         token: Token,
         budget: &mut Budget<'_>,
@@ -329,19 +334,19 @@ fn prepare(
     )
 }
 
-fn closure(owner: &Recovered) -> CompilerClosureV2 {
+pub(crate) fn closure(owner: &Recovered) -> CompilerClosureV2 {
     *owner.handoff().capsule().base().compiler_closure()
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct Backing {
+pub(crate) struct Backing {
     handoff: usize,
     llvm: usize,
     final_f: usize,
     source_catalog: usize,
     signed_roots: [usize; 2],
 }
-fn backing(owner: &Recovered, erased: bool) -> Backing {
+pub(crate) fn backing(owner: &Recovered, erased: bool) -> Backing {
     let (source_catalog, signed_roots) = match owner.recovered().source_proof() {
         Original::Direct(proof) => {
             assert!(!erased);

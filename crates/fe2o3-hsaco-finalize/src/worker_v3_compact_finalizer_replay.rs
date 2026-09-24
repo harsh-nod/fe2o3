@@ -87,14 +87,41 @@ struct CompactResponseMetadataRangesV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct DecodedCompactReplayTailV1 {
-    worker: WorkerMeasurementV1,
-    execution_limits: WorkerExecutionLimitsV1,
-    bootstrap_output_bound: u64,
-    external_providers: Vec<WorkerV3ProviderReplayReferenceV1>,
-    link_options: Vec<LinkOptionV1>,
+pub(crate) struct DecodedCompactReplayTailV1 {
+    pub(crate) worker: WorkerMeasurementV1,
+    pub(crate) execution_limits: WorkerExecutionLimitsV1,
+    pub(crate) bootstrap_output_bound: u64,
+    pub(crate) external_providers: Vec<WorkerV3ProviderReplayReferenceV1>,
+    pub(crate) link_options: Vec<LinkOptionV1>,
     bootstrap_metadata: CompactResponseMetadataRangesV1,
     replay_metadata: CompactResponseMetadataRangesV1,
+}
+
+impl DecodedCompactReplayTailV1 {
+    pub(crate) fn replay_view<'a>(
+        &'a self,
+        bytes: &'a [u8],
+    ) -> ProtectedWorkerV3CompactFinalizerReplayViewV2<'a> {
+        let metadata = |ranges: &CompactResponseMetadataRangesV1| {
+            WorkerResponseReplayMetadataV1::from_bodies(
+                &bytes[ranges.diagnostics.clone()],
+                ranges.provider_evidence.as_ref().map(|r| &bytes[r.clone()]),
+                ranges
+                    .derivation_evidence
+                    .as_ref()
+                    .map(|r| &bytes[r.clone()]),
+            )
+        };
+        ProtectedWorkerV3CompactFinalizerReplayViewV2 {
+            worker: &self.worker,
+            execution_limits: self.execution_limits,
+            bootstrap_output_bound: self.bootstrap_output_bound,
+            external_providers: &self.external_providers,
+            link_options: &self.link_options,
+            bootstrap_metadata: metadata(&self.bootstrap_metadata),
+            replay_metadata: metadata(&self.replay_metadata),
+        }
+    }
 }
 
 pub(crate) struct ProtectedWorkerV3CompactFinalizerReplayViewV2<'replay> {
@@ -241,7 +268,7 @@ impl ProtectedWorkerV3CompactFinalizerReplayV1 {
     }
 }
 
-fn decode_compact_replay_tail(
+pub(crate) fn decode_compact_replay_tail(
     reader: &mut CompactReplayReaderV1<'_>,
     has_derivation_metadata: bool,
 ) -> Result<DecodedCompactReplayTailV1, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
@@ -1202,9 +1229,38 @@ fn encode_compact_replay_with_binding(
     bytes.extend_from_slice(finalization_identity.as_bytes());
     bytes.extend_from_slice(&source_evidence_identity);
     binding.encode(&mut bytes);
-    encode_content_identity(&mut bytes, worker.executable());
-    push_u8_text(&mut bytes, worker.worker_build_identity())?;
-    push_u8_text(&mut bytes, worker.llvm_build_identity())?;
+    encode_compact_replay_tail(
+        &mut bytes,
+        binding.retains_derivation_metadata(),
+        worker,
+        limits,
+        bootstrap_output_bound,
+        external_providers,
+        link_options,
+        bootstrap_metadata,
+        replay_metadata,
+    )?;
+    let checksum = hash_domain_blob(binding.checksum_domain(), &bytes);
+    bytes.extend_from_slice(&checksum);
+    debug_assert_eq!(bytes.len(), exact_length);
+    Ok(bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn encode_compact_replay_tail(
+    bytes: &mut Vec<u8>,
+    retains_derivation_metadata: bool,
+    worker: &WorkerMeasurementV1,
+    limits: WorkerExecutionLimitsV1,
+    bootstrap_output_bound: u64,
+    external_providers: &[OwnedWorkerV3ProviderReplayPartV1],
+    link_options: &[LinkOptionV1],
+    bootstrap_metadata: WorkerResponseReplayMetadataV1<'_>,
+    replay_metadata: WorkerResponseReplayMetadataV1<'_>,
+) -> Result<(), ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+    encode_content_identity(bytes, worker.executable());
+    push_u8_text(bytes, worker.worker_build_identity())?;
+    push_u8_text(bytes, worker.llvm_build_identity())?;
     bytes.extend_from_slice(&limits.timeout().as_secs().to_le_bytes());
     bytes.extend_from_slice(&limits.timeout().subsec_nanos().to_le_bytes());
     let stdout_bytes = u64::try_from(limits.stdout_bytes())
@@ -1220,33 +1276,22 @@ fn encode_compact_replay_with_binding(
     );
     for provider in external_providers {
         bytes.push(provider.kind as u8);
-        encode_content_identity(&mut bytes, provider.identity);
+        encode_content_identity(bytes, provider.identity);
     }
     bytes.push(
         u8::try_from(link_options.len())
             .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Options)?,
     );
     for option in link_options {
-        push_u8_text(&mut bytes, option.name())?;
-        push_u16_text(&mut bytes, option.value())?;
+        push_u8_text(bytes, option.name())?;
+        push_u16_text(bytes, option.value())?;
     }
-    encode_response_metadata(
-        &mut bytes,
-        bootstrap_metadata,
-        binding.retains_derivation_metadata(),
-    )?;
-    encode_response_metadata(
-        &mut bytes,
-        replay_metadata,
-        binding.retains_derivation_metadata(),
-    )?;
-    let checksum = hash_domain_blob(binding.checksum_domain(), &bytes);
-    bytes.extend_from_slice(&checksum);
-    debug_assert_eq!(bytes.len(), exact_length);
-    Ok(bytes)
+    encode_response_metadata(bytes, bootstrap_metadata, retains_derivation_metadata)?;
+    encode_response_metadata(bytes, replay_metadata, retains_derivation_metadata)?;
+    Ok(())
 }
 
-fn validate_construction_parts(
+pub(crate) fn validate_construction_parts(
     bootstrap_output_bound: u64,
     external_providers: &[OwnedWorkerV3ProviderReplayPartV1],
     link_options: &[LinkOptionV1],
@@ -1300,7 +1345,7 @@ fn validate_construction_parts(
     Ok(())
 }
 
-fn compact_replay_encoded_length(
+pub(crate) fn compact_replay_encoded_length(
     binding_header_bytes: usize,
     retains_derivation_metadata: bool,
     worker: &WorkerMeasurementV1,
@@ -1541,17 +1586,17 @@ fn try_vec<T>(
     Ok(values)
 }
 
-struct CompactReplayReaderV1<'bytes> {
+pub(crate) struct CompactReplayReaderV1<'bytes> {
     bytes: &'bytes [u8],
     offset: usize,
 }
 
 impl<'bytes> CompactReplayReaderV1<'bytes> {
-    const fn new(bytes: &'bytes [u8]) -> Self {
+    pub(crate) const fn new(bytes: &'bytes [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
 
-    fn take(
+    pub(crate) fn take(
         &mut self,
         length: usize,
     ) -> Result<&'bytes [u8], ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
@@ -1584,14 +1629,14 @@ impl<'bytes> CompactReplayReaderV1<'bytes> {
             .ok_or(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Truncated)
     }
 
-    fn u8(&mut self) -> Result<u8, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+    pub(crate) fn u8(&mut self) -> Result<u8, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
         self.take(1)?
             .first()
             .copied()
             .ok_or(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Truncated)
     }
 
-    fn u16(&mut self) -> Result<u16, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+    pub(crate) fn u16(&mut self) -> Result<u16, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().map_err(
             |_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Truncated,
         )?))
@@ -1603,13 +1648,13 @@ impl<'bytes> CompactReplayReaderV1<'bytes> {
         )?))
     }
 
-    fn u64(&mut self) -> Result<u64, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+    pub(crate) fn u64(&mut self) -> Result<u64, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().map_err(
             |_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::Truncated,
         )?))
     }
 
-    fn array<const N: usize>(
+    pub(crate) fn array<const N: usize>(
         &mut self,
     ) -> Result<[u8; N], ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
         self.take(N)?

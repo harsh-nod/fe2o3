@@ -88,6 +88,7 @@ pub use compiler_module_handoff::native_v4::{
     consume_compiler_module_handoff_with_currentness_v4, publish_compiler_module_handoff_v4,
     publish_compiler_module_handoff_with_currentness_v4,
     recover_compiler_module_handoff_receipt_v4,
+    rederive_compiler_module_handoff_receipt_for_replay_v4,
 };
 mod durable_link_publication;
 mod durable_published_claim;
