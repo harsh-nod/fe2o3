@@ -74,8 +74,20 @@ deterministic maximum-count tests check saturation and restoration. Ancillary
 custody retains separate ownership for rustix's SCM_RIGHTS descriptors and the
 guard's SCM_PIDFD descriptors. Its initialized aligned backing, checked record
 bounds, one-shot adoption and unwind cleanup remain required despite extraction
-into shared modules. The two KFD debug-metadata stores counted here are test-only
-exclusive writes to retained aligned storage, not production GPU registration.
+into shared modules. KFD debug-metadata publication has a separate retained
+no-queue transaction and native ownership contract; its registration does not
+grant queue or dispatch authority. See
+[no-queue metadata](gfx950-debug-metadata-noqueue-v1.md).
+
+The no-queue review covers one example call block, one consuming unsafe function,
+three retained metadata-store blocks, and two native ioctl blocks. Its transport
+uses initialized exact-layout inputs and retains all native custody after any
+possible exposure. Fresh-process and no-foreign-runtime obligations remain with
+the caller; observational isolation checks do not prove them. The transaction
+test's single remaining block reads the freshly supplied root synchronously,
+before mutation. Later assertions consume copied transition snapshots, never a
+saved shared-derived pointer across mutable access. This reconciliation grants
+no GPU qualification or production launch authority.
 
 The source-safety fixture `owned_unsafe_closure.rs` deliberately contains one
 empty unsafe block inside an owned `FnOnce` closure. It exercises rooted source

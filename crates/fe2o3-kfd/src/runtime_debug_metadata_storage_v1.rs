@@ -54,6 +54,10 @@ pub(super) trait DebugActivationTransportV1 {
     fn check_currentness(&mut self) -> Result<(), MetadataErrorV1>;
     fn register_trap(&mut self, trap_base: u64, gpu_id: u32) -> Result<(), MetadataErrorV1>;
     fn enable_runtime(&mut self, root_address: u64) -> Result<(), MetadataErrorV1>;
+
+    // Observe copied state, never a saved pointer across mutable publication.
+    #[cfg(test)]
+    fn observe_transition(&mut self, _state: i32, _linked: bool) {}
 }
 
 struct Record {
@@ -175,13 +179,22 @@ impl MetadataStorageV1 {
         fence(Ordering::Release);
         let root = &self.record[0].root as *const _ as usize as u64;
         transport.enable_runtime(root)?;
+        #[cfg(test)]
+        {
+            let snapshot = self.snapshot();
+            transport.observe_transition(snapshot.state, snapshot.linked);
+        }
         transport.check_currentness()?;
         self.phase = Phase::ActiveAbsent;
         self.transition(true, |snapshot| {
             // Snapshot is descriptive test instrumentation, never native authority.
             let _ = (snapshot.state, snapshot.linked);
+            #[cfg(test)]
+            transport.observe_transition(snapshot.state, snapshot.linked);
             transport.check_currentness()?;
             fe2o3_runtime_debug_state_v1();
+            #[cfg(test)]
+            transport.observe_transition(snapshot.state, snapshot.linked);
             transport.check_currentness()
         })
     }

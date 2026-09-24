@@ -1,7 +1,7 @@
 //! CPU-only transaction injection. No device, Kernel, queue or syscall is fabricated.
 use super::*;
-use std::{cell::Cell, rc::Rc};
 use crate::engineering_gfx950::debug_cold::retention::RetainNativeOnDropV1;
+use std::{cell::Cell, rc::Rc};
 
 #[derive(Clone, Copy, Debug)]
 enum Failure {
@@ -36,14 +36,6 @@ impl DebugActivationTransportV1 for FakeTransport {
     fn check_currentness(&mut self) -> Result<(), MetadataErrorV1> {
         self.calls.push("check");
         self.checks += 1;
-        if self.root != 0 {
-            // SAFETY: supplied only by the live actual MetadataStorage in this
-            // synchronous transaction. No fabricated address is dereferenced.
-            let root = unsafe { &*(self.root as usize as *const abi::RDebugAbiV11) };
-            assert_eq!(root.version, 11);
-            assert_ne!(root.breakpoint, 0);
-            self.observed.push((root.state, root.map != 0));
-        }
         match self.failure {
             Failure::Check(n) if n == self.checks => Err(MetadataErrorV1::Currentness),
             Failure::PanicCheck(n) if n == self.checks => panic!("injected currentness unwind"),
@@ -66,9 +58,12 @@ impl DebugActivationTransportV1 for FakeTransport {
         self.root = root_address;
         assert_ne!(root_address, 0);
         assert_eq!(root_address % 8, 0);
-        // SAFETY: the private engine derives this from its retained live Record.
+        // SAFETY: the private engine freshly derives this from its live Record.
+        // This synchronous borrow ends before any metadata mutation; the saved
+        // address is subsequently compared as a scalar, never dereferenced.
         let root = unsafe { &*(root_address as usize as *const abi::RDebugAbiV11) };
         assert_eq!(root.version, 11);
+        assert_ne!(root.breakpoint, 0);
         assert_eq!(root.map, 0);
         assert_eq!(root.state, abi::RT_CONSISTENT_V1);
         assert_eq!(root.reserved0, 0);
@@ -80,6 +75,10 @@ impl DebugActivationTransportV1 for FakeTransport {
             Failure::PanicEnable => panic!("injected runtime unwind"),
             _ => Ok(()),
         }
+    }
+
+    fn observe_transition(&mut self, state: i32, linked: bool) {
+        self.observed.push((state, linked));
     }
 }
 fn storage() -> MetadataStorageV1 {

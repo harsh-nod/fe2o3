@@ -712,6 +712,9 @@
     "block": 5,
     "extern_block": 3
   },
+  "crates/fe2o3-kfd/examples/gfx950_debug_noqueue_v1/run.rs": {
+    "block": 1
+  },
   "crates/fe2o3-kfd/src/bin/gfx950_engineering_worker.rs": {
     "block": 1
   },
@@ -724,6 +727,9 @@
   "crates/fe2o3-kfd/src/engineering_gfx950.rs": {
     "block": 8,
     "function": 5
+  },
+  "crates/fe2o3-kfd/src/engineering_gfx950_debug_noqueue_v1.rs": {
+    "function": 1
   },
   "crates/fe2o3-kfd/src/engineering_gfx950_dispatch_timestamps.rs": {
     "block": 5,
@@ -776,7 +782,13 @@
     "block": 7
   },
   "crates/fe2o3-kfd/src/runtime_debug_metadata_storage_v1.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-kfd/src/runtime_debug_native_noqueue_v1.rs": {
     "block": 2
+  },
+  "crates/fe2o3-kfd/src/runtime_debug_noqueue_transaction_v1_tests.rs": {
+    "block": 1
   },
   "crates/fe2o3-kfd/src/stopped_state_v1.rs": {
     "block": 2
