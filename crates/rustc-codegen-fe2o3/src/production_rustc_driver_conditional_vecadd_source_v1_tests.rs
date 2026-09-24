@@ -18,6 +18,9 @@ const BASE: &str = "crates/rustc-codegen-fe2o3/tests/fixtures/production-extract
 const MANIFEST: &str = "config/tutorial-kernel-manifest-v1.json";
 const LOAD_MISMATCH: &str =
     "safe reference load has no exact ranked GPU read with matching input, type, and index";
+const GUARD_MISMATCH: &str =
+    "GPU write has a logical path guard outside the exact memory-bounds selection";
+const AMBIGUOUS_LOAD: &str = "safe reference load matches multiple ranked GPU reads";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum Case {
@@ -325,19 +328,27 @@ impl Callbacks for VecaddCallbacks {
                         (
                             Case::InputGuard,
                             Err(Pipeline::RankedProjection(Projection::ReferenceEffectJoin(
-                                error @ Join::ConditionalReferenceBoundsRequired { .. },
+                                Join::UnsupportedGpuEffect { detail, .. },
                             ))),
-                        ) => {
+                        ) if detail == GUARD_MISMATCH => {
                             fresh_proof(&proof, 0);
-                            assert!(error.to_string().contains("FE2O3-CPU-BOUNDS-001"));
-                            serde_json::json!({"boundary": error.to_string(), "negative": true})
+                            serde_json::json!({"boundary": detail, "negative": true})
                         }
                         (
-                            Case::CpuRead | Case::SourceArgument,
+                            Case::CpuRead,
                             Err(Pipeline::RankedProjection(Projection::ReferenceEffectJoin(
                                 Join::UnsupportedReference(detail),
                             ))),
                         ) if detail == LOAD_MISMATCH => {
+                            fresh_proof(&proof, 0);
+                            serde_json::json!({"boundary": detail, "negative": true})
+                        }
+                        (
+                            Case::SourceArgument,
+                            Err(Pipeline::RankedProjection(Projection::ReferenceEffectJoin(
+                                Join::UnsupportedReference(detail),
+                            ))),
+                        ) if detail == AMBIGUOUS_LOAD => {
                             fresh_proof(&proof, 0);
                             serde_json::json!({"boundary": detail, "negative": true})
                         }
