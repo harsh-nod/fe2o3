@@ -30,6 +30,7 @@ pub(crate) struct ConditionalReferenceRootV1 {
     _runtime: FunctionalRefinementVerusRuntimeLeaseV1,
     _receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
     _report: fe2o3_verifier::ProductionConditionalFormulaReportV1,
+    _cpu_bounds_require_host: Option<u32>,
 }
 
 pub(crate) enum ReferenceRootV1 {
@@ -122,6 +123,7 @@ pub(crate) fn continue_reference_v1<'a>(
         construction,
         signed_receipts,
         runtime,
+        pending_cpu_bounds,
     } = bound.into_staged()?;
     let mut session =
         ProductionPlironSessionV1::new_ranked_v1(ProductionSessionLimitsV1::default())
@@ -204,6 +206,7 @@ pub(crate) fn continue_reference_v1<'a>(
             _runtime: runtime,
             _receipts: signed_receipts,
             _report: report,
+            _cpu_bounds_require_host: pending_cpu_bounds,
         }),
         source,
     ))

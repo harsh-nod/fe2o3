@@ -14,11 +14,14 @@ enum Failure {
     Protocol(fe2o3_compiler_execution_protocol::CompilerExecutionServiceProtocolErrorV2),
     Subject(fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV2),
     Journal(fe2o3_compiler_execution_protocol::CompilerExecutionNativeJournalErrorV2),
+    Worker(fe2o3_compiler_execution_protocol::CompilerExecutionWorkerAnchorJournalErrorV2),
     Directory(fe2o3_artifact_transaction::RetainedDurableDirectoryErrorV2),
     DirectoryAdmission(fe2o3_artifact_transaction::RetainedDurableDirectoryErrorV1),
     Occurrence(crate::compiler_execution_occurrence::NativeOccurrenceError),
     Transport(crate::CompilerExecutionServiceErrorV1),
     Anchor(fe2o3_external_anchor_protocol::AnchorProtocolErrorV1),
+    AnchorAdmission(crate::ProtectedExternalAnchorServiceErrorV2),
+    AnchorTransport(crate::ProtectedCompilerExecutionExternalAnchorErrorV1),
     Io(rustix::io::Errno),
     Lock(std::io::Error),
     Rejected(&'static str),
@@ -74,6 +77,18 @@ from_error!(
 );
 from_error!(rustix::io::Errno, Io);
 from_error!(std::io::Error, Lock);
+from_error!(
+    fe2o3_compiler_execution_protocol::CompilerExecutionWorkerAnchorJournalErrorV2,
+    Worker
+);
+from_error!(
+    crate::ProtectedExternalAnchorServiceErrorV2,
+    AnchorAdmission
+);
+from_error!(
+    crate::ProtectedCompilerExecutionExternalAnchorErrorV1,
+    AnchorTransport
+);
 impl NativeIssuerServiceError {
     pub(super) fn rejected(reason: &'static str) -> Self {
         Self(Failure::Rejected(reason))
@@ -82,6 +97,10 @@ impl NativeIssuerServiceError {
         match &self.0 {
             Failure::Resource(e) => Some(*e),
             Failure::Admission(e) => e.resource(),
+            Failure::AnchorAdmission(e) => e.resource(),
+            Failure::AnchorTransport(crate::ProtectedCompilerExecutionExternalAnchorErrorV1::Resource(e)) => Some(*e),
+            Failure::Worker(fe2o3_compiler_execution_protocol::CompilerExecutionWorkerAnchorJournalErrorV2::Resource(e)) => Some(*e),
+            Failure::Journal(fe2o3_compiler_execution_protocol::CompilerExecutionNativeJournalErrorV2::Resource(e)) => Some(*e),
             Failure::Key(KeyError::Resource(e)) => Some(*e),
             Failure::Directory(
                 fe2o3_artifact_transaction::RetainedDurableDirectoryErrorV2::Resource(e),
@@ -102,11 +121,14 @@ impl std::fmt::Display for NativeIssuerServiceError {
             Failure::Protocol(e) => write!(f, "{e}"),
             Failure::Subject(e) => write!(f, "{e}"),
             Failure::Journal(e) => write!(f, "{e}"),
+            Failure::Worker(e) => write!(f, "{e}"),
             Failure::Directory(e) => write!(f, "{e}"),
             Failure::DirectoryAdmission(e) => write!(f, "{e}"),
             Failure::Occurrence(e) => write!(f, "{e}"),
             Failure::Transport(e) => write!(f, "{e}"),
             Failure::Anchor(e) => write!(f, "{e}"),
+            Failure::AnchorAdmission(e) => write!(f, "{e}"),
+            Failure::AnchorTransport(e) => write!(f, "{e}"),
             Failure::Io(e) => write!(f, "{e}"),
             Failure::Lock(e) => write!(f, "{e}"),
             Failure::Rejected(reason) => f.write_str(reason),

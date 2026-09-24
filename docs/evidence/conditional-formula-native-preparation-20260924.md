@@ -4,6 +4,12 @@ This is a prerequisite checkpoint for #272. It does not complete M1, any other
 milestone, or the 47-kernel production-to-safe-GPU-launch matrix. No GPU run or
 protected conditional aggregate execution is credited to this checkpoint.
 
+Later work is recorded in the [conditional memory and native publication
+checkpoint](conditional-memory-native-publication-20260924.md). A separate
+[protected consuming-fill run](conditional-consumer-protected-20260924.md)
+executes this checkpoint's frozen compiler; its credit is not transferred to
+the later memory theorem or publication implementation.
+
 ## Compiler Boundary
 
 The production reference path can retain a conditional root separately from an

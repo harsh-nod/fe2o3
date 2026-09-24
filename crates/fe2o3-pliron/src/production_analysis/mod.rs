@@ -70,7 +70,8 @@ pub use pliron_provenance_alias::*;
 pub use pliron_race::*;
 pub use pliron_ranked_bounds::*;
 pub use pliron_ranked_coverage_v1::{
-    ProductionRankedRecipeCoverageErrorV1, check_ranked_recipe_paths_v1,
+    ProductionConditionalRankedReadBoundV1, ProductionRankedRecipeCoverageErrorV1,
+    check_ranked_recipe_paths_v1, check_ranked_recipe_paths_with_input_bounds_v1,
 };
 pub use pliron_report_validation::*;
 pub use pliron_resource_envelope::ProductionAnalysisResourcePhaseV1;

@@ -29,6 +29,10 @@ use crate::{
     },
 };
 
+#[path = "conditional_total_view_paths_v1.rs"]
+mod paths;
+use paths::check_paths;
+
 /// A closed-fragment refusal, never evidence that the program is incorrect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConditionalTotalViewUnsupportedV1 {
@@ -728,7 +732,9 @@ fn derive<'module>(
         alignment: store.access.alignment,
         reads: 0,
     };
-    facts.address_domain = check_paths(
+    // Discover domains without using input guards as assumptions. Otherwise an
+    // input guard could circularly justify its own readable-span premise.
+    check_paths(
         function,
         flow,
         &definitions,
@@ -736,8 +742,10 @@ fn derive<'module>(
         &facts,
         pointer.location,
         selected_predicate.is_some(),
+        None,
         budget,
     )?;
+    let mut reads = allocate::<ConditionalTotalViewReadV1>(definitions.len(), budget)?;
     for (block_index, block) in body.blocks.iter().enumerate() {
         for (ordinal, operation) in block.operations.iter().enumerate() {
             budget.charge_work(2)?;
@@ -777,13 +785,33 @@ fn derive<'module>(
                     block_index,
                     budget,
                 )?;
-                visit_read(read)?;
+                reads.push(read);
                 facts.reads = facts
                     .reads
                     .checked_add(1)
                     .ok_or(ResourceError::Arithmetic)?;
             }
         }
+    }
+    for state in &mut states {
+        budget.charge_work(2)?;
+        state.counts = [0, 0];
+        state.indegree = 0;
+    }
+    facts.address_domain = check_paths(
+        function,
+        flow,
+        &definitions,
+        &mut states,
+        &facts,
+        pointer.location,
+        selected_predicate.is_some(),
+        Some(&reads),
+        budget,
+    )?;
+    for read in reads {
+        budget.charge_work(1)?;
+        visit_read(read)?;
     }
     // All scratch owners drop before the outer scope restores the storage floor.
     Ok(facts)
@@ -932,184 +960,6 @@ fn derive_read(
     })
 }
 
-fn switch_predicate(
-    selector: ValueId,
-    definitions: &[Definition<'_>],
-    predicate: ValueId,
-    budget: &mut Budget<'_>,
-) -> Derived<bool> {
-    let selector = definition(definitions, selector, budget)?;
-    budget.charge_work(2)?;
-    Ok(
-        matches!(selector.operation.kind, OperationKind::Cast { kind: CastKind::ZeroExtend, value, .. } if value == predicate),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn check_paths(
-    function: &Function,
-    flow: &IndexedControlFlow,
-    definitions: &[Definition<'_>],
-    states: &mut [BlockState],
-    facts: &ConditionalTotalViewFactsV1<'_>,
-    pointer_location: FunctionOperationLocation,
-    selected_offset: bool,
-    budget: &mut Budget<'_>,
-) -> Derived<ConditionalTotalViewAddressDomainV1> {
-    let body = function.body.as_ref().ok_or(ResourceError::Accounting)?;
-    let mut reachable_count = 0_usize;
-    let mut order = allocate::<usize>(states.len(), budget)?;
-    for (source, block) in body.blocks.iter().enumerate() {
-        budget.charge_work(2)?;
-        if !states[source].reachable {
-            continue;
-        }
-        reachable_count = reachable_count
-            .checked_add(1)
-            .ok_or(ResourceError::Arithmetic)?;
-        let lookup = position(flow, block.id, budget)?;
-        if lookup != source {
-            return Err(ResourceError::Accounting.into());
-        }
-        let edges = flow
-            .outgoing_edges(block.id)
-            .ok_or(ResourceError::Accounting)?;
-        for edge in edges {
-            budget.charge_work(2)?;
-            let target = position(
-                flow,
-                flow.edge_target(edge).ok_or(ResourceError::Accounting)?,
-                budget,
-            )?;
-            states[target].indegree = states[target]
-                .indegree
-                .checked_add(1)
-                .ok_or(ResourceError::Arithmetic)?;
-        }
-    }
-    for (index, state) in states.iter().enumerate() {
-        budget.charge_work(1)?;
-        if state.reachable && state.indegree == 0 {
-            order.push(index);
-        }
-    }
-    let mut cursor = 0;
-    while cursor < order.len() {
-        budget.charge_work(2)?;
-        let source = order[cursor];
-        cursor += 1;
-        let block = &body.blocks[source];
-        position(flow, block.id, budget)?;
-        for edge in flow
-            .outgoing_edges(block.id)
-            .ok_or(ResourceError::Accounting)?
-        {
-            budget.charge_work(2)?;
-            let target = position(
-                flow,
-                flow.edge_target(edge).ok_or(ResourceError::Accounting)?,
-                budget,
-            )?;
-            states[target].indegree = states[target]
-                .indegree
-                .checked_sub(1)
-                .ok_or(ResourceError::Accounting)?;
-            if states[target].indegree == 0 {
-                order.push(target);
-            }
-        }
-    }
-    if order.len() != reachable_count {
-        return refuse(Unsupported::Cycle);
-    }
-    let entry = states.first_mut().ok_or(ResourceError::Accounting)?;
-    entry.counts = [1, 1];
-    let mut address_domain = ConditionalTotalViewAddressDomainV1::GuardedOutput;
-    for source in order {
-        budget.charge_work(4)?;
-        let block = &body.blocks[source];
-        let mut counts = states[source].counts;
-        for (ordinal, operation) in block.operations.iter().enumerate() {
-            budget.charge_work(8)?;
-            let location = FunctionOperationLocation::new(block.id, ordinal);
-            if !allowed_operation(operation) {
-                return refuse(Unsupported::Operation { location });
-            }
-            if location == pointer_location && !selected_offset && counts[0] != 0 {
-                address_domain = ConditionalTotalViewAddressDomainV1::GlobalLaunch;
-            }
-            if location == facts.store_location {
-                for (case, count) in counts.iter_mut().enumerate() {
-                    if case == 0 && facts.store_predicate.is_some() {
-                        continue;
-                    }
-                    *count = ((*count & 1) << 1) | (u8::from(*count & 6 != 0) << 2);
-                }
-            }
-        }
-        let terminator = block.terminator.as_ref().ok_or(ResourceError::Accounting)?;
-        let choice = match terminator {
-            Terminator::Return { values } if values.is_empty() => {
-                for (case, count) in counts.iter().copied().enumerate() {
-                    let expected = if case == 0 { 1 } else { 2 };
-                    if count != 0 && count != expected {
-                        return refuse(Unsupported::WriteCount {
-                            block: block.id,
-                            predicate_true: case == 1,
-                        });
-                    }
-                }
-                continue;
-            }
-            Terminator::Unreachable => {
-                if counts != [0, 0] {
-                    return refuse(Unsupported::AbnormalExit { block: block.id });
-                }
-                continue;
-            }
-            Terminator::Branch { .. } => None,
-            Terminator::ConditionalBranch { condition, .. } if *condition == facts.predicate => {
-                Some([1, 0])
-            }
-            Terminator::ConditionalBranch { .. } => None,
-            Terminator::Switch {
-                selector, cases, ..
-            } if cases.len() == 2 => {
-                budget.charge_work(4)?;
-                let choices = match (cases[0].value, cases[1].value) {
-                    (0, 1) => [0, 1],
-                    (1, 0) => [1, 0],
-                    _ => return refuse(Unsupported::Terminator { block: block.id }),
-                };
-                if !switch_predicate(*selector, definitions, facts.predicate, budget)? {
-                    return refuse(Unsupported::Terminator { block: block.id });
-                }
-                Some(choices)
-            }
-            _ => return refuse(Unsupported::Terminator { block: block.id }),
-        };
-        position(flow, block.id, budget)?;
-        for edge in flow
-            .outgoing_edges(block.id)
-            .ok_or(ResourceError::Accounting)?
-        {
-            budget.charge_work(6)?;
-            let ordinal = flow.edge(edge).ok_or(ResourceError::Accounting)?.ordinal();
-            let target = position(
-                flow,
-                flow.edge_target(edge).ok_or(ResourceError::Accounting)?,
-                budget,
-            )?;
-            for (case, count) in counts.iter().copied().enumerate() {
-                if choice.is_none_or(|choices| choices[case] == ordinal) {
-                    states[target].counts[case] |= count;
-                }
-            }
-        }
-    }
-    Ok(address_domain)
-}
-
 /// Derives a conditional, single-output identity-write theorem without a launch sample.
 ///
 /// The caller keeps its Module-owner reservation. All work uses the supplied
@@ -1126,7 +976,7 @@ pub fn derive_conditional_total_view_from_verified_v1<'module>(
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         budget.charge_work(4)?;
         budget.reserve_storage(
-            size_of::<ConditionalTotalViewFactsV1<'_>>() + 3 * size_of::<Vec<()>>(),
+            size_of::<ConditionalTotalViewFactsV1<'_>>() + 4 * size_of::<Vec<()>>(),
         )?;
         derive(verified.module(), kernel, budget, &mut |_| Ok(()))
     }));

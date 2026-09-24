@@ -126,6 +126,7 @@ pub(crate) struct CompilerOwnedReferenceEffectRequestV2 {
     kernel: ProductionRankedKernelV1,
     requests: Vec<CompilerOwnedReferenceEffectSiteV2>,
     proof_timeout_seconds: u32,
+    pending_cpu_bounds: Option<u32>,
 }
 
 pub(crate) struct CompilerOwnedBoundReferenceEffectV2 {
@@ -135,12 +136,14 @@ pub(crate) struct CompilerOwnedBoundReferenceEffectV2 {
     signed_receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
     // Retain the protected closure, not just its identity, through the continuation.
     runtime: FunctionalRefinementVerusRuntimeLeaseV1,
+    pending_cpu_bounds: Option<u32>,
 }
 
 pub(crate) struct CompilerOwnedStagedReferenceEffectV2 {
     construction: ProductionConstructionV1,
     signed_receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
     runtime: FunctionalRefinementVerusRuntimeLeaseV1,
+    pending_cpu_bounds: Option<u32>,
 }
 
 struct CompilerOwnedReferenceEffectSiteV2 {
@@ -178,6 +181,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
         ),
         ProductionReferenceEffectJoinErrorV2,
     > {
+        require_unconditional_cpu_bounds_v2(self.pending_cpu_bounds)?;
         self.prove_and_bind()?.into_staged()?.compile()
     }
 
@@ -256,6 +260,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
             policy,
             signed_receipts,
             runtime,
+            pending_cpu_bounds: self.pending_cpu_bounds,
         })
     }
 }
@@ -294,6 +299,7 @@ impl CompilerOwnedBoundReferenceEffectV2 {
             construction,
             signed_receipts: self.signed_receipts,
             runtime: self.runtime,
+            pending_cpu_bounds: self.pending_cpu_bounds,
         })
     }
 }
@@ -312,6 +318,7 @@ impl CompilerOwnedStagedReferenceEffectV2 {
             construction,
             signed_receipts,
             runtime,
+            pending_cpu_bounds: _,
         } = self;
         let result = (|| {
             let mut session = fe2o3_pliron::ProductionPlironSessionV1::new_ranked_v1(
@@ -344,10 +351,12 @@ impl CompilerOwnedStagedReferenceEffectV2 {
         ),
         ProductionReferenceEffectJoinErrorV2,
     > {
+        require_unconditional_cpu_bounds_v2(self.pending_cpu_bounds)?;
         let Self {
             construction,
             signed_receipts,
             runtime,
+            pending_cpu_bounds: _,
         } = self;
         let result = compile_ranked_kernel_for_lowering_v1(
             construction,
@@ -361,6 +370,17 @@ impl CompilerOwnedStagedReferenceEffectV2 {
         .map(|lowering| (lowering, signed_receipts));
         drop(runtime);
         result
+    }
+}
+
+fn require_unconditional_cpu_bounds_v2(
+    pending: Option<u32>,
+) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
+    match pending {
+        Some(block) => {
+            Err(ProductionReferenceEffectJoinErrorV2::ConditionalReferenceBoundsRequired { block })
+        }
+        None => Ok(()),
     }
 }
 
@@ -522,7 +542,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
             },
         );
     }
-    crate::production_reference_bounds_v2::discharge_reference_bounds_over_ranked_domains_v2(
+    let pending_cpu_bounds = match crate::production_reference_bounds_v2::discharge_reference_bounds_over_ranked_domains_v2(
         &kernel,
         &binding.effect_ir,
         &prepared
@@ -534,13 +554,16 @@ pub(crate) fn prepare_reference_effect_request_v2(
                 },
             )
             .collect::<Vec<_>>(),
-    )
-    .map_err(
-        |error| ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-            block: error.block(),
-            detail: error.detail().to_owned(),
+    ) {
+        Ok(()) => None,
+        Err(error) => match error.pending_host_extent_v1() {
+            Some(block) => Some(block),
+            None => return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
+                block: error.block(),
+                detail: error.detail().to_owned(),
+            }),
         },
-    )?;
+    };
 
     let subjects = FunctionalRefinementSubjectsV2::new(
         SafeReferenceKindV2::Mir,
@@ -718,6 +741,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
         kernel,
         requests,
         proof_timeout_seconds,
+        pending_cpu_bounds,
     })
 }
 
@@ -1660,6 +1684,9 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
         block: u32,
         detail: String,
     },
+    ConditionalReferenceBoundsRequired {
+        block: u32,
+    },
     AmbiguousOwnership,
     WriteLocation,
     InvalidReservedValueCount {
@@ -1727,6 +1754,10 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
             Self::ReferenceBoundsCheck { block, detail } => write!(
                 formatter,
                 "source-to-proof V2 cannot establish safe Rust slice bounds authority in reference block {block}: {detail}"
+            ),
+            Self::ConditionalReferenceBoundsRequired { block } => write!(
+                formatter,
+                "FE2O3-CPU-BOUNDS-001: reference block {block} requires source-bound conditional host premises; ordinary compilation is forbidden"
             ),
             Self::AmbiguousOwnership => formatter.write_str(
                 "source-to-proof V2 output view already has an ownership contract; one compiler-owned contract is required",
@@ -2133,6 +2164,33 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn ordinary_request_refuses_pending_cpu_bounds_before_proof_execution() {
+        let request = CompilerOwnedReferenceEffectRequestV2 {
+            kernel: ProductionRankedKernelV1::new(
+                "pending_cpu_bounds",
+                0,
+                vec![ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::Return,
+                )],
+            )
+            .unwrap(),
+            requests: vec![],
+            proof_timeout_seconds: 1,
+            pending_cpu_bounds: Some(7),
+        };
+        assert!(matches!(
+            request.prove_and_compile(),
+            Err(
+                ProductionReferenceEffectJoinErrorV2::ConditionalReferenceBoundsRequired {
+                    block: 7,
+                }
+            ),
+        ));
+        require_unconditional_cpu_bounds_v2(None).unwrap();
     }
 
     fn usize_constant(bits: u128) -> ReferenceConstantV1 {

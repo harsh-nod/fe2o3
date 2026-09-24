@@ -832,6 +832,77 @@ fn readonly_input_value_expression_retains_exact_access_and_address_domains() {
 }
 
 #[test]
+fn exact_input_length_guard_is_implied_without_shrinking_address_domain() {
+    let mut module = input_expression_fixture(true, false);
+    let mut load_block = BasicBlock::new(BlockId(40));
+    load_block.operations = std::mem::take(&mut body(&mut module).blocks[1].operations);
+    load_block.terminator = Some(ret());
+    body(&mut module).blocks[1].operations = vec![
+        op(
+            50,
+            Type::INDEX,
+            OperationKind::SliceLength { slice: ValueId(3) },
+        ),
+        op(
+            51,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: ValueId(10),
+                rhs: ValueId(50),
+            },
+        ),
+    ];
+    body(&mut module).blocks[1].terminator = Some(conditional(51, 40, 50));
+    let mut trap = BasicBlock::new(BlockId(50));
+    trap.terminator = Some(Terminator::Unreachable);
+    body(&mut module).blocks.extend([load_block, trap]);
+    let ConditionalTotalViewAnalysisV1::Established(facts) = analyze(&module) else {
+        panic!("input-length implication");
+    };
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    facts
+        .visit_reads_v1(&mut budget, |read| {
+            assert_eq!(
+                read.access_domain(),
+                ConditionalTotalViewAddressDomainV1::GuardedOutput
+            );
+            assert_eq!(
+                read.address_domain(),
+                ConditionalTotalViewAddressDomainV1::GlobalLaunch
+            );
+            Ok(())
+        })
+        .unwrap();
+
+    let mut inverted = module.clone();
+    body(&mut inverted).blocks[1].terminator = Some(conditional(51, 50, 40));
+    assert!(matches!(
+        refused(&inverted),
+        Unsupported::AbnormalExit { .. }
+    ));
+
+    let mut wrong_index = module.clone();
+    let OperationKind::Compare { lhs, .. } =
+        &mut body(&mut wrong_index).blocks[1].operations[1].kind
+    else {
+        unreachable!()
+    };
+    *lhs = ValueId(13);
+    assert!(matches!(
+        refused(&wrong_index),
+        Unsupported::AbnormalExit { .. }
+    ));
+
+    body(&mut module).blocks[1].terminator = Some(conditional(2, 40, 50));
+    assert_eq!(
+        refused(&module),
+        Unsupported::AbnormalExit { block: BlockId(50) }
+    );
+}
+
+#[test]
 fn input_read_and_expression_refusals_do_not_relax_memory_or_totality() {
     for change in 0..3 {
         let mut module = input_expression_fixture(true, false);

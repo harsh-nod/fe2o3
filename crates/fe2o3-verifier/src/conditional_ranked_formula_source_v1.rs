@@ -13,13 +13,13 @@ use fe2o3_pliron::ProductionConditionalRuntimePremiseV1 as Premise;
 use super::{BoundedSource, Budget, Error, source_limit};
 
 #[derive(Clone, Copy)]
-struct Address {
-    domain: Domain,
-    width: u64,
-    alignment: u32,
+pub(super) struct Address {
+    pub(super) domain: Domain,
+    pub(super) width: u64,
+    pub(super) alignment: u32,
 }
 
-fn address(premise: &Premise, parameter: u32) -> Result<Address, Error> {
+pub(super) fn address(premise: &Premise, parameter: u32) -> Result<Address, Error> {
     let Premise::RepresentableAddress {
         parameter: actual,
         domain,
@@ -45,7 +45,7 @@ fn address(premise: &Premise, parameter: u32) -> Result<Address, Error> {
     })
 }
 
-fn read_row(row: &[Premise], output: u32) -> Result<(u32, Domain, Address), Error> {
+pub(super) fn read_row(row: &[Premise], output: u32) -> Result<(u32, Domain, Address), Error> {
     let [
         Premise::ReadableInput { parameter, domain },
         Premise::SeparateInputOutput {
@@ -125,14 +125,14 @@ pub(super) fn append_premise_theorem(
     Ok(())
 }
 
-fn prefix(domain: Domain) -> &'static str {
+pub(super) fn prefix(domain: Domain) -> &'static str {
     match domain {
         Domain::GlobalLaunch => "g",
         Domain::GuardedOutput => "(if g == 0 { 0 } else if n == 0 { 1 } else { n })",
     }
 }
 
-fn selected_index(domain: Domain) -> &'static str {
+pub(super) fn selected_index(domain: Domain) -> &'static str {
     match domain {
         Domain::GlobalLaunch => "i",
         Domain::GuardedOutput => "(if i < n { i } else { 0 })",

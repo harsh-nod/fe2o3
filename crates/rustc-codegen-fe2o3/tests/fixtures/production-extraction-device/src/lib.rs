@@ -288,6 +288,7 @@ mod physical_entry_v20;
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
     feature = "wrapped-fill",
+    feature = "unannotated-fill",
     feature = "conditional-descriptor-pair",
     feature = "private-unit-helper",
     feature = "f32-negate",

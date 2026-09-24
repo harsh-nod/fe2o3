@@ -26,6 +26,16 @@ pub(super) const NATIVE_ISSUER_STATE_FILES: [&str; 3] = [
     "compiler-execution-issuer-v3.redo",
     "compiler-execution-issuer-v3.recovery",
 ];
+pub(super) const NATIVE_WORKER_STATE_FILES: [&str; 3] = [
+    "compiler-execution-worker-v3.state",
+    "compiler-execution-worker-v3.redo",
+    "compiler-execution-worker-v3.recovery",
+];
+pub(super) const NATIVE_ANCHOR_STATE_FILES: [&str; 3] = [
+    "compiler-execution-worker-anchor-v2.state",
+    "compiler-execution-worker-anchor-v2.redo",
+    "compiler-execution-worker-anchor-v2.recovery",
+];
 
 /// The issuer holds the directory singleton lock before this check. Standalone
 /// Worker callers must also serialize writers. Never infer absence from decoding.
@@ -33,6 +43,8 @@ pub(super) fn reject_legacy_state(store: &RetainedDurableDirectoryV1) -> Result<
     for name in LEGACY_STATE_FILES
         .into_iter()
         .chain(NATIVE_ISSUER_STATE_FILES)
+        .chain(NATIVE_WORKER_STATE_FILES)
+        .chain(NATIVE_ANCHOR_STATE_FILES)
     {
         store.require_absent(name)?;
     }
@@ -44,6 +56,15 @@ pub(super) struct JournalNames {
     pub redo: &'static str,
     pub recovery: &'static str,
     pub maximum_bytes: usize,
+}
+
+/// A decoded crash position. Planning performs no namespace mutation; consumers
+/// joining several journals must validate every plan before applying any of them.
+pub(super) struct RecoveryPlan<T> {
+    pub record: Option<T>,
+    canonical: Option<Vec<u8>>,
+    redo: Option<Vec<u8>>,
+    recovery: Option<Vec<u8>>,
 }
 
 /// Mechanical I/O and nominal decoding for the same recovery state machine.
@@ -85,10 +106,18 @@ impl JournalNames {
         &self,
         io: &mut impl Recovery<T, E>,
     ) -> Result<Option<T>, E> {
+        let plan = self.plan_using(io)?;
+        self.apply_using(plan, io)
+    }
+
+    pub fn plan_using<T, E: From<IoError>>(
+        &self,
+        io: &mut impl Recovery<T, E>,
+    ) -> Result<RecoveryPlan<T>, E> {
         let canonical = io.read(self.canonical, self.maximum_bytes)?;
         let redo = io.read(self.redo, self.maximum_bytes)?;
         let recovery = io.read(self.recovery, self.maximum_bytes)?;
-        let (record, bytes) = if let Some(bytes) = recovery {
+        let record = if let Some(bytes) = &recovery {
             // A recovery rename never coexists with either transaction name.
             // Even byte-identical duplicates are not a reachable crash position.
             if canonical.is_some() || redo.is_some() {
@@ -97,28 +126,66 @@ impl JournalNames {
                 }
                 .into());
             }
-            let record = io.decode(&bytes)?;
-            io.promote(self, self.recovery, None, &bytes)?;
-            (record, bytes)
+            Some(io.decode(bytes)?)
         } else {
-            match (canonical, redo) {
-                (None, None) => return Ok(None),
+            match (&canonical, &redo) {
+                (None, None) => None,
                 (canonical, Some(bytes)) => {
-                    let record = io.decode(&bytes)?;
+                    let record = io.decode(bytes)?;
                     let prior = canonical
                         .as_deref()
                         .map(|bytes| io.decode(bytes))
                         .transpose()?;
                     io.successor(prior.as_ref(), &record)?;
-                    io.promote(self, self.redo, canonical.as_deref(), &bytes)?;
-                    (record, bytes)
+                    Some(record)
                 }
-                (Some(bytes), None) => {
-                    let record = io.decode(&bytes)?;
-                    io.stabilize(self, &bytes)?;
-                    (record, bytes)
-                }
+                (Some(bytes), None) => Some(io.decode(bytes)?),
             }
+        };
+        Ok(RecoveryPlan {
+            record,
+            canonical,
+            redo,
+            recovery,
+        })
+    }
+
+    pub fn validate_plan<T, E: From<IoError>>(
+        &self,
+        plan: &RecoveryPlan<T>,
+        io: &mut impl Recovery<T, E>,
+    ) -> Result<(), E> {
+        for (name, expected) in [
+            (self.canonical, &plan.canonical),
+            (self.redo, &plan.redo),
+            (self.recovery, &plan.recovery),
+        ] {
+            if io.read(name, self.maximum_bytes)?.as_deref() != expected.as_deref() {
+                return Err(IoError::ContentMismatch {
+                    entry: name.to_owned(),
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn apply_using<T, E: From<IoError>>(
+        &self,
+        plan: RecoveryPlan<T>,
+        io: &mut impl Recovery<T, E>,
+    ) -> Result<Option<T>, E> {
+        let bytes = if let Some(bytes) = plan.recovery {
+            io.promote(self, self.recovery, None, &bytes)?;
+            bytes
+        } else if let Some(bytes) = plan.redo {
+            io.promote(self, self.redo, plan.canonical.as_deref(), &bytes)?;
+            bytes
+        } else if let Some(bytes) = plan.canonical {
+            io.stabilize(self, &bytes)?;
+            bytes
+        } else {
+            return Ok(None);
         };
         if io.read(self.canonical, self.maximum_bytes)?.as_deref() != Some(bytes.as_slice()) {
             return Err(IoError::ContentMismatch {
@@ -128,7 +195,7 @@ impl JournalNames {
         }
         io.absent(self.redo)?;
         io.absent(self.recovery)?;
-        Ok(Some(record))
+        Ok(plan.record)
     }
 }
 

@@ -1,4 +1,4 @@
-//! Native issuer custody admission and its bounded first-sequence consumer.
+//! Native issuer custody admission and its bounded durable service consumer.
 use super::{
     CurrentStaticIssuerMeasurementsV1 as Measurements, FileSnapshotV1 as Snapshot,
     IssuerAdmissionErrorKindV1 as Kind, ProtectedIssuerProcessV1 as Process,
@@ -59,12 +59,11 @@ use ProtectedCompilerExecutionIssuerStorageV2 as Storage;
 ///
 /// Admission checks a caller-pinned policy, not its provisioning provenance.
 /// The anchor is retained transport custody only: no exchange has authenticated
-/// an observation under the policy's anchor key. The next production boundary
-/// must verify the separately pinned anchor response and join the native Worker
-/// journal before publication or readiness. `serve_native_preparation` consumes
-/// this owner into singleton recovery and durable Prepare/Issue exchanges for
-/// an independently observed, still-current first-sequence occurrence. It refuses
-/// Worker publication/currentness and does not publish readiness. Raw signing,
+/// an observation under the policy's anchor key. `serve_native_preparation`
+/// consumes this owner into singleton recovery, independently observed issuance,
+/// and durable native Worker publication/currentness exchanges. It verifies the
+/// separately pinned anchor response and exact journal joins before replying.
+/// It does not publish readiness or alter deployment. Raw signing,
 /// descriptor extraction and V1 conversions remain unavailable. The V1 serving
 /// entrypoint is unchanged.
 ///
