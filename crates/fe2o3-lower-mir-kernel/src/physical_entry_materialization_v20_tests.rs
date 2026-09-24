@@ -3,7 +3,7 @@ use super::*;
 use fe2o3_kernel_ir as physical_entry_fixture_ir;
 use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, VerifiedCanonicalKernelIrModuleV20};
 #[path = "../../fe2o3-kernel-ir/tests/fixtures/physical_entry_v20.rs"]
-mod fixture;
+pub(crate) mod fixture;
 
 fn events(module: &fe2o3_kernel_ir::Module) -> (Origin, Site, Vec<Event>) {
     let body = module.functions[0].body.as_ref().unwrap();

@@ -77,6 +77,7 @@ pub(super) fn breakpoint(r: &MiResultsV3, symbol: &str) -> Result<Vec<u8>, Refus
             "enabled",
             "addr",
             "func",
+            "at",
             "file",
             "fullname",
             "line",
@@ -90,7 +91,6 @@ pub(super) fn breakpoint(r: &MiResultsV3, symbol: &str) -> Result<Vec<u8>, Refus
             "disp",
             "enabled",
             "addr",
-            "func",
             "times",
             "original-location",
         ],
@@ -98,10 +98,26 @@ pub(super) fn breakpoint(r: &MiResultsV3, symbol: &str) -> Result<Vec<u8>, Refus
     if text(b, "type")? != b"breakpoint"
         || text(b, "disp")? != b"keep"
         || text(b, "enabled")? != b"y"
-        || text(b, "func")? != symbol.as_bytes()
         || text(b, "original-location")? != symbol.as_bytes()
     {
         return Err(Refusal::Stop);
+    }
+    // ROCgDB's print_breakpoint_location emits func for a full symbol
+    // table, or at via print_address_symbolic for a minimal symbol.
+    // Only the exact zero-offset symbol spelling is accepted in either
+    // mutually exclusive form; neither form establishes process custody.
+    match (b.get("func"), b.get("at")) {
+        (Some(value), None) if value.as_const() == Some(symbol.as_bytes()) => {}
+        (None, Some(value))
+            if value
+                .as_const()
+                .and_then(|raw| raw.strip_prefix(b"<"))
+                .and_then(|raw| raw.strip_suffix(b">"))
+                == Some(symbol.as_bytes())
+                && !["file", "fullname", "line"]
+                    .iter()
+                    .any(|key| b.contains_key(*key)) => {}
+        _ => return Err(Refusal::Stop),
     }
     let address = text(b, "addr")?.strip_prefix(b"0x").ok_or(Refusal::Stop)?;
     if address.is_empty()

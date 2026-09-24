@@ -24,6 +24,9 @@ use std::fmt;
 
 #[path = "kernel_ir_codegen_nominal_descriptor_v3.rs"]
 pub(crate) mod nominal_v3;
+#[path = "kernel_ir_codegen_physical_entry_v20.rs"]
+mod physical_entry_v20;
+pub(crate) use physical_entry_v20::retain_verified_physical_entry_compiler_module_text_v20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DescriptorSourceIdentity {
@@ -118,6 +121,7 @@ pub(crate) enum CompilerModuleConstructionError {
     },
     DescriptorSourceAlreadyBound,
     CompleteBodyIdentityMismatch,
+    PhysicalEntryIdentityMismatchV20,
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
     UnsupportedExecutionType,
@@ -136,6 +140,8 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::LimitExceeded { field, actual, max } => {
                 write!(formatter, "{field} count/size {actual} exceeds limit {max}")
             }
+            Self::PhysicalEntryIdentityMismatchV20 => formatter
+                .write_str("physical-entry canonical emission identity/sole-root closure mismatch"),
             Self::CompleteBodyIdentityMismatch => formatter
                 .write_str("complete-body canonical emission identity/sole-root closure mismatch"),
             Self::DescriptorSourceAlreadyBound => {

@@ -5,6 +5,8 @@ mod inline_helpers_v30;
 
 #[path = "compiler_descriptor_complete_body_v19.rs"]
 pub(crate) mod complete_body_v19;
+#[path = "compiler_descriptor_physical_entry_v20.rs"]
+pub(crate) mod physical_entry_v20;
 
 #[path = "compiler_descriptor_checked_output_policy3_v1.rs"]
 pub(crate) mod checked_output_policy3_v1;
@@ -697,6 +699,15 @@ fn validate_production_descriptor_root_with_physical_matcher_v1(
                     SemanticCallableDeclV1::CompilerIntrinsic {
                         operation, binding, ..
                     } => match operation {
+                        SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryBegin
+                            if binding.abi().source_input_types().first()
+                                == Some(&semantic_type_id) =>
+                        {
+                            // Only the private physical descriptor route admits
+                            // its capability, after complete checked-owner and
+                            // actual source/ABI memory joins. Generic paths still refuse.
+                            Some(SemanticDisjointIndexSpaceV1::Index1d)
+                        }
                         SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_)
                             if binding.abi().source_input_types().first()
                                 == Some(&semantic_type_id) =>
@@ -1174,6 +1185,7 @@ enum DescriptorCapabilityAdmissionV1<'a> {
     Ordinary,
     CompleteBodyV19,
     InlineHelpersV30(&'a inline_helpers_v30::InlineHelperDescriptorAdmissionV30<'a>),
+    PhysicalEntryV20(&'a physical_entry_v20::PhysicalEntryDescriptorAdmissionV20<'a>),
 }
 
 // Only the child V19 constructor passes true, after the genuine source/ranked/
@@ -1540,6 +1552,13 @@ fn descriptor_capabilities_with_admission_v1(
             // Only execution requirements enter the runtime descriptor.
             continue;
         }
+        if let DescriptorCapabilityAdmissionV1::PhysicalEntryV20(checked) = admission
+            && checked.admits(module, &capability)
+        {
+            // Structural source/physical requirements stay in the retained
+            // owner and ABI preparation. Runtime requirements project normally.
+            continue;
+        }
         let Some(projected) = dialect_amdgcn::project_descriptor_capability_v1(
             fe2o3_kernel_ir::TargetCapabilityRefV1::from_owned(&capability),
             allow_exact_tiled_matrix,
@@ -1690,6 +1709,8 @@ pub(crate) enum CompilerDescriptorError {
     },
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     CompleteBodyV19(Box<fe2o3_lower_mir_kernel::ProductionCompleteBodyCheckErrorV19>),
+    PhysicalEntryV20(Box<fe2o3_lower_mir_kernel::ProductionPhysicalEntryCheckErrorV20>),
+    PhysicalEntryResourceV20(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     CheckedOutputPolicy3(fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy3V1),
     CheckedOutputPolicy4(
         Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy4V1>,
@@ -1784,6 +1805,14 @@ impl fmt::Display for CompilerDescriptorError {
             Self::UnexpectedWorkgroupSize { kernel, expected } => write!(
                 formatter,
                 "typed descriptor kernel `{kernel}` does not have the exact {expected:?} workgroup"
+            ),
+            Self::PhysicalEntryV20(error) => write!(
+                formatter,
+                "physical-entry source/ranked/complete-memory replay failed: {error}"
+            ),
+            Self::PhysicalEntryResourceV20(error) => write!(
+                formatter,
+                "physical-entry descriptor resource admission failed: {error}"
             ),
             Self::CompleteBodyV19(error) => write!(
                 formatter,

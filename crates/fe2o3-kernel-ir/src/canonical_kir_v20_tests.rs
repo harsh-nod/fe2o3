@@ -1,6 +1,8 @@
 //! Inert exact graph/codec/resource controls, not source/native/GPU qualification.
 use super::*;
 use crate::gfx942_physical_entry_fixture_v20_tests as fixture;
+#[path = "formal_memory_obligations/physical_entry_v20_tests.rs"]
+mod formal_memory;
 use crate::*;
 
 type Opcode = Gfx942PhysicalEntryOpcodeV20;

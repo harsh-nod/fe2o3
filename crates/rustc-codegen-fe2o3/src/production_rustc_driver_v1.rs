@@ -39,6 +39,7 @@ use amdgpu_outputs_v1::{
 
 #[path = "production_rustc_driver_v1/complete_body_v19.rs"]
 mod complete_body_v19;
+mod physical_entry_v20;
 
 #[path = "production_rustc_driver_v1/ordered_region_diagnostic_export_v16.rs"]
 mod ordered_region_diagnostic_export_v16;
@@ -1026,6 +1027,9 @@ mod gfx942_complete_body_qualification_v19_tests;
 
 #[cfg(all(test, target_os = "linux"))]
 mod gfx942_physical_entry_qualification_v20_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_physical_entry_production_v20_tests;
 
 #[cfg(test)]
 #[path = "production_rustc_driver_v1_tests.rs"]

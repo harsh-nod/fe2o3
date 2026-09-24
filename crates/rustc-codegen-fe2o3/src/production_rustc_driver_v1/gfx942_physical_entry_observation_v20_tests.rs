@@ -151,7 +151,7 @@ pub(super) fn observe(
     }))
 }
 
-fn observe_cpu(
+pub(crate) fn observe_cpu(
     executable: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV20,
     diamond: bool,
 ) -> usize {

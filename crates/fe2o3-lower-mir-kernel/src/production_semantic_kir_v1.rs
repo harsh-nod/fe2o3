@@ -81,6 +81,11 @@ include!("production_ordered_region_inspection_v1.rs");
 include!("production_ordered_program_pre_ranked_v17.rs");
 include!("production_complete_body_source_vnext.rs");
 include!("production_physical_entry_source_v20.rs");
+#[path = "production_physical_entry_checks_v20.rs"]
+mod physical_entry_checks_v20;
+pub use physical_entry_checks_v20::{
+    ProductionPhysicalEntryCheckErrorV20, ProductionPhysicalEntryCheckedKirOwnerV20,
+};
 #[path = "production_complete_body_checks_v19.rs"]
 mod complete_body_checks_v19;
 pub use complete_body_checks_v19::{

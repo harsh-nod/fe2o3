@@ -16,7 +16,7 @@ mod storage;
 use storage::Scope;
 #[cfg(test)]
 #[path = "physical_entry_materialization_v20_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EventKind {

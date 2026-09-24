@@ -600,3 +600,127 @@ fn fixed_startup_setting_after_setup_refuses_before_entry_continuation() {
     );
     assert_eq!(fake.0.resumes, 0);
 }
+
+fn breakpoint_result(raw: &str) -> crate::rocgdb_mi_parser_v3::MiResultsV3 {
+    let line = format!("1^done,{raw}\n");
+    let crate::rocgdb_mi_parser_v3::MiRecordV3::Result { results, .. } =
+        parser::record(line.as_bytes()).unwrap()
+    else {
+        panic!("fixture shape");
+    };
+    results
+}
+#[test]
+fn exact_full_or_minimal_symbol_breakpoints_preserve_dynamic_number() {
+    for symbol in [
+        parser::ENTRY_HOST_SYMBOL,
+        parser::PRE_HOST_SYMBOL,
+        parser::POST_HOST_SYMBOL,
+    ] {
+        let full = bp(41, symbol);
+        let minimal = full.replace(&format!("func=\"{symbol}\""), &format!("at=\"<{symbol}>\""));
+        for raw in [full, minimal] {
+            assert_eq!(
+                protocol::breakpoint(&breakpoint_result(&raw), symbol),
+                Ok(b"41".to_vec())
+            );
+        }
+    }
+}
+#[test]
+fn minimal_symbol_breakpoints_refuse_offsets_alternate_names_and_ambiguity() {
+    let symbol = parser::ENTRY_HOST_SYMBOL;
+    let full = bp(41, symbol);
+    for replacement in [
+        format!("at=\"<{symbol}+0>\""),
+        format!("at=\"<{symbol}+4>\""),
+        format!("at=\"<{symbol}-4>\""),
+        format!("at=\"<*{symbol}*>\""),
+        format!("at=\"<{symbol} at source.rs:1>\""),
+        format!("at=\"{symbol}\""),
+        "at=\"<foreign>\"".into(),
+        "at=\"\"".into(),
+        format!("at=[\"<{symbol}>\"]"),
+        format!("func=\"{symbol}\",at=\"<{symbol}>\""),
+        format!("at=\"<{symbol}>\",file=\"source.rs\""),
+    ] {
+        let raw = full.replace(&format!("func=\"{symbol}\""), &replacement);
+        assert!(
+            protocol::breakpoint(&breakpoint_result(&raw), symbol).is_err(),
+            "{replacement}"
+        );
+    }
+    let missing = full.replace(&format!(",func=\"{symbol}\""), "");
+    assert!(protocol::breakpoint(&breakpoint_result(&missing), symbol).is_err());
+}
+#[test]
+fn minimal_symbol_form_does_not_relax_address_origin_or_group_checks() {
+    let symbol = parser::ENTRY_HOST_SYMBOL;
+    let original =
+        bp(41, symbol).replace(&format!("func=\"{symbol}\""), &format!("at=\"<{symbol}>\""));
+    for (from, to) in [
+        ("addr=\"0x1234\"", "addr=\"0x0\""),
+        ("addr=\"0x1234\"", "addr=\"<PENDING>\""),
+        ("addr=\"0x1234\"", "addr=\"<MULTIPLE>\""),
+        ("addr=\"0x1234\"", "addr=\"0x10000000000000000\""),
+        ("thread-groups=[\"i1\"]", "thread-groups=[\"i2\"]"),
+        ("thread-groups=[\"i1\"]", "thread-groups=[\"i1\",\"i2\"]"),
+        ("times=\"0\"", "times=\"2\""),
+        ("number=\"41\"", "number=\"0\""),
+        (
+            "original-location=\"fe2o3_gfx950_noqueue_process_entry_v1\"",
+            "original-location=\"foreign\"",
+        ),
+    ] {
+        assert!(
+            protocol::breakpoint(&breakpoint_result(&original.replacen(from, to, 1)), symbol)
+                .is_err()
+        );
+    }
+}
+#[test]
+fn duplicate_minimal_symbol_fields_are_rejected_by_shared_mi_parser() {
+    let symbol = parser::ENTRY_HOST_SYMBOL;
+    let raw = bp(41, symbol).replace(
+        &format!("func=\"{symbol}\""),
+        &format!("at=\"<{symbol}>\",at=\"<{symbol}>\""),
+    );
+    assert!(parser::record(format!("1^done,{raw}\n").as_bytes()).is_err());
+}
+#[test]
+fn full_closed_protocol_accepts_minimal_symbol_breakpoint_creation() {
+    struct Minimal(Fake);
+    impl Peer for Minimal {
+        fn send(&mut self, token: u64, command: &str) -> Result<(), Refusal> {
+            self.0.send(token, command)?;
+            if let Some(symbol) = command.strip_prefix("-break-insert ") {
+                let last = self.0.records.back_mut().unwrap();
+                *last = String::from_utf8(last.clone())
+                    .unwrap()
+                    .replace(&format!("func=\"{symbol}\""), &format!("at=\"<{symbol}>\""))
+                    .into_bytes();
+            }
+            Ok(())
+        }
+        fn next(&mut self) -> Result<Option<Vec<u8>>, Refusal> {
+            self.0.next()
+        }
+        fn observe_child(&mut self, pid: u32) -> Result<(), Refusal> {
+            self.0.observe_child(pid)
+        }
+        fn entry(&mut self) -> Result<(), Refusal> {
+            self.0.entry()
+        }
+        fn current(&mut self) -> Result<(), Refusal> {
+            self.0.current()
+        }
+        fn finish(&mut self) -> Result<wire::Cleanup, Refusal> {
+            self.0.finish()
+        }
+    }
+    let mut fake = Minimal(Fake::new(Fault::None));
+    let observed = protocol::run(&mut fake, "/fixture/observer", &arguments()).unwrap();
+    assert!(!observed.debugger_acceptance_observed);
+    assert!(!observed.runtime_loaded_success_observed);
+    assert_eq!(fake.0.resumes, 3);
+}

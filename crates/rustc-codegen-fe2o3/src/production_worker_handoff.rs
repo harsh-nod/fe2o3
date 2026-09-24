@@ -36,6 +36,9 @@ use std::fmt;
 #[path = "production_worker_complete_body_v19.rs"]
 mod complete_body_v19;
 pub(crate) use complete_body_v19::prepare_complete_body_worker_handoff_v19;
+#[path = "production_worker_physical_entry_v20.rs"]
+mod physical_entry_v20;
+pub(crate) use physical_entry_v20::prepare_physical_entry_worker_handoff_v20;
 
 #[path = "production_worker_refined_forwarding_v1.rs"]
 pub(crate) mod refined_forwarding_v1;

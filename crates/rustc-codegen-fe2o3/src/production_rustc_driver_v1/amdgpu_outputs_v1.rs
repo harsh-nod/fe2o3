@@ -57,7 +57,7 @@ pub(super) fn extract_amdgpu_llvm_in_active_session_v1(
         census,
     )?;
     if transaction.has_authenticated_physical_entry_v20() {
-        return Err("MIR37/KIR20 physical-entry production LLVM requires mandatory ranked/formal/descriptor continuation; only explicit pre-ranked diagnostics are available".into());
+        return physical_entry_v20::extract_llvm(transaction, output, expected_target);
     }
     if transaction.has_authenticated_complete_body_v19() {
         return complete_body_v19::extract_llvm(transaction, output, expected_target);
@@ -129,7 +129,7 @@ pub(super) fn extract_amdgpu_compiler_handoff_in_active_session_v1(
         census,
     )?;
     if transaction.has_authenticated_physical_entry_v20() {
-        return Err("MIR37/KIR20 physical-entry normal worker handoff is unavailable before mandatory ranked/formal/descriptor continuation".into());
+        return physical_entry_v20::extract_handoff(transaction, output, expected_target);
     }
     if transaction.has_authenticated_complete_body_v19() {
         return complete_body_v19::extract_handoff(transaction, output, expected_target);

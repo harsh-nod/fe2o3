@@ -1,20 +1,12 @@
-//! Actual Rust -> authenticated MIR37 -> pre-ranked exact KIR20 -> CPU/LLVM diagnostics.
-//! The bounded parent prepares real dependencies once, then isolates each live
-//! rustc session. No diagnostic reconstruction can mint this source owner.
-//! Ranked/formal/descriptor continuation remains unavailable. Native LLVM,
-//! protected artifact finalization and GPU execution are NOT run.
+//! Actual Rust -> checked KIR20 -> CPU/LLVM/normal inert descriptor handoff.
+//! Each driver session retains actual rustc custody; files are diagnostic only.
+//! Unresolved runtime ABI conditions are not discharged by these tests.
+//! No native worker, protected finalizer or GPU execution is run.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use fe2o3_kernel_ir::{AccessMode, OperationKind, ScalarType, Type};
-use fe2o3_kir_sim::{
-    AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
-    ScalarBitsV1, SharedBufferV1, SimulationArgumentV1, SimulationLimitsV1, SimulationRequestV1,
-    SimulationTargetV1,
-};
-use fe2o3_mir_model::semantic_mir_v1::{SemanticMirWireVersionV1, SemanticTerminatorKindV1};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 use reserved_fe2o3_symbols::CRATE_BINDING_ID_ENV_V1;
 use serde::{Deserialize, Serialize};
@@ -26,18 +18,18 @@ use super::gfx942_inline_value_qualification_v30_tests::{
 };
 use super::{Callbacks, Compilation, Compiler, TyCtxt};
 
-#[path = "gfx942_physical_entry_observation_v20_tests.rs"]
-pub(crate) mod observation;
+#[path = "gfx942_physical_entry_production_observation_v20_tests.rs"]
+mod observation;
 
-const OUTPUT_ENV: &str = "FE2O3_TEST_PHYSICAL_ENTRY_OUTPUT_V20";
-const CHILD_ENV: &str = "FE2O3_TEST_PHYSICAL_ENTRY_INPUTS_V20";
-const FEATURE_ENV: &str = "FE2O3_TEST_PHYSICAL_ENTRY_FEATURE_V20";
+const OUTPUT_ENV: &str = "FE2O3_TEST_PHYSICAL_PRODUCTION_OUTPUT_V20";
+const CHILD_ENV: &str = "FE2O3_TEST_PHYSICAL_PRODUCTION_INPUTS_V20";
+const FEATURE_ENV: &str = "FE2O3_TEST_PHYSICAL_PRODUCTION_FEATURE_V20";
 const PACKAGE: &str = "fe2o3-production-extraction-fixture";
 const CRATE_NAME: &str = "fe2o3_production_extraction_fixture";
-const CHILD: &str = "production_rustc_driver_v1::gfx942_physical_entry_qualification_v20_tests::actual_physical_entry_source_child";
-const PREFIX: &str = "FE2O3_PHYSICAL_ENTRY_OBSERVATION_V20 ";
-const MODE_ENV: &str = "FE2O3_TEST_PHYSICAL_ENTRY_MODE_V20";
-const MODES: [&str; 2] = ["observe", "diagnostic"];
+const CHILD: &str = "production_rustc_driver_v1::gfx942_physical_entry_production_v20_tests::actual_physical_entry_production_child";
+const PREFIX: &str = "FE2O3_PHYSICAL_PRODUCTION_OBSERVATION_V20 ";
+const MODE_ENV: &str = "FE2O3_TEST_PHYSICAL_PRODUCTION_MODE_V20";
+const MODES: [&str; 3] = ["observe", "llvm", "handoff"];
 const FEATURES: [&str; 8] = [
     "physical-entry-one-v20",
     "physical-entry-diamond-v20",
@@ -128,7 +120,7 @@ fn derive_record(directory: &Path, feature: &str) -> PreparedInvocation {
     let (args, crate_binding, cargo_observation) =
         invocation_for_fixture(directory, &fixture, PACKAGE, CRATE_NAME, Some(feature));
     PreparedInvocation {
-        schema: "fe2o3-test-source-physical-entry-invocation-v20".into(),
+        schema: "fe2o3-test-source-physical-production-invocation-v20".into(),
         feature: feature.into(),
         args,
         crate_binding,
@@ -191,7 +183,7 @@ impl Callbacks for BodyCallbacks<'_> {
                 return Err("actual physical-entry source marker was not authenticated".into());
             }
             let target = transaction
-                .lower_physical_entry_diagnostic_v20()
+                .lower_physical_entry_target_v20()
                 .map_err(|error| error.to_string())?;
             observation::observe(target, self.feature, self.output)
         })());
@@ -207,8 +199,8 @@ fn checked_mode(mode: &str) -> Result<(), &'static str> {
 }
 
 #[test]
-#[ignore = "isolated actual AMD rustc child; use actual_physical_entry_source_ladder"]
-fn actual_physical_entry_source_child() {
+#[ignore = "isolated actual AMD rustc child; use actual_physical_entry_production_ladder"]
+fn actual_physical_entry_production_child() {
     let directory =
         PathBuf::from(std::env::var_os(CHILD_ENV).expect("missing preparation directory"));
     let feature = std::env::var(FEATURE_ENV).expect("missing feature");
@@ -255,11 +247,22 @@ fn actual_physical_entry_source_child() {
             assert_eq!(callbacks.calls, 1);
             callbacks.result.expect("actual callback not reached")
         }
-        "diagnostic" => super::run_diagnostic_physical_entry_extraction_driver_v20(&actual.args, &output).map(|()| {
-            let canonical=read_bounded(&output.join("canonical-v20.bin"),1024*1024).unwrap();
-            let llvm=read_bounded(&output.join("canonical.ll"),64*1024).unwrap();
-            let sidecar=read_bounded(&output.join("native-observation-input-v20.txt"),32*1024).unwrap();
-            json!({"stage":"public_pre_ranked_diagnostic_driver","canonical_sha256":digest(&canonical),"llvm_sha256":digest(&llvm),"native_observation_sha256":digest(&sidecar)})
+        "llvm" => super::run_production_gfx942_llvm_extraction_driver_v1(&actual.args, &output)
+            .map(|()| {
+                let bytes = read_bounded(&output, 64 * 1024).unwrap();
+                json!({"stage":"public_normal_checked_llvm_driver","llvm_sha256":digest(&bytes)})
+            }),
+        "handoff" => super::run_production_gfx942_compiler_handoff_extraction_driver_v1(
+            &actual.args,
+            &output,
+        )
+        .map(|()| {
+            let bytes = read_bounded(&output, 1024 * 1024).unwrap();
+            let decoded = fe2o3_compiler_ffi::CompilerModuleHandoffV2::decode(&bytes).unwrap();
+            assert!(
+                !decoded.authenticates_compiler_origin() && !decoded.grants_compiler_authority()
+            );
+            json!({"stage":"public_normal_inert_handoff_driver","handoff_sha256":digest(&bytes)})
         }),
         _ => unreachable!(),
     };
@@ -281,7 +284,7 @@ fn actual_physical_entry_source_child() {
     println!(
         "\n{PREFIX}{}",
         serde_json::to_string(&json!({
-            "schema": "fe2o3-test-source-physical-entry-observation-v20",
+            "schema": "fe2o3-test-source-physical-production-observation-v20",
             "feature": feature, "mode": mode, "invocation": actual, "observation": observation,
             "actual_rustc_callback": true, "source_unchanged": true,
             "protected_finalizer_admitted": false, "native_llvm_executed": false,
@@ -293,7 +296,7 @@ fn actual_physical_entry_source_child() {
 
 #[test]
 #[ignore = "pinned-nightly real-source ladder; serialize Cargo and provide a fresh absolute output directory"]
-fn actual_physical_entry_source_ladder() {
+fn actual_physical_entry_production_ladder() {
     let directory = PathBuf::from(
         std::env::var_os(OUTPUT_ENV).expect("set a fresh task-owned output directory"),
     );
@@ -403,37 +406,34 @@ fn actual_physical_entry_source_ladder() {
             observations.push(observation);
         }
         if FEATURES[..3].contains(&feature) {
-            for (file, cap) in [
-                ("canonical-v20.bin", 1024 * 1024),
-                ("canonical.ll", 64 * 1024),
-                ("native-observation-input-v20.txt", 32 * 1024),
+            for (mode, file, cap) in [
+                ("llvm", "canonical.ll", 64 * 1024),
+                ("handoff", "handoff-v2.bin", 1024 * 1024),
             ] {
                 let observed = read_bounded(
                     &directory.join(format!("{feature}.observe")).join(file),
                     cap,
                 )
                 .unwrap();
-                let public = read_bounded(
-                    &directory.join(format!("{feature}.diagnostic")).join(file),
-                    cap,
-                )
-                .unwrap();
+                let public =
+                    read_bounded(&directory.join(format!("{feature}.{mode}")), cap).unwrap();
                 assert_eq!(
                     observed, public,
-                    "public diagnostic output differs from same-source immutable pre-ranked owner"
+                    "normal driver differs from the same current checked source owner"
                 );
             }
         }
     }
     require_current_source();
-    assert_eq!(observations.len(), 16);
+    assert_eq!(observations.len(), 24);
     fs::write(
         directory.join("observation.json"),
         serde_json::to_vec_pretty(&json!({
-            "schema": "fe2o3-test-source-physical-entry-ladder-v20", "observations": observations,
+            "schema": "fe2o3-test-source-physical-production-ladder-v20", "observations": observations,
             "public_driver_output_relation": "exact_bytes_same_current_source",
-            "cpu_positive_cases": 576, "exact_negative_runs": 10,
-            "ranked_formal_descriptor_continuation": "unavailable; pre-ranked diagnostics only",
+            "cpu_positive_cases": 576, "exact_negative_runs": 15, "actual_owner_abi_negative_controls": 54, "abi_resource_denial_controls": 12,
+            "ranked_formal_descriptor_continuation": "normal checked source to inert LLVM/handoff",
+            "runtime_abi_conditions_discharged": false,
             "protected_finalizer_admitted": false, "native_llvm_executed": false,
             "grants_artifact_or_launch_authority": false, "hardware_observed": false,
         }))
@@ -447,7 +447,7 @@ fn actual_physical_entry_source_ladder() {
 }
 
 #[test]
-fn physical_entry_source_controls_reject_wrong_stage_or_feature() {
+fn physical_entry_production_controls_reject_wrong_stage_or_feature() {
     for feature in &FEATURES[3..] {
         assert!(expected_rejection(feature, "generic unsupported KIR operation").is_err());
         assert!(expected_rejection(feature, "actual compiler process failed").is_err());
