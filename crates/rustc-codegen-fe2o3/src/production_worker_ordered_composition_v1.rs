@@ -17,6 +17,30 @@ impl PreparedOrderedCompositionWorkerHandoffV1<'_> {
     pub(crate) fn checked(&self) -> &Checked {
         &self.checked
     }
+    /// Test-only consuming observation after the ordinary validated handoff.
+    /// No live source owner escapes; the unchanged ledger is retained by the
+    /// caller until its inert observation has been serialized and consumed.
+    #[cfg(test)]
+    pub(crate) fn into_inert_transport_observation<T>(
+        mut self,
+        observe: impl FnOnce(
+            &Checked,
+            &CompilerModuleHandoffV2,
+            &CompilerDescriptorSourceV1,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<T, String>,
+    ) -> Result<(T, Ledger), String> {
+        let (handoff, descriptor) = self
+            .prepared
+            .into_validated_parts()
+            .map_err(|e| e.to_string())?;
+        let result = self
+            ._ledger
+            .with_budget(|budget| observe(&self.checked, &handoff, &descriptor, budget))?;
+        // Source/check/typed-root fields remain alive throughout observe().
+        // Charges stay conservative after their drop; there is no refund/reset.
+        Ok((result, self._ledger))
+    }
     /// Erases live source/check custody. Returned protocol data remains inert.
     pub(crate) fn into_inert_for_extraction(
         self,

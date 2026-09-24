@@ -1,4 +1,7 @@
 #include "WorkerMachineEffect.h"
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+#include "../tests/ordered-composition-transport/TransportTestV1.h"
+#endif
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -231,6 +234,9 @@ struct MetadataKernel {
   uint64_t KernargSize = 0;
   uint64_t GroupSize = 0;
   uint64_t PrivateSize = 0;
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+  bool TransportShape = false;
+#endif
 };
 
 struct LoaderSegment {
@@ -492,8 +498,15 @@ Expected<uint64_t> metadataUnsigned(msgpack::MapDocNode &Map, StringRef Name) {
   return analysisError(Twine("metadata field is not unsigned: ") + Name);
 }
 
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+#include "../tests/ordered-composition-transport/TransportMetadataV1.inc"
+#endif
 Expected<std::vector<MetadataKernel>>
-readMetadata(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader) {
+readMetadata(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+             , bool Transport = false
+#endif
+             ) {
   const ELFFile<ELF64LE> &File = Object.getELFFile();
   auto Sections = File.sections();
   if (!Sections)
@@ -574,6 +587,9 @@ readMetadata(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader) {
           return analysisError("metadata repeats a kernel");
         Result.push_back(
             {Name->str(), Descriptor->str(), *Kernarg, *Group, *Private});
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+        if (Transport) Result.back().TransportShape=transportMetadataShape(Map);
+#endif
       }
     }
     if (NoteError)
@@ -1839,9 +1855,21 @@ makeInstructionTrace(StringRef FunctionName,
   return Result;
 }
 
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+#include "../tests/ordered-composition-transport/TransportStateV1.inc"
+#include "../tests/ordered-composition-transport/TransportRegistersV1.inc"
+#include "../tests/ordered-composition-transport/TransportShapeV1.inc"
+#include "../tests/ordered-composition-transport/TransportRosterV1.inc"
+#include "../tests/ordered-composition-transport/TransportEvaluateV1.inc"
+#include "../tests/ordered-composition-transport/TransportJoinV1.inc"
+#endif
 Expected<AnalyzedFunction>
 analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
-                bool ReturnPairIsLiveIn, McState &Mc) {
+                bool ReturnPairIsLiveIn, McState &Mc
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+                , TransportAttempt *Transport = nullptr
+#endif
+                ) {
   auto Decoded = decodeFunction(Function, Mc);
   if (!Decoded)
     return Decoded.takeError();
@@ -2096,6 +2124,11 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
       }))
     return analysisError(Twine("function has no physical return: ") +
                          Function.Name);
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+  if (Transport && !Transport->observe(Function,*Decoded,*Cfg,
+      {*Mc.Registers,*Mc.Instructions,*Mc.Analysis},Result))
+    return analysisError("typed transport function observation refused");
+#endif
   return Result;
 }
 
@@ -2366,8 +2399,13 @@ decodePhysicalMachineEffectRequest(ArrayRef<uint8_t> Bytes) {
   return Result;
 }
 
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+static Expected<PhysicalMachineEffectEvidence> analyzeTransportMachineEffectsV1(
+    const PhysicalMachineEffectRequest &Request, TransportAttempt *Transport) {
+#else
 Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     const PhysicalMachineEffectRequest &Request) {
+#endif
   if (Request.Entries.empty() || Request.Entries.size() > MaxEntries)
     return analysisError("request entry count exceeds bound");
   for (size_t I = 0; I < Request.Entries.size(); ++I) {
@@ -2413,7 +2451,11 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
   if (!DynamicLoader)
     return DynamicLoader.takeError();
 
-  auto Metadata = readMetadata(*Object, *Loader);
+  auto Metadata = readMetadata(*Object, *Loader
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+                               , Transport != nullptr
+#endif
+                               );
   if (!Metadata)
     return Metadata.takeError();
   if (Metadata->size() != Request.Entries.size())
@@ -2444,6 +2486,14 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     auto EntryEvidence = validateDescriptor(Kernel, *Entry, *Descriptor);
     if (!EntryEvidence)
       return EntryEvidence.takeError();
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+    if (Transport) {
+      auto DescriptorBytes=symbolBytes(*Descriptor);
+      if (!DescriptorBytes) return DescriptorBytes.takeError();
+      if (!Transport->bind(Kernel,*Entry,*DescriptorBytes))
+        return analysisError("typed transport descriptor join refused");
+    }
+#endif
     Evidence.Entries.push_back(std::move(*EntryEvidence));
   }
 
@@ -2470,7 +2520,11 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
       return analysisError(Twine("reachable function symbol is absent: ") +
                            Name);
     auto Analyzed = analyzeFunction(
-        *Function, *Symbols, !KernelEntries.contains(Name), *Mc);
+        *Function, *Symbols, !KernelEntries.contains(Name), *Mc
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+        , Transport
+#endif
+        );
     if (!Analyzed)
       return Analyzed.takeError();
     // Enforce the old pre-deduplication edge cap on actual call sites, even
@@ -2518,8 +2572,49 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
            std::tie(Right.EntrySymbol, Right.FunctionSymbol,
                     Right.InstructionOffset, Right.Kind, Right.ByteWidth);
   });
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+  if (Transport && !Transport->finish(Evidence))
+    return analysisError("typed transport aggregate commit refused");
+#endif
   return Evidence;
 }
+
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
+    const PhysicalMachineEffectRequest &Request) {
+  return analyzeTransportMachineEffectsV1(Request,nullptr);
+}
+namespace transport_test_v1 {
+std::optional<Reservation> Reservation::acquire(Account &A) {
+  const auto denied=[&](Refusal Reason)->std::optional<Reservation> {
+    if(A.Denials!=UINT64_MAX)++A.Denials;
+    A.LastDenial=Reason;
+    return std::nullopt;
+  };
+  if(A.Storage>A.StorageLimit || StorageBytes>A.StorageLimit-A.Storage)
+    return denied(Refusal::ResourceStorage);
+  if(A.Work>A.WorkLimit || WorkUnits>A.WorkLimit-A.Work)
+    return denied(Refusal::ResourceWork);
+  A.Storage+=StorageBytes;A.Work+=WorkUnits;
+  if(A.Storage>A.Peak)A.Peak=A.Storage;
+  return Reservation(A);
+}
+Expected<Result> analyze(const PhysicalMachineEffectRequest &Request,
+                         const SourceProjection &Source,Account &Account) {
+  auto Held=Reservation::acquire(Account);
+  if(!Held)return analysisError("transport fixed logical prepayment refused");
+  // No retained transport state exists before the exact prepayment above.
+  TransportAttempt Attempt(Source);
+  if(!Attempt.good())return analysisError("transport source projection refused");
+  if(Request.Entries.size()!=1 || Request.Entries[0].Symbol!=Source.Root ||
+     Request.Payload.size()>1024*1024)
+    return analysisError("transport fixed entry/payload profile refused");
+  auto Evidence=analyzeTransportMachineEffectsV1(Request,&Attempt);
+  if(!Evidence)return Evidence.takeError();
+  return Result(std::move(*Evidence),Attempt.summary(),std::move(*Held));
+}
+} // namespace transport_test_v1
+#endif
 
 Expected<std::vector<uint8_t>> encodePhysicalMachineEffectEvidence(
     const PhysicalMachineEffectEvidence &Evidence) {

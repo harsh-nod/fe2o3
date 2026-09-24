@@ -11,6 +11,10 @@ mod checks;
 mod inputs;
 #[path = "gfx942_ordered_composition_promoted_normal_observation_v1_tests.rs"]
 mod observation;
+#[path = "gfx942_ordered_composition_transport_ladder_v1_tests.rs"]
+mod transport_ladder;
+#[path = "gfx942_ordered_composition_transport_roles_v1_tests.rs"]
+mod transport_roles;
 const OUTPUT_ENV: &str = "FE2O3_TEST_COMPOSITION_PROMOTED_NORMAL_OUTPUT_V1";
 const INPUT_ENV: &str = "FE2O3_TEST_COMPOSITION_PROMOTED_NORMAL_INPUT_V1";
 const VARIANT_ENV: &str = "FE2O3_TEST_COMPOSITION_PROMOTED_NORMAL_VARIANT_V1";
@@ -18,6 +22,8 @@ const MODE_ENV: &str = "FE2O3_TEST_COMPOSITION_PROMOTED_NORMAL_MODE_V1";
 const CHILD: &str = "production_rustc_driver_v1::gfx942_ordered_composition_qualification_v1_tests::publisher::public_action::cli::promoted_normal::actual_promoted_normal_child";
 const PREFIX: &str = "FE2O3_COMPOSITION_PROMOTED_NORMAL_SESSION_V1 ";
 struct Body<'a> {
+    transport_roles: bool,
+    role_ledger: Option<fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1>,
     variant: &'a str,
     output: &'a Path,
     started: std::time::Instant,
@@ -33,7 +39,14 @@ impl Callbacks for Body<'_> {
                 crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
             )?;
             let target = transaction.lower_ordered_composition_target_v1()?;
-            observation::observe(target, self.variant, self.output, self.started)
+            if self.transport_roles {
+                let (value, ledger) =
+                    transport_roles::observe(target, self.variant, self.output, self.started)?;
+                self.role_ledger = Some(ledger);
+                Ok(value)
+            } else {
+                observation::observe(target, self.variant, self.output, self.started)
+            }
         })());
         Compilation::Stop
     }
@@ -50,7 +63,11 @@ fn actual_promoted_normal_child() {
     );
     let variant = std::env::var(VARIANT_ENV).unwrap();
     let mode = std::env::var(MODE_ENV).unwrap();
-    let name = checks::normal_case(&variant, &mode).unwrap();
+    let name = if mode == transport_roles::MODE {
+        transport_roles::case(&variant).unwrap()
+    } else {
+        checks::normal_case(&variant, &mode).unwrap()
+    };
     // Mode is not part of source invocation identity; all three modes rederive the same source args.
     let record = inputs::invocation(&root, &variant, &variant);
     let retained: Invocation = serde_json::from_slice(
@@ -81,9 +98,13 @@ fn actual_promoted_normal_child() {
     let output = root.join(format!("{name}.output"));
     assert!(!output.exists());
     timely(started.elapsed(), 300).unwrap();
+    // Only the new mode retains a ledger through the terminal output boundary.
+    let mut role_ledger = None;
     let result = match mode.as_str() {
-        "observe" => {
+        "observe" | transport_roles::MODE => {
             let mut body = Body {
+                transport_roles: mode == transport_roles::MODE,
+                role_ledger: None,
                 variant: &variant,
                 output: &output,
                 started,
@@ -92,6 +113,7 @@ fn actual_promoted_normal_child() {
             };
             rustc_driver::run_compiler(&record.args, &mut body);
             assert_eq!(body.calls, 1);
+            role_ledger = body.role_ledger.take();
             body.result.expect("actual source callback")
         }
         "llvm" => driver::run_production_gfx942_llvm_extraction_driver_v1(&record.args, &output)
@@ -124,17 +146,31 @@ fn actual_promoted_normal_child() {
     let observed = result.unwrap();
     inputs::recheck(&root, &variant, &variant, &record, &source);
     timely(started.elapsed(), 300).unwrap();
+    let transport = mode == transport_roles::MODE;
+    assert_eq!(role_ledger.is_some(), transport);
+    let schema = if transport {
+        transport_roles::SCHEMA
+    } else {
+        "fe2o3-test-composition-promoted-normal-session-v1"
+    };
+    let prefix = if transport {
+        transport_roles::FRAME_PREFIX
+    } else {
+        PREFIX
+    };
     let frame = serde_json::to_string(&json!({
-        "schema":"fe2o3-test-composition-promoted-normal-session-v1",
+        "schema":schema,
         "variant":variant,"mode":mode,"invocation":record,"source":source,"observation":observed,
         "actual_fresh_frontend":true,"runtime_conditions_discharged":false,
         "source_custody_exported":false,"hardware_observed":false,"protected_authority":false
     }))
     .unwrap();
     assert!(frame.len() <= 256 * 1024);
-    println!("\n{PREFIX}{frame}");
+    println!("\n{prefix}{frame}");
     std::io::stdout().flush().unwrap();
     timely(started.elapsed(), 300).unwrap();
+    drop(frame);
+    drop(role_ledger);
 }
 fn normal_session(root: &Path, variant: &str, mode: &str, started: std::time::Instant) -> Value {
     let session = std::time::Instant::now();

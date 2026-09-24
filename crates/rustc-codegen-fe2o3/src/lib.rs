@@ -59,6 +59,7 @@ mod production_physical_lds_exchange_census_v39;
 mod production_physical_lds_exchange_source_abi_v39;
 mod production_physical_lds_exchange_terminal_v39;
 mod production_pipeline;
+mod production_tiled_region_source_v1;
 pub use production_rustc_driver_v1::run_diagnostic_ordered_composition_extraction_driver_v1;
 #[cfg(target_os = "linux")]
 pub use production_rustc_driver_v1::run_ordered_composition_source_promotion_driver_v1;

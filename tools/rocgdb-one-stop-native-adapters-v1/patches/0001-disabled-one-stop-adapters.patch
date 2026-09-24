@@ -1,0 +1,2953 @@
+diff --git a/gdb/amd-dbgapi-one-stop-activation-v1.h b/gdb/amd-dbgapi-one-stop-activation-v1.h
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-activation-v1.h
+@@ -0,0 +1,11 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Compile-candidate safety gate. No environment, command argument, JSON,
++   token, receipt or caller pointer can change this source-level refusal.
++   A separately reviewed source revision is required even to attempt arming. */
++#ifndef GDB_AMD_DBGAPI_ONE_STOP_ACTIVATION_V1_H
++#define GDB_AMD_DBGAPI_ONE_STOP_ACTIVATION_V1_H
++namespace amd_owned_one_stop_v1 {
++constexpr bool selection_available () noexcept { return false; }
++static_assert (!selection_available (), "first adapter is compile-only");
++}
++#endif
+diff --git a/gdb/amd-dbgapi-one-stop-checkpoint-v1.h b/gdb/amd-dbgapi-one-stop-checkpoint-v1.h
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-checkpoint-v1.h
+@@ -0,0 +1,138 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Exact frozen 776-byte target checkpoint codec. Parsing yields inert facts,
++   not a queue handle, permission or source provenance. No dynamic allocation. */
++#ifndef GDB_AMD_DBGAPI_ONE_STOP_CHECKPOINT_V1_H
++#define GDB_AMD_DBGAPI_ONE_STOP_CHECKPOINT_V1_H
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <limits>
++
++namespace amd_owned_one_stop_v1 {
++using checkpoint_bytes = std::array<std::uint8_t, 776>;
++using digest_bytes = std::array<std::uint8_t, 32>;
++inline constexpr digest_bytes fixed_object_sha {{
++  0xcd,0x3d,0xaa,0xb7,0x6d,0xb3,0x47,0x10,0x41,0x66,0xc8,0x98,0xa5,0x8d,0xcc,0x29,
++  0xc1,0x97,0xee,0x1e,0xac,0x8b,0x25,0x8b,0x10,0xa2,0xc7,0x93,0xe8,0x77,0x9c,0x87
++}};
++inline constexpr digest_bytes fixed_source_sha {{
++  0xe5,0x67,0xe9,0xb4,0x14,0xf0,0x08,0x22,0xfb,0xf6,0x43,0x69,0x84,0xa4,0x52,0xd9,
++  0x94,0x06,0x30,0xec,0xce,0xc4,0x0a,0x0e,0x86,0xb2,0xc5,0xc1,0x91,0x59,0x80,0x17
++}};
++/* Actual fixed object's zero-filled 12288-byte image, using the three
++   independently checked target-loader segments. NOT the original ELF digest. */
++inline constexpr digest_bytes fixed_image_sha {{
++  0x2b,0x3a,0xe7,0xaa,0xfb,0x41,0x9b,0xf6,0x58,0x2b,0x72,0xaa,0x8a,0xf2,0x2f,0x46,
++  0x85,0xa8,0xa4,0xf6,0x81,0x1c,0x30,0x5c,0xdd,0xfe,0x5a,0x1f,0x84,0x21,0xfe,0xc6
++}};
++inline constexpr digest_bytes fixed_trap_sha {{
++  0x4f,0xfe,0xa8,0x93,0xee,0x53,0xe0,0x18,0xa6,0x29,0xc1,0x92,0x54,0x85,0x57,0x21,
++  0x88,0x24,0x44,0x51,0x71,0x55,0x25,0x1f,0x1f,0x45,0xdd,0x35,0x19,0xbc,0x81,0xfe
++}};
++inline bool checked_sum (std::uint64_t a, std::uint64_t b, std::uint64_t &out) noexcept {
++  if (b > std::numeric_limits<std::uint64_t>::max () - a) return false;
++  out = a + b; return true;
++}
++/* CODE_OBJECT_INFO_LOAD_ADDRESS is ptrdiff_t signed relocation bias.
++   Never cast a negative bias to an unsigned base before checked arithmetic. */
++inline bool apply_bias (std::uint64_t value, std::int64_t bias, std::uint64_t &out) noexcept {
++  if (bias >= 0) return checked_sum (value, static_cast<std::uint64_t> (bias), out);
++  const auto magnitude = static_cast<std::uint64_t> (-(bias + 1)) + 1;
++  if (value < magnitude) return false;
++  out = value - magnitude; return true;
++}
++class checkpoint_view {
++public:
++  explicit checkpoint_view (const checkpoint_bytes &bytes) noexcept : b (bytes) {}
++  std::uint64_t u64 (std::size_t offset) const noexcept {
++    if (offset > b.size () - 8) return 0;
++    std::uint64_t v = 0;
++    for (unsigned n = 0; n != 8; ++n) v |= std::uint64_t (b[offset+n]) << (8*n);
++    return v;
++  }
++  std::uint32_t u32 (std::size_t offset) const noexcept {
++    if (offset > b.size () - 4) return 0;
++    std::uint32_t v = 0;
++    for (unsigned n = 0; n != 4; ++n) v |= std::uint32_t (b[offset+n]) << (8*n);
++    return v;
++  }
++  std::uint16_t u16 (std::size_t offset) const noexcept {
++    if (offset > b.size () - 2) return 0;
++    return std::uint16_t (b[offset]) | (std::uint16_t (b[offset+1]) << 8);
++  }
++  bool digest_at (std::size_t at, const digest_bytes &expected) const noexcept {
++    if (at > b.size () - expected.size ()) return false;
++    for (std::size_t n = 0; n != expected.size (); ++n)
++      if (b[at+n] != expected[n]) return false;
++    return true;
++  }
++  bool valid (std::uint64_t actual_pid) const noexcept {
++    constexpr std::array<std::uint8_t, 8> magic {{'F','3','G','S','T','P','0','1'}};
++    for (std::size_t n = 0; n != magic.size (); ++n) if (b[n] != magic[n]) return false;
++    if (u32 (8) != 1 || u32 (12) != 776 || actual_pid == 0
++        || actual_pid > std::numeric_limits<std::uint32_t>::max ()
++        || u32 (16) != actual_pid || u32 (24) != 39903
++        || u64 (32) != UINT64_C (16366993098680759275)
++        || u64 (40) != 0 || u64 (48) != 0 || u64 (64) != 12288
++        || u64 (96) != 8388608 || u64 (152) != 264
++        || u64 (168) != 272 || u64 (176) != 4096 || u64 (192) != 256
++        || u64 (208) != 4096 || u64 (216) == 0 || (u64 (216) & 7) != 0
++        || u64 (232) != 181829632 || u64 (248) != 4096)
++      return false;
++    std::uint64_t descriptor = 0, entry = 0, write = 0, read = 0, value = 0, output = 0;
++    if (!checked_sum (u64 (56), 1984, descriptor) || descriptor != u64 (72)
++        || !checked_sum (u64 (56), 6144, entry) || entry != u64 (80)
++        || !checked_sum (u64 (104), 0x38, write) || write != u64 (112)
++        || !checked_sum (u64 (104), 0x80, read) || read != u64 (120)
++        || !checked_sum (u64 (128), 8, value) || value != u64 (136)
++        || !checked_sum (u64 (160), 8, output) || output != u64 (184)) return false;
++    const std::array<std::array<std::uint64_t, 2>, 9> ranges {{
++      {{u64 (56), 12288}}, {{u64 (88), 8388608}}, {{u64 (104), 4096}},
++      {{u64 (128), 4096}}, {{u64 (144), 65536}}, {{u64 (160), 4096}},
++      {{u64 (200), 4096}}, {{u64 (224), 181829632}}, {{u64 (240), 4096}}
++    }};
++    for (std::size_t n = 0; n != ranges.size (); ++n) {
++      std::uint64_t end = 0;
++      if (ranges[n][0] == 0 || (ranges[n][0] & 4095) != 0
++          || !checked_sum (ranges[n][0], ranges[n][1], end)) return false;
++      for (std::size_t p = 0; p < n; ++p) {
++        std::uint64_t previous_end = 0;
++        if (!checked_sum (ranges[p][0], ranges[p][1], previous_end)
++            || !(end <= ranges[p][0] || previous_end <= ranges[n][0])) return false;
++      }
++    }
++    if (!digest_at (256, fixed_object_sha) || !digest_at (288, fixed_source_sha)
++        || !digest_at (320, fixed_image_sha) || !digest_at (352, fixed_trap_sha))
++      return false;
++    // Retain/requery the actual target's closure digest. This nonzero check
++    // does NOT independently recompute the Rust loader's identity algorithm.
++    bool closure_nonzero = false;
++    for (std::size_t n = 384; n != 416; ++n) closure_nonzero |= b[n] != 0;
++    if (!closure_nonzero) return false;
++    for (std::size_t n = 744; n != 776; ++n) if (b[n] != 0) return false;
++    return packet_valid () && kernarg_valid ();
++  }
++  bool packet_valid () const noexcept {
++    constexpr std::size_t p = 416;
++    return u32 (p) == 0x00010001 && u16 (p+4) == 64 && u16 (p+6) == 1
++      && u16 (p+8) == 1 && u16 (p+10) == 0 && u32 (p+12) == 64
++      && u32 (p+16) == 1 && u32 (p+20) == 1 && u32 (p+24) == 0
++      && u32 (p+28) == 0 && u64 (p+32) == u64 (72)
++      && u64 (p+40) == u64 (144) && u64 (p+48) == 0
++      && u64 (p+56) == u64 (128); // packet signal BASE, never value+8.
++  }
++  bool kernarg_valid () const noexcept {
++    for (std::size_t n = 0; n != 264; ++n) {
++      std::uint8_t expected = 0;
++      if (n < 8) expected = static_cast<std::uint8_t> (u64 (184) >> (8*n));
++      else if (n == 8 || n == 12 || n == 16 || n == 22 || n == 24 || n == 72) expected = 1;
++      else if (n == 20) expected = 64;
++      if (b[480+n] != expected) return false;
++    }
++    return true;
++  }
++private:
++  const checkpoint_bytes &b;
++};
++} // namespace amd_owned_one_stop_v1
++#endif
+diff --git a/gdb/amd-dbgapi-one-stop-locator-v1.h b/gdb/amd-dbgapi-one-stop-locator-v1.h
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-locator-v1.h
+@@ -0,0 +1,38 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Exact retained Rust memory locator grammar, not an address capability. */
++#ifndef GDB_AMD_DBGAPI_ONE_STOP_LOCATOR_V1_H
++#define GDB_AMD_DBGAPI_ONE_STOP_LOCATOR_V1_H
++#include <cstddef>
++#include <cstdint>
++namespace amd_owned_one_stop_v1 {
++inline bool fixed_memory_locator (const char *text,std::size_t bytes,
++                                  std::uint64_t pid,std::uint64_t &address) noexcept {
++  if (!text || bytes<34 || bytes>128 || text[bytes-1]!=0 || !pid) return false;
++  std::size_t at=0;
++  auto literal=[&] (const char *s) {
++    for (std::size_t n=0;s[n];++n) {
++      if (at>=bytes-1 || text[at++]!=s[n]) return false;
++    }
++    return true;
++  };
++  auto number=[&] (unsigned base,std::uint64_t &out) {
++    const auto start=at; out=0;
++    while (at<bytes-1) {
++      const char c=text[at]; unsigned digit=base;
++      if (c>='0' && c<='9') digit=static_cast<unsigned> (c-'0');
++      else if (base==16 && c>='a' && c<='f') digit=10+static_cast<unsigned> (c-'a');
++      if (digit>=base) break;
++      if (out>(UINT64_MAX-digit)/base) return false;
++      out=out*base+digit; ++at;
++    }
++    return at>start && !(at-start>1 && text[start]=='0');
++  };
++  std::uint64_t actual_pid=0,actual_address=0,actual_size=0;
++  if (!literal ("memory://") || !number (10,actual_pid) || actual_pid!=pid
++      || !literal ("#offset=0x") || !number (16,actual_address) || !actual_address
++      || !literal ("&size=") || !number (10,actual_size) || actual_size!=5312
++      || at!=bytes-1 || actual_address>UINT64_MAX-actual_size) return false;
++  address=actual_address; return true;
++}
++}
++#endif
+diff --git a/gdb/amd-dbgapi-one-stop-native-events-v1.inc b/gdb/amd-dbgapi-one-stop-native-events-v1.inc
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-native-events-v1.inc
+@@ -0,0 +1,185 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Called solely at the existing client's actual callback/sole-ACK sites.
++   No synthetic event, second ACK or serialized owner construction. */
++namespace amd_owned_one_stop_v1 {
++void native_adapter::callback_begin (amd_dbgapi_inferior_info &actual,breakpoint *bp,
++                                    amd_dbgapi_breakpoint_id_t id,thread_info *thread) {
++  if (!selected ()) return;
++  require (&actual==&info () && thread==m_host && thread==inferior_thread ()
++           && m_path==path::none && m_callback_progress==callback_progress::none
++           && bp!=nullptr && bp->pspace==m_inferior->pspace
++           && bp->has_single_location () && bp->disposition==disp_donttouch,
++           failure::callback_identity);
++  const auto found=actual.breakpoint_map.find (id.handle);
++  require (found!=actual.breakpoint_map.end () && found->second==bp
++           && bp->first_loc ().pspace==m_inferior->pspace
++           && bp->first_loc ().address!=0
++           && regcache_read_pc (get_thread_regcache (thread))==bp->first_loc ().address,
++           failure::callback_identity);
++  const auto object=reinterpret_cast<std::uintptr_t> (bp);
++  if (m_callback_object==0) {
++    require (m_owner.state ()==phase::host_running,failure::callback_identity);
++    m_callback_object=object; m_callback_pc=bp->first_loc ().address;
++    m_callback_number=static_cast<std::uint64_t> (bp->number);
++  } else {
++    require (object==m_callback_object && bp->first_loc ().address==m_callback_pc
++             && static_cast<std::uint64_t> (bp->number)==m_callback_number,
++             failure::callback_identity);
++  }
++  if (m_owner.state ()==phase::awaiting_target_completion) {
++    read_runtime_root (m_owner.m_root_address);
++    require (m_root_read.breakpoint==m_callback_pc
++             && m_owner.terminal_callback_begin
++                  (current_identity (),object,id.handle,thread->global_num,
++                   m_owner.m_root_address,m_root_read),failure::callback_identity);
++  } else {
++    require (m_owner.callback_begin (current_identity (),object,id.handle,thread->global_num),
++             failure::callback_identity);
++  }
++}
++void native_adapter::callback_end (amd_dbgapi_inferior_info &actual,breakpoint *bp,
++                                  amd_dbgapi_breakpoint_id_t id,thread_info *thread,
++                                  amd_dbgapi_event_id_t event,amd_dbgapi_breakpoint_action_t action,
++                                  amd_dbgapi_status_t status) {
++  if (!selected ()) return;
++  require (&actual==&info () && thread==m_host && bp!=nullptr
++           && reinterpret_cast<std::uintptr_t> (bp)==m_callback_object
++           && bp->has_single_location () && bp->first_loc ().address==m_callback_pc,
++           failure::callback_identity);
++  const auto actual_owner=current_identity ();
++  const bool accepted=m_owner.state ()==phase::awaiting_target_completion
++    ? m_owner.terminal_callback_complete (actual_owner,m_callback_object,id.handle,
++                                          thread->global_num,event.handle,action,status)
++    : m_owner.callback_complete (actual_owner,m_callback_object,id.handle,
++                                 thread->global_num,event.handle,action,status);
++  require (accepted,failure::callback_identity);
++  m_callback_progress=callback_progress::step_ready;
++  // This admits no effect here. Actual infrun/target fences still consume the
++  // one precisely identified internal host step and subsequent continuation.
++  flush ();
++}
++void native_adapter::runtime_ack (amd_dbgapi_inferior_info &actual,amd_dbgapi_event_id_t event,
++                                 amd_dbgapi_runtime_state_t state,amd_dbgapi_status_t status) {
++  if (!selected ()) return;
++  require (&actual==&info () && actual.runtime_state==state
++           && m_path==path::none && m_callback_progress==callback_progress::none,
++           failure::owner_changed);
++  if (state==AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS) {
++    require (m_owner.runtime_loaded (current_identity (),event.handle,status),failure::acknowledgement);
++  } else if (state==AMD_DBGAPI_RUNTIME_STATE_UNLOADED) {
++    require (m_owner.runtime_unloaded (current_identity (),event.handle,status),failure::acknowledgement);
++  } else reject (failure::native_result);
++  flush ();
++}
++void native_adapter::objects_ack (amd_dbgapi_inferior_info &actual,amd_dbgapi_event_id_t event,
++                                 amd_dbgapi_status_t status) {
++  if (!selected ()) return;
++  require (&actual==&info (),failure::owner_changed);
++  if (m_owner.state ()==phase::awaiting_target_completion) {
++    require (m_owner.terminal_object_completed (current_identity (),event.handle,status),
++             failure::acknowledgement);
++  } else {
++    require (m_origin_pending && !m_origin_complete
++             && m_owner.code_object_completed (current_identity (),event.handle,m_object.handle,status),
++             failure::acknowledgement);
++    m_origin_pending=false; m_origin_complete=true;
++  }
++}
++void native_adapter::wave_ack (amd_dbgapi_inferior_info &actual,amd_dbgapi_event_id_t event,
++                              thread_info *thread,amd_dbgapi_status_t status) {
++  if (!selected ()) return;
++  require (&actual==&info () && thread!=nullptr && status==AMD_DBGAPI_STATUS_SUCCESS
++           && m_gpu_thread==nullptr && m_owner.state ()==phase::awaiting_gpu_stop
++           && m_path==path::none,failure::stop_changed);
++  // THREAD came from the actual handled WAVE_STOP before its sole ACK.
++  // Never query the event handle after ACK, when the native event is invalid.
++  m_candidate_stop=query_stop (thread,false);
++  require (m_owner.stopped_after_ack (current_identity (),event.handle,m_candidate_stop,status),
++           failure::stop_changed);
++  m_gpu_thread=thread; m_gpu_thread_ref=thread_info_ref::new_reference (thread);
++  // No diagnostic output until actual MI stop and post-auto-delete safe point.
++}
++void native_adapter::after_host_or_gpu_stop (thread_info *thread) {
++  if (!selected ()) return;
++  if (m_owner.state ()==phase::lifecycle_disappeared && thread==nullptr) return;
++  // Lifecycle disappearance is not a claim that the separate MI exit was normal.
++  require (thread!=nullptr && thread==inferior_thread (),failure::stop_changed);
++  if (m_owner.state ()==phase::provisional_checkpoint) {
++    require (thread==m_host
++             && m_owner.host_stop_output_completed
++                  (current_identity (),regcache_read_pc (get_thread_regcache (thread))),
++             failure::checkpoint_changed);
++  } else if (m_owner.state ()==phase::provisional_gpu_stop) {
++    require (thread==m_gpu_thread,failure::stop_changed);
++    m_candidate_stop=query_stop (thread,true);
++    require (m_owner.gpu_stop_output_completed (current_identity (),m_candidate_stop),
++             failure::stop_changed);
++  } else reject (failure::order);
++  // MI *stopped alone never means checkpoint retirement. Do not flush here.
++}
++void native_adapter::deleting_breakpoint (breakpoint *bp) {
++  if (!selected () || m_owner.invalid ()) return;
++  if (bp==m_breakpoint) {
++    const auto object=reinterpret_cast<std::uintptr_t> (bp);
++    const auto number=static_cast<std::uint64_t> (bp->number);
++    require (m_owner.deleting_breakpoint (object,number),failure::breakpoint_changed);
++    m_breakpoint=nullptr; // Observer precedes deletion; never dereference it later.
++    return;
++  }
++  if (reinterpret_cast<std::uintptr_t> (bp)==m_callback_object) {
++    require (m_owner.state ()==phase::awaiting_target_completion && !m_owner.m_callback
++             && m_owner.m_terminal==owner::terminal_stage::withdrawal_complete
++             && m_callback_progress==callback_progress::none,
++             failure::breakpoint_changed);
++    // This notification is not a retirement proof and grants no further resume.
++    return;
++  }
++  reject (failure::breakpoint_changed);
++}
++void native_adapter::after_auto_delete () {
++  if (!selected ()) return;
++  if (m_owner.state ()==phase::provisional_checkpoint) {
++    require (m_breakpoint==nullptr && inferior_thread ()==m_host,
++             failure::retirement_incomplete);
++    std::size_t objects=0,locations=0,count=0;
++    for (auto &bp : all_breakpoints ()) {
++      debit (counter::work,1);
++      require (++count<=64,failure::budget);
++      if (reinterpret_cast<std::uintptr_t> (&bp)==m_breakpoint_identity) ++objects;
++    }
++    count=0;
++    for (auto &location : all_bp_locations ()) {
++      debit (counter::work,1); require (++count<=64,failure::budget);
++      if (location->pspace==m_inferior->pspace && location->address==m_checkpoint_pc) ++locations;
++    }
++    require (m_owner.retirement_finished (current_identity (),
++               regcache_read_pc (get_thread_regcache (m_host)),objects,locations),
++             failure::retirement_incomplete);
++  } else {
++    require (m_owner.state ()==phase::current_gpu_stop && inferior_thread ()==m_gpu_thread,
++             failure::stop_changed);
++    m_stop_retired=true;
++  }
++  flush (); // After actual breakpoint_auto_delete has fully returned.
++}
++void native_adapter::disappearing (inferior *actual) {
++  if (!selected () || m_owner.invalid ()) return;
++  // exit_inferior clears threads before this observer, but has not cleared PID.
++  // Retained strong references prevent address reuse; do not pretend a live
++  // stopped host thread still exists or query target memory here.
++  const bool same_owner=actual==m_inferior && m_info!=nullptr
++    && amd_dbgapi_inferior_data.get (actual)==m_info && m_info->inf==actual
++    && actual->pspace==reinterpret_cast<program_space *> (m_owner.m_identity.program_space)
++    && actual->num==static_cast<int> (m_owner.m_identity.inferior_number)
++    && actual->pid==static_cast<int> (m_owner.m_identity.pid)
++    && m_info->process_id.handle==m_owner.m_identity.process
++    && m_inferior_ref.get ()==actual && m_host_ref.get ()==m_host;
++  if (!same_owner || !m_owner.lifecycle_disappeared (m_owner.m_identity)) {
++    m_owner.poison (failure::lifecycle);
++    return; // Never interrupt ordinary known-owner teardown with a thrown error.
++  }
++  flush ();
++}
++void native_adapter::invalidate (failure why) { if (selected ()) m_owner.poison (why); }
++void native_adapter::native_unwind () noexcept { if (selected ()) m_owner.poison (failure::native_result); }
++} // namespace amd_owned_one_stop_v1
+diff --git a/gdb/amd-dbgapi-one-stop-native-io-v1.inc b/gdb/amd-dbgapi-one-stop-native-io-v1.inc
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-native-io-v1.inc
+@@ -0,0 +1,155 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Concrete same-client target/file I/O and bounded allocator adapters.
++   Included after the existing real target/inferior definitions. */
++namespace amd_owned_one_stop_v1 {
++native_adapter &native_adapter::instance () noexcept {
++  static native_adapter retained;
++  return retained;
++}
++[[noreturn]] void native_adapter::reject (failure why) {
++  m_owner.poison (why);
++  error (_("fixed owned one-stop native relation refused (%u)"),
++         static_cast<unsigned> (m_owner.why ()));
++}
++void native_adapter::require (bool yes, failure why) {
++  if (!yes || m_owner.invalid ()) reject (why);
++}
++void native_adapter::debit (counter kind, std::uint64_t amount) {
++  if (!m_owner.debit (kind, amount)) reject (failure::budget);
++}
++void native_adapter::api () { debit (counter::api,1); debit (counter::work,8); }
++void native_adapter::read (std::uint64_t address, std::uint8_t *out, std::size_t bytes) {
++  require (m_inferior != nullptr && current_inferior () == m_inferior
++           && bytes != 0 && out != nullptr && address != 0
++           && bytes <= 776 && address <= UINT64_MAX-bytes, failure::owner_changed);
++  debit (counter::read_calls,1); debit (counter::read_bytes,bytes);
++  if (target_read_memory (address,out,bytes) != 0) reject (failure::native_result);
++}
++void native_adapter::hash_input (const std::uint8_t *bytes, std::size_t count, bool file) {
++  std::uint64_t blocks=0;
++  require (count<=256 && m_hash.input_blocks (count,blocks),failure::budget);
++  if (file) debit (counter::file_rounds,blocks*64);
++  else { debit (counter::work,count); debit (counter::work,blocks*64); }
++  require (m_hash.update (bytes,count),failure::budget);
++}
++void native_adapter::hash_finish (const digest_bytes &expected, bool file) {
++  debit (file ? counter::file_rounds : counter::work,m_hash.finish_blocks ()*64);
++  require (m_hash.finish (m_digest) && m_digest==expected,failure::checkpoint_changed);
++}
++void native_adapter::hash_inferior (std::uint64_t address, std::uint64_t bytes,
++                                   const digest_bytes &expected) {
++  require (bytes==5312 || bytes==12288 || bytes==4096,failure::checkpoint_changed);
++  m_hash=sha256 {}; // Fresh digest only; the owning resource ledger never resets.
++  for (std::uint64_t at=0;at<bytes;) {
++    const auto n=static_cast<std::size_t> (std::min<std::uint64_t> (256,bytes-at));
++    std::uint64_t current=0;
++    require (checked_sum (address,at,current),failure::checkpoint_changed);
++    read (current,m_work.image_chunk.data (),n);
++    hash_input (m_work.image_chunk.data (),n,false); at+=n;
++  }
++  hash_finish (expected,false);
++}
++void native_adapter::read_u64 (std::uint64_t address, std::uint64_t &value) {
++  read (address,m_work.image_chunk.data (),8); debit (counter::work,8); value=0;
++  for (unsigned n=0;n!=8;++n) value|=std::uint64_t (m_work.image_chunk[n])<<(8*n);
++}
++void native_adapter::hash_executable () {
++  require (m_exec_fd>=0 && m_file_passes<2,failure::checkpoint_changed);
++  ++m_file_passes; // Consume before lseek/read: any outcome cannot retry.
++  struct stat before {},after {};
++  require (::fstat (m_exec_fd,&before)==0 && S_ISREG (before.st_mode)
++           && before.st_size==static_cast<off_t> (target_bytes)
++           && before.st_dev==m_exec_identity.st_dev && before.st_ino==m_exec_identity.st_ino
++           && before.st_size==m_exec_identity.st_size
++           && before.st_mtim.tv_sec==m_exec_identity.st_mtim.tv_sec
++           && before.st_mtim.tv_nsec==m_exec_identity.st_mtim.tv_nsec
++           && before.st_ctim.tv_sec==m_exec_identity.st_ctim.tv_sec
++           && before.st_ctim.tv_nsec==m_exec_identity.st_ctim.tv_nsec,
++           failure::checkpoint_changed);
++  require (::lseek (m_exec_fd,0,SEEK_SET)==0,failure::native_result);
++  m_hash=sha256 {};
++  for (std::uint64_t at=0;at<target_bytes;) {
++    const auto n=static_cast<std::size_t> (std::min<std::uint64_t> (256,target_bytes-at));
++    debit (counter::file_requested_bytes,n);
++    const auto got=::read (m_exec_fd,m_work.image_chunk.data (),n);
++    if (got>0) debit (counter::file_observed_bytes,static_cast<std::uint64_t> (got));
++    require (got==static_cast<ssize_t> (n),failure::native_result); // No EINTR/short-read retry.
++    hash_input (m_work.image_chunk.data (),n,true); at+=n;
++  }
++  debit (counter::file_requested_bytes,1);
++  const auto eof=::read (m_exec_fd,m_work.image_chunk.data (),1);
++  if (eof>0) debit (counter::file_probe_bytes,static_cast<std::uint64_t> (eof));
++  require (eof==0,failure::checkpoint_changed);
++  hash_finish (target_sha,true);
++  require (::fstat (m_exec_fd,&after)==0 && after.st_dev==before.st_dev
++           && after.st_ino==before.st_ino && after.st_size==before.st_size
++           && after.st_mtim.tv_sec==before.st_mtim.tv_sec
++           && after.st_mtim.tv_nsec==before.st_mtim.tv_nsec
++           && after.st_ctim.tv_sec==before.st_ctim.tv_sec
++           && after.st_ctim.tv_nsec==before.st_ctim.tv_nsec,
++           failure::checkpoint_changed);
++}
++void *native_adapter::allocate_client (std::size_t bytes) {
++  if (!m_query_output) {
++    if (m_owner.selected () && (m_owner.invalid () || m_owner.state ()==phase::disabled)) {
++      m_owner.poison (failure::allocation); return nullptr;
++    }
++    return ::malloc (bytes); // Unselected/ordinary baseline calls unchanged.
++  }
++  if (m_in_allocate || !m_owner.request_client_output (bytes)) {
++    m_owner.poison (failure::allocation); return nullptr;
++  }
++  if (m_owner.m_allocation_empty) return nullptr; // Exact size0 callback; never malloc(0).
++  m_in_allocate=true;
++  void *const result=::malloc (bytes);
++  m_in_allocate=false;
++  if (!m_owner.client_output_allocated (reinterpret_cast<std::uintptr_t> (result))) {
++    if (result) ::free (result);
++    return nullptr;
++  }
++  return result;
++}
++void native_adapter::deallocate_client (void *pointer) {
++  if (!m_query_output) { ::free (pointer); return; }
++  if (pointer==nullptr) return; // No-op, never an object identity or release witness.
++  if (m_owner.releasing_client_output (reinterpret_cast<std::uintptr_t> (pointer)))
++    ::free (pointer);
++  else m_owner.poison (failure::allocation);
++}
++void native_adapter::client_scope_failed () noexcept {
++  // Only this exact allocation may be freed after a failed/throwing call.
++  if (m_owner.m_allocation_pointer) {
++    auto *p=reinterpret_cast<void *> (m_owner.m_allocation_pointer);
++    if (m_owner.releasing_client_output (m_owner.m_allocation_pointer)) ::free (p);
++  }
++  m_query_output=false; m_in_allocate=false;
++}
++template<typename Handle,typename Call>
++Handle native_adapter::list_one (Call call) {
++  static_assert (sizeof (Handle)==8,"fixed installed native handle width");
++  require (!m_query_output && m_owner.begin_client_output (sizeof (Handle)),failure::allocation);
++  m_query_output=true;
++  try {
++    std::size_t count=0; Handle *rows=nullptr;
++    api ();
++    const auto status=call (&count,&rows); // Actual API allocates only through guarded callback.
++    require (count==1 && rows!=nullptr
++             && m_owner.client_output_returned (reinterpret_cast<std::uintptr_t> (rows),
++                                                sizeof (Handle),status),
++             failure::allocation);
++    const Handle only=*rows;
++    require (only.handle!=0,failure::owner_changed);
++    require (m_owner.releasing_client_output (reinterpret_cast<std::uintptr_t> (rows)),
++             failure::allocation);
++    ::free (rows); m_query_output=false; return only;
++  } catch (...) { m_owner.poison (failure::native_result); client_scope_failed (); throw; }
++}
++template<typename Get,typename Id,typename Query,typename Value>
++void native_adapter::query (Get get,Id id,Query query,Value &value) {
++  static_assert (std::is_trivially_copyable<Value>::value,"fixed scalar query output");
++  static_assert (sizeof (Value)<=24,"closed fixed scalar query roster");
++  api ();
++  const auto status=get (id,query,sizeof (value),&value);
++  require (status==AMD_DBGAPI_STATUS_SUCCESS,failure::native_result);
++}
++}
+diff --git a/gdb/amd-dbgapi-one-stop-native-object-v1.inc b/gdb/amd-dbgapi-one-stop-native-object-v1.inc
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-native-object-v1.inc
+@@ -0,0 +1,140 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Native object identities originate only in this actual same-client list and
++   scalar query sequence. Its output remains borrowed in-process solib data. */
++namespace amd_owned_one_stop_v1 {
++bool native_adapter::selected_object (amd_dbgapi_inferior_info &actual,
++                                     amd_dbgapi_code_object_id_t &object,
++                                     std::ptrdiff_t &bias,const char *&locator) {
++  require (&actual==&info () && m_owner.check_owner (current_identity ()),failure::owner_changed);
++  if (m_owner.state ()==phase::awaiting_target_completion) {
++    require (m_owner.m_callback && !m_query_output
++             && m_owner.begin_client_empty_objects (),failure::allocation);
++    m_query_output=true;
++    try {
++      std::size_t count=0; amd_dbgapi_code_object_id_t *rows=nullptr;
++      api ();
++      const auto status=amd_dbgapi_process_code_object_list
++        (actual.process_id,&count,&rows,nullptr);
++      require (m_owner.client_empty_objects_returned
++               (reinterpret_cast<std::uintptr_t> (rows),count,status),failure::allocation);
++      m_query_output=false;
++      return false; // No object/URI/permission is fabricated for the empty list.
++    } catch (...) { m_owner.poison (failure::native_result); client_scope_failed (); throw; }
++  }
++  require (m_owner.state ()==phase::host_running && m_owner.m_callback
++           && !m_origin_pending && !m_origin_complete,failure::order);
++  object=list_one<amd_dbgapi_code_object_id_t>
++    ([&actual] (std::size_t *count,amd_dbgapi_code_object_id_t **rows) {
++      return amd_dbgapi_process_code_object_list (actual.process_id,count,rows,nullptr);
++    }); // The one real list allocation is freed BEFORE the URI query.
++  query (amd_dbgapi_code_object_get_info,object,AMD_DBGAPI_CODE_OBJECT_INFO_LOAD_ADDRESS,bias);
++  require (!m_query_output && m_owner.begin_client_locator (),failure::allocation);
++  m_query_output=true;
++  try {
++    char *uri=nullptr; api ();
++    const auto status=amd_dbgapi_code_object_get_info
++      (object,AMD_DBGAPI_CODE_OBJECT_INFO_URI_NAME,sizeof (uri),&uri);
++    const auto bytes=m_owner.m_allocation_bytes;
++    require (uri!=nullptr && m_owner.client_output_returned
++             (reinterpret_cast<std::uintptr_t> (uri),bytes,status)
++             && bytes>=1 && bytes<=m_work.locator.size (),failure::allocation);
++    debit (counter::work,bytes*2);
++    for (std::size_t n=0;n<bytes;++n) m_work.locator[n]=static_cast<std::uint8_t> (uri[n]);
++    require (m_owner.releasing_client_output (reinterpret_cast<std::uintptr_t> (uri)),
++             failure::allocation);
++    ::free (uri); m_query_output=false;
++    std::uint64_t address=0;
++    require (fixed_memory_locator (reinterpret_cast<const char *> (m_work.locator.data ()),
++                                   bytes,m_owner.m_identity.pid,address),
++             failure::checkpoint_changed);
++    m_object=object; m_object_bias=bias; m_original_address=address; m_origin_pending=true;
++    locator=reinterpret_cast<const char *> (m_work.locator.data ());
++    return true;
++  } catch (...) { m_owner.poison (failure::native_result); client_scope_failed (); throw; }
++}
++void native_adapter::read_runtime_root (std::uint64_t address) {
++  require (address!=0 && (address&7)==0,failure::checkpoint_changed);
++  static_assert (sizeof (runtime_root)==40 && std::is_standard_layout<runtime_root>::value,
++                 "exact retained target root ABI");
++  read (address,reinterpret_cast<std::uint8_t *> (&m_root_read),sizeof (m_root_read));
++}
++void native_adapter::inspect_empty_transport (const checkpoint_view &cp) {
++  std::uint64_t word=0;
++  read_u64 (cp.u64 (112),word); require (word==0,failure::checkpoint_changed);
++  read_u64 (cp.u64 (120),word); require (word==0,failure::checkpoint_changed);
++  read_u64 (cp.u64 (136),word); require (word==1,failure::checkpoint_changed);
++  read (cp.u64 (88),m_work.image_chunk.data (),64);
++  for (std::size_t n=0;n<64;++n)
++    require (m_work.image_chunk[n]==(n==0 ? 1 : 0),failure::checkpoint_changed);
++  read (cp.u64 (144),m_work.kernarg_read.data (),264);
++  for (std::size_t n=0;n<264;++n)
++    require (m_work.kernarg_read[n]==m_candidate.bytes[480+n],failure::checkpoint_changed);
++  constexpr std::uint64_t first=UINT64_C (0x0123456789abcdef);
++  constexpr std::uint64_t last=UINT64_C (0xfedcba9876543210);
++  for (std::size_t at=0;at<272;) {
++    const auto count=std::min<std::size_t> (256,272-at);
++    std::uint64_t address=0; require (checked_sum (cp.u64 (160),at,address),failure::checkpoint_changed);
++    read (address,m_work.image_chunk.data (),count);
++    for (std::size_t n=0;n<count;++n) {
++      const auto index=at+n;
++      const std::uint8_t expected=index<8 ? static_cast<std::uint8_t> (first>>(index*8))
++        : index<264 ? 0xa5 : static_cast<std::uint8_t> (last>>((index-264)*8));
++      require (m_work.image_chunk[n]==expected,failure::checkpoint_changed);
++    }
++    at+=count;
++  }
++  // Deliberately not the whole8MiB ring or unused3824 output bytes.
++}
++void native_adapter::inspect_checkpoint (bool recheck) {
++  require (m_owner.check_owner (current_identity ()) && m_origin_complete
++           && m_file_passes>=1 && m_checkpoint_passes==(recheck ? 1u : 0u)
++           && m_host==inferior_thread () && m_host->state!=THREAD_EXITED
++           && (!recheck || (m_infrun_origin && !m_infrun_step && !m_infrun_user_step))
++           && !m_host->executing () && !m_host->resumed (),
++           failure::checkpoint_changed);
++  ++m_checkpoint_passes; // Consume the fixed pass before any possible read.
++  require (read_start_ticks ()==m_start_ticks,failure::owner_changed);
++  current_executable ();
++  if (recheck) hash_executable ();
++  debit (counter::work,2176+4096+512);
++  auto *cache=get_thread_regcache (m_host);
++  ULONGEST argument=0;
++  require (regcache_read_pc (cache)==m_checkpoint_pc
++           && regcache_cooked_read_unsigned (cache,AMD64_RDI_REGNUM,&argument)==REG_VALID
++           && argument!=0 && (argument&7)==0,failure::checkpoint_changed);
++  if (recheck) require (argument==m_owner.m_checkpoint.record_address,failure::checkpoint_changed);
++  m_candidate.record_address=argument; m_candidate.host_pc=m_checkpoint_pc;
++  read (argument,m_work.checkpoint_read.data (),m_work.checkpoint_read.size ());
++  m_candidate.bytes=m_work.checkpoint_read;
++  const checkpoint_view cp (m_candidate.bytes);
++  require (cp.valid (m_owner.m_identity.pid),failure::checkpoint_changed);
++  std::uint64_t base=0,descriptor=0,entry=0;
++  require (apply_bias (0,m_object_bias,base) && apply_bias (1984,m_object_bias,descriptor)
++           && apply_bias (6144,m_object_bias,entry) && base==cp.u64 (56)
++           && descriptor==cp.u64 (72) && entry==cp.u64 (80),failure::checkpoint_changed);
++  m_candidate.entry=entry; m_candidate.signal_base=cp.u64 (128);
++  m_candidate.code_object=m_object.handle;
++  sole_queue (cp,recheck);
++  inspect_empty_transport (cp);
++  hash_inferior (m_original_address,5312,fixed_object_sha);
++  hash_inferior (base,12288,fixed_image_sha);
++  hash_inferior (cp.u64 (200),4096,fixed_trap_backing_sha);
++  read (argument,m_work.checkpoint_read.data (),m_work.checkpoint_read.size ());
++  require (m_work.checkpoint_read==m_candidate.bytes
++           && regcache_read_pc (cache)==m_checkpoint_pc
++           && read_start_ticks ()==m_start_ticks
++           && m_owner.check_owner (current_identity ()),failure::checkpoint_changed);
++  read_runtime_root (cp.u64 (216));
++  require (m_callback_pc!=0 && m_root_read.breakpoint==m_callback_pc
++           && m_callback_object==m_owner.m_origin_callback_object,
++           failure::checkpoint_changed);
++  if (recheck) {
++    require (same (m_owner.m_checkpoint,m_candidate)
++             && m_owner.recheck_checkpoint_root (current_identity (),cp.u64 (216),m_root_read),
++             failure::checkpoint_changed);
++  } else {
++    require (m_owner.bind_checkpoint_root (current_identity (),cp.u64 (216),m_root_read),
++             failure::checkpoint_changed);
++  }
++}
++}
+diff --git a/gdb/amd-dbgapi-one-stop-native-owner-v1.inc b/gdb/amd-dbgapi-one-stop-native-owner-v1.inc
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-native-owner-v1.inc
+@@ -0,0 +1,258 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Actual GDB owners, measured executable and PID-start binding. No imported
++   identity is accepted. The setup command has no caller-supplied parameters. */
++#include "ui-out.h"
++namespace amd_owned_one_stop_v1 {
++amd_dbgapi_inferior_info &native_adapter::info () {
++  require (m_owner.selected () && !m_owner.invalid () && m_inferior!=nullptr
++           && current_inferior ()==m_inferior && m_info!=nullptr,
++           failure::owner_changed);
++  require (amd_dbgapi_inferior_data.get (m_inferior)==m_info
++           && m_info->inf==m_inferior && m_info->process_id.handle!=0,
++           failure::owner_changed); // Never get-or-create a replacement registry owner.
++  return *m_info;
++}
++identity native_adapter::current_identity () {
++  auto &i=info ();
++  require (m_host!=nullptr && m_host->inf==m_inferior && m_host->global_num>0
++           && m_host->state!=THREAD_EXITED && !ptid_is_gpu (m_host->ptid)
++           && m_inferior->pid>0 && m_host->ptid.pid ()==m_inferior->pid
++           && m_inferior->process_target ()->find_thread (m_host->ptid)==m_host,
++           failure::owner_changed);
++  return {reinterpret_cast<std::uintptr_t> (m_inferior),
++          reinterpret_cast<std::uintptr_t> (m_inferior->pspace),
++          reinterpret_cast<std::uintptr_t> (&i),
++          static_cast<std::uint64_t> (m_inferior->num),
++          static_cast<std::uint64_t> (m_inferior->pid),m_start_ticks,
++          i.process_id.handle,static_cast<std::uint64_t> (m_host->global_num)};
++}
++void native_adapter::thread_roster (std::size_t &host,std::size_t &gpu) {
++  host=0; gpu=0; std::size_t inferiors=0,total=0;
++  for (auto *inf : all_non_exited_inferiors ()) {
++    debit (counter::work,1);
++    require (++inferiors<=1 && inf==m_inferior,failure::resume_scope);
++  }
++  require (inferiors==1,failure::resume_scope);
++  for (auto *thread : all_non_exited_threads (m_inferior->process_target (),minus_one_ptid)) {
++    debit (counter::work,1);
++    require (++total<=16 && thread->inf==m_inferior
++             && thread->ptid.pid ()==m_inferior->pid,failure::resume_scope);
++    if (ptid_is_gpu (thread->ptid)) ++gpu;
++    else { require (thread==m_host,failure::resume_scope); ++host; }
++  }
++}
++std::uint64_t native_adapter::read_start_ticks () {
++  require (m_inferior!=nullptr && m_inferior->pid>0,failure::owner_changed);
++  const auto count=std::snprintf (m_proc_path.data (),m_proc_path.size (),
++                                 "/proc/%d/stat",m_inferior->pid);
++  require (count>0 && static_cast<std::size_t> (count)<m_proc_path.size (),failure::budget);
++  debit (counter::proc_requested_bytes,m_proc.size ());
++  debit (counter::work,m_proc.size ());
++  scoped_fd fd (::open (m_proc_path.data (),O_RDONLY|O_CLOEXEC|O_NOFOLLOW));
++  require (fd.get ()>=0,failure::owner_changed);
++  const auto got=::read (fd.get (),m_proc.data (),m_proc.size ());
++  require (got>0 && static_cast<std::size_t> (got)<m_proc.size ()
++           && m_proc[static_cast<std::size_t> (got)-1]=='\n',failure::owner_changed);
++  const auto end=static_cast<std::size_t> (got);
++  std::size_t at=0; std::uint64_t pid=0;
++  while (at<end && m_proc[at]>='0' && m_proc[at]<='9') {
++    const unsigned digit=static_cast<unsigned> (m_proc[at++]-'0');
++    require (pid<=(UINT64_MAX-digit)/10,failure::owner_changed); pid=pid*10+digit;
++  }
++  require (pid==static_cast<std::uint64_t> (m_inferior->pid)
++           && at+2<end && m_proc[at]==' ' && m_proc[at+1]=='(',failure::owner_changed);
++  std::size_t close=0;
++  for (std::size_t n=at+2;n<end;++n) if (m_proc[n]==')') close=n;
++  require (close>at+1 && close+4<end && m_proc[close+1]==' ',failure::owner_changed);
++  at=close+2; // Field3 state; advance exactly to field22 starttime.
++  for (unsigned field=3;field<22;++field) {
++    require (at<end && m_proc[at]!=' ',failure::owner_changed);
++    while (at<end && m_proc[at]!=' ') ++at;
++    require (at<end,failure::owner_changed); ++at;
++  }
++  std::uint64_t ticks=0; const auto first=at;
++  while (at<end && m_proc[at]>='0' && m_proc[at]<='9') {
++    const unsigned digit=static_cast<unsigned> (m_proc[at++]-'0');
++    require (ticks<=(UINT64_MAX-digit)/10,failure::owner_changed); ticks=ticks*10+digit;
++  }
++  require (at>first && at<end && m_proc[at]==' ' && ticks!=0,failure::owner_changed);
++  return ticks;
++}
++void native_adapter::current_executable () {
++  require (m_inferior!=nullptr && m_inferior->pid>0
++           && m_inferior->pspace->exec_filename ()!=nullptr
++           && std::strcmp (m_inferior->pspace->exec_filename (),target_path)==0,
++           failure::checkpoint_changed);
++  const auto count=std::snprintf (m_proc_path.data (),m_proc_path.size (),
++                                 "/proc/%d/exe",m_inferior->pid);
++  require (count>0 && static_cast<std::size_t> (count)<m_proc_path.size (),failure::budget);
++  scoped_fd actual (::open (m_proc_path.data (),O_RDONLY|O_CLOEXEC));
++  struct stat process_file {},fixed_file {};
++  require (actual.get ()>=0 && ::fstat (actual.get (),&process_file)==0
++           && ::lstat (target_path,&fixed_file)==0
++           && S_ISREG (fixed_file.st_mode) && S_ISREG (process_file.st_mode)
++           && fixed_file.st_dev==process_file.st_dev && fixed_file.st_ino==process_file.st_ino
++           && fixed_file.st_size==static_cast<off_t> (target_bytes)
++           && process_file.st_size==fixed_file.st_size,failure::checkpoint_changed);
++  if (m_exec_fd<0) {
++    m_exec_identity=process_file; m_exec_fd=actual.release ();
++  } else {
++    require (process_file.st_dev==m_exec_identity.st_dev
++             && process_file.st_ino==m_exec_identity.st_ino
++             && process_file.st_size==m_exec_identity.st_size
++             && process_file.st_mtim.tv_sec==m_exec_identity.st_mtim.tv_sec
++             && process_file.st_mtim.tv_nsec==m_exec_identity.st_mtim.tv_nsec
++             && process_file.st_ctim.tv_sec==m_exec_identity.st_ctim.tv_sec
++             && process_file.st_ctim.tv_nsec==m_exec_identity.st_ctim.tv_nsec,
++             failure::checkpoint_changed);
++  }
++}
++class owned_checkpoint_breakpoint final : public code_breakpoint {
++public:
++  owned_checkpoint_breakpoint (struct gdbarch *arch,CORE_ADDR pc)
++    : code_breakpoint (arch,bp_breakpoint) {
++    symtab_and_line location;
++    location.pc=pc; location.section=find_pc_overlay (pc); location.pspace=current_program_space;
++    add_location (location); pspace=current_program_space; disposition=disp_del;
++  }
++  void re_set (program_space *) override {
++    native_adapter::instance ().check_owned_breakpoint_reset (this);
++  }
++  void check_status (bpstat *status) override {
++    status->stop=1;
++    try { native_adapter::instance ().checkpoint_hit (this,status); }
++    catch (...) { native_adapter::instance ().invalidate (failure::checkpoint_changed); throw; }
++  }
++  enum print_stop_action print_it (const bpstat *status) const override {
++    auto &adapter=native_adapter::instance ();
++    try {
++      // This is presentation of the same retained native stop, not an input
++      // parser or a new proof. MI and console may each print the stop once.
++      adapter.debit (counter::work,64);
++      adapter.check_owned_breakpoint_reset (this);
++      adapter.check_owned_breakpoint_owner ();
++      adapter.require (adapter.m_owner.state ()==phase::provisional_checkpoint
++                       && inferior_thread ()==adapter.m_host
++                       && !adapter.m_host->executing () && !adapter.m_host->resumed ()
++                       && status!=nullptr && status->breakpoint_at==this
++                       && status->bp_location_at.get ()==&first_loc ()
++                       && status->stop && status->simd_lane_mask==0
++                       && type==bp_breakpoint && number<0 && enable_state==bp_enabled
++                       && !silent && ignore_count==0 && !commands
++                       && cond_string==nullptr && extra_string==nullptr,
++                       failure::checkpoint_changed);
++      struct ui_out *out=current_uiout;
++      if (out->is_mi_like_p ()) {
++        out->field_string ("reason","breakpoint-hit");
++        out->field_string ("disp","del");
++        out->field_signed ("bkptno",number);
++      } else {
++        out->text ("Owned one-stop checkpoint, ");
++      }
++      return PRINT_SRC_AND_LOC;
++    } catch (...) { adapter.invalidate (failure::output); throw; }
++  }
++  void print_mention () const override {
++    // install_breakpoint(internal=true) never invokes mention.
++    native_adapter::instance ().reject (failure::command);
++  }
++  void print_recreate (struct ui_file *) const override {
++    // No locspec exists and selected MI admits no save/recreate command.
++    native_adapter::instance ().reject (failure::command);
++  }
++  int resources_needed (const struct bp_location *) override {
++    // This exact object is a software breakpoint, never a hardware query.
++    native_adapter::instance ().reject (failure::command);
++  }
++};
++static_assert (sizeof (owned_checkpoint_breakpoint)<=1024,
++               "fixed breakpoint object is within the prepaid logical envelope");
++void native_adapter::select_at_entry () {
++  if (!selection_available ())
++    error (_("owned one-stop native activation unavailable: compile candidate only"));
++  require (!m_owner.selected (),failure::already_selected);
++  require (m_owner.reserve_selection (logical_storage (),limits::logical_bytes),failure::budget);
++  try {
++    m_inferior=current_inferior (); m_host=inferior_thread ();
++    require (m_inferior!=nullptr && m_host!=nullptr && m_host->inf==m_inferior
++             && m_inferior->pid>0 && m_inferior->num>0 && !non_stop
++             && top_level_interpreter ()!=nullptr
++             && std::strcmp (top_level_interpreter ()->name (),"mi2")==0
++             && m_inferior->pspace->cbfd==nullptr
++             && m_host->state==THREAD_STOPPED && !m_host->executing ()
++             && !m_host->resumed () && !ptid_is_gpu (m_host->ptid),failure::owner_changed);
++    m_inferior_ref=inferior_ref::new_reference (m_inferior);
++    m_ui=current_ui; m_interpreter=top_level_interpreter ();
++    m_host_ref=thread_info_ref::new_reference (m_host);
++    m_info=amd_dbgapi_inferior_data.get (m_inferior);
++    require (m_info!=nullptr && m_info->inf==m_inferior && m_info->process_id.handle!=0
++             && m_info->runtime_state==AMD_DBGAPI_RUNTIME_STATE_UNLOADED
++             && runtime_observation.owns (reinterpret_cast<std::uintptr_t> (m_info),
++                                          m_info->process_id.handle)
++             && !runtime_observation.invalid () && !runtime_observation.attaching (),
++             failure::owner_changed);
++    auto *arch=m_inferior->arch ();
++    require (gdbarch_bfd_arch_info (arch)->arch==bfd_arch_i386
++             && gdbarch_bfd_arch_info (arch)->mach==bfd_mach_x86_64
++             && gdbarch_byte_order (arch)==BFD_ENDIAN_LITTLE
++             && gdbarch_ptr_bit (arch)==64,failure::checkpoint_changed);
++    current_executable (); hash_executable (); m_start_ticks=read_start_ticks ();
++    require (m_owner.bind_selection (current_identity ()),failure::owner_changed);
++    auto *obj=m_inferior->pspace->symfile_object_file;
++    require (obj!=nullptr && obj->obfd!=nullptr
++             && std::strcmp (bfd_get_filename (obj->obfd.get ()),target_path)==0,
++             failure::checkpoint_changed);
++    const auto entry=lookup_minimal_symbol (m_inferior->pspace,entry_symbol,obj);
++    const auto checkpoint=lookup_minimal_symbol (m_inferior->pspace,checkpoint_symbol,obj);
++    require (entry.minsym!=nullptr && checkpoint.minsym!=nullptr
++             && entry.objfile==obj && checkpoint.objfile==obj
++             && entry.minsym->has_size () && entry.minsym->size ()==entry_symbol_size
++             && checkpoint.minsym->has_size () && checkpoint.minsym->size ()==checkpoint_symbol_size
++             && entry.minsym->type ()==mst_text && checkpoint.minsym->type ()==mst_text,
++             failure::checkpoint_changed);
++    std::uint64_t expected_entry=0,expected_checkpoint=0;
++    require (checked_sum (obj->text_section_offset (),entry_symbol_value,expected_entry)
++             && checked_sum (obj->text_section_offset (),checkpoint_symbol_value,expected_checkpoint)
++             && entry.value_address ()==expected_entry
++             && checkpoint.value_address ()==expected_checkpoint
++             && regcache_read_pc (get_thread_regcache (m_host))==expected_entry,
++             failure::checkpoint_changed);
++    m_entry_pc=expected_entry; m_checkpoint_pc=expected_checkpoint;
++    std::size_t host=0,gpu=0; thread_roster (host,gpu);
++    require (host==1 && gpu==0,failure::resume_scope);
++    std::size_t count=0;
++    for (auto &location : all_bp_locations ()) {
++      debit (counter::work,1);
++      require (++count<=64 && !(location->pspace==m_inferior->pspace
++               && (location->address==m_entry_pc || location->address==m_checkpoint_pc)),
++               failure::breakpoint_changed);
++    }
++    auto pending=std::make_unique<owned_checkpoint_breakpoint> (m_inferior->arch (),m_checkpoint_pc);
++    m_breakpoint=pending.get (); m_breakpoint_identity=reinterpret_cast<std::uintptr_t> (m_breakpoint);
++    auto *installed=install_breakpoint (true,std::move (pending),1);
++    require (installed==m_breakpoint && installed->number!=0,failure::breakpoint_changed);
++    m_candidate.breakpoint_object=m_breakpoint_identity;
++    m_candidate.breakpoint_number=static_cast<std::uint64_t> (installed->number);
++    flush ();
++  } catch (...) { m_owner.poison (failure::owner_changed); throw; }
++}
++void native_adapter::check_owned_breakpoint_owner () {
++  require (m_owner.check_owner (current_identity ()),failure::owner_changed);
++}
++void native_adapter::check_owned_breakpoint_reset (const owned_checkpoint_breakpoint *bp) {
++  require (m_owner.selected () && bp==m_breakpoint
++           && bp->pspace==m_inferior->pspace && bp->has_single_location ()
++           && bp->first_loc ().address==m_checkpoint_pc
++           && bp->first_loc ().pspace==m_inferior->pspace
++           && bp->disposition==disp_del,failure::breakpoint_changed);
++  // Fixed address remains unchanged through the legitimate selected solib refresh.
++}
++void native_adapter::checkpoint_hit (owned_checkpoint_breakpoint *bp,bpstat *status) {
++  require (m_owner.selected () && bp==m_breakpoint && status!=nullptr
++           && status->breakpoint_at==bp && status->bp_location_at!=nullptr
++           && status->bp_location_at->address==m_checkpoint_pc
++           && bp->disposition==disp_del,failure::breakpoint_changed);
++  inspect_checkpoint (false);
++  require (m_owner.checkpoint_hit (current_identity (),m_candidate),failure::checkpoint_changed);
++}
++}
+diff --git a/gdb/amd-dbgapi-one-stop-native-query-v1.inc b/gdb/amd-dbgapi-one-stop-native-query-v1.inc
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-native-query-v1.inc
+@@ -0,0 +1,182 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Actual same-client scalar query roster. This is separate private currentness,
++   not an override of the legacy stopped-observation ledger's invalidation. */
++namespace amd_owned_one_stop_v1 {
++gpu_stop native_adapter::query_stop (thread_info *thread, bool require_gdb_current) {
++  auto &info=this->info ();
++  require (m_owner.check_owner (current_identity ()) && thread!=nullptr
++           && thread->inf==m_inferior && thread->global_num>0
++           && ptid_is_gpu (thread->ptid)
++           && thread->ptid.pid ()==m_inferior->pid
++           && m_inferior->pspace->cbfd==nullptr
++           && m_inferior->target_at (arch_stratum)==&the_amd_dbgapi_target,
++           failure::stop_changed);
++  if (require_gdb_current)
++    require (thread==inferior_thread () && thread->ptid==inferior_ptid
++             && thread->state==THREAD_STOPPED && !thread->executing ()
++             && !thread->resumed (),failure::stop_changed);
++  require (read_start_ticks ()==m_start_ticks,failure::owner_changed);
++  const auto join=[this] (bool equal) { require (equal,failure::stop_changed); };
++  const auto wave = get_amd_dbgapi_wave_id (thread->ptid);
++  stopped_obs::stop_identity s {};
++  s.wave = wave.handle;
++  amd_dbgapi_process_id_t process {};
++  amd_dbgapi_workgroup_id_t workgroup {};
++  amd_dbgapi_dispatch_id_t dispatch {};
++  amd_dbgapi_queue_id_t queue {};
++  amd_dbgapi_agent_id_t agent {};
++  amd_dbgapi_architecture_id_t architecture {};
++  std::size_t lanes = 0;
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_STATE, s.state);
++  join (s.state == AMD_DBGAPI_WAVE_STATE_STOP);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_STOP_REASON, s.stop_reason);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_PROCESS, process);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_WORKGROUP, workgroup);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_DISPATCH, dispatch);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_QUEUE, queue);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_AGENT, agent);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_ARCHITECTURE, architecture);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_LANE_COUNT, lanes);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_WORKGROUP_COORD, s.coordinate);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_WAVE_NUMBER_IN_WORKGROUP, s.wave_index);
++  join (process == info.process_id && lanes == 64);
++  s.lanes = static_cast<std::uint32_t> (lanes);
++  s.workgroup = workgroup.handle; s.dispatch = dispatch.handle;
++  s.queue = queue.handle; s.agent = agent.handle; s.architecture = architecture.handle;
++
++  amd_dbgapi_process_id_t group_process {};
++  amd_dbgapi_queue_id_t group_queue {};
++  amd_dbgapi_dispatch_id_t group_dispatch {};
++  amd_dbgapi_agent_id_t group_agent {};
++  amd_dbgapi_architecture_id_t group_architecture {};
++  std::array<std::uint32_t, 3> group_coordinate {};
++  query (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_PROCESS, group_process);
++  query (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_QUEUE, group_queue);
++  query (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_DISPATCH, group_dispatch);
++  query (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_AGENT, group_agent);
++  query (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_ARCHITECTURE, group_architecture);
++  query (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_WORKGROUP_COORD, group_coordinate);
++  join (group_process == process && group_queue == queue && group_dispatch == dispatch
++                  && group_agent == agent && group_architecture == architecture
++                  && group_coordinate == s.coordinate);
++
++  amd_dbgapi_process_id_t dispatch_process {};
++  amd_dbgapi_queue_id_t dispatch_queue {};
++  amd_dbgapi_agent_id_t dispatch_agent {};
++  amd_dbgapi_architecture_id_t dispatch_architecture {};
++  std::array<std::uint16_t, 3> native_workgroup {};
++  std::uint32_t dimensions = 0;
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_PROCESS, dispatch_process);
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_QUEUE, dispatch_queue);
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_AGENT, dispatch_agent);
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_ARCHITECTURE, dispatch_architecture);
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_OS_QUEUE_PACKET_ID, s.packet);
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_GRID_DIMENSIONS, dimensions);
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_GRID_SIZES, s.grid);
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_WORKGROUP_SIZES, native_workgroup);
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_PRIVATE_SEGMENT_SIZE, s.private_bytes);
++  query (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_GROUP_SEGMENT_SIZE, s.group_bytes);
++  join (dispatch_process == process && dispatch_queue == queue
++                  && dispatch_agent == agent && dispatch_architecture == architecture
++                  && dimensions == 1);
++  for (std::size_t i = 0; i < 3; ++i) s.workgroup_size[i] = native_workgroup[i];
++
++  amd_dbgapi_process_id_t queue_process {};
++  amd_dbgapi_agent_id_t queue_agent {};
++  amd_dbgapi_architecture_id_t queue_architecture {};
++  std::uint32_t queue_error = 0;
++  query (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_PROCESS, queue_process);
++  query (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_AGENT, queue_agent);
++  query (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_ARCHITECTURE, queue_architecture);
++  query (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_OS_ID, s.os_queue);
++  query (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_TYPE, s.queue_type);
++  query (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_STATE, s.queue_state);
++  query (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_ERROR_REASON, queue_error);
++  join (queue_process == process && queue_agent == agent
++                  && queue_architecture == architecture && queue_error == 0);
++
++  amd_dbgapi_process_id_t agent_process {};
++  amd_dbgapi_architecture_id_t agent_architecture {};
++  std::uint32_t agent_state = 0;
++  query (amd_dbgapi_agent_get_info, agent, AMD_DBGAPI_AGENT_INFO_PROCESS, agent_process);
++  query (amd_dbgapi_agent_get_info, agent, AMD_DBGAPI_AGENT_INFO_ARCHITECTURE, agent_architecture);
++  query (amd_dbgapi_agent_get_info, agent, AMD_DBGAPI_AGENT_INFO_OS_ID, s.os_agent);
++  query (amd_dbgapi_agent_get_info, agent, AMD_DBGAPI_AGENT_INFO_STATE, agent_state);
++  query (amd_dbgapi_architecture_get_info, architecture,
++                    AMD_DBGAPI_ARCHITECTURE_INFO_ELF_AMDGPU_MACHINE, s.elf_machine);
++  join (agent_process == process && agent_architecture == architecture
++                  && agent_state == AMD_DBGAPI_AGENT_STATE_SUPPORTED);
++  join (stopped_obs::closed_profile (s));
++  const checkpoint_view cp (m_owner.m_checkpoint.bytes);
++  amd_dbgapi_global_address_t queue_address=0, kernarg=0, descriptor=0, entry=0;
++  amd_dbgapi_global_address_t completion=0, pc=0;
++  amd_dbgapi_size_t queue_bytes=0;
++  std::uint32_t barrier=0, acquire=0, release=0;
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_ADDRESS,queue_address);
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_SIZE,queue_bytes);
++  query (amd_dbgapi_dispatch_get_info,dispatch,AMD_DBGAPI_DISPATCH_INFO_BARRIER,barrier);
++  query (amd_dbgapi_dispatch_get_info,dispatch,AMD_DBGAPI_DISPATCH_INFO_ACQUIRE_FENCE,acquire);
++  query (amd_dbgapi_dispatch_get_info,dispatch,AMD_DBGAPI_DISPATCH_INFO_RELEASE_FENCE,release);
++  query (amd_dbgapi_dispatch_get_info,dispatch,AMD_DBGAPI_DISPATCH_INFO_KERNEL_ARGUMENT_SEGMENT_ADDRESS,kernarg);
++  query (amd_dbgapi_dispatch_get_info,dispatch,AMD_DBGAPI_DISPATCH_INFO_KERNEL_DESCRIPTOR_ADDRESS,descriptor);
++  query (amd_dbgapi_dispatch_get_info,dispatch,AMD_DBGAPI_DISPATCH_INFO_KERNEL_CODE_ENTRY_ADDRESS,entry);
++  query (amd_dbgapi_dispatch_get_info,dispatch,AMD_DBGAPI_DISPATCH_INFO_KERNEL_COMPLETION_ADDRESS,completion);
++  query (amd_dbgapi_wave_get_info,wave,AMD_DBGAPI_WAVE_INFO_PC,pc);
++  join (queue.handle==m_owner.m_checkpoint.queue && s.os_queue==cp.u32 (20)
++        && s.os_agent==cp.u32 (24) && s.packet==0
++        && queue_address==cp.u64 (88) && queue_bytes==cp.u64 (96)
++        && barrier==AMD_DBGAPI_DISPATCH_BARRIER_NONE
++        && acquire==AMD_DBGAPI_DISPATCH_FENCE_SCOPE_SYSTEM
++        && release==AMD_DBGAPI_DISPATCH_FENCE_SCOPE_SYSTEM
++        && kernarg==cp.u64 (144) && descriptor==cp.u64 (72)
++        && entry==cp.u64 (80) && entry<=UINT64_MAX-80 && pc==entry+80
++        && completion==cp.u64 (128)); // API17 is the actual signal BASE, never VALUE+8.
++  // End fence, independent of the initial state/stop-reason query.
++  std::uint32_t final_state = 0, final_reason = 0;
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_STATE, final_state);
++  query (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_STOP_REASON, final_reason);
++  join (final_state == s.state && final_reason == s.stop_reason
++                  && info.inf->process_target ()->find_thread (thread->ptid) == thread);
++  return {static_cast<std::uint64_t> (thread->global_num),wave.handle,workgroup.handle,
++          dispatch.handle,queue.handle,agent.handle,architecture.handle,pc,completion};
++}
++
++void native_adapter::sole_queue (const checkpoint_view &cp,bool recheck) {
++  auto &i=info ();
++  const auto queue=list_one<amd_dbgapi_queue_id_t>
++    ([&i] (std::size_t *count,amd_dbgapi_queue_id_t **rows) {
++      return amd_dbgapi_process_queue_list (i.process_id,count,rows,nullptr);
++    });
++  amd_dbgapi_process_id_t process {},agent_process {};
++  amd_dbgapi_agent_id_t agent {};
++  amd_dbgapi_architecture_id_t architecture {},agent_architecture {};
++  amd_dbgapi_global_address_t address=0;
++  amd_dbgapi_size_t bytes=0;
++  amd_dbgapi_os_queue_id_t os_queue=0;
++  amd_dbgapi_os_agent_id_t os_agent=0;
++  std::uint32_t type=0,state=0,error=0,agent_state=0,machine=0;
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_PROCESS,process);
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_AGENT,agent);
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_ARCHITECTURE,architecture);
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_OS_ID,os_queue);
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_TYPE,type);
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_STATE,state);
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_ERROR_REASON,error);
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_ADDRESS,address);
++  query (amd_dbgapi_queue_get_info,queue,AMD_DBGAPI_QUEUE_INFO_SIZE,bytes);
++  query (amd_dbgapi_agent_get_info,agent,AMD_DBGAPI_AGENT_INFO_PROCESS,agent_process);
++  query (amd_dbgapi_agent_get_info,agent,AMD_DBGAPI_AGENT_INFO_ARCHITECTURE,agent_architecture);
++  query (amd_dbgapi_agent_get_info,agent,AMD_DBGAPI_AGENT_INFO_OS_ID,os_agent);
++  query (amd_dbgapi_agent_get_info,agent,AMD_DBGAPI_AGENT_INFO_STATE,agent_state);
++  query (amd_dbgapi_architecture_get_info,architecture,AMD_DBGAPI_ARCHITECTURE_INFO_ELF_AMDGPU_MACHINE,machine);
++  require (process==i.process_id && agent_process==process && agent_architecture==architecture
++           && agent.handle!=0 && architecture.handle!=0
++           && type==AMD_DBGAPI_OS_QUEUE_TYPE_HSA_AQL
++           && state==AMD_DBGAPI_QUEUE_STATE_VALID && error==0
++           && agent_state==AMD_DBGAPI_AGENT_STATE_SUPPORTED && machine==0x4f
++           && os_queue==cp.u32 (20) && os_agent==cp.u32 (24)
++           && address==cp.u64 (88) && bytes==cp.u64 (96),failure::checkpoint_changed);
++  if (recheck) require (queue.handle==m_owner.m_checkpoint.queue,failure::checkpoint_changed);
++  m_candidate.queue=queue.handle; // Actual returned handle, never cast from OS ID.
++}
++}
+diff --git a/gdb/amd-dbgapi-one-stop-native-resume-v1.inc b/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
+@@ -0,0 +1,194 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   The generic fence runs before dcache invalidation and top_target()->resume.
++   The selected path consumes native state BEFORE any host or wave resume. */
++namespace amd_owned_one_stop_v1 {
++void native_adapter::infrun_begin (thread_info *thread,ptid_t scope,bool step,gdb_signal signal,
++                                  bool trap,bool inline_step,bool software,bool user_step) {
++  if (!selected ()) return;
++  require (!m_infrun_origin && m_path==path::none && thread!=nullptr
++           && thread==inferior_thread () && (thread==m_host || thread==m_gpu_thread)
++           && m_owner.check_owner (current_identity ()),failure::resume_scope);
++  m_infrun_origin=true; m_infrun_scope=scope; m_infrun_step=step; m_infrun_signal=signal;
++  m_infrun_trap=trap; m_infrun_inline=inline_step; m_infrun_software=software;
++  m_infrun_user_step=user_step;
++}
++void native_adapter::infrun_end () noexcept { m_infrun_origin=false; }
++void native_adapter::before_generic_resume (ptid_t scope,int step,gdb_signal signal) {
++  if (!selected ()) return;
++  require (m_infrun_origin && m_path==path::none && !m_generic_returned
++           && !m_generic_commit && m_infrun_scope==scope && m_infrun_step==(step!=0)
++           && m_infrun_signal==signal && signal==GDB_SIGNAL_0
++           && !m_infrun_software && !m_infrun_user_step
++           && !inferior_thread ()->executing () && !inferior_thread ()->resumed ()
++           && m_owner.check_owner (current_identity ()),failure::resume_scope);
++  std::size_t host=0,gpu=0; thread_roster (host,gpu);
++  const bool all=scope==minus_one_ptid || scope==ptid_t (m_inferior->pid);
++  const bool host_only=scope==m_host->ptid || (all && host==1 && gpu==0);
++  if (m_callback_progress==callback_progress::step_ready) {
++    require (!m_command_continue && inferior_thread ()==m_host
++             && scope==m_host->ptid && step==1 && m_infrun_trap && m_infrun_inline
++             && regcache_read_pc (get_thread_regcache (m_host))==m_callback_pc
++             && (m_owner.state ()==phase::host_running
++                 || m_owner.state ()==phase::awaiting_target_completion),failure::resume_scope);
++    m_callback_progress=callback_progress::step_inflight;
++    m_path=path::callback_step; // Consume before actual hardware host step.
++  } else if (m_callback_progress==callback_progress::continue_ready) {
++    require (!m_command_continue && inferior_thread ()==m_host && host_only
++             && step==0 && !m_infrun_trap && !m_infrun_inline,failure::resume_scope);
++    m_path=path::callback_continue; // Exactly one continuation from actual step completion.
++  } else if (m_owner.state ()==phase::armed_entry) {
++    require (m_command_continue && inferior_thread ()==m_host && host==1 && gpu==0
++             && host_only && step==0 && !m_infrun_trap && !m_infrun_inline
++             && regcache_read_pc (get_thread_regcache (m_host))==m_entry_pc,
++             failure::resume_scope);
++    m_command_continue=false;
++    require (m_owner.entry_continuation_consumed (current_identity ()),failure::resume_scope);
++    m_path=path::entry;
++  } else if (m_owner.state ()==phase::retired_checkpoint) {
++    require (m_command_continue && inferior_thread ()==m_host && host_only
++             && step==0 && !m_infrun_trap && !m_infrun_inline
++             && m_breakpoint==nullptr,failure::resume_scope);
++    m_command_continue=false;
++    inspect_checkpoint (true); // Actual PC, bytes, queue, file/root; same ledger.
++    require (m_owner.consume_publication (current_identity (),m_candidate,host,gpu,step,signal),
++             failure::resume_scope);
++    m_path=path::publication;
++  } else if (m_owner.state ()==phase::current_gpu_stop) {
++    require (m_command_continue && m_stop_retired && inferior_thread ()==m_gpu_thread
++             && all && step==0 && !m_infrun_trap && !m_infrun_inline,
++             failure::resume_scope);
++    m_command_continue=false; m_stop_retired=false;
++    // Frontend state is now RUNNING intent. Native STOP/PC and actual
++    // !executing/!resumed still hold before the target effect.
++    m_candidate_stop=query_stop (m_gpu_thread,false);
++    require (m_owner.consume_completion (current_identity (),m_candidate_stop,host,gpu,step,signal),
++             failure::resume_scope);
++    m_path=path::completion;
++  } else reject (failure::resume_scope);
++}
++void native_adapter::after_amd_cpu_resume () {
++  if (!selected ()) return;
++  require (m_path==path::publication || m_path==path::completion
++           || m_path==path::callback_step || m_path==path::callback_continue,
++           failure::resume_scope);
++  if (m_path==path::publication || m_path==path::completion)
++    require (m_owner.cpu_resume_returned (),failure::native_result);
++}
++void native_adapter::after_amd_wave_resume (amd_dbgapi_wave_id_t wave,amd_dbgapi_status_t status) {
++  if (!selected ()) return;
++  require (m_path==path::completion
++           && m_owner.wave_resume_returned (wave.handle,status),failure::native_result);
++  // Called before existing INVALID_WAVE_ID compatibility. No selected waiver.
++}
++void native_adapter::after_amd_resume () {
++  if (!selected ()) return;
++  require (!m_amd_body_returned && m_path!=path::none && m_path!=path::entry,
++           failure::resume_scope);
++  if (m_path==path::publication || m_path==path::completion)
++    require (m_owner.resume_body_returned (),failure::native_result);
++  m_amd_body_returned=true;
++}
++void native_adapter::after_generic_resume () {
++  if (!selected ()) return;
++  require (m_path!=path::none && !m_generic_returned
++           && (m_path==path::entry ? !m_amd_body_returned : m_amd_body_returned),
++           failure::native_result);
++  m_generic_returned=true;
++}
++void native_adapter::before_generic_commit () {
++  if (!selected ()) return;
++  require (m_path!=path::none && m_generic_returned && !m_generic_commit,
++           failure::commit);
++  if (m_path==path::publication || m_path==path::completion)
++    require (m_owner.commit_started (current_identity ()),failure::commit);
++  m_generic_commit=true; // Before beneath/forward-progress effects.
++}
++void native_adapter::after_amd_commit () {
++  if (!selected ()) return;
++  require (m_generic_commit && !m_amd_commit_returned && m_path!=path::entry
++           && m_amd_body_returned,failure::commit);
++  m_amd_commit_returned=true;
++}
++void native_adapter::after_generic_commit () {
++  if (!selected ()) return;
++  require (m_generic_commit && m_generic_returned
++           && (m_path==path::entry ? !m_amd_commit_returned : m_amd_commit_returned),
++           failure::commit);
++  if (m_path==path::publication || m_path==path::completion)
++    require (m_owner.commit_returned (),failure::commit);
++  if (m_path==path::callback_continue) m_callback_progress=callback_progress::none;
++  m_path=path::none; m_generic_returned=m_generic_commit=false;
++  m_amd_body_returned=m_amd_commit_returned=false;
++  flush ();
++}
++void native_adapter::before_finish_step (thread_info *thread,const target_waitstatus &wait,
++                                        bool had_inline,bool trap_expected,std::uint64_t inline_address) {
++  if (!selected ()) return;
++  if (m_callback_progress!=callback_progress::step_inflight) return;
++  require (m_path==path::none && thread==m_host && thread==inferior_thread ()
++           && wait.kind ()==TARGET_WAITKIND_STOPPED && wait.sig ()==GDB_SIGNAL_TRAP
++           && had_inline && trap_expected && inline_address==m_callback_pc
++           && !thread->executing () && !thread->resumed ()
++           && m_owner.check_owner (current_identity ()),failure::resume_scope);
++  m_callback_progress=callback_progress::continue_ready;
++  // Actual native stopped event, not a CLI step claim. The source hook precedes
++  // finish_step_over clearing the actual inline/trap identity.
++}
++void native_adapter::about_to_proceed () {
++  if (!selected ()) return;
++  require (m_command_continue && !m_infrun_origin && m_path==path::none
++           && m_callback_progress==callback_progress::none,failure::resume_scope);
++  if (m_owner.state ()==phase::armed_entry)
++    require (inferior_thread ()==m_host && m_owner.check_owner (current_identity ()),
++             failure::resume_scope);
++  else require (m_owner.early_proceed (current_identity ()),failure::resume_scope);
++}
++void native_adapter::mi_input (const char *text) {
++  if (!selected ()) return;
++  require (text!=nullptr && current_ui==m_ui && top_level_interpreter ()==m_interpreter,
++           failure::command);
++  std::size_t size=0;
++  while (size<128 && text[size]!=0) ++size;
++  debit (counter::work,size);
++  require (size>0 && size<128,failure::command);
++  std::size_t token=0;
++  while (token<size && text[token]>='0' && text[token]<='9') ++token;
++  require (token>0 && token<=20 && token<size && !m_command_continue && !m_exit_requested,
++           failure::command);
++  if (std::strcmp (text+token,"-exec-continue")==0) {
++    require (m_path==path::none && m_callback_progress==callback_progress::none
++             && (m_owner.state ()==phase::armed_entry
++                 || m_owner.state ()==phase::retired_checkpoint
++                 || m_owner.state ()==phase::current_gpu_stop),failure::command);
++    m_command_continue=true;
++  } else if (std::strcmp (text+token,"-gdb-exit")==0) {
++    require (m_owner.state ()==phase::lifecycle_disappeared && m_path==path::none,
++             failure::command);
++    m_exit_requested=true;
++  } else reject (failure::command);
++}
++void native_adapter::nested_mi () { if (selected ()) reject (failure::command); }
++void native_adapter::flush () {
++  if (!selected () || m_owner.invalid ()) return;
++  if (m_owner.state ()==phase::provisional_checkpoint
++      || m_owner.state ()==phase::provisional_gpu_stop
++      || (m_owner.state ()==phase::current_gpu_stop && !m_stop_retired)) return;
++  try {
++    require (current_ui==m_ui && top_level_interpreter ()==m_interpreter,failure::output);
++    auto *mi=as_mi_interp (m_interpreter);
++    require (mi!=nullptr && mi->raw_stdout!=nullptr,failure::output);
++    while (const auto *row=m_owner.next_diagnostic ()) {
++      const auto count=std::snprintf (m_output.data (),m_output.size (),
++        "=fe2o3-owned-one-stop-v1,s=\"%llu\",p=\"%u\",pid=\"%llu\",i=\"%llu\",a=\"%llu\",t=\"%llu\"\n",
++        static_cast<unsigned long long> (row->sequence),static_cast<unsigned> (row->state),
++        static_cast<unsigned long long> (m_owner.m_identity.pid),
++        static_cast<unsigned long long> (m_owner.m_identity.inferior_number),
++        static_cast<unsigned long long> (m_owner.m_identity.process),
++        static_cast<unsigned long long> (m_owner.m_identity.host_thread));
++      require (count>0 && static_cast<std::size_t> (count)<m_output.size (),failure::output);
++      debit (counter::work,static_cast<std::uint64_t> (count));
++      gdb_puts (m_output.data (),mi->raw_stdout); gdb_flush (mi->raw_stdout);
++    }
++  } catch (...) { m_owner.poison (failure::output); throw; }
++}
++} // namespace amd_owned_one_stop_v1
+diff --git a/gdb/amd-dbgapi-one-stop-native-v1.h b/gdb/amd-dbgapi-one-stop-native-v1.h
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-native-v1.h
+@@ -0,0 +1,153 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Included in the existing amd-dbgapi target translation unit only. No second
++   client, public owner constructor, raw pointer permit or JSON importer. */
++#ifndef GDB_AMD_DBGAPI_ONE_STOP_NATIVE_V1_H
++#define GDB_AMD_DBGAPI_ONE_STOP_NATIVE_V1_H
++#include "amd-dbgapi-owned-one-stop-v1.h"
++#include "amd-dbgapi-one-stop-activation-v1.h"
++#include "amd-dbgapi-one-stop-profile-v1.h"
++#include "amd-dbgapi-one-stop-locator-v1.h"
++#include "amd-dbgapi-one-stop-sha256-v1.h"
++#include <sys/stat.h>
++namespace amd_owned_one_stop_v1 {
++class owned_checkpoint_breakpoint;
++class native_adapter final {
++public:
++  native_adapter (const native_adapter &) = delete;
++  native_adapter &operator= (const native_adapter &) = delete;
++  native_adapter (native_adapter &&) = delete;
++  native_adapter &operator= (native_adapter &&) = delete;
++  static native_adapter &instance () noexcept;
++  bool selected () const noexcept { return m_owner.selected (); }
++  /* Existing callbacks delegate byte-equivalently while no selected bounded
++     output scope is active. These return no owner/permission to the caller. */
++  void *allocate_client (std::size_t);
++  void deallocate_client (void *);
++  void select_at_entry (); // No user arguments; all inputs read from GDB.
++  void before_generic_resume (ptid_t, int, gdb_signal);
++  void after_generic_resume ();
++  void after_generic_commit ();
++  void native_unwind () noexcept;
++  void infrun_begin (thread_info *,ptid_t,bool,gdb_signal,bool,bool,bool,bool);
++  void infrun_end () noexcept;
++  void before_finish_step (thread_info *,const target_waitstatus &,bool,bool,std::uint64_t);
++  void mi_input (const char *);
++  void nested_mi ();
++  void after_amd_cpu_resume ();
++  void after_amd_wave_resume (amd_dbgapi_wave_id_t, amd_dbgapi_status_t);
++  void after_amd_resume ();
++  void before_generic_commit ();
++  void after_amd_commit ();
++  void after_auto_delete ();
++  void deleting_breakpoint (breakpoint *);
++  void after_host_or_gpu_stop (thread_info *);
++  void about_to_proceed ();
++  void callback_begin (amd_dbgapi_inferior_info &, breakpoint *,
++                       amd_dbgapi_breakpoint_id_t, thread_info *);
++  void callback_end (amd_dbgapi_inferior_info &, breakpoint *,
++                     amd_dbgapi_breakpoint_id_t, thread_info *,
++                     amd_dbgapi_event_id_t, amd_dbgapi_breakpoint_action_t,
++                     amd_dbgapi_status_t);
++  void runtime_ack (amd_dbgapi_inferior_info &, amd_dbgapi_event_id_t,
++                    amd_dbgapi_runtime_state_t, amd_dbgapi_status_t);
++  void objects_ack (amd_dbgapi_inferior_info &, amd_dbgapi_event_id_t,
++                    amd_dbgapi_status_t);
++  void wave_ack (amd_dbgapi_inferior_info &, amd_dbgapi_event_id_t,
++                 thread_info *, amd_dbgapi_status_t);
++  void disappearing (inferior *);
++  void invalidate (failure);
++  void flush ();
++  /* Existing solib loop calls this only in selected profile. It obtains the
++     real sole handle and bounded URI before its ordinary solib bookkeeping. */
++  bool selected_object (amd_dbgapi_inferior_info &, amd_dbgapi_code_object_id_t &,
++                        std::ptrdiff_t &, const char *&);
++private:
++  friend class owned_checkpoint_breakpoint;
++  native_adapter () noexcept = default;
++  [[noreturn]] void reject (failure);
++  void require (bool, failure);
++  void debit (counter, std::uint64_t);
++  void api ();
++  identity current_identity ();
++  amd_dbgapi_inferior_info &info ();
++  void thread_roster (std::size_t &, std::size_t &);
++  void checkpoint_hit (owned_checkpoint_breakpoint *, bpstat *);
++  void inspect_checkpoint (bool recheck);
++  void read (std::uint64_t, std::uint8_t *, std::size_t);
++  void hash_inferior (std::uint64_t, std::uint64_t, const digest_bytes &);
++  void hash_executable ();
++  std::uint64_t read_start_ticks ();
++  void current_executable ();
++  void hash_input (const std::uint8_t *, std::size_t, bool file);
++  void hash_finish (const digest_bytes &, bool file);
++  void read_u64 (std::uint64_t, std::uint64_t &);
++  void read_runtime_root (std::uint64_t);
++  void check_owned_breakpoint_reset (const owned_checkpoint_breakpoint *);
++  void check_owned_breakpoint_owner ();
++  void inspect_empty_transport (const checkpoint_view &);
++  void sole_queue (const checkpoint_view &, bool);
++  gpu_stop query_stop (thread_info *, bool require_gdb_current);
++  template<typename Get, typename Id, typename Query, typename Value>
++  void query (Get, Id, Query, Value &);
++  template<typename Handle, typename Call>
++  Handle list_one (Call);
++  void client_scope_failed () noexcept;
++  static constexpr std::uint64_t constant_and_scratch = 4096;
++  static constexpr std::uint64_t logical_storage () noexcept;
++  owner m_owner;
++  workspace m_work;
++  sha256 m_hash;
++  digest_bytes m_digest {};
++  checkpoint m_candidate {};
++  gpu_stop m_candidate_stop {};
++  runtime_root m_root_read {};
++  std::array<char,1024> m_proc {};
++  std::array<char,128> m_proc_path {};
++  struct stat m_exec_identity {};
++  ui *m_ui = nullptr;
++  interp *m_interpreter = nullptr;
++  std::array<char,128> m_output {};
++  inferior *m_inferior = nullptr;
++  inferior_ref m_inferior_ref;
++  amd_dbgapi_inferior_info *m_info = nullptr;
++  thread_info *m_host = nullptr;
++  thread_info_ref m_host_ref;
++  thread_info *m_gpu_thread = nullptr;
++  thread_info_ref m_gpu_thread_ref;
++  owned_checkpoint_breakpoint *m_breakpoint = nullptr; // Cleared in deleted hook.
++  std::uintptr_t m_breakpoint_identity = 0;
++  std::uint64_t m_entry_pc = 0, m_checkpoint_pc = 0, m_start_ticks = 0;
++  amd_dbgapi_code_object_id_t m_object {};
++  std::ptrdiff_t m_object_bias = 0;
++  std::uint64_t m_original_address = 0;
++  std::uint64_t m_callback_pc = 0, m_callback_number = 0;
++  std::uintptr_t m_callback_object = 0;
++  int m_exec_fd = -1;
++  unsigned m_file_passes = 0, m_checkpoint_passes = 0;
++  bool m_query_output = false, m_in_allocate = false;
++  bool m_origin_pending = false, m_origin_complete = false;
++  enum class path : std::uint8_t { none,entry,callback_step,callback_continue,publication,completion };
++  enum class callback_progress : std::uint8_t { none,step_ready,step_inflight,continue_ready };
++  path m_path=path::none;
++  callback_progress m_callback_progress=callback_progress::none;
++  bool m_infrun_origin=false,m_infrun_step=false,m_infrun_inline=false;
++  bool m_infrun_trap=false,m_infrun_software=false,m_infrun_user_step=false;
++  bool m_generic_returned=false,m_generic_commit=false;
++  bool m_amd_body_returned=false,m_amd_commit_returned=false;
++  bool m_command_continue=false,m_exit_requested=false,m_stop_retired=false;
++  ptid_t m_infrun_scope;
++  gdb_signal m_infrun_signal=GDB_SIGNAL_0;
++};
++constexpr std::uint64_t native_adapter::logical_storage () noexcept {
++  /* sizeof includes owner + every concrete scratch/data member. Additional
++     4096 prepays fixed constants, parser/scalar stack scratch and fixed RAII
++     guards, with the sole128-byte library callback allocation separate. */
++  return sizeof (native_adapter) + constant_and_scratch + limits::client_output_bytes;
++}
++static_assert (sizeof (native_adapter) + 4096 + limits::client_output_bytes
++               <= limits::logical_bytes, "all new fixed retained data is prepaid");
++static_assert (limits::file_requested_bytes == target_file_read_cap
++               && limits::file_rounds == target_file_round_cap,
++               "measured executable and file ledger must remain joined");
++}
++#endif
+diff --git a/gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc b/gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc
+@@ -0,0 +1,41 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Single-instance wrappers compiled in the existing AMD client TU. */
++namespace amd_owned_one_stop_native_v1 {
++using adapter=amd_owned_one_stop_v1::native_adapter;
++bool selected () noexcept { return adapter::instance ().selected (); }
++void unwind () noexcept { adapter::instance ().native_unwind (); }
++void before_resume (ptid_t p,int step,gdb_signal sig) { adapter::instance ().before_generic_resume (p,step,sig); }
++void after_resume () { adapter::instance ().after_generic_resume (); }
++void before_commit () { adapter::instance ().before_generic_commit (); }
++void after_commit () { adapter::instance ().after_generic_commit (); }
++void infrun_begin (thread_info *t,ptid_t p,bool step,gdb_signal sig,bool trap,bool inl,bool soft,bool user) {
++  adapter::instance ().infrun_begin (t,p,step,sig,trap,inl,soft,user);
++}
++void infrun_end () noexcept { adapter::instance ().infrun_end (); }
++void before_finish_step (thread_info *t,const target_waitstatus &s,bool inl,bool trap,std::uint64_t address) {
++  adapter::instance ().before_finish_step (t,s,inl,trap,address);
++}
++void after_auto_delete () { adapter::instance ().after_auto_delete (); }
++void after_normal_stop (thread_info *t) { adapter::instance ().after_host_or_gpu_stop (t); }
++void flush_safe_point () { adapter::instance ().flush (); }
++void mi_input (const char *s) { adapter::instance ().mi_input (s); }
++void nested_mi () { adapter::instance ().nested_mi (); }
++bool selected_object (inferior *inf,amd_dbgapi_code_object_id_t &id,
++                      std::ptrdiff_t &bias,const char *&uri) {
++  unwind_guard guard;
++  if (!selected () || inf!=current_inferior ())
++    error (_("owned one-stop selected object request has no actual owner"));
++  auto *info=amd_dbgapi_inferior_data.get (inf);
++  if (info==nullptr) {
++    unwind ();
++    error (_("owned one-stop actual registry owner disappeared"));
++  }
++  return adapter::instance ().selected_object (*info,id,bias,uri);
++}
++}
++static void one_stop_select_command_v1 (const char *args,int) {
++  if (args!=nullptr && *args!=0)
++    error (_("owned one-stop selector accepts no arguments"));
++  // The real method is compiled; its first source-level gate always refuses.
++  amd_owned_one_stop_v1::native_adapter::instance ().select_at_entry ();
++}
+diff --git a/gdb/amd-dbgapi-one-stop-observation-v1.h b/gdb/amd-dbgapi-one-stop-observation-v1.h
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-observation-v1.h
+@@ -0,0 +1,39 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   In-process hook declarations only. No observation DTO is an owner. */
++#ifndef GDB_AMD_DBGAPI_ONE_STOP_OBSERVATION_V1_H
++#define GDB_AMD_DBGAPI_ONE_STOP_OBSERVATION_V1_H
++#if HAVE_AMD_DBGAPI
++#include "target.h"
++#include <amd-dbgapi/amd-dbgapi.h>
++#include <cstddef>
++#include <cstdint>
++#include <exception>
++namespace amd_owned_one_stop_native_v1 {
++bool selected () noexcept;
++void before_resume (ptid_t,int,gdb_signal);
++void after_resume ();
++void before_commit ();
++void after_commit ();
++void unwind () noexcept;
++void infrun_begin (thread_info *,ptid_t,bool,gdb_signal,bool,bool,bool,bool);
++void infrun_end () noexcept;
++void before_finish_step (thread_info *,const target_waitstatus &,bool,bool,std::uint64_t);
++void after_auto_delete ();
++void after_normal_stop (thread_info *);
++void flush_safe_point ();
++void mi_input (const char *);
++void nested_mi ();
++bool selected_object (inferior *,amd_dbgapi_code_object_id_t &,std::ptrdiff_t &,const char *&);
++/* Poison on unknown native outcome. This does not swallow GDB errors, retry,
++   call a target, ACK an event, free client output or perform native teardown. */
++class unwind_guard final {
++  int m_depth=std::uncaught_exceptions ();
++public:
++  unwind_guard () noexcept = default;
++  unwind_guard (const unwind_guard &)=delete;
++  unwind_guard &operator= (const unwind_guard &)=delete;
++  ~unwind_guard () noexcept { if (std::uncaught_exceptions ()>m_depth) unwind (); }
++};
++}
++#endif
++#endif
+diff --git a/gdb/amd-dbgapi-one-stop-profile-v1.h b/gdb/amd-dbgapi-one-stop-profile-v1.h
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-profile-v1.h
+@@ -0,0 +1,34 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Private fixed measured CPU target, NOT a native-run qualification.
++   Source replacement/review is required to select another executable. */
++#ifndef GDB_AMD_DBGAPI_ONE_STOP_PROFILE_V1_H
++#define GDB_AMD_DBGAPI_ONE_STOP_PROFILE_V1_H
++#include "amd-dbgapi-one-stop-checkpoint-v1.h"
++namespace amd_owned_one_stop_v1 {
++inline constexpr char target_path[] = "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-gfx950-one-stop-observer-r3/debug/fe2o3-private-one-stop-target";
++inline constexpr std::uint64_t target_bytes = 4162064;
++inline constexpr digest_bytes target_sha {{
++  0x1e,0xc7,0x2e,0x9d,0x53,0xdf,0x21,0xa5,0x10,0x08,0x99,0x51,0xa6,0xbb,0xa9,0xa0,
++  0x16,0x7d,0x8b,0x7e,0x23,0x23,0xe3,0xdc,0xd1,0xd1,0xec,0x5a,0xdd,0x3f,0x3b,0xdb
++}};
++/* Exact1116-byte retained trap text followed by2980 zero bytes. Distinct
++   from the logical trap digest retained inside the target checkpoint. */
++inline constexpr digest_bytes fixed_trap_backing_sha {{
++  0x3d,0x50,0x09,0xe2,0x13,0x70,0x8e,0x59,0x79,0xd5,0xfb,0xc2,0xb7,0xf9,0xe4,0x77,0x97,0x12,0xbb,0xcb,0xfa,0x07,0xa0,0xda,0x30,0x1d,0xd3,0xb2,0xaf,0x05,0x47,0x95
++}};
++inline constexpr char entry_symbol[] = "fe2o3_gfx950_one_stop_process_entry_v1";
++inline constexpr char checkpoint_symbol[] = "fe2o3_gfx950_one_stop_prepublication_checkpoint_v1";
++inline constexpr std::uint64_t entry_symbol_value = 0xc7800;
++inline constexpr std::uint64_t checkpoint_symbol_value = 0x19daf0;
++inline constexpr std::uint64_t entry_symbol_size = 16;
++inline constexpr std::uint64_t checkpoint_symbol_size = 20;
++/* Exact measured file payload plus two independent EOF probes. */
++inline constexpr std::uint64_t target_file_read_cap = 2 * target_bytes + 2;
++inline constexpr std::uint64_t target_file_round_cap = 2 * ((target_bytes + 9 + 63) / 64) * 64;
++static_assert (target_file_read_cap == 8324130, "fixed two-pass file reads/EOF");
++static_assert (target_file_round_cap == 8324224, "fixed two-pass SHA rounds");
++/* Measured content is not qualification. The actual native hook path must
++   establish its same-client/entry/retirement/resume joins independently; no
++   Boolean, command argument or JSON field can waive those joins. */
++}
++#endif
+diff --git a/gdb/amd-dbgapi-one-stop-sha256-v1.h b/gdb/amd-dbgapi-one-stop-sha256-v1.h
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-sha256-v1.h
+@@ -0,0 +1,96 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Fixed-buffer SHA-256 for source-pinned file/inferior streaming. Hashes are
++   content observations, never source/runtime/queue authority.
++   The native caller prepays input bytes and 64 rounds per compression block. */
++#ifndef GDB_AMD_DBGAPI_ONE_STOP_SHA256_V1_H
++#define GDB_AMD_DBGAPI_ONE_STOP_SHA256_V1_H
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <limits>
++
++namespace amd_owned_one_stop_v1 {
++class sha256 final {
++public:
++  using digest = std::array<std::uint8_t, 32>;
++  static constexpr std::uint64_t max_bytes = (std::uint64_t (1) << 61) - 1;
++  bool input_blocks (std::size_t bytes, std::uint64_t &blocks) const noexcept {
++    if (m_finished || bytes > max_bytes - m_total) return false;
++    blocks = (std::uint64_t (m_used) + bytes) / 64; return true;
++  }
++  std::uint64_t finish_blocks () const noexcept { return m_used <= 55 ? 1 : 2; }
++  bool update (const std::uint8_t *bytes, std::size_t count) noexcept {
++    if (m_finished || (count && bytes == nullptr) || count > max_bytes - m_total) return false;
++    m_total += count;
++    for (std::size_t i = 0; i != count; ++i) {
++      m_block[m_used++] = bytes[i];
++      if (m_used == 64) { compress (); m_used = 0; }
++    }
++    return true;
++  }
++  bool finish (digest &out) noexcept {
++    if (m_finished) return false;
++    const std::uint64_t bits = m_total * 8;
++    m_block[m_used++] = 0x80;
++    if (m_used > 56) {
++      while (m_used < 64) m_block[m_used++] = 0;
++      compress (); m_used = 0;
++    }
++    while (m_used < 56) m_block[m_used++] = 0;
++    for (unsigned n = 0; n != 8; ++n)
++      m_block[56 + n] = static_cast<std::uint8_t> (bits >> (56 - 8 * n));
++    compress ();
++    for (unsigned n = 0; n != 8; ++n)
++      for (unsigned b = 0; b != 4; ++b)
++        out[n * 4 + b] = static_cast<std::uint8_t> (m_state[n] >> (24 - 8 * b));
++    m_finished = true; return true;
++  }
++private:
++  static std::uint32_t ror (std::uint32_t x, unsigned n) noexcept
++  { return (x >> n) | (x << (32 - n)); }
++  void compress () noexcept {
++    for (unsigned n = 0; n != 16; ++n)
++      m_schedule[n] = (std::uint32_t (m_block[n * 4]) << 24)
++        | (std::uint32_t (m_block[n * 4 + 1]) << 16)
++        | (std::uint32_t (m_block[n * 4 + 2]) << 8) | m_block[n * 4 + 3];
++    auto a=m_state[0], b=m_state[1], c=m_state[2], d=m_state[3];
++    auto e=m_state[4], f=m_state[5], g=m_state[6], h=m_state[7];
++    for (unsigned n = 0; n != 64; ++n) {
++      if (n >= 16) {
++        const auto x = m_schedule[(n - 15) & 15], y = m_schedule[(n - 2) & 15];
++        const auto s0 = ror (x, 7) ^ ror (x, 18) ^ (x >> 3);
++        const auto s1 = ror (y, 17) ^ ror (y, 19) ^ (y >> 10);
++        m_schedule[n & 15] += s0 + m_schedule[(n - 7) & 15] + s1;
++      }
++      const auto s1 = ror (e, 6) ^ ror (e, 11) ^ ror (e, 25);
++      const auto t1 = h + s1 + ((e & f) ^ (~e & g)) + constants[n] + m_schedule[n & 15];
++      const auto s0 = ror (a, 2) ^ ror (a, 13) ^ ror (a, 22);
++      const auto t2 = s0 + ((a & b) ^ (a & c) ^ (b & c));
++      h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
++    }
++    m_state[0]+=a; m_state[1]+=b; m_state[2]+=c; m_state[3]+=d;
++    m_state[4]+=e; m_state[5]+=f; m_state[6]+=g; m_state[7]+=h;
++  }
++  inline static constexpr std::array<std::uint32_t, 64> constants {{
++    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
++    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
++    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
++    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
++    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
++    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
++    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
++    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
++  }};
++  std::array<std::uint32_t, 8> m_state {{
++    0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
++    0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19
++  }};
++  std::array<std::uint8_t, 64> m_block {};
++  std::array<std::uint32_t, 16> m_schedule {};
++  std::uint64_t m_total = 0;
++  std::size_t m_used = 0;
++  bool m_finished = false;
++};
++static_assert (sizeof (sha256) <= 256, "prepaid streaming digest context");
++} // namespace amd_owned_one_stop_v1
++#endif
+diff --git a/gdb/amd-dbgapi-owned-one-stop-v1.h b/gdb/amd-dbgapi-owned-one-stop-v1.h
+--- /dev/null
++++ b/gdb/amd-dbgapi-owned-one-stop-v1.h
+@@ -0,0 +1,624 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   This file is part of GDB; GPL version 3 or (at your option) any later version.
++   Fixed same-client one-stop owner. No serialized authority/importer.
++   Native mutation is private to the in-process adapter; test access is compiled
++   only by the separate standalone pure-control translation unit. */
++#ifndef GDB_AMD_DBGAPI_OWNED_ONE_STOP_V1_H
++#define GDB_AMD_DBGAPI_OWNED_ONE_STOP_V1_H
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <limits>
++#include <type_traits>
++
++namespace amd_owned_one_stop_v1 {
++class native_adapter;
++#ifdef FE2O3_ONE_STOP_PURE_TEST
++struct core_test;
++#endif
++
++enum class phase : std::uint8_t {
++  disabled, armed_entry, host_running, provisional_checkpoint, retired_checkpoint,
++  publication_consumed, awaiting_gpu_stop, provisional_gpu_stop, current_gpu_stop,
++  completion_consumed, awaiting_target_completion, lifecycle_disappeared, invalid
++};
++enum class failure : std::uint8_t {
++  none, profile_unavailable, already_selected, owner_changed, order, budget,
++  acknowledgement, event_identity, callback_identity, breakpoint_changed,
++  retirement_incomplete, checkpoint_changed, stop_changed, resume_scope,
++  native_result, commit, output, command, lifecycle, allocation
++};
++enum class resume_kind : std::uint8_t { publication, completion };
++enum class counter : std::uint8_t {
++  api, read_bytes, read_calls, work, diagnostic_rows,
++  file_requested_bytes, file_observed_bytes, file_probe_bytes, file_rounds, proc_requested_bytes
++};
++struct usage {
++  std::uint64_t logical_bytes = 0, api = 0, read_bytes = 0, read_calls = 0, work = 0, rows = 0;
++  std::uint64_t file_requested_bytes = 0, file_observed_bytes = 0, file_rounds = 0;
++  std::uint64_t file_probe_bytes = 0;
++  std::uint64_t proc_requested_bytes = 0;
++};
++/* A closed policy, not user configuration. Logical memory is prepaid once.
++   Read volume counts every repeated inferior read, separately from storage.
++   Existing GDB/lib internals are not asserted to fit this logical envelope. */
++struct limits {
++  static constexpr std::uint64_t logical_bytes = 64 * 1024;
++  static constexpr std::uint64_t api = 192;
++  static constexpr std::uint64_t read_bytes = 64 * 1024;
++  static constexpr std::uint64_t read_calls = 256;
++  static constexpr std::uint64_t work = 131072;
++  /* Separate fixed two-pass executable-file budget. Requested EOF probes
++     consume capacity but contribute zero observed bytes on exact EOF. */
++  static constexpr std::uint64_t file_requested_bytes = 8324130;
++  static constexpr std::uint64_t file_observed_bytes = 8324128;
++  static constexpr std::uint64_t file_probe_bytes = 2;
++  static constexpr std::uint64_t file_rounds = 8324224;
++  static constexpr std::uint64_t proc_requested_bytes = 16384;
++  static constexpr std::uint64_t rows = 16;
++  static constexpr std::size_t events = 64;
++  static constexpr std::size_t callbacks = 8;
++  static constexpr std::uint64_t client_output_bytes = 128;
++};
++
++/* Fixed adapter scratch; all members are included in the selected lifetime's
++   logical prepayment. Do not add an unaccounted parallel stack buffer. */
++struct workspace {
++  std::array<std::uint8_t, 776> checkpoint_read {};
++  std::array<std::uint8_t, 264> kernarg_read {};
++  std::array<std::uint8_t, 256> image_chunk {};
++  std::array<std::uint8_t, 256> digest_state {};
++  std::array<std::uint8_t, 128> locator {};
++  std::array<std::uint64_t, 16> native_scalars {};
++  std::array<std::uintptr_t, 16> thread_scan {};
++};
++
++/* These are internal observations, not independently accepted proofs. Only
++   native_adapter can submit them to an owner. No public mutating entry exists. */
++struct identity {
++  std::uintptr_t inferior = 0, program_space = 0, process_owner = 0;
++  std::uint64_t inferior_number = 0, pid = 0, pid_start = 0, process = 0, host_thread = 0;
++};
++inline bool same (const identity &a, const identity &b) noexcept {
++  return a.inferior == b.inferior && a.program_space == b.program_space
++    && a.process_owner == b.process_owner && a.inferior_number == b.inferior_number
++    && a.pid == b.pid && a.pid_start == b.pid_start && a.process == b.process
++    && a.host_thread == b.host_thread;
++}
++inline bool complete (const identity &a) noexcept {
++  return a.inferior && a.program_space && a.process_owner && a.inferior_number
++    && a.pid && a.pid_start && a.process && a.host_thread;
++}
++struct checkpoint {
++  std::array<std::uint8_t, 776> bytes {};
++  std::uintptr_t breakpoint_object = 0;
++  std::uint64_t breakpoint_number = 0, host_pc = 0, record_address = 0;
++  std::uint64_t queue = 0, entry = 0, signal_base = 0, code_object = 0;
++};
++inline bool same (const checkpoint &a, const checkpoint &b) noexcept {
++  return a.bytes == b.bytes && a.breakpoint_object == b.breakpoint_object
++    && a.breakpoint_number == b.breakpoint_number && a.host_pc == b.host_pc
++    && a.record_address == b.record_address && a.queue == b.queue
++    && a.entry == b.entry && a.signal_base == b.signal_base
++    && a.code_object == b.code_object;
++}
++struct gpu_stop {
++  std::uint64_t thread = 0, wave = 0, workgroup = 0, dispatch = 0, queue = 0;
++  std::uint64_t agent = 0, architecture = 0, pc = 0, completion_base = 0;
++};
++inline bool same (const gpu_stop &a, const gpu_stop &b) noexcept {
++  return a.thread == b.thread && a.wave == b.wave && a.workgroup == b.workgroup
++    && a.dispatch == b.dispatch && a.queue == b.queue && a.agent == b.agent
++    && a.architecture == b.architecture && a.pc == b.pc
++    && a.completion_base == b.completion_base;
++}
++/* Exact retained target ABI layout, not a public permission constructor.
++   The native adapter reads all40 bytes on the selected little-endian target. */
++struct runtime_root {
++  std::uint32_t version = 11, reserved0 = 0;
++  std::uint64_t map = 0, breakpoint = 0;
++  std::uint32_t state = 0, reserved1 = 0;
++  std::uint64_t loader_base = 0;
++};
++static_assert (sizeof (runtime_root) == 40 && alignof (runtime_root) == 8,
++               "fixed x86_64 runtime root");
++static_assert (offsetof (runtime_root, map) == 8
++               && offsetof (runtime_root, breakpoint) == 16
++               && offsetof (runtime_root, state) == 24
++               && offsetof (runtime_root, loader_base) == 32,
++               "source-owned root field offsets");
++inline bool root_header (const runtime_root &r) noexcept {
++  return r.version == 11 && r.reserved0 == 0 && r.reserved1 == 0
++    && r.loader_base == 0 && r.breakpoint != 0;
++}
++inline bool root_constants (const runtime_root &a, const runtime_root &b) noexcept {
++  return a.version == b.version && a.reserved0 == b.reserved0
++    && a.breakpoint == b.breakpoint && a.reserved1 == b.reserved1
++    && a.loader_base == b.loader_base;
++}
++struct diagnostic {
++  std::uint64_t sequence = 0;
++  phase state = phase::disabled;
++  failure why = failure::none;
++};
++
++/* Not movable/copyable; its address, the actual GDB owners and fixed scratch
++   remain retained for this debugger lifetime. No reset/rebind or permit escape. */
++class owner final {
++public:
++  owner () noexcept = default;
++  owner (const owner &) = delete;
++  owner &operator= (const owner &) = delete;
++  owner (owner &&) = delete;
++  owner &operator= (owner &&) = delete;
++  bool selected () const noexcept { return m_selected; }
++  phase state () const noexcept { return m_phase; }
++  failure why () const noexcept { return m_failure; }
++  usage consumed () const noexcept { return m_usage; }
++  bool invalid () const noexcept { return m_phase == phase::invalid; }
++  static constexpr std::uint64_t fixed_storage () noexcept;
++
++private:
++  friend class native_adapter;
++#ifdef FE2O3_ONE_STOP_PURE_TEST
++  friend struct core_test;
++#endif
++  void poison (failure why) noexcept {
++    if (!m_selected || invalid ()) return;
++    m_failure = why; m_phase = phase::invalid;
++    /* Failure retains all charged storage and work. No late allocation. */
++  }
++  bool fail (failure why) noexcept { poison (why); return false; }
++  bool require (bool condition, failure why) noexcept {
++    return condition && !invalid () ? true : fail (why);
++  }
++  bool debit (counter kind, std::uint64_t amount) noexcept {
++    if (!m_selected || invalid ()) return false;
++    if (m_phase == phase::disabled
++        && (kind == counter::api || kind == counter::read_bytes
++            || kind == counter::read_calls || kind == counter::diagnostic_rows))
++      return fail (failure::order); // Bootstrap cannot query a native target.
++    std::uint64_t *used = nullptr, cap = 0;
++    switch (kind) {
++      case counter::api: used = &m_usage.api; cap = limits::api; break;
++      case counter::read_bytes: used = &m_usage.read_bytes; cap = limits::read_bytes; break;
++      case counter::read_calls: used = &m_usage.read_calls; cap = limits::read_calls; break;
++      case counter::file_requested_bytes: used = &m_usage.file_requested_bytes; cap = limits::file_requested_bytes; break;
++      case counter::file_observed_bytes: used = &m_usage.file_observed_bytes; cap = limits::file_observed_bytes; break;
++      case counter::file_probe_bytes: used = &m_usage.file_probe_bytes; cap = limits::file_probe_bytes; break;
++      case counter::file_rounds: used = &m_usage.file_rounds; cap = limits::file_rounds; break;
++      case counter::proc_requested_bytes: used = &m_usage.proc_requested_bytes; cap = limits::proc_requested_bytes; break;
++      case counter::work: used = &m_usage.work; cap = limits::work; break;
++      case counter::diagnostic_rows: used = &m_usage.rows; cap = limits::rows; break;
++    }
++    if (used == nullptr || *used > cap || amount > cap - *used) return fail (failure::budget);
++    *used += amount; return true;
++  }
++  bool note () noexcept {
++    if (!debit (counter::diagnostic_rows, 1)) return false;
++    const auto n = static_cast<std::size_t> (m_usage.rows - 1);
++    m_rows[n] = {m_usage.rows, m_phase, failure::none};
++    return true;
++  }
++  /* Reserve BEFORE metered file/PID inspection. Disabled is not armed: every
++     transition still requires its actual phase. A failed bootstrap cannot be
++     reset or rebound. The adapter supplies sizeof its complete retained state
++     plus explicit constant/scratch/client-output envelopes, not a user cap. */
++  bool reserve_selection (std::uint64_t retained_bytes,
++                          std::uint64_t prepaid_capacity) noexcept {
++    if (m_selected) return fail (failure::already_selected);
++    m_selected = true;
++    if (retained_bytes < fixed_storage () || retained_bytes > limits::logical_bytes
++        || prepaid_capacity < retained_bytes) return fail (failure::budget);
++    m_usage.logical_bytes = retained_bytes;
++    return true;
++  }
++  bool bind_selection (const identity &actual) noexcept {
++    if (!require (m_selected && m_phase == phase::disabled && !m_identity.inferior,
++                  failure::order)
++        || !require (complete (actual), failure::owner_changed)) return false;
++    m_identity = actual; m_phase = phase::armed_entry; return note ();
++  }
++  bool select (const identity &actual, std::uint64_t prepaid_capacity) noexcept {
++    return reserve_selection (fixed_storage (), prepaid_capacity)
++      && bind_selection (actual);
++  }
++  /* Used when the fixed measured executable/profile is absent. No native
++     adapter may turn this failure into armed_entry from a CLI/JSON claim. */
++  void select_unavailable () noexcept {
++    if (m_selected) { poison (failure::already_selected); return; }
++    m_selected = true; m_usage.logical_bytes = fixed_storage ();
++    poison (failure::profile_unavailable);
++  }
++  bool check_owner (const identity &actual) noexcept {
++    return require (complete (m_identity) && complete (actual)
++                    && same (m_identity, actual), failure::owner_changed);
++  }
++  bool entry_continuation_consumed (const identity &actual) noexcept {
++    if (!check_owner (actual) || !require (m_phase == phase::armed_entry, failure::order))
++      return false;
++    /* The adapter consumes BEFORE calling the actual entry resume. Failure
++       during that call/commit must poison; state is not a retry capability. */
++    m_phase = phase::host_running; return note ();
++  }
++  bool event (std::uint64_t id, std::int64_t status) noexcept {
++    if (!require (status == 0, failure::acknowledgement)
++        || !require (id != 0 && m_events_used < m_events.size (), failure::event_identity))
++      return false;
++    if (!debit (counter::work, m_events_used + 1)) return false;
++    for (std::size_t n = 0; n < m_events_used; ++n)
++      if (m_events[n] == id) return fail (failure::event_identity);
++    m_events[m_events_used++] = id; return true;
++  }
++  bool runtime_loaded (const identity &actual, std::uint64_t event_id,
++                       std::int64_t ack_status) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::host_running && !m_runtime, failure::order)
++        || !event (event_id, ack_status)) return false;
++    m_runtime = true; return note ();
++  }
++  bool callback_begin (const identity &actual, std::uintptr_t bp_object,
++                       std::uint64_t native_breakpoint, std::uint64_t thread) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::host_running && m_runtime && !m_callback,
++                     failure::callback_identity)
++        || !require (bp_object && native_breakpoint && thread == m_identity.host_thread
++                     && m_callbacks < limits::callbacks, failure::callback_identity))
++      return false;
++    if (!require (!m_origin_callback_object
++                  || (bp_object == m_origin_callback_object
++                      && native_breakpoint == m_origin_callback_id),
++                  failure::callback_identity)) return false;
++    if (!m_origin_callback_object) {
++      m_origin_callback_object = bp_object; m_origin_callback_id = native_breakpoint;
++    }
++    ++m_callbacks; m_callback = true;
++    m_callback_object = bp_object; m_callback_id = native_breakpoint; return true;
++  }
++  bool code_object_completed (const identity &actual, std::uint64_t event_id,
++                              std::uint64_t native_object, std::int64_t ack_status) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::host_running && m_callback && !m_object
++                     && native_object != 0, failure::order)
++        || !event (event_id, ack_status)) return false;
++    m_object = native_object; return note ();
++  }
++  bool callback_complete (const identity &actual, std::uintptr_t bp_object,
++                           std::uint64_t native_breakpoint, std::uint64_t thread,
++                           std::uint64_t resume_event, std::uint32_t action,
++                           std::int64_t ack_status) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::host_running && m_callback
++                     && bp_object == m_callback_object && native_breakpoint == m_callback_id
++                     && thread == m_identity.host_thread, failure::callback_identity))
++      return false;
++    if (action == 1) {
++      if (!require (resume_event == 0 && ack_status == 0, failure::callback_identity))
++        return false;
++    } else if (action == 2) {
++      if (!event (resume_event, ack_status)) return false;
++    } else return fail (failure::callback_identity);
++    m_callback = false; m_callback_object = 0; m_callback_id = 0;
++    ++m_completed_callbacks; return note ();
++  }
++  bool bind_checkpoint_root (const identity &actual, std::uint64_t root_address,
++                              const runtime_root &observed) noexcept {
++    if (!check_owner (actual) || !debit (counter::work, 160)
++        || !require (m_phase == phase::host_running && m_object && !m_callback
++                     && m_origin_callback_object && !m_root_address
++                     && root_address && root_header (observed)
++                     && observed.state == 0 && observed.map != 0, failure::checkpoint_changed))
++      return false;
++    m_root_address = root_address; m_root = observed; return true;
++  }
++  bool recheck_checkpoint_root (const identity &actual, std::uint64_t root_address,
++                                 const runtime_root &observed) noexcept {
++    if (!check_owner (actual) || !debit (counter::work, 160)
++      || !require (m_phase == phase::retired_checkpoint && !m_root_rechecked
++                  && root_address == m_root_address
++                  && root_constants (observed, m_root) && observed.map == m_root.map
++                  && observed.state == m_root.state, failure::checkpoint_changed)) return false;
++    m_root_rechecked = true; return true;
++  }
++  bool checkpoint_hit (const identity &actual, const checkpoint &observed) noexcept {
++    std::uint64_t observed_root = 0;
++    for (std::size_t n = 0; n != 8; ++n)
++      observed_root |= std::uint64_t (observed.bytes[216 + n]) << (8 * n);
++    if (!check_owner (actual)
++        || !require (m_phase == phase::host_running && m_runtime && m_object
++                     && m_completed_callbacks != 0 && !m_callback
++                     && m_root_address && observed_root == m_root_address, failure::order)
++        || !require (observed.breakpoint_object && observed.breakpoint_number
++                     && observed.host_pc && observed.record_address
++                     && observed.queue && observed.entry && observed.signal_base
++                     && observed.code_object == m_object, failure::checkpoint_changed))
++      return false;
++    m_checkpoint = observed; m_phase = phase::provisional_checkpoint;
++    return note ();
++  }
++  bool host_stop_output_completed (const identity &actual, std::uint64_t actual_pc) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::provisional_checkpoint
++                     && actual_pc == m_checkpoint.host_pc && !m_host_stop_notified, failure::order))
++      return false;
++    m_host_stop_notified = true; return true;
++  }
++  bool deleting_breakpoint (std::uintptr_t bp_object, std::uint64_t number) noexcept {
++    if (!require (m_phase == phase::provisional_checkpoint && m_host_stop_notified
++                  && !m_delete_seen && bp_object == m_checkpoint.breakpoint_object
++                  && number == m_checkpoint.breakpoint_number, failure::breakpoint_changed))
++      return false;
++    m_delete_seen = true; return true; // NOT retired yet.
++  }
++  bool retirement_finished (const identity &actual, std::uint64_t actual_pc,
++                             std::size_t remaining_owned_objects,
++                             std::size_t remaining_breakpoints_at_pc) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::provisional_checkpoint && m_host_stop_notified
++                     && m_delete_seen && actual_pc == m_checkpoint.host_pc
++                     && remaining_owned_objects == 0 && remaining_breakpoints_at_pc == 0,
++                     failure::retirement_incomplete)) return false;
++    m_phase = phase::retired_checkpoint; return note ();
++  }
++  bool early_proceed (const identity &actual) noexcept {
++    if (!check_owner (actual)) return false;
++    /* Initial/internal host continuation is deliberately NOT admitted here.
++       It requires its separately source-pinned native adapter route. */
++    return require (m_phase == phase::retired_checkpoint
++                    || m_phase == phase::current_gpu_stop, failure::resume_scope);
++  }
++  bool consume_publication (const identity &actual, const checkpoint &requeried,
++                            std::size_t actual_host_threads, std::size_t actual_gpu_threads,
++                            int actual_step, std::int64_t actual_signal) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::retired_checkpoint
++                     && m_root_rechecked && same (m_checkpoint, requeried), failure::checkpoint_changed)
++        || !require (actual_host_threads == 1 && actual_gpu_threads == 0
++                     && actual_step == 0 && actual_signal == 0, failure::resume_scope))
++      return false;
++    m_resume = resume_kind::publication; m_phase = phase::publication_consumed;
++    return note ();
++  }
++  bool stopped_after_ack (const identity &actual, std::uint64_t event_id,
++                          const gpu_stop &observed, std::int64_t ack_status) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::awaiting_gpu_stop, failure::order)
++        || !event (event_id, ack_status)
++        || !require (observed.thread && observed.wave && observed.workgroup
++                     && observed.dispatch && observed.agent && observed.architecture
++                     && observed.queue == m_checkpoint.queue
++                     && m_checkpoint.entry <= std::numeric_limits<std::uint64_t>::max () - 80
++                     && observed.pc == m_checkpoint.entry + 80
++                     && observed.completion_base == m_checkpoint.signal_base,
++                     failure::stop_changed)) return false;
++    m_stop = observed; m_phase = phase::provisional_gpu_stop; return note ();
++  }
++  bool gpu_stop_output_completed (const identity &actual, const gpu_stop &requeried) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::provisional_gpu_stop && same (m_stop, requeried),
++                     failure::stop_changed)) return false;
++    m_phase = phase::current_gpu_stop; return note ();
++  }
++  bool consume_completion (const identity &actual, const gpu_stop &requeried,
++                           std::size_t actual_host_threads, std::size_t actual_gpu_threads,
++                           int actual_step, std::int64_t actual_signal) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::current_gpu_stop && same (m_stop, requeried),
++                     failure::stop_changed)
++        || !require (actual_host_threads == 1 && actual_gpu_threads == 1
++                     && actual_step == 0 && actual_signal == 0, failure::resume_scope))
++      return false;
++    m_resume = resume_kind::completion; m_phase = phase::completion_consumed;
++    return note ();
++  }
++  bool during_resume () const noexcept {
++    return m_phase == phase::publication_consumed || m_phase == phase::completion_consumed;
++  }
++  bool cpu_resume_returned () noexcept {
++    if (!require (during_resume () && !m_cpu_returned && !m_body_returned, failure::order))
++      return false;
++    m_cpu_returned = true; return true;
++  }
++  bool wave_resume_returned (std::uint64_t wave, std::int64_t actual_status) noexcept {
++    if (!require (m_phase == phase::completion_consumed && m_cpu_returned
++                  && !m_wave_returned && !m_body_returned && wave == m_stop.wave, failure::order)
++        || !require (actual_status == 0, failure::native_result)) return false;
++    m_wave_returned = true; return true;
++  }
++  bool resume_body_returned () noexcept {
++    if (!require (during_resume () && m_cpu_returned && !m_body_returned
++                  && (m_resume == resume_kind::publication ? !m_wave_returned : m_wave_returned),
++                  failure::order)) return false;
++    m_body_returned = true; return true;
++  }
++  bool commit_started (const identity &actual) noexcept {
++    if (!check_owner (actual)
++        || !require (during_resume () && m_body_returned && !m_commit_started, failure::commit))
++      return false;
++    m_commit_started = true; return true;
++  }
++  bool commit_returned () noexcept {
++    if (!require (during_resume () && m_commit_started, failure::commit)) return false;
++    m_phase = m_resume == resume_kind::publication
++      ? phase::awaiting_gpu_stop : phase::awaiting_target_completion;
++    m_cpu_returned = m_wave_returned = m_body_returned = m_commit_started = false;
++    return note ();
++  }
++  enum class terminal_stage : std::uint8_t {
++    idle, deleting, delete_complete, consistent, objects_acknowledged,
++    withdrawal_complete, unloaded
++  };
++  bool terminal_callback_begin (const identity &actual, std::uintptr_t bp_object,
++                                std::uint64_t native_breakpoint, std::uint64_t thread,
++                                std::uint64_t root_address,
++                                const runtime_root &observed) noexcept {
++    if (!check_owner (actual) || !debit (counter::work, 160)
++        || !require (m_phase == phase::awaiting_target_completion && m_runtime
++                     && !m_callback && m_root_address && root_address == m_root_address
++                     && bp_object == m_origin_callback_object
++                     && native_breakpoint == m_origin_callback_id
++                     && thread == m_identity.host_thread && m_callbacks < limits::callbacks
++                     && root_constants (observed, m_root), failure::callback_identity))
++      return false;
++    if (m_terminal == terminal_stage::idle) {
++      if (!require (observed.state == 2 && observed.map == m_root.map,
++                    failure::callback_identity)) return false;
++      m_terminal = terminal_stage::deleting;
++    } else if (m_terminal == terminal_stage::delete_complete) {
++      if (!require (observed.state == 0 && observed.map == 0,
++                    failure::callback_identity)) return false;
++      m_terminal = terminal_stage::consistent;
++    } else return fail (failure::order);
++    ++m_callbacks; m_callback = true;
++    m_callback_object = bp_object; m_callback_id = native_breakpoint; return true;
++  }
++  bool terminal_object_completed (const identity &actual, std::uint64_t event_id,
++                                   std::int64_t ack_status) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::awaiting_target_completion && m_callback
++                     && m_terminal == terminal_stage::consistent && m_empty_objects,
++                     failure::order)
++        || !event (event_id, ack_status)) return false;
++    m_terminal = terminal_stage::objects_acknowledged; return true;
++  }
++  bool terminal_callback_complete (const identity &actual, std::uintptr_t bp_object,
++                                    std::uint64_t native_breakpoint, std::uint64_t thread,
++                                    std::uint64_t resume_event, std::uint32_t action,
++                                    std::int64_t ack_status) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::awaiting_target_completion && m_callback
++                     && bp_object == m_callback_object && native_breakpoint == m_callback_id
++                     && thread == m_identity.host_thread, failure::callback_identity))
++      return false;
++    if (m_terminal == terminal_stage::deleting) {
++      if (!require (action == 1 && resume_event == 0 && ack_status == 0
++                    && !m_empty_objects, failure::callback_identity)) return false;
++      m_terminal = terminal_stage::delete_complete;
++    } else if (m_terminal == terminal_stage::objects_acknowledged) {
++      if (!require (action == 2, failure::callback_identity)
++          || !event (resume_event, ack_status)) return false;
++      m_terminal = terminal_stage::withdrawal_complete;
++    } else return fail (failure::order);
++    m_callback = false; m_callback_object = 0; m_callback_id = 0;
++    ++m_completed_callbacks; return true; // No extra diagnostic rows.
++  }
++  bool runtime_unloaded (const identity &actual, std::uint64_t event_id,
++                         std::int64_t ack_status) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::awaiting_target_completion && m_runtime
++                     && !m_callback && !m_allocation_active
++                     && m_terminal == terminal_stage::withdrawal_complete, failure::lifecycle)
++        || !event (event_id, ack_status)) return false;
++    m_runtime = false; m_terminal = terminal_stage::unloaded; return note ();
++  }
++  bool lifecycle_disappeared (const identity &actual) noexcept {
++    if (!check_owner (actual)
++        || !require (m_phase == phase::awaiting_target_completion
++                     && m_terminal == terminal_stage::unloaded && !m_runtime, failure::lifecycle))
++      return false;
++    m_phase = phase::lifecycle_disappeared; return note ();
++    // No normal-exit, completion, queue destruction or reclamation assertion.
++  }
++  bool begin_client_output (std::size_t expected_bytes) noexcept {
++    if (!require (m_selected && complete (m_identity) && !m_allocation_active && expected_bytes != 0
++                  && expected_bytes <= limits::client_output_bytes, failure::allocation))
++      return false;
++    m_allocation_active = true; m_allocation_requested = false;
++    m_allocation_bytes = expected_bytes; m_allocation_bounded = false;
++    m_allocation_empty = false; return true;
++  }
++  /* URI_NAME is the only bounded-length output. Handles remain exact-size.
++     The actual callback request selects the one retained length BEFORE malloc;
++     the later returned pointer/length must match it exactly. */
++  bool begin_client_locator () noexcept {
++    if (!begin_client_output (limits::client_output_bytes)) return false;
++    m_allocation_bounded = true; return true;
++  }
++  bool begin_client_empty_objects () noexcept {
++    if (!require (m_selected && complete (m_identity) && !m_allocation_active
++                  && m_phase == phase::awaiting_target_completion && m_callback
++                  && m_terminal == terminal_stage::consistent && !m_empty_objects,
++                  failure::allocation)) return false;
++    m_allocation_active = true; m_allocation_requested = false;
++    m_allocation_empty = true; m_allocation_bounded = false;
++    m_allocation_bytes = 0; return true;
++  }
++  bool client_empty_objects_returned (std::uintptr_t actual_pointer,
++                                      std::size_t actual_count,
++                                      std::int64_t actual_status) noexcept {
++    if (!require (m_allocation_active && m_allocation_empty && m_allocation_requested
++                  && !m_allocation_pointer && actual_pointer == 0 && actual_count == 0
++                  && actual_status == 0, failure::allocation)) return false;
++    m_allocation_active = false; m_allocation_requested = false;
++    m_allocation_empty = false; m_empty_objects = true; return true;
++  }
++  bool request_client_output (std::size_t actual_bytes) noexcept {
++    if (!require (m_allocation_active && !m_allocation_requested
++                  && (m_allocation_empty ? actual_bytes == 0
++                       : (actual_bytes != 0
++                          && (m_allocation_bounded ? actual_bytes <= m_allocation_bytes
++                              : actual_bytes == m_allocation_bytes))),
++                  failure::allocation)) return false;
++    m_allocation_bytes = actual_bytes;
++    m_allocation_requested = true; return true; // BEFORE malloc, or direct null for empty.
++    // The empty scope never calls malloc(0); null is not a native handle identity.
++  }
++  bool client_output_allocated (std::uintptr_t actual_pointer) noexcept {
++    if (!require (m_allocation_active && !m_allocation_empty
++                  && m_allocation_requested && !m_allocation_pointer
++                  && actual_pointer != 0, failure::allocation)) return false;
++    m_allocation_pointer = actual_pointer; return true;
++  }
++  bool client_output_returned (std::uintptr_t actual_pointer, std::size_t actual_bytes,
++                               std::int64_t actual_status) noexcept {
++    return require (m_allocation_active && m_allocation_pointer != 0
++                    && actual_pointer == m_allocation_pointer && actual_bytes == m_allocation_bytes
++                    && actual_status == 0, failure::allocation);
++  }
++  bool releasing_client_output (std::uintptr_t actual_pointer) noexcept {
++    // Cleanup of the one known allocation remains allowed AFTER poisoning.
++    // The adapter still calls the real matching free exactly once.
++    if (!m_allocation_active || !m_allocation_pointer || actual_pointer != m_allocation_pointer)
++      return fail (failure::allocation);
++    m_allocation_active = false; m_allocation_requested = false;
++    m_allocation_pointer = 0; m_allocation_bytes = 0; m_allocation_bounded = false; return true;
++  }
++  const diagnostic *next_diagnostic () noexcept {
++    return m_sent < m_usage.rows ? &m_rows[m_sent++] : nullptr;
++    // Caller must poison(output) on any thrown/partial/unknown write.
++  }
++
++  identity m_identity {};
++  runtime_root m_root {};
++  std::uint64_t m_root_address = 0, m_origin_callback_id = 0;
++  std::uintptr_t m_origin_callback_object = 0;
++  terminal_stage m_terminal = terminal_stage::idle;
++  bool m_empty_objects = false, m_allocation_empty = false, m_root_rechecked = false;
++  checkpoint m_checkpoint {};
++  gpu_stop m_stop {};
++  std::array<std::uint64_t, limits::events> m_events {};
++  std::array<diagnostic, limits::rows> m_rows {};
++  usage m_usage {};
++  std::size_t m_events_used = 0, m_callbacks = 0, m_completed_callbacks = 0, m_sent = 0;
++  std::uintptr_t m_callback_object = 0;
++  std::uint64_t m_callback_id = 0, m_object = 0;
++  phase m_phase = phase::disabled;
++  failure m_failure = failure::none;
++  resume_kind m_resume = resume_kind::publication;
++  bool m_selected = false, m_runtime = false, m_callback = false;
++  bool m_host_stop_notified = false, m_delete_seen = false;
++  bool m_cpu_returned = false, m_wave_returned = false, m_body_returned = false;
++  bool m_commit_started = false;
++  bool m_allocation_active = false, m_allocation_requested = false;
++  bool m_allocation_bounded = false;
++  std::size_t m_allocation_bytes = 0;
++  std::uintptr_t m_allocation_pointer = 0;
++};
++constexpr std::uint64_t owner::fixed_storage () noexcept {
++  return sizeof (owner) + sizeof (workspace) + limits::client_output_bytes;
++}
++static_assert (owner::fixed_storage () <= limits::logical_bytes, "complete fixed logical envelope");
++static_assert (!std::is_copy_constructible<owner>::value, "owner cannot be copied");
++static_assert (!std::is_move_constructible<owner>::value, "address-bound owner cannot be moved");
++} // namespace amd_owned_one_stop_v1
++#endif
+diff --git a/gdb/amd-dbgapi-runtime-observation-hooks-v1.inc b/gdb/amd-dbgapi-runtime-observation-hooks-v1.inc
+--- a/gdb/amd-dbgapi-runtime-observation-hooks-v1.inc
++++ b/gdb/amd-dbgapi-runtime-observation-hooks-v1.inc
+@@ -162,7 +162,7 @@
+   observed_native_event_v1 (const observed_native_event_v1 &) = delete;
+   observed_native_event_v1 &operator= (const observed_native_event_v1 &) = delete;
+ 
+-  void complete (runtime_obs::kind type, std::uint64_t runtime = 0)
++  std::int64_t complete (runtime_obs::kind type, std::uint64_t runtime = 0)
+   {
+     auto status = finish ();
+     runtime_observation.completed (type, m_event.handle,
+@@ -172,6 +172,7 @@
+       (type == runtime_obs::kind::runtime_complete
+          ? stopped_obs::kind::runtime_complete : stopped_obs::kind::code_objects_complete,
+        m_event.handle, static_cast<std::uint32_t> (m_kind), runtime, status);
++    return status; // Expose the same sole ACK result; never ACK twice.
+   }
+   std::int64_t finish ()
+   {
+diff --git a/gdb/amd-dbgapi-target.c b/gdb/amd-dbgapi-target.c
+--- a/gdb/amd-dbgapi-target.c
++++ b/gdb/amd-dbgapi-target.c
+@@ -20,6 +20,18 @@
+ 
+ 
+ #include "amd-dbgapi-target.h"
++#include "amd-dbgapi-one-stop-observation-v1.h"
++#include "mi/mi-interp.h"
++#include "ui.h"
++#include "minsyms.h"
++#include "symtab.h"
++#include "symfile.h"
++#include "amd64-tdep.h"
++#include <fcntl.h>
++#include <unistd.h>
++#include <cstdio>
++#include <cstring>
++#include <type_traits>
+ #include "amdgpu-tdep.h"
+ #include "arch-utils.h"
+ #include "async-event.h"
+@@ -264,6 +276,8 @@
+ 
+ #include "amd-dbgapi-stopped-wave-observation-hooks-v1.inc"
+ #include "amd-dbgapi-runtime-observation-hooks-v1.inc"
++#include "amd-dbgapi-one-stop-native-v1.h"
++namespace one_stop_native = amd_owned_one_stop_v1;
+ 
+ static amd_dbgapi_event_id_t process_event_queue
+   (amd_dbgapi_inferior_info &info,
+@@ -865,6 +879,7 @@
+ void
+ amd_dbgapi_target_breakpoint::check_status (struct bpstat *bs)
+ {
++  amd_owned_one_stop_native_v1::unwind_guard one_stop_unwind;
+   struct inferior *inf = current_inferior ();
+   amd_dbgapi_inferior_info *info = get_amd_dbgapi_inferior_info (inf);
+   amd_dbgapi_status_t status;
+@@ -894,6 +909,8 @@
+   observed_native_scope_v1 callback_scope
+     (runtime_obs::reason::callback_identity);
+ 
++  one_stop_native::native_adapter::instance ().callback_begin
++    (*info, this, breakpoint_id, callback_thread);
+   status = amd_dbgapi_report_breakpoint_hit
+     (breakpoint_id,
+      reinterpret_cast<amd_dbgapi_client_thread_id_t> (callback_thread),
+@@ -914,6 +931,8 @@
+     {
+       runtime_observation.end_callback (0, 0, action, status);
+       stopped_obs::end_callback (0, 0, action, status);
++      one_stop_native::native_adapter::instance ().callback_end
++        (*info, this, breakpoint_id, callback_thread, AMD_DBGAPI_EVENT_NONE, action, status);
+       callback_scope.done ();
+       flush_runtime_observation ();
+       return;
+@@ -976,6 +995,9 @@
+      action, ack_status);
+   stopped_obs::end_callback
+     (resume_event_id.handle, AMD_DBGAPI_EVENT_KIND_BREAKPOINT_RESUME, action, ack_status);
++  one_stop_native::native_adapter::instance ().callback_end
++    (*info, this, breakpoint_id, callback_thread, resume_event_id, action,
++     static_cast<amd_dbgapi_status_t> (ack_status));
+   callback_scope.done ();
+   flush_runtime_observation ();
+ }
+@@ -1481,10 +1503,14 @@
+   if (!ptid_is_gpu (inferior_ptid) || scope_ptid != inferior_ptid)
+     {
+       beneath ()->resume (scope_ptid, step, signo);
++      one_stop_native::native_adapter::instance ().after_amd_cpu_resume ();
+ 
+       /* If the request is for a single thread, we are done.  */
+       if (scope_ptid == inferior_ptid)
+-	return;
++        {
++          one_stop_native::native_adapter::instance ().after_amd_resume ();
++          return;
++        }
+     }
+ 
+   process_stratum_target *proc_target = current_inferior ()->process_target ();
+@@ -1517,6 +1543,7 @@
+ 	}
+ 
+       status = amd_dbgapi_wave_resume (wave_id, resume_mode, wave_exception);
++      one_stop_native::native_adapter::instance ().after_amd_wave_resume (wave_id, status);
+       if (status != AMD_DBGAPI_STATUS_SUCCESS
+ 	  /* Ignore the error that wave is no longer valid as that could
+ 	     indicate that the process has exited.  GDB treats resuming a
+@@ -1527,6 +1554,7 @@
+ 
+       wi.stopping = false;
+     }
++  one_stop_native::native_adapter::instance ().after_amd_resume ();
+ }
+ 
+ void
+@@ -1538,6 +1566,7 @@
+ 
+   process_stratum_target *proc_target = current_inferior ()->process_target ();
+   require_forward_progress (minus_one_ptid, proc_target, true);
++  one_stop_native::native_adapter::instance ().after_amd_commit ();
+ }
+ 
+ /* Return a string version of RESUME_MODE, for debug log purposes.  */
+@@ -1728,6 +1757,7 @@
+       if (event_id == AMD_DBGAPI_EVENT_NONE)
+ 	return;
+ 
++      amd_owned_one_stop_native_v1::unwind_guard one_stop_unwind;
+       observed_native_event_v1 mark_event_processed (*info, event_id, event_kind);
+       if (event_kind != AMD_DBGAPI_EVENT_KIND_RUNTIME)
+         {
+@@ -1785,8 +1815,10 @@
+ 		     "due to a restriction error"));
+ 	  break;
+ 	}
+-      mark_event_processed.complete
++      const auto one_stop_ack = mark_event_processed.complete
+         (runtime_obs::kind::runtime_complete, runtime_state);
++      one_stop_native::native_adapter::instance ().runtime_ack
++        (*info, event_id, runtime_state, static_cast<amd_dbgapi_status_t> (one_stop_ack));
+       if (runtime_state != AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS)
+         invalidate_observation_event_v1
+           (runtime_state == AMD_DBGAPI_RUNTIME_STATE_UNLOADED
+@@ -1916,7 +1948,9 @@
+ 		   amd_dbgapi_event_kind_t event_kind)
+ {
+   /* Automatically mark this event processed when going out of scope.  */
++  amd_owned_one_stop_native_v1::unwind_guard one_stop_unwind;
+   observed_native_event_v1 mark_event_processed (info, event_id, event_kind);
++  thread_info *one_stop_event_thread = nullptr;
+ 
+   gdb_assert (info.inf != nullptr);
+   std::uint64_t observed_runtime_state = 0;
+@@ -1988,6 +2022,7 @@
+ 	      = info.inf->process_target ()->find_thread (event_ptid);
+ 	    if (thread == nullptr)
+ 	      thread = add_gpu_thread (info.inf, event_ptid);
++            one_stop_event_thread = thread;
+ 
+ 	    /* If the wave is stopped because of a software breakpoint, the
+ 	       program counter needs to be adjusted so that it points to the
+@@ -2071,11 +2106,18 @@
+     }
+ 
+   if (event_kind == AMD_DBGAPI_EVENT_KIND_CODE_OBJECT_LIST_UPDATED)
+-    mark_event_processed.complete (runtime_obs::kind::code_objects_complete);
++    {
++      const auto one_stop_ack = mark_event_processed.complete (runtime_obs::kind::code_objects_complete);
++      one_stop_native::native_adapter::instance ().objects_ack
++        (info, event_id, static_cast<amd_dbgapi_status_t> (one_stop_ack));
++    }
+   else if (event_kind == AMD_DBGAPI_EVENT_KIND_RUNTIME)
+     {
+-      mark_event_processed.complete (runtime_obs::kind::runtime_complete,
++      const auto one_stop_ack = mark_event_processed.complete (runtime_obs::kind::runtime_complete,
+                                      observed_runtime_state);
++      one_stop_native::native_adapter::instance ().runtime_ack
++        (info, event_id, static_cast<amd_dbgapi_runtime_state_t> (observed_runtime_state),
++         static_cast<amd_dbgapi_status_t> (one_stop_ack));
+       invalidate_observation_event_v1 (runtime_obs::reason::runtime_unloaded);
+     }
+   else
+@@ -2087,6 +2129,13 @@
+           && !stopped_wave_observation.invalid ())
+         observed = query_stopped_wave_event_v1 (info, event_id);
+       auto acknowledged_status = mark_event_processed.finish ();
++      if (event_kind == AMD_DBGAPI_EVENT_KIND_WAVE_STOP)
++        one_stop_native::native_adapter::instance ().wave_ack
++          (info, event_id, one_stop_event_thread,
++           static_cast<amd_dbgapi_status_t> (acknowledged_status));
++      else if (amd_owned_one_stop_native_v1::selected ())
++        one_stop_native::native_adapter::instance ().invalidate
++          (one_stop_native::failure::stop_changed);
+       if (observed)
+         stopped_wave_observation.stage
+           (event_id.handle, static_cast<std::uint32_t> (event_kind),
+@@ -2588,6 +2637,7 @@
+ void
+ amd_dbgapi_target::mourn_inferior ()
+ {
++  one_stop_native::native_adapter::instance ().invalidate (one_stop_native::failure::lifecycle);
+   /* Mourn removes an inferior, including kill/failed-attach cleanup.  This
+      invalidation alone does not establish a normal process exit.  */
+   invalidate_runtime_observation (runtime_obs::reason::inferior_exit);
+@@ -2598,6 +2648,7 @@
+ void
+ amd_dbgapi_target::detach (inferior *inf, int from_tty)
+ {
++  one_stop_native::native_adapter::instance ().invalidate (one_stop_native::failure::lifecycle);
+   /* This target entry is a GDB detach, unlike detach_amd_dbgapi below.  */
+   invalidate_runtime_observation (runtime_obs::reason::detach);
+   /* We're about to resume the waves by detaching the dbgapi library from the
+@@ -3000,6 +3051,7 @@
+ static void
+ amd_dbgapi_inferior_execd (inferior *exec_inf, inferior *follow_inf)
+ {
++  one_stop_native::native_adapter::instance ().invalidate (one_stop_native::failure::lifecycle);
+   invalidate_runtime_observation (runtime_obs::reason::inferior_exec);
+   /* The inferior has EXEC'd and the process image has changed.  The dbgapi is
+      attached to the old process image, so we need to detach and re-attach to
+@@ -3024,6 +3076,7 @@
+ amd_dbgapi_inferior_forked (inferior *parent_inf, inferior *child_inf,
+ 			    target_waitkind fork_kind)
+ {
++  one_stop_native::native_adapter::instance ().invalidate (one_stop_native::failure::lifecycle);
+   invalidate_runtime_observation (runtime_obs::reason::inferior_fork);
+   if (child_inf != nullptr)
+     {
+@@ -3054,6 +3107,7 @@
+ static void
+ amd_dbgapi_inferior_exited (inferior *inf)
+ {
++  one_stop_native::native_adapter::instance ().disappearing (inf);
+   invalidate_runtime_observation (runtime_obs::reason::inferior_exit);
+   detach_amd_dbgapi (inf);
+ }
+@@ -3063,6 +3117,7 @@
+ static void
+ amd_dbgapi_inferior_pre_detach (inferior *inf)
+ {
++  one_stop_native::native_adapter::instance ().invalidate (one_stop_native::failure::lifecycle);
+   /* Cover both pushed and unpushed targets before library teardown.  A
+      later inferior_exit notification must not replace this detach cause.  */
+   invalidate_runtime_observation (runtime_obs::reason::detach);
+@@ -3364,8 +3419,12 @@
+ /* Callbacks passed to amd_dbgapi_initialize.  */
+ 
+ static amd_dbgapi_callbacks_t dbgapi_callbacks = {
+-  .allocate_memory = malloc,
+-  .deallocate_memory = free,
++  .allocate_memory = [] (std::size_t bytes) -> void * {
++    return one_stop_native::native_adapter::instance ().allocate_client (bytes);
++  },
++  .deallocate_memory = [] (void *pointer) {
++    one_stop_native::native_adapter::instance ().deallocate_client (pointer);
++  },
+   .client_process_get_info = amd_dbgapi_client_process_get_info_callback,
+   .insert_breakpoint = amd_dbgapi_insert_breakpoint_callback,
+   .remove_breakpoint = amd_dbgapi_remove_breakpoint_callback,
+@@ -4878,6 +4937,14 @@
+ 	   get_status_string (status));
+ }
+ 
++#include "amd-dbgapi-one-stop-native-io-v1.inc"
++#include "amd-dbgapi-one-stop-native-query-v1.inc"
++#include "amd-dbgapi-one-stop-native-object-v1.inc"
++#include "amd-dbgapi-one-stop-native-owner-v1.inc"
++#include "amd-dbgapi-one-stop-native-events-v1.inc"
++#include "amd-dbgapi-one-stop-native-resume-v1.inc"
++#include "amd-dbgapi-one-stop-native-wrappers-v1.inc"
++
+ extern initialize_file_ftype _initialize_amd_dbgapi_target;
+ 
+ void
+@@ -4933,6 +5000,17 @@
+       stopped_obs::change (stopped_obs::reason::thread_changed);
+     }, "amd-stopped-wave-observation-v1");
+ 
++  /* Selected-profile hooks; every method is inert before closed selection. */
++  gdb::observers::about_to_proceed.attach
++    ([] () { one_stop_native::native_adapter::instance ().about_to_proceed (); },
++     "amd-owned-one-stop-v1");
++  gdb::observers::breakpoint_deleted.attach
++    ([] (breakpoint *bp) { one_stop_native::native_adapter::instance ().deleting_breakpoint (bp); },
++     "amd-owned-one-stop-v1");
++  add_cmd ("fe2o3-one-stop-select-v1", class_maintenance,
++           one_stop_select_command_v1,
++           _("Unavailable: compile-only fixed-profile one-stop adapter."), &cmdlist);
++
+   /* Install observers.  */
+   gdb::observers::breakpoint_created.attach (amd_dbgapi_target_breakpoint_fixup,
+ 					     "amd-dbgapi");
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -31,6 +31,7 @@
+ #include "breakpoint.h"
+ #include "gdbcore.h"
+ #include "target.h"
++#include "amd-dbgapi-one-stop-observation-v1.h"
+ #include "target-connection.h"
+ #include "gdbthread.h"
+ #include "annotate.h"
+@@ -2676,6 +2677,24 @@
+ 		       resume_ptid.to_string ().c_str (),
+ 		       step, gdb_signal_to_symbol_string (sig));
+ 
++#if HAVE_AMD_DBGAPI
++  amd_owned_one_stop_native_v1::unwind_guard one_stop_unwind;
++  /* This relation uses the actual infrun thread/address space and step-over
++     record before any target effect. Displaced/watchpoint paths stay refused. */
++  const bool one_stop_inline = amd_owned_one_stop_native_v1::selected ()
++    && step_over_info_valid_p ()
++    && step_over_info.thread == tp->global_num
++    && step_over_info.aspace == tp->inf->pspace->aspace
++    && step_over_info.address == regcache_read_pc (get_thread_regcache (tp))
++    && !step_over_info.nonsteppable_watchpoint_p
++    && !displaced_step_in_progress_thread (tp);
++  amd_owned_one_stop_native_v1::infrun_begin
++    (tp, resume_ptid, step, sig, tp->control.trap_expected, one_stop_inline,
++     thread_has_single_step_breakpoints_set (tp), tp->control.stepping_command);
++  auto one_stop_origin_end = make_scope_exit ([] () {
++    amd_owned_one_stop_native_v1::infrun_end ();
++  });
++#endif
+   target_resume (resume_ptid, step, sig);
+ }
+ 
+@@ -6772,6 +6791,18 @@
+ static int
+ finish_step_over (struct execution_control_state *ecs)
+ {
++#if HAVE_AMD_DBGAPI
++  amd_owned_one_stop_native_v1::unwind_guard one_stop_unwind;
++  const bool one_stop_inline = amd_owned_one_stop_native_v1::selected ()
++    && step_over_info_valid_p ()
++    && step_over_info.thread == ecs->event_thread->global_num
++    && step_over_info.aspace == ecs->event_thread->inf->pspace->aspace
++    && !step_over_info.nonsteppable_watchpoint_p
++    && !displaced_step_in_progress_thread (ecs->event_thread);
++  amd_owned_one_stop_native_v1::before_finish_step
++    (ecs->event_thread, ecs->ws, one_stop_inline,
++     ecs->event_thread->control.trap_expected, step_over_info.address);
++#endif
+   displaced_step_finish (ecs->event_thread, ecs->ws);
+ 
+   bool had_step_over_info = step_over_info_valid_p ();
+@@ -9840,7 +9871,12 @@
+ 	  && last.kind () != TARGET_WAITKIND_THREAD_EXITED)
+ 	/* Delete the breakpoint we stopped at, if it wants to be deleted.
+ 	   Delete any breakpoint that is to be deleted at the next stop.  */
+-	breakpoint_auto_delete (inferior_thread ()->control.stop_bpstat);
++        {
++          breakpoint_auto_delete (inferior_thread ()->control.stop_bpstat);
++#if HAVE_AMD_DBGAPI
++          amd_owned_one_stop_native_v1::after_auto_delete ();
++#endif
++        }
+     }
+ 
+   return false;
+diff --git a/gdb/mi/mi-interp.c b/gdb/mi/mi-interp.c
+--- a/gdb/mi/mi-interp.c
++++ b/gdb/mi/mi-interp.c
+@@ -20,6 +20,7 @@
+ 
+ 
+ #include "mi-interp.h"
++#include "amd-dbgapi-one-stop-observation-v1.h"
+ #include "amd-dbgapi-runtime-observation-v1.h"
+ #include "amd-dbgapi-stopped-wave-observation-v1.h"
+ 
+@@ -73,6 +74,7 @@
+ 
+ #if HAVE_AMD_DBGAPI
+   amd_runtime_observation_v1::flush_safe_point ();
++  amd_owned_one_stop_native_v1::flush_safe_point ();
+ #endif
+ 
+   gdb_puts ("(gdb) \n", mi->raw_stdout);
+@@ -462,6 +464,8 @@
+   amd_runtime_observation_v1::flush_safe_point ();
+   amd_stopped_wave_observation_v1::after_normal_stop
+     (print_frame ? inferior_thread () : nullptr);
++  amd_owned_one_stop_native_v1::after_normal_stop
++    (print_frame ? inferior_thread () : nullptr);
+ #endif
+ }
+ 
+diff --git a/gdb/mi/mi-main.c b/gdb/mi/mi-main.c
+--- a/gdb/mi/mi-main.c
++++ b/gdb/mi/mi-main.c
+@@ -42,6 +42,7 @@
+ #include "regcache.h"
+ #include "frame.h"
+ #include "mi-main.h"
++#include "amd-dbgapi-one-stop-observation-v1.h"
+ #include "amd-dbgapi-stopped-wave-observation-v1.h"
+ #include "mi-interp.h"
+ #include "language.h"
+@@ -1968,6 +1969,8 @@
+ mi_execute_command (const char *cmd, int from_tty)
+ {
+ #if HAVE_AMD_DBGAPI
++  amd_owned_one_stop_native_v1::mi_input (cmd);
++  amd_owned_one_stop_native_v1::unwind_guard one_stop_unwind;
+   /* Observation-only: every next command invalidates before dispatch, including
+      CLI-through-MI and Python execute_mi.  There is no read-command exception. */
+   amd_stopped_wave_observation_v1::change
+@@ -1992,6 +1995,9 @@
+     }
+   catch (const gdb_exception &exception)
+     {
++#if HAVE_AMD_DBGAPI
++      amd_owned_one_stop_native_v1::unwind ();
++#endif
+       mi_print_exception (mi, token.c_str (), exception);
+     }
+ 
+@@ -2020,6 +2026,9 @@
+ 
+ 	  /* The command execution failed and error() was called
+ 	     somewhere.  */
++#if HAVE_AMD_DBGAPI
++          amd_owned_one_stop_native_v1::unwind ();
++#endif
+ 	  mi_print_exception (mi, command->token.c_str (), result);
+ 	  mi_out_rewind (current_uiout);
+ 
+@@ -2039,6 +2048,7 @@
+ mi_execute_command (mi_parse *context)
+ {
+ #if HAVE_AMD_DBGAPI
++  amd_owned_one_stop_native_v1::nested_mi ();
+   /* Observation-only: every next command invalidates before dispatch, including
+      CLI-through-MI and Python execute_mi.  There is no read-command exception. */
+   amd_stopped_wave_observation_v1::change
+diff --git a/gdb/solib-rocm.c b/gdb/solib-rocm.c
+--- a/gdb/solib-rocm.c
++++ b/gdb/solib-rocm.c
+@@ -26,6 +26,7 @@
+ #include "event-top.h"
+ #include "gdbsupport/fileio.h"
+ #include "inferior.h"
++#include "amd-dbgapi-one-stop-observation-v1.h"
+ #include "observable.h"
+ #include "solib.h"
+ #include "solib-svr4.h"
+@@ -706,52 +707,69 @@
+   info->solib_list.clear ();
+   std::vector<rocm_so> &sos = info->solib_list;
+ 
+-  amd_dbgapi_code_object_id_t *code_object_list;
+-  size_t count;
+-
+-  amd_dbgapi_status_t status
+-    = amd_dbgapi_process_code_object_list (process_id, &count,
+-					   &code_object_list, nullptr);
+-  if (status != AMD_DBGAPI_STATUS_SUCCESS)
++  if (amd_owned_one_stop_native_v1::selected ())
+     {
+-      warning (_("amd_dbgapi_process_code_object_list failed (%s)"),
+-	       get_status_string (status));
+-      return;
++      amd_owned_one_stop_native_v1::unwind_guard one_stop_unwind;
++      amd_dbgapi_code_object_id_t object {};
++      std::ptrdiff_t bias = 0;
++      const char *uri = nullptr;
++      if (amd_owned_one_stop_native_v1::selected_object (inf, object, bias, uri))
++        {
++          lm_info_svr4_up li = std::make_unique<lm_info_svr4> ();
++          li->l_addr = static_cast<CORE_ADDR> (bias);
++          std::string unique_name = string_printf ("code_object_%ld", object.handle);
++          sos.emplace_back (uri, std::move (unique_name), std::move (li));
++        }
+     }
+-
+-  for (size_t i = 0; i < count; ++i)
++  else
+     {
+-      CORE_ADDR l_addr;
+-      char *uri_bytes;
+-
+-      status = amd_dbgapi_code_object_get_info
+-	(code_object_list[i], AMD_DBGAPI_CODE_OBJECT_INFO_LOAD_ADDRESS,
+-	 sizeof (l_addr), &l_addr);
+-      if (status != AMD_DBGAPI_STATUS_SUCCESS)
+-	continue;
+-
+-      status = amd_dbgapi_code_object_get_info
+-	(code_object_list[i], AMD_DBGAPI_CODE_OBJECT_INFO_URI_NAME,
+-	 sizeof (uri_bytes), &uri_bytes);
++      amd_dbgapi_code_object_id_t *code_object_list;
++      size_t count;
++    
++      amd_dbgapi_status_t status
++        = amd_dbgapi_process_code_object_list (process_id, &count,
++    					   &code_object_list, nullptr);
+       if (status != AMD_DBGAPI_STATUS_SUCCESS)
+-	continue;
+-
+-      gdb::unique_xmalloc_ptr<char> uri_bytes_holder (uri_bytes);
+-
+-      lm_info_svr4_up li = std::make_unique<lm_info_svr4> ();
+-      li->l_addr = l_addr;
+-
+-      /* Generate a unique name so that code objects with the same URI but
+-	 different load addresses are seen by gdb core as different shared
+-	 objects.  */
+-      std::string unique_name
+-	= string_printf ("code_object_%ld", code_object_list[i].handle);
+-
+-      sos.emplace_back (uri_bytes, std::move (unique_name), std::move (li));
++        {
++          warning (_("amd_dbgapi_process_code_object_list failed (%s)"),
++    	       get_status_string (status));
++          return;
++        }
++    
++      for (size_t i = 0; i < count; ++i)
++        {
++          CORE_ADDR l_addr;
++          char *uri_bytes;
++    
++          status = amd_dbgapi_code_object_get_info
++    	(code_object_list[i], AMD_DBGAPI_CODE_OBJECT_INFO_LOAD_ADDRESS,
++    	 sizeof (l_addr), &l_addr);
++          if (status != AMD_DBGAPI_STATUS_SUCCESS)
++    	continue;
++    
++          status = amd_dbgapi_code_object_get_info
++    	(code_object_list[i], AMD_DBGAPI_CODE_OBJECT_INFO_URI_NAME,
++    	 sizeof (uri_bytes), &uri_bytes);
++          if (status != AMD_DBGAPI_STATUS_SUCCESS)
++    	continue;
++    
++          gdb::unique_xmalloc_ptr<char> uri_bytes_holder (uri_bytes);
++    
++          lm_info_svr4_up li = std::make_unique<lm_info_svr4> ();
++          li->l_addr = l_addr;
++    
++          /* Generate a unique name so that code objects with the same URI but
++    	 different load addresses are seen by gdb core as different shared
++    	 objects.  */
++          std::string unique_name
++    	= string_printf ("code_object_%ld", code_object_list[i].handle);
++    
++          sos.emplace_back (uri_bytes, std::move (unique_name), std::move (li));
++        }
++    
++      xfree (code_object_list);
+     }
+ 
+-  xfree (code_object_list);
+-
+   if (rocm_solib_ops.current_sos == NULL)
+     {
+       /* Override what we need to.  */
+diff --git a/gdb/target.c b/gdb/target.c
+--- a/gdb/target.c
++++ b/gdb/target.c
+@@ -21,6 +21,7 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+ 
+ #include "target.h"
++#include "amd-dbgapi-one-stop-observation-v1.h"
+ #include "extract-store-integer.h"
+ #include "target-dcache.h"
+ #include "cli/cli-cmds.h"
+@@ -2665,9 +2666,16 @@
+   gdb_assert (inferior_ptid != null_ptid);
+   gdb_assert (inferior_ptid.matches (scope_ptid));
+ 
++#if HAVE_AMD_DBGAPI
++  amd_owned_one_stop_native_v1::unwind_guard one_stop_unwind;
++  amd_owned_one_stop_native_v1::before_resume (scope_ptid, step, signal);
++#endif
+   target_dcache_invalidate (current_program_space->aspace);
+ 
+   current_inferior ()->top_target ()->resume (scope_ptid, step, signal);
++#if HAVE_AMD_DBGAPI
++  amd_owned_one_stop_native_v1::after_resume ();
++#endif
+ 
+   registers_changed_ptid (curr_target, scope_ptid);
+   /* We only set the internal executing state here.  The user/frontend
+@@ -2686,7 +2694,14 @@
+ target_commit_resumed ()
+ {
+   gdb_assert (current_inferior ()->process_target ()->commit_resumed_state);
++#if HAVE_AMD_DBGAPI
++  amd_owned_one_stop_native_v1::unwind_guard one_stop_unwind;
++  amd_owned_one_stop_native_v1::before_commit ();
++#endif
+   current_inferior ()->top_target ()->commit_resumed ();
++#if HAVE_AMD_DBGAPI
++  amd_owned_one_stop_native_v1::after_commit ();
++#endif
+ }
+ 
+ /* See target.h.  */
