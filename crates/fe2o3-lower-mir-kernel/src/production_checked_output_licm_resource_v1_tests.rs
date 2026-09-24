@@ -123,10 +123,12 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
                 measured(profile, mutation, WORK, STORAGE);
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
+            // V20 enlarges retained OperationKind storage; work and the exact
+            // nested first-denial phase are unchanged on both target profiles.
             let expected = if mutation {
-                (2_733_569, 3_304_704, 2_686_896, 3_281_565)
+                (2_733_569, 3_335_168, 2_686_896, 3_309_341)
             } else {
-                (249_631, 1_944_506, 238_296, 1_929_013)
+                (249_631, 1_949_434, 238_296, 1_933_493)
             };
             assert_eq!((work, peak), (expected.0, expected.1));
             let (result, accepted, actual_peak, storage_denial, work_denial) =

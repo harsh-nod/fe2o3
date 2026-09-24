@@ -134,6 +134,7 @@ struct Session<'a, P: Peer> {
     pid: Option<u32>,
     thread: Option<Vec<u8>>,
     group_added: bool,
+    startup_settings_seen: [bool; 5],
     group_exited: bool,
     thread_exited: bool,
     normal_exit: bool,
@@ -150,6 +151,7 @@ impl<'a, P: Peer> Session<'a, P> {
             pid: None,
             thread: None,
             group_added: false,
+            startup_settings_seen: [false; 5],
             group_exited: false,
             thread_exited: false,
             normal_exit: false,
@@ -226,6 +228,30 @@ impl<'a, P: Peer> Session<'a, P> {
     }
     fn notification(&mut self, class: &str, r: &MiResultsV3) -> Result<(), Refusal> {
         match class {
+            "cmd-param-changed" => {
+                fields(r, &["param", "value"], &["param", "value"])?;
+                // Precisely the fixed -iex startup effects observed from the
+                // pinned debugger; not a generic setting-notification sink.
+                const PARAMETERS: [&[u8]; 5] = [
+                    b"auto-load gdb-scripts",
+                    b"auto-load libthread-db",
+                    b"auto-load local-gdbinit",
+                    b"auto-load python-scripts",
+                    b"startup-with-shell",
+                ];
+                if self.phase != Phase::Setup || text(r, "value")? != b"off" {
+                    return Err(Refusal::State);
+                }
+                let parameter = text(r, "param")?;
+                let index = PARAMETERS
+                    .iter()
+                    .position(|known| *known == parameter)
+                    .ok_or(Refusal::Shape)?;
+                if self.startup_settings_seen[index] {
+                    return Err(Refusal::Duplicate);
+                }
+                self.startup_settings_seen[index] = true;
+            }
             "thread-group-added" => {
                 fields(r, &["id"], &["id"])?;
                 if text(r, "id")? != b"i1" || self.group_added {

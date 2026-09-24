@@ -80,6 +80,7 @@ include!("production_ordered_region_pre_ranked_v16.rs");
 include!("production_ordered_region_inspection_v1.rs");
 include!("production_ordered_program_pre_ranked_v17.rs");
 include!("production_complete_body_source_vnext.rs");
+include!("production_physical_entry_source_v20.rs");
 #[path = "production_complete_body_checks_v19.rs"]
 mod complete_body_checks_v19;
 pub use complete_body_checks_v19::{
@@ -16335,6 +16336,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(program) => {
                 self.lower_gfx942_ordered_program_v32(block, call, *program, operations)?
             }
+            SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryBegin
+            | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryLabel(_)
+            | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryStep(_) => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "physical-entry source requires exact MIR37/KIR20 materialization",
+                ));
+            }
             SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_) => {
                 return Err(unsupported(
                     0,
@@ -24713,11 +24724,17 @@ fn authenticated_disjoint_slice_parameter(
     argument: u32,
     ty: SemanticTypeIdV1,
 ) -> Option<Type> {
-    let (element, raw_index, access) = disjoint_slice_descriptor(callables, ty).or_else(|| {
-        complete_body_parameter_vnext::complete_body_slice_parameter_vnext(
-            types, callables, function, argument, ty,
-        )
-    })?;
+    let (element, raw_index, access) = disjoint_slice_descriptor(callables, ty)
+        .or_else(|| {
+            complete_body_parameter_vnext::complete_body_slice_parameter_vnext(
+                types, callables, function, argument, ty,
+            )
+        })
+        .or_else(|| {
+            physical_entry_parameter_v20::physical_entry_slice_parameter_v20(
+                types, callables, function, argument, ty,
+            )
+        })?;
     let argument = usize::try_from(argument).ok()?;
     let abi = function.abi();
     if abi.source_input_types().get(argument) != Some(&ty)

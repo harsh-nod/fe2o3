@@ -62,7 +62,7 @@ fn version_slot_and_literal_frame_are_exact() {
         Some(SemanticMirWireVersionV1::V36)
     );
     assert_eq!(SemanticMirWireVersionV1::V36.as_u16(), 36);
-    assert_eq!(SemanticMirWireVersionV1::from_u16(37), None);
+    assert_eq!(SemanticMirWireVersionV1::from_u16(38), None);
     let operation = SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(packed());
     let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
     encode_compiler_intrinsic_operation(&mut writer, operation, SemanticMirWireVersionV1::V36)

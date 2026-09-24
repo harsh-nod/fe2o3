@@ -19,6 +19,12 @@ pub(super) fn validate_request_schema(
     request: &InertSemanticMirRequestV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if wire_version != SemanticMirWireVersionV1::V37 && physical_entry_v37::uses_v37(request) {
+        return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version,
+            required: SemanticMirWireVersionV1::V37,
+        });
+    }
     if wire_version != SemanticMirWireVersionV1::V29
         && saturating_integer_v30::contains_inert_execution(request)
     {
@@ -83,6 +89,21 @@ pub(super) fn encode_direct_call(
     call: &SemanticDirectCallV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if call.physical_entry_source_v37.is_some() {
+        if wire_version != SemanticMirWireVersionV1::V37 {
+            return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: wire_version,
+                required: SemanticMirWireVersionV1::V37,
+            });
+        }
+        if call.inline_assembly_source_v30.is_some()
+            || call.ordered_region_source_v31.is_some()
+            || call.ordered_program_source_v32.is_some()
+            || call.complete_body_source_vnext.is_some()
+        {
+            return Err(SemanticMirErrorV1::InvalidPhysicalEntryV37);
+        }
+    }
     if call.complete_body_source_vnext.is_some() {
         if wire_version != SemanticMirWireVersionV1::V36 {
             return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
@@ -179,6 +200,9 @@ pub(super) fn encode_direct_call(
     }
     if wire_version == SemanticMirWireVersionV1::V36 {
         complete_body_v36::encode_source(writer, call.complete_body_source_vnext)?;
+    }
+    if wire_version == SemanticMirWireVersionV1::V37 {
+        physical_entry_v37::encode_source(writer, call.physical_entry_source_v37)?;
     }
     Ok(())
 }

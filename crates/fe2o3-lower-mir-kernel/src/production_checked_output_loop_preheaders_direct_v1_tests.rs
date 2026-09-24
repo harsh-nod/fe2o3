@@ -417,8 +417,10 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
                 (measured_storage, storage_limit)
             );
             // Both targets use the same canonical fixture and exact replay schedule.
+            // V20 enlarges retained OperationKind storage; work and the exact
+            // nested first-denial phase are unchanged on both target profiles.
             let expected = if mutation {
-                (845_738, 2_671_762)
+                (845_738, 2_685_874)
             } else {
                 (65_552, 1_655_457)
             };

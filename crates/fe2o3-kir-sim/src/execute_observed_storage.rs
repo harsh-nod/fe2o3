@@ -57,6 +57,9 @@ impl AdmittedSimulationModuleV1 {
         limits: SimulationLimitsV1,
         options: ObservationExecutionOptionsV1,
     ) -> Result<SimulationPlanV1, SimulationPreflightErrorV1> {
+        if options.capture_limits.is_enabled() {
+            self.check_debug_capture_supported_v20()?;
+        }
         let mut plan = match options.dynamic_workgroup_memory {
             Some(dynamic) => {
                 self.preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
@@ -93,6 +96,8 @@ impl AdmittedSimulationModuleV1 {
         event_sink: &mut impl SimulationEventSinkV1,
         debug_sink: &mut impl SimulationDebugSinkV1,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        self.check_debug_capture_supported_v20()
+            .map_err(SimulationErrorV1::Preflight)?;
         let plan = self
             .preflight_with_observation_options(request, target, limits, options)
             .map_err(SimulationErrorV1::Preflight)?;
@@ -131,6 +136,8 @@ impl AdmittedSimulationModuleV1 {
         event_sink: &mut impl SimulationEventSinkV1,
         debug_sink: &mut impl SimulationDebugSinkV1,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        self.check_debug_capture_supported_v20()
+            .map_err(SimulationErrorV1::Preflight)?;
         let plan = self
             .preflight_with_observation_options(request, target, limits, options)
             .map_err(SimulationErrorV1::Preflight)?;

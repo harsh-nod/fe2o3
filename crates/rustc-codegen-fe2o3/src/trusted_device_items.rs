@@ -47,13 +47,13 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x97, 0x0f, 0x32, 0x1b, 0x61, 0xbf, 0x43, 0x20, 0xf4, 0xaf, 0x4b, 0xb0, 0x00, 0x89, 0x08, 0x8b,
-    0xaa, 0x92, 0xe7, 0x10, 0x4c, 0x34, 0xb9, 0xeb, 0xbb, 0x71, 0x06, 0x7d, 0xfe, 0x33, 0x69, 0xbd,
+    0x0a, 0xa7, 0xfa, 0xec, 0x0c, 0xf4, 0xfc, 0x2a, 0xdb, 0x16, 0xd9, 0x7e, 0xa5, 0xb4, 0x0a, 0x11,
+    0x28, 0xbd, 0x02, 0x42, 0x86, 0x57, 0x80, 0xe0, 0xe3, 0xfb, 0xb9, 0x48, 0x24, 0x8b, 0x2d, 0x91,
 ];
 // The pinned Cargo-produced manifest fixture is checked with the complete source tree.
 const REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x52, 0xd6, 0x48, 0xec, 0x3d, 0x06, 0xab, 0x04, 0x45, 0x3b, 0x71, 0x46, 0xdc, 0xda, 0x03, 0xa5,
-    0x75, 0xd3, 0x99, 0xb6, 0x20, 0xf8, 0xfc, 0x92, 0x37, 0x6e, 0x7c, 0xf7, 0x6f, 0x5c, 0x88, 0x97,
+    0x33, 0xbd, 0xfc, 0x4e, 0x10, 0x11, 0x07, 0xb7, 0x53, 0x85, 0xc0, 0x3a, 0x4d, 0x58, 0x57, 0x10,
+    0x6f, 0x60, 0x5f, 0x06, 0x71, 0xca, 0x01, 0x77, 0xc6, 0xe3, 0x84, 0x3e, 0x9c, 0x88, 0xb9, 0x98,
 ];
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 2] = [
     REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
@@ -383,6 +383,9 @@ pub(crate) enum TrustedDeviceItem {
     AmdGpuOrderedXorAddE32,
     AmdGpuOrderedProgramE32,
     AmdGpuCompleteBodyE32,
+    AmdGpuPhysicalEntryBeginGfx942,
+    AmdGpuPhysicalEntryLabelGfx942,
+    AmdGpuPhysicalEntryStepGfx942,
     AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation),
     KernelContext,
     KernelContextIssue,
@@ -1353,6 +1356,21 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::diagnostics::__amdgpu_ordered_program_e32_v1",
     ),
     (
+        TrustedDeviceItem::AmdGpuPhysicalEntryBeginGfx942,
+        "fe2o3_device_amdgpu_physical_entry_begin_gfx942_v1",
+        "fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_begin_gfx942_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942,
+        "fe2o3_device_amdgpu_physical_entry_label_gfx942_v1",
+        "fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_label_gfx942_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942,
+        "fe2o3_device_amdgpu_physical_entry_step_gfx942_v1",
+        "fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_step_gfx942_v1",
+    ),
+    (
         TrustedDeviceItem::AmdGpuCompleteBodyE32,
         "fe2o3_device_amdgpu_complete_body_gfx942_v1",
         "fe2o3_device::diagnostics::__amdgpu_complete_body_gfx942_v1",
@@ -1648,6 +1666,15 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         }
         TrustedDeviceItem::AmdGpuOrderedProgramE32 => {
             Some("fe2o3_device::diagnostics::__amdgpu_ordered_program_e32_v1")
+        }
+        TrustedDeviceItem::AmdGpuPhysicalEntryBeginGfx942 => {
+            Some("fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_begin_gfx942_v1")
+        }
+        TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942 => {
+            Some("fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_label_gfx942_v1")
+        }
+        TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942 => {
+            Some("fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_step_gfx942_v1")
         }
         TrustedDeviceItem::AmdGpuCompleteBodyE32 => {
             Some("fe2o3_device::diagnostics::__amdgpu_complete_body_gfx942_v1")
@@ -3658,7 +3685,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("970f321b61bf4320f4af4bb00089088baa92e7104c34b9ebbb71067dfe3369bd")
+            digest("0aa7faec0cf4fc2adb16d97ea5b40a1128bd0242865780e0e3fbb948248b2d91")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -4255,6 +4282,9 @@ mod tests {
             TrustedDeviceItem::AmdGpuOrderedXorAddE32,
             TrustedDeviceItem::AmdGpuOrderedProgramE32,
             TrustedDeviceItem::AmdGpuCompleteBodyE32,
+            TrustedDeviceItem::AmdGpuPhysicalEntryBeginGfx942,
+            TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942,
+            TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942,
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),

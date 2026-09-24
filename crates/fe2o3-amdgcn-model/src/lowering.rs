@@ -4897,6 +4897,14 @@ impl<'a> FunctionLowerer<'a> {
                     "complete bodies require the exact canonical V19 owner entry point",
                 ));
             }
+            OperationKind::Gfx942PhysicalEntryDeclaration(_)
+            | OperationKind::Gfx942PhysicalEntryStep(_) => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedOperation,
+                    "physical entries require the exact canonical V20 owner entry point",
+                ));
+            }
             OperationKind::Matrix(matrix) => {
                 self.validate_matrix(matrix, &location)?;
             }

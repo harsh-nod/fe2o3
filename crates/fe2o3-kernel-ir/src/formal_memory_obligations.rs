@@ -1025,6 +1025,8 @@ fn derive_kernel_memory_obligations_with_v19_context(
                 | OperationKind::Gfx942OrderedProgram(_)
                 | OperationKind::Gfx942CompleteBodyDeclaration(_)
                 | OperationKind::Gfx942CompleteBodyStep(_)
+                | OperationKind::Gfx942PhysicalEntryDeclaration(_)
+                | OperationKind::Gfx942PhysicalEntryStep(_)
                 | OperationKind::VerificationContract(_)
                 | OperationKind::VectorLoad(_)
                 | OperationKind::VectorStore(_)

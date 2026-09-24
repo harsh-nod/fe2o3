@@ -511,3 +511,92 @@ fn producer_duplicate_keys_and_extra_records_are_refused() {
     let twice = format!("{valid}{valid}");
     assert!(protocol::check_producer(twice.as_bytes(), 77, &arguments()).is_err());
 }
+
+#[test]
+fn exact_fixed_startup_notifications_are_inert_and_optional() {
+    let mut fake = Fake::new(Fault::None);
+    for parameter in [
+        "auto-load gdb-scripts",
+        "auto-load libthread-db",
+        "auto-load local-gdbinit",
+        "auto-load python-scripts",
+        "startup-with-shell",
+    ] {
+        fake.line(format!(
+            "=cmd-param-changed,param=\"{parameter}\",value=\"off\"\n"
+        ));
+    }
+    let observed = run(&mut fake).unwrap();
+    assert!(!observed.debugger_acceptance_observed);
+    assert!(!observed.runtime_loaded_success_observed);
+    assert_eq!(fake.resumes, 3);
+    // The existing all-absent fixture remains admitted, too.
+}
+
+#[test]
+fn startup_parameter_values_unknown_keys_and_extra_fields_are_closed() {
+    for line in [
+        "=cmd-param-changed,param=\"auto-load python-scripts\",value=\"on\"\n",
+        "=cmd-param-changed,param=\"auto-load python-scripts\",value=\"0\"\n",
+        "=cmd-param-changed,param=\"auto-load\",value=\"off\"\n",
+        "=cmd-param-changed,param=\"debuginfod enabled\",value=\"off\"\n",
+        "=cmd-param-changed,param=\"startup-with-shell\",value=\"off\",extra=\"x\"\n",
+        "=cmd-param-changed,param=\"startup-with-shell\"\n",
+        "=cmd-param-changed,value=\"off\"\n",
+        "=cmd-param-changed,param=\"startup-with-shell\",value=[\"off\"]\n",
+        "=cmd-param-changed,param=\"startup-with-shell\",param=\"startup-with-shell\",value=\"off\"\n",
+    ] {
+        let mut fake = Fake::new(Fault::None);
+        fake.line(line);
+        assert!(run(&mut fake).is_err(), "{line:?}");
+        assert!(!fake.observed);
+        assert_eq!(fake.resumes, 0);
+    }
+}
+
+#[test]
+fn duplicate_startup_parameter_notification_refuses_before_inferior_launch() {
+    let mut fake = Fake::new(Fault::None);
+    for _ in 0..2 {
+        fake.line("=cmd-param-changed,param=\"startup-with-shell\",value=\"off\"\n");
+    }
+    assert_eq!(run(&mut fake).err(), Some(Refusal::Duplicate));
+    assert!(!fake.observed);
+}
+
+#[test]
+fn fixed_startup_setting_after_setup_refuses_before_entry_continuation() {
+    struct Late(Fake);
+    impl Peer for Late {
+        fn send(&mut self, token: u64, command: &str) -> Result<(), Refusal> {
+            self.0.send(token, command)?;
+            if command == "-exec-run" {
+                self.0.records.push_front(
+                    b"=cmd-param-changed,param=\"startup-with-shell\",value=\"off\"\n".to_vec(),
+                );
+            }
+            Ok(())
+        }
+        fn next(&mut self) -> Result<Option<Vec<u8>>, Refusal> {
+            self.0.next()
+        }
+        fn observe_child(&mut self, pid: u32) -> Result<(), Refusal> {
+            self.0.observe_child(pid)
+        }
+        fn entry(&mut self) -> Result<(), Refusal> {
+            self.0.entry()
+        }
+        fn current(&mut self) -> Result<(), Refusal> {
+            self.0.current()
+        }
+        fn finish(&mut self) -> Result<wire::Cleanup, Refusal> {
+            self.0.finish()
+        }
+    }
+    let mut fake = Late(Fake::new(Fault::None));
+    assert_eq!(
+        protocol::run(&mut fake, "/fixture/observer", &arguments()).err(),
+        Some(Refusal::State),
+    );
+    assert_eq!(fake.0.resumes, 0);
+}

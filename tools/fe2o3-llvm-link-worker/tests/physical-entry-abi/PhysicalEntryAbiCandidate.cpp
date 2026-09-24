@@ -37,7 +37,10 @@ void physicalWrite(StringRef Path, ArrayRef<uint8_t> Bytes) {
       std::equal(After.Bytes.begin(), After.Bytes.end(), Bytes.begin()), "physical output readback");
 }
 }
-int main(int Argc, char **Argv) {
+#ifndef FE2O3_PHYSICAL_ENTRY_MAIN
+#define FE2O3_PHYSICAL_ENTRY_MAIN main
+#endif
+int FE2O3_PHYSICAL_ENTRY_MAIN(int Argc, char **Argv) {
   alarm(90);
   require(Argc == 4, "usage: physical-entry-abi-candidate copy|select O0|O3 ABS_FRESH_DIRECTORY");
   const StringRef Mode(Argv[1]), LevelName(Argv[2]), Directory(Argv[3]);

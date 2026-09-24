@@ -31,6 +31,9 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     Gfx942OrderedXorAddE32,
     Gfx942OrderedProgramE32,
     Gfx942CompleteBodyE32,
+    Gfx942PhysicalEntryBegin,
+    Gfx942PhysicalEntryLabel,
+    Gfx942PhysicalEntryStep,
     ContextIssue,
     WorkgroupDerive,
     MaskedTileLoadU32,
@@ -179,6 +182,15 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::AmdGpuOrderedProgramE32 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedProgramE32)
+            }
+            TrustedDeviceItem::AmdGpuPhysicalEntryBeginGfx942 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryBegin)
+            }
+            TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryLabel)
+            }
+            TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryStep)
             }
             TrustedDeviceItem::AmdGpuCompleteBodyE32 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942CompleteBodyE32)
@@ -870,6 +882,15 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedProgramE32) => {
                 TrustedDeviceItem::AmdGpuOrderedProgramE32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryBegin) => {
+                TrustedDeviceItem::AmdGpuPhysicalEntryBeginGfx942
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryLabel) => {
+                TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryStep) => {
+                TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942CompleteBodyE32) => {
                 TrustedDeviceItem::AmdGpuCompleteBodyE32

@@ -97,6 +97,14 @@ fn reject_unsupported_module(
                             "complete bodies require the exact canonical V19 owner entry point",
                         ));
                     }
+                    OperationKind::Gfx942PhysicalEntryDeclaration(_)
+                    | OperationKind::Gfx942PhysicalEntryStep(_) => {
+                        return Err(LoweringErrors::one(
+                            LoweringLocation::device_operation(module, function, block.id, ordinal),
+                            LoweringDiagnosticCode::UnsupportedOperation,
+                            "physical entries require the exact canonical V20 owner entry point",
+                        ));
+                    }
                     OperationKind::Execution(_) => {
                         return Err(LoweringErrors::one(
                             LoweringLocation::device_operation(module, function, block.id, ordinal),

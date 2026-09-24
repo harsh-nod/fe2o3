@@ -122,3 +122,15 @@ compatibility, the entry environment/FD shape, debugger runtime handling,
 same-stop code-object/content observation, and cleanup behavior are **unrun**.
 Do not mark debugger acceptance, V4 physical capture, or a milestone complete
 from these sources or fixture tests.
+
+## Exact startup-setting notifications
+
+The installed debugger's fixed `-iex` commands emit five optional
+`cmd-param-changed` notifications: `auto-load gdb-scripts`,
+`auto-load libthread-db`, `auto-load local-gdbinit`,
+`auto-load python-scripts`, and `startup-with-shell`.
+Only exact `param`/`value` fields and value `off` are admitted, once per
+parameter and only during setup before `-exec-run`. These are inert startup
+compatibility records, not a loader-isolation, runtime-acceptance, or
+process-ownership predicate. Unknown parameters, duplicates, changed values,
+extra fields, and notifications after setup refuse.

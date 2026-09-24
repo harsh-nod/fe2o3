@@ -135,6 +135,7 @@ pub(crate) enum ErrorKind {
     PreflightMissingBacking,
     PreflightBufferViewBounds,
     PreflightAllocationFailure,
+    PreflightPhysicalEntrySymbolicDebugUnavailableV20,
     ExecutionStepLimit,
     ExecutionEventLimit,
     ExecutionCallDepthLimit,

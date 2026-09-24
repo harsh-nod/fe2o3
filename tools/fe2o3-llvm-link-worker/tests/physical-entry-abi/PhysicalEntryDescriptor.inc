@@ -6,9 +6,10 @@ struct PhysicalDescriptor {
 };
 std::optional<PhysicalDescriptor> physicalDescriptor(
     const PhysicalMachineEffectEvidence &E,ArrayRef<uint8_t> Payload,
-    const PhysicalMetadata &M) {
-  if(Payload.empty() || Payload.size()>64*1024 || E.Entries.size()!=1 ||
-      E.Entries[0].Symbol!=PhysicalName || E.PayloadBytes!=Payload.size() ||
+    const PhysicalMetadata &M, StringRef Symbol = PhysicalName,
+    uint32_t MinimumSgprs = 20, uint32_t MinimumVgprs = 9) {
+  if(MinimumSgprs<3 || MinimumSgprs>64 || MinimumVgprs<1 || MinimumVgprs>64 || Payload.empty() || Payload.size()>64*1024 || E.Entries.size()!=1 ||
+      E.Entries[0].Symbol!=Symbol || E.PayloadBytes!=Payload.size() ||
       E.PayloadDigest!=SHA256::hash(Payload)) return std::nullopt;
   auto O=object::ObjectFile::createObjectFile(MemoryBufferRef(
       StringRef(reinterpret_cast<const char*>(Payload.data()),Payload.size()),"<physical-descriptor>"));
@@ -18,7 +19,7 @@ std::optional<PhysicalDescriptor> physicalDescriptor(
     if(++Count>4096) return std::nullopt;
     auto Name=S.getName();
     if(!Name) { consumeError(Name.takeError()); return std::nullopt; }
-    if(*Name!=PhysicalName.str()+".kd") continue;
+    if(*Name!=Symbol.str()+".kd") continue;
     if(Result) return std::nullopt;
     auto Sec=S.getSection();
     if(!Sec) { consumeError(Sec.takeError()); return std::nullopt; }
@@ -59,8 +60,8 @@ std::optional<PhysicalDescriptor> physicalDescriptor(
     const uint32_t SgprBlocks=(D.Rsrc1>>6)&15;
     if(SgprBlocks>13) return std::nullopt;
     D.Sgprs=(SgprBlocks+1)*8;
-    if(D.Vgprs<9 || D.Boundary<9 || D.Vgprs<D.Boundary || D.Vgprs<M.Vgprs ||
-        D.Sgprs<20 || D.Sgprs<M.Sgprs || M.Vgprs<9 || M.Sgprs<20 ||
+    if(D.Vgprs<MinimumVgprs || D.Boundary<MinimumVgprs || D.Vgprs<D.Boundary || D.Vgprs<M.Vgprs ||
+        D.Sgprs<MinimumSgprs || D.Sgprs<M.Sgprs || M.Vgprs<MinimumVgprs || M.Sgprs<MinimumSgprs ||
         M.Agprs!=0 || M.SgprSpills!=0 || M.VgprSpills!=0) return std::nullopt;
     for(const auto &I:E.Instructions) for(const auto &Operand:I.Operands) {
       if(Operand.Kind!=PhysicalMachineOperandKind::Register) continue;

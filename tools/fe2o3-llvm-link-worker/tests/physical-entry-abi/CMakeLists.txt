@@ -17,3 +17,13 @@ target_compile_definitions(physical-entry-abi-candidate PRIVATE
 target_compile_options(physical-entry-abi-candidate PRIVATE
   -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter -fno-exceptions -fno-rtti)
 target_link_libraries(physical-entry-abi-candidate PRIVATE fe2o3_worker_pipeline)
+
+add_executable(physical-entry-canonical-candidate PhysicalEntryCanonicalCandidate.cpp)
+target_compile_features(physical-entry-canonical-candidate PRIVATE cxx_std_20)
+target_include_directories(physical-entry-canonical-candidate PRIVATE "${FE2O3_WORKER_SOURCE}/tests")
+target_compile_definitions(physical-entry-canonical-candidate PRIVATE
+  FE2O3_LLVM_BUILD_ID="${FE2O3_EXPECTED_LLVM_BUILD_ID}"
+  FE2O3_WORKER_BUILD_ID="${PROBE_WORKER_BUILD_ID}")
+target_compile_options(physical-entry-canonical-candidate PRIVATE
+  -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter -fno-exceptions -fno-rtti)
+target_link_libraries(physical-entry-canonical-candidate PRIVATE fe2o3_worker_pipeline)

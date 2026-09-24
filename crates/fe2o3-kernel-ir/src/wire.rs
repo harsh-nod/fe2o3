@@ -66,6 +66,11 @@ pub const KERNEL_IR_VERSION_V16: u16 = 16;
 pub const KERNEL_IR_VERSION_V17: u16 = 17;
 /// V12 carriers plus exact typed complete bodies; this profile assigns no meaning to V18.
 pub const KERNEL_IR_VERSION_V19: u16 = 19;
+/// Physical-entry declaration and steps, separate from all older profiles.
+pub const KERNEL_IR_VERSION_V20: u16 = 20;
+
+#[path = "wire/physical_entry_v20.rs"]
+mod physical_entry_v20;
 
 #[path = "wire/complete_body_v19.rs"]
 mod complete_body_v19;
@@ -367,6 +372,11 @@ pub fn encode_module_v19(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V19)
 }
 
+/// Exact inert V20 encoding; no source, launch or artifact authority.
+pub fn encode_module_v20(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V20)
+}
+
 /// Authority-free storage extents observed through the V12 encoding schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelIrV12WireExtentV1 {
@@ -598,6 +608,23 @@ pub(crate) fn decode_module_v19_with_allocation_budget_v1(
     )
 }
 
+/// Exact inert V20 decoding with no profile fallback.
+pub fn decode_module_v20(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V20, false)
+}
+
+pub(crate) fn decode_module_v20_with_allocation_budget_v1(
+    bytes: &[u8],
+    budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Module, KernelIrDecodeError> {
+    decode_module_impl_v1(
+        bytes,
+        KERNEL_IR_VERSION_V20,
+        false,
+        Some(DecodeBudgetV12::Resources(budget)),
+    )
+}
+
 pub(crate) fn decode_module_v17_with_allocation_budget_v1(
     bytes: &[u8],
     budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
@@ -680,6 +707,7 @@ fn decode_module_impl_v1(
                 | KERNEL_IR_VERSION_V16
                 | KERNEL_IR_VERSION_V17
                 | KERNEL_IR_VERSION_V19
+                | KERNEL_IR_VERSION_V20
         )
     {
         return Err(KernelIrDecodeError::UnknownVersion(version));
@@ -1315,6 +1343,26 @@ fn encode_operation_kind(
             writer.u8(41)?;
             complete_body_v19::encode_step(writer, step)?;
         }
+        OperationKind::Gfx942PhysicalEntryDeclaration(declaration) => {
+            if writer.version != KERNEL_IR_VERSION_V20 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "gfx942 physical entry declaration",
+                });
+            }
+            writer.u8(42)?;
+            physical_entry_v20::encode_declaration(writer, declaration)?;
+        }
+        OperationKind::Gfx942PhysicalEntryStep(step) => {
+            if writer.version != KERNEL_IR_VERSION_V20 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "gfx942 physical entry step",
+                });
+            }
+            writer.u8(43)?;
+            physical_entry_v20::encode_step(writer, step)?;
+        }
         OperationKind::Gfx942OrderedProgram(program) => {
             if writer.version != KERNEL_IR_VERSION_V17 {
                 return Err(KernelIrEncodeError::UnsupportedInVersion {
@@ -1355,6 +1403,14 @@ fn decode_operation_kind(
         }
         41 if reader.version == KERNEL_IR_VERSION_V19 => {
             OperationKind::Gfx942CompleteBodyStep(complete_body_v19::decode_step(reader)?)
+        }
+        42 if reader.version == KERNEL_IR_VERSION_V20 => {
+            OperationKind::Gfx942PhysicalEntryDeclaration(physical_entry_v20::decode_declaration(
+                reader,
+            )?)
+        }
+        43 if reader.version == KERNEL_IR_VERSION_V20 => {
+            OperationKind::Gfx942PhysicalEntryStep(physical_entry_v20::decode_step(reader)?)
         }
         39 if reader.version == KERNEL_IR_VERSION_V17 => {
             OperationKind::Gfx942OrderedProgram(ordered_program_v17::decode(reader)?)

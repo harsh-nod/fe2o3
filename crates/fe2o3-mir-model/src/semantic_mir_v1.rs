@@ -26,6 +26,8 @@ mod gfx942_inline_v30;
 mod gfx942_ordered_program_v32;
 mod gfx942_ordered_region_v31;
 mod nominal_pointer_sized_v35;
+mod physical_entry_source_v37;
+mod physical_entry_v37;
 mod saturating_integer_v30;
 mod target_properties;
 mod wave64_shuffle_v33;
@@ -55,6 +57,10 @@ pub use gfx942_ordered_program_v32::{
 pub use gfx942_ordered_region_v31::{
     SemanticGfx942OrderedRegionCallV31, SemanticGfx942OrderedRegionProfileV31,
     SemanticGfx942OrderedRegionRegistersV31, SemanticOrderedRegionSourceV31,
+};
+pub use physical_entry_source_v37::SemanticPhysicalEntrySourceV37;
+pub use physical_entry_v37::{
+    SEMANTIC_PHYSICAL_ENTRY_MAX_OCCURRENCES_V37, SemanticPhysicalEntryInstructionV37,
 };
 pub use saturating_integer_v30::SemanticSaturatingIntegerOpV1;
 use target_properties::{
@@ -95,6 +101,8 @@ pub const INERT_SEMANTIC_MIR_VERSION_V34: u16 = 34;
 pub const INERT_SEMANTIC_MIR_VERSION_V35: u16 = 35;
 /// Ordinary V28 grammar plus exact whole-body packing and inert source tails.
 pub const INERT_SEMANTIC_MIR_VERSION_V36: u16 = 36;
+/// Exact declarative physical-entry primitives and inert occurrence records.
+pub const INERT_SEMANTIC_MIR_VERSION_V37: u16 = 37;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -126,6 +134,7 @@ pub enum SemanticMirWireVersionV1 {
     V34,
     V35,
     V36,
+    V37,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -154,6 +163,7 @@ impl SemanticMirWireVersionV1 {
             Self::V34 => INERT_SEMANTIC_MIR_VERSION_V34,
             Self::V35 => INERT_SEMANTIC_MIR_VERSION_V35,
             Self::V36 => INERT_SEMANTIC_MIR_VERSION_V36,
+            Self::V37 => INERT_SEMANTIC_MIR_VERSION_V37,
         }
     }
 
@@ -182,6 +192,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V34 => Some(Self::V34),
             INERT_SEMANTIC_MIR_VERSION_V35 => Some(Self::V35),
             INERT_SEMANTIC_MIR_VERSION_V36 => Some(Self::V36),
+            INERT_SEMANTIC_MIR_VERSION_V37 => Some(Self::V37),
             _ => None,
         }
     }
@@ -4862,6 +4873,7 @@ pub struct SemanticDirectCallV1 {
     ordered_region_source_v31: Option<SemanticOrderedRegionSourceV31>,
     ordered_program_source_v32: Option<SemanticOrderedProgramSourceV32>,
     complete_body_source_vnext: Option<SemanticCompleteBodySourceVNext>,
+    physical_entry_source_v37: Option<SemanticPhysicalEntrySourceV37>,
 }
 
 impl SemanticDirectCallV1 {
@@ -4933,6 +4945,7 @@ impl SemanticDirectCallV1 {
             ordered_region_source_v31: None,
             ordered_program_source_v32: None,
             complete_body_source_vnext: None,
+            physical_entry_source_v37: None,
         })
     }
 
@@ -4990,6 +5003,19 @@ impl SemanticDirectCallV1 {
 
     pub const fn complete_body_source_vnext(&self) -> Option<SemanticCompleteBodySourceVNext> {
         self.complete_body_source_vnext
+    }
+
+    /// Inert observations only; actual per-call source custody stays compiler-owned.
+    pub fn with_physical_entry_source_v37(
+        mut self,
+        source: SemanticPhysicalEntrySourceV37,
+    ) -> Self {
+        self.physical_entry_source_v37 = Some(source);
+        self
+    }
+
+    pub const fn physical_entry_source_v37(&self) -> Option<SemanticPhysicalEntrySourceV37> {
+        self.physical_entry_source_v37
     }
 
     pub fn arguments(&self) -> &[SemanticOperandV1] {
@@ -5491,6 +5517,12 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     Gfx942OrderedProgram(SemanticGfx942U32ProgramV32),
     /// Fixed bounded whole-body const descriptors; source record is per call.
     Gfx942CompleteBody(SemanticCompleteBodyPackingVNext),
+    /// Consumes the five exact logical source inputs once.
+    Gfx942PhysicalEntryBegin,
+    /// Declares one literal authored layout label.
+    Gfx942PhysicalEntryLabel(u8),
+    /// One exact typed physical instruction or native-control primitive.
+    Gfx942PhysicalEntryStep(SemanticPhysicalEntryInstructionV37),
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
@@ -6482,6 +6514,14 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V36, limits)
     }
 
+    /// Explicit-only bounded physical-entry source grammar; inert data is not source custody.
+    pub fn admit_exact_v37(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V37, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6500,6 +6540,9 @@ impl InertSemanticMirRequestV1 {
         self,
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        if physical_entry_v37::uses_v37(&self) {
+            return Err(SemanticMirErrorV1::InvalidPhysicalEntryV37);
+        }
         // V36 is explicit-only. The live importer selects it from its actual
         // authenticated terminal; inert payloads never switch the ordinary path.
         if complete_body_v36::uses_v36(&self) {
@@ -6991,6 +7034,7 @@ pub enum SemanticMirErrorV1 {
     InvalidOrderedRegionV31,
     InvalidOrderedProgramV32,
     InvalidCompleteBodyV36,
+    InvalidPhysicalEntryV37,
     EmptyModel {
         entity: SemanticMirEntityV1,
     },
@@ -7105,6 +7149,8 @@ impl fmt::Display for SemanticMirErrorV1 {
             Self::InvalidOrderedProgramV32 => {
                 formatter.write_str("closed gfx942 ordered program or source occurrence is invalid")
             }
+            Self::InvalidPhysicalEntryV37 => formatter
+                .write_str("invalid bounded physical-entry V37 primitive or source occurrence"),
             Self::InvalidCompleteBodyV36 => {
                 write!(
                     formatter,
@@ -7817,6 +7863,9 @@ fn validate_callables(context: &mut ValidationContextV1<'_>) -> Result<(), Seman
                 ) {
                     charge_validation_work(context, complete_body_v36::VALIDATION_WORK)?;
                 }
+                if physical_entry_v37::is_physical(*operation) {
+                    charge_validation_work(context, physical_entry_v37::VALIDATION_WORK)?;
+                }
                 if !intrinsic_identities.insert(*operation_identity)
                     || !compiler_intrinsic_signature_matches(
                         context.request,
@@ -7887,6 +7936,9 @@ fn record_intrinsic_capability_claims(
         SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(_) => true,
         SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(_) => true,
         SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_) => true,
+        SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryBegin
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryLabel(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryStep(_) => true,
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, .. } => {
             claims.claim_mapping(index_witness, SemanticDisjointIndexSpaceV1::Index1d)
         }
@@ -8333,6 +8385,9 @@ fn compiler_intrinsic_signature_matches(
     }
     let inputs = abi.source_input_types();
     let output = abi.source_output_type();
+    if physical_entry_v37::is_physical(operation) {
+        return physical_entry_v37::signature_matches(request, operation, abi);
+    }
     // The fixed charged V31/V32 profiles reject oversized signatures before the
     // generic input-type prewalk. All subsequent profile loops have at most eight items.
     if matches!(
@@ -8373,6 +8428,11 @@ fn compiler_intrinsic_signature_matches(
             SemanticGfx942U32ProgramV32::from_descriptors(program.count(), *program.descriptors())
                 .is_ok()
                 && gfx942_ordered_program_v32::signature_matches(request, abi)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryBegin
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryLabel(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryStep(_) => {
+            unreachable!("handled before generic signature walk")
         }
         SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(packed) => {
             complete_body_v36::validate_packing(packed).is_ok()
@@ -15521,6 +15581,12 @@ fn validate_call(
     call: &SemanticDirectCallV1,
 ) -> Result<(), SemanticMirErrorV1> {
     context.callable_reference(call.callee, location)?;
+    if call.physical_entry_source_v37.is_some()
+        || matches!(context.request.callables.get(call.callee.0 as usize), Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) if physical_entry_v37::is_physical(*operation))
+    {
+        charge_validation_work(context, physical_entry_v37::VALIDATION_WORK)?;
+    }
+    physical_entry_v37::validate_call_source(context.request, function, location, call)?;
     if call.complete_body_source_vnext.is_some()
         || matches!(
             context.request.callables.get(call.callee.0 as usize),
@@ -16194,6 +16260,9 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryBegin
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryLabel(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryStep(_)
         | SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_) => {}
         SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
             pending.push_back(scope);
@@ -17063,6 +17132,9 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
 fn minimum_wire_version_without_nominal(
     request: &InertSemanticMirRequestV1,
 ) -> SemanticMirWireVersionV1 {
+    if physical_entry_v37::uses_v37(request) {
+        return SemanticMirWireVersionV1::V37;
+    }
     if complete_body_v36::uses_v36(request) {
         return SemanticMirWireVersionV1::V36;
     }
@@ -18188,6 +18260,9 @@ fn encode_compiler_intrinsic_operation(
     operation: SemanticCompilerIntrinsicOperationV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if physical_entry_v37::is_physical(operation) {
+        return physical_entry_v37::encode_operation(writer, operation, wire_version);
+    }
     if let SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(packed) = operation {
         return complete_body_v36::encode_packing(writer, packed, wire_version);
     }
@@ -18274,6 +18349,7 @@ fn encode_compiler_intrinsic_operation(
             | SemanticMirWireVersionV1::V33
             | SemanticMirWireVersionV1::V34
             | SemanticMirWireVersionV1::V36
+            | SemanticMirWireVersionV1::V37
     ) {
         SemanticMirWireVersionV1::V15
     } else {
@@ -18283,7 +18359,10 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(_)
-        | SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_) => {
+        | SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryBegin
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryLabel(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryStep(_) => {
             unreachable!("encoded above")
         }
         SemanticCompilerIntrinsicOperationV1::Execution(operation) => operation.encode(writer),

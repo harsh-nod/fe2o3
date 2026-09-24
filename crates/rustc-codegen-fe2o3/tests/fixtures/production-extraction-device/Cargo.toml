@@ -8,6 +8,14 @@ rust-version.workspace = true
 publish = false
 
 [features]
+physical-entry-one-v20 = []
+physical-entry-diamond-v20 = []
+physical-entry-registers-v20 = []
+physical-entry-wrong-launch-v20 = []
+physical-entry-foreign-input-v20 = []
+physical-entry-undefined-merge-v20 = []
+physical-entry-missing-wait-v20 = []
+physical-entry-wrong-carry-v20 = []
 complete-body-one-v19 = []
 complete-body-diamond-v19 = []
 complete-body-wrong-launch-v19 = []

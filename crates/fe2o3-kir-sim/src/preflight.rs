@@ -82,6 +82,8 @@ pub enum UnsupportedFeatureV1 {
     OrderedProgramProfile,
     CompleteBody,
     CompleteBodyProfile,
+    PhysicalEntry,
+    PhysicalEntryProfile,
 }
 
 /// One typed unsupported finding in the selected kernel's reachable call graph.
@@ -308,6 +310,8 @@ impl Error for DynamicWorkgroupMemoryUnavailableV1 {}
 /// Fail-closed launch and reachable-program preflight failure.
 #[derive(Debug, Eq, PartialEq)]
 pub enum SimulationPreflightErrorV1 {
+    /// Existing debug/checkpoint schema cannot retain symbolic pointer/carry state.
+    PhysicalEntrySymbolicDebugUnavailableV20,
     InvalidLimits(SimulationLimitsErrorV1),
     UnknownKernel(fe2o3_kernel_ir::KernelId),
     MissingEntry(FunctionId),
@@ -363,6 +367,10 @@ impl fmt::Display for SimulationPreflightErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidLimits(error) => error.fmt(formatter),
+            Self::PhysicalEntrySymbolicDebugUnavailableV20 => write!(
+                formatter,
+                "physical-entry symbolic pointer/carry state is unavailable in the current public debugger and checkpoint schema"
+            ),
             Self::UnknownKernel(kernel) => write!(formatter, "unknown simulation kernel {kernel}"),
             Self::MissingEntry(entry) => write!(formatter, "kernel entry {entry} is missing"),
             Self::InvalidLaunch(detail) => write!(formatter, "invalid simulation launch: {detail}"),
@@ -556,6 +564,13 @@ pub(crate) fn preflight(
                 ),
                 program: crate::ordered_program_v17::launch_profile_matches(
                     module, kernel, request, target,
+                ),
+                physical_entry: crate::physical_entry_v20::launch_profile_matches(
+                    module,
+                    kernel,
+                    request,
+                    target,
+                    wire_version,
                 ),
                 complete_body: crate::complete_body_v19::launch_profile_matches(
                     module,
@@ -1149,6 +1164,7 @@ struct OrderedProfiles {
     region: bool,
     program: bool,
     complete_body: bool,
+    physical_entry: bool,
 }
 
 fn scan_reachable(
@@ -1197,6 +1213,8 @@ fn scan_reachable(
             && crate::ordered_program_v17::function_profile_is_consistent(
                 &function.required_capabilities,
             );
+        let physical_entry_profile = launch_profiles.physical_entry
+            && crate::physical_entry_v20::scope_profile_matches(&function.required_capabilities);
         let complete_body_profile = launch_profiles.complete_body
             && crate::complete_body_v19::scope_profile_matches(&function.required_capabilities);
         scan_signature(function, target, &mut findings);
@@ -1248,6 +1266,7 @@ fn scan_reachable(
                         region: ordered_region_profile,
                         program: ordered_program_profile,
                         complete_body: complete_body_profile,
+                        physical_entry: physical_entry_profile,
                     },
                 )?;
             }
@@ -1892,6 +1911,56 @@ fn scan_operation(
             .is_err()
             {
                 reject!(UnsupportedFeatureV1::OrderedProgram);
+            }
+        }
+        OperationKind::Gfx942PhysicalEntryDeclaration(declaration) => {
+            if !ordered_profiles.physical_entry {
+                reject!(UnsupportedFeatureV1::PhysicalEntryProfile);
+            }
+            let registers = fe2o3_kernel_ir::GFX942_PHYSICAL_ENTRY_REGISTERS_V20;
+            if declaration.validate_shape().is_err()
+                || operation.results.len() != registers.len()
+                || operation
+                    .results
+                    .iter()
+                    .zip(registers)
+                    .any(|(value, register)| value.ty != Type::Scalar(register.scalar_type()))
+                || !matches!(value_types.get(&declaration.parameters[0]),Some(Type::Slice(slice))
+                    if slice.address_space==AddressSpace::Global && slice.access==AccessMode::ReadWrite
+                    && slice.element.as_ref()==&Type::Scalar(ScalarType::U32))
+                || declaration.parameters[1..].iter().any(|value| {
+                    value_types.get(value).copied() != Some(&Type::Scalar(ScalarType::U32))
+                })
+            {
+                reject!(UnsupportedFeatureV1::PhysicalEntry);
+            }
+        }
+        OperationKind::Gfx942PhysicalEntryStep(step) => {
+            if !ordered_profiles.physical_entry {
+                reject!(UnsupportedFeatureV1::PhysicalEntryProfile);
+            }
+            let registers = step.instruction.result_registers();
+            if step.validate_shape().is_err()
+                || operation.results.len() != registers.iter().flatten().count()
+                || operation
+                    .results
+                    .iter()
+                    .zip(registers.iter().flatten())
+                    .any(|(value, register)| value.ty != Type::Scalar(register.scalar_type()))
+                || step
+                    .operands
+                    .iter()
+                    .zip(step.instruction.operand_registers())
+                    .any(|(value, register)| match (value, register) {
+                        (Some(value), Some(register)) => {
+                            value_types.get(value).copied()
+                                != Some(&Type::Scalar(register.scalar_type()))
+                        }
+                        (None, None) => false,
+                        _ => true,
+                    })
+            {
+                reject!(UnsupportedFeatureV1::PhysicalEntry);
             }
         }
         OperationKind::Gfx942CompleteBodyDeclaration(declaration) => {
@@ -2789,6 +2858,7 @@ mod tests {
                 region: false,
                 program: false,
                 complete_body: false,
+                physical_entry: false,
             },
         )
         .unwrap();
@@ -2846,6 +2916,7 @@ mod tests {
                 region: false,
                 program: false,
                 complete_body: false,
+                physical_entry: false,
             },
         )
         .unwrap();
@@ -2908,6 +2979,7 @@ mod tests {
                 region: false,
                 program: false,
                 complete_body: false,
+                physical_entry: false,
             },
         )
         .unwrap();
@@ -2953,6 +3025,7 @@ mod tests {
                 region: false,
                 program: false,
                 complete_body: false,
+                physical_entry: false,
             },
         )
         .unwrap();

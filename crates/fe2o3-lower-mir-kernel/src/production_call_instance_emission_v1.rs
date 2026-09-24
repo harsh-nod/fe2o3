@@ -254,7 +254,9 @@ fn call_splice_check_callee_operation_v1(
         | Op::Gfx942OrderedRegion(_)
         | Op::Gfx942OrderedProgram(_)
         | Op::Gfx942CompleteBodyDeclaration(_)
-        | Op::Gfx942CompleteBodyStep(_) => Err(Error::CalleeInlineAssembly),
+        | Op::Gfx942CompleteBodyStep(_)
+        | Op::Gfx942PhysicalEntryDeclaration(_)
+        | Op::Gfx942PhysicalEntryStep(_) => Err(Error::CalleeInlineAssembly),
         Op::Intrinsic(intrinsic) => match intrinsic.kind {
             fe2o3_kernel_ir::IntrinsicKind::InvocationIndex { .. }
             | fe2o3_kernel_ir::IntrinsicKind::LaunchExtent { .. } => Ok(()),

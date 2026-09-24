@@ -119,6 +119,7 @@ pub(crate) enum ProductionPipelineError {
     CheckedOutputPolicy8Stage(checked_output_policy8_v1::CheckedOutputPolicy8StageErrorV1),
     SourceLocalOrderStage(source_local_order_v1::SourceLocalOrderStageErrorV1),
     CompleteBodyStage(Box<complete_body_vnext::CompleteBodyStageErrorVNext>),
+    PhysicalEntryDiagnosticStage(Box<physical_entry_diagnostic_v20::PhysicalEntryStageErrorV20>),
     PrivateCellNativeStage(private_cell_native_v1::PrivateCellNativeStageErrorV1),
     LoopPreheadersNativeStage(private_cell_native_v1::LoopPreheadersNativeStageErrorV1),
     LicmNativeStage(private_cell_native_v1::LicmNativeStageErrorV1),
@@ -162,6 +163,7 @@ impl fmt::Display for ProductionPipelineError {
             Self::CheckedOutputPolicy8Stage(error) => write!(formatter, "checked Policy8 production stage failed: {error}"),
             Self::SourceLocalOrderStage(error) => write!(formatter, "source local-order stage failed: {error}"),
             Self::CompleteBodyStage(error) => write!(formatter, "complete-body source preparation failed: {error}"),
+            Self::PhysicalEntryDiagnosticStage(error) => write!(formatter, "physical-entry pre-ranked diagnostic preparation failed: {error}"),
             Self::PrivateCellNativeStage(error) => write!(formatter, "private-cell native stage failed: {error}"),
             Self::LoopPreheadersNativeStage(error) => write!(formatter, "loop-preheaders native stage failed: {error}"),
             Self::LicmNativeStage(error) => write!(formatter, "LICM native stage failed: {error}"),
@@ -377,6 +379,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CheckedOutputPolicy8Stage(error) => Some(error),
             Self::SourceLocalOrderStage(error) => Some(error),
             Self::CompleteBodyStage(error) => Some(error.as_ref()),
+            Self::PhysicalEntryDiagnosticStage(error) => Some(error.as_ref()),
             Self::PrivateCellNativeStage(error) => Some(error),
             Self::LoopPreheadersNativeStage(error) => Some(error),
             Self::LicmNativeStage(error) => Some(error),
@@ -3930,6 +3933,7 @@ pub(crate) mod complete_body_vnext;
 pub(crate) mod guarded_loop_source_v1;
 #[path = "production_pipeline_loop_capture_v1.rs"]
 pub(crate) mod loop_capture_v1;
+pub(crate) mod physical_entry_diagnostic_v20;
 pub(crate) use complete_body_vnext::AuthenticatedCompleteBodyTargetModuleV19;
 pub(crate) mod ordered_program_diagnostic_v32;
 pub(crate) mod ordered_program_origin_v1;

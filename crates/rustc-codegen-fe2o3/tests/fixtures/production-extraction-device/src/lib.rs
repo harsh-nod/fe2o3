@@ -151,7 +151,27 @@ mod ordered_program_v32;
 ))]
 mod complete_body_v19;
 
+#[cfg(any(
+    feature = "physical-entry-one-v20",
+    feature = "physical-entry-diamond-v20",
+    feature = "physical-entry-registers-v20",
+    feature = "physical-entry-wrong-launch-v20",
+    feature = "physical-entry-foreign-input-v20",
+    feature = "physical-entry-undefined-merge-v20",
+    feature = "physical-entry-missing-wait-v20",
+    feature = "physical-entry-wrong-carry-v20",
+))]
+mod physical_entry_v20;
+
 #[cfg(not(any(
+    feature = "physical-entry-one-v20",
+    feature = "physical-entry-diamond-v20",
+    feature = "physical-entry-registers-v20",
+    feature = "physical-entry-wrong-launch-v20",
+    feature = "physical-entry-foreign-input-v20",
+    feature = "physical-entry-undefined-merge-v20",
+    feature = "physical-entry-missing-wait-v20",
+    feature = "physical-entry-wrong-carry-v20",
     feature = "complete-body-one-v19",
     feature = "complete-body-diamond-v19",
     feature = "complete-body-wrong-launch-v19",

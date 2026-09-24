@@ -69,7 +69,7 @@ fn integer_assembly_is_scalar_bits_owned_with_explicit_remaining_rejection() {
         .iter()
         .filter(|row| row.operation == SimulationOperationSurfaceV1::InlineAssembly)
         .collect();
-    assert_eq!(rows.len(), 32);
+    assert_eq!(rows.len(), 4 * 9); // Four target profiles, nine wire versions.
     for row in rows {
         assert_eq!(
             row.capability,
@@ -101,7 +101,7 @@ fn inert_v12_surfaces_keep_stable_ids_and_have_no_simulation_owner() {
             .iter()
             .filter(|row| row.operation == surface)
             .collect();
-        assert_eq!(rows.len(), 32);
+        assert_eq!(rows.len(), 4 * 9); // Four target profiles, nine wire versions.
         for row in rows {
             assert!(matches!(&row.capability,
                 SimulationCapabilityDispositionV1::Unsupported { reason }
@@ -143,6 +143,7 @@ fn pointer_access_restriction_is_typed_memory_owned_from_v11() {
             SimulationKirWireVersionV1::V16,
             SimulationKirWireVersionV1::V17,
             SimulationKirWireVersionV1::V19,
+            SimulationKirWireVersionV1::V20,
         ] {
             assert!(matches!(
                 matrix
@@ -166,7 +167,7 @@ fn execution_v15_surface_is_additive_and_has_no_simulation_owner() {
         .iter()
         .filter(|row| row.operation == SimulationOperationSurfaceV1::Execution)
         .collect();
-    assert_eq!(rows.len(), 32);
+    assert_eq!(rows.len(), 4 * 9); // Four target profiles, nine wire versions.
     assert!(rows.iter().all(|row| matches!(
         &row.capability,
         SimulationCapabilityDispositionV1::Unsupported {
@@ -183,7 +184,7 @@ fn v12_inherits_every_v11_disposition_without_activating_inert_carriers() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V12)
         .collect::<Vec<_>>();
-    assert_eq!(inherited.len(), 168);
+    assert_eq!(inherited.len(), 4 * 44); // Every surface, including V20-only refusals.
     for row in inherited {
         let previous = matrix
             .top_level_rows
@@ -210,7 +211,7 @@ fn v17_extends_only_the_v12_baseline_and_never_owns_the_v16_pair() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V17)
         .collect();
-    assert_eq!(rows.len(), 168);
+    assert_eq!(rows.len(), 4 * 44); // Every surface, including V20-only refusals.
     for row in rows {
         if row.operation == SimulationOperationSurfaceV1::OrderedProgram {
             continue; // Its exact single owned profile is tested by canonical_v17.

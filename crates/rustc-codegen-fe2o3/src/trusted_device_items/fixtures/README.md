@@ -143,3 +143,30 @@ are unchanged, as are the raw-byte sorted-path length-framed identity rules.
 
 Fresh compiler/source and provider mutation gates are required. This pin entry
 does not claim successful compilation, source qualification or GPU execution.
+
+## Exact MIR37 physical-entry terminal source refresh
+
+The reviewed source tree now has 32 regular source leaves. The only device
+source delta from the MIR36 image is the registered physical_entry_v1 module
+and its three no-inline typed markers: actual authenticated calls select
+terminals145..147, CombinedV7 and MIR37/intrinsics93..95. The unchanged
+diagnostics.rs remains 7490 bytes, SHA-256
+`803b2178d789c18875b8d3a816af355abfd6a3f8f29cbe7b3262c1ba6e75111d`.
+The new physical_entry_v1.rs is 7685 bytes, SHA-256
+`5b74180b97caad3e0f0009dd2a803bc6bb5277e12b01dba9e4c839ac36b7af9d`.
+
+The exact current canonical closure is
+`0aa7faec0cf4fc2adb16d97ea5b40a1128bd0242865780e0e3fbb948248b2d91`.
+The current Cargo-vendor closure is
+`33bdfc4e101107b75385c03a4d5857106f605f0671ca0177c6e3843e9c88b998`.
+Only these two complete materializations are accepted; earlier pins above
+are historical, not compatibility exceptions. Source-file and package bytes,
+sorted relative paths, length framing, source-definition identity and exact
+provider ABI checks remain mandatory. No path whitelist or digest bypass is
+added. The 1922-byte vendor manifest and its historical producer are unchanged;
+this refresh does not claim a new Cargo vendor producer run.
+
+Materialization controls cover changing, removing and renaming the new leaf
+in canonical and vendor images, in addition to the existing manifest and source
+controls. Fresh matching compiler/source gates are still required. These pins
+are reviewed inputs, not evidence of successful compilation or execution.

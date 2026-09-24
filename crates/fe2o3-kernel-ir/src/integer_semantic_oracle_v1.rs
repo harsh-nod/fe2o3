@@ -504,6 +504,8 @@ fn operation_name(kind: &OperationKind) -> &'static str {
         OperationKind::Gfx942OrderedProgram(_) => "ordered-program",
         OperationKind::Gfx942CompleteBodyDeclaration(_) => "complete-body-declaration",
         OperationKind::Gfx942CompleteBodyStep(_) => "complete-body-step",
+        OperationKind::Gfx942PhysicalEntryDeclaration(_) => "physical-entry-declaration",
+        OperationKind::Gfx942PhysicalEntryStep(_) => "physical-entry-step",
     }
 }
 

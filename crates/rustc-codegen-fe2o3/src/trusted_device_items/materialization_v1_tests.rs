@@ -83,7 +83,7 @@ fn reviewed_materialization_fixture(vendored: bool) -> ProviderPackageFixture {
     let original = Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT);
     let mut files = Vec::new();
     super::collect_reviewed_source_files(&original.join("src"), &mut files).unwrap();
-    assert_eq!(files.len(), 31);
+    assert_eq!(files.len(), 32);
     for file in files {
         let target = fixture.root.join(file.strip_prefix(original).unwrap());
         fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -180,7 +180,7 @@ fn canonical_and_cargo_vendor_materializations_preserve_actual_identities() {
 #[test]
 fn reviewed_materializations_reject_manifest_and_source_mutations() {
     for vendored in [false, true] {
-        for mutation in 0..9 {
+        for mutation in 0..12 {
             let fixture = reviewed_materialization_fixture(vendored);
             admit_reviewed_materialization(&fixture).unwrap();
             match mutation {
@@ -218,6 +218,17 @@ fn reviewed_materializations_reject_manifest_and_source_mutations() {
                     fs::copy(&path, fixture.root.join("Cargo.toml.orig")).unwrap();
                     fs::write(path, b"[package]\nname = 'unreviewed'\n").unwrap();
                 }
+                9 => fs::write(
+                    fixture.source_root().join("physical_entry_v1.rs"),
+                    b"// substituted physical provider\n",
+                )
+                .unwrap(),
+                10 => fs::remove_file(fixture.source_root().join("physical_entry_v1.rs")).unwrap(),
+                11 => fs::rename(
+                    fixture.source_root().join("physical_entry_v1.rs"),
+                    fixture.source_root().join("physical_entry_renamed.rs"),
+                )
+                .unwrap(),
                 _ => unreachable!(),
             }
             assert!(
@@ -233,6 +244,50 @@ fn reviewed_materializations_reject_manifest_and_source_mutations() {
             assert!(super::validate_safe_execution_provider_definition_v1(&definition).is_err());
         }
     }
+}
+
+#[test]
+fn physical_entry_provider_uses_the_exact_reviewed_materialization() {
+    for vendored in [false, true] {
+        let fixture = reviewed_materialization_fixture(vendored);
+        let admitted = reviewed_provider_source_closure_from_definition(
+            &fixture.source_root().join("physical_entry_v1.rs"),
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+            &super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1,
+        )
+        .unwrap();
+        assert_eq!(
+            admitted.identity,
+            admit_reviewed_materialization(&fixture).unwrap().identity
+        );
+        for item in [
+            TrustedDeviceItem::AmdGpuPhysicalEntryBeginGfx942,
+            TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942,
+            TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942,
+        ] {
+            let path = exact_provider_compiler_definition_path_v1(item)
+                .unwrap()
+                .strip_prefix("fe2o3_device::")
+                .unwrap();
+            assert!(path.starts_with("physical_entry_v1::"));
+            let definition = semantic_definition(path, admitted.identity, [6; 32]);
+            validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition).unwrap();
+        }
+    }
+}
+
+#[test]
+fn physical_entry_refresh_preserves_the_exact_diagnostics_leaf() {
+    use sha2::{Digest as _, Sha256};
+    let source =
+        fs::read(Path::new(super::REVIEWED_FE2O3_DEVICE_SOURCE_ROOT).join("diagnostics.rs"))
+            .unwrap();
+    assert_eq!(source.len(), 7490);
+    let actual: [u8; 32] = Sha256::digest(source).into();
+    assert_eq!(
+        actual,
+        digest("803b2178d789c18875b8d3a816af355abfd6a3f8f29cbe7b3262c1ba6e75111d")
+    );
 }
 
 #[test]

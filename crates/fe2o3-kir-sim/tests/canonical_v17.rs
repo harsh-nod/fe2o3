@@ -541,7 +541,7 @@ fn declared_capability_row_owns_only_v17_gfx942_cpu_value_abstraction() {
         .iter()
         .filter(|row| row.operation == SimulationOperationSurfaceV1::OrderedProgram)
         .collect();
-    assert_eq!(rows.len(), 32);
+    assert_eq!(rows.len(), 4 * 9); // four targets across all nine exact wire profiles
     let owned: Vec<_> = rows
         .iter()
         .filter(|row| {

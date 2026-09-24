@@ -15,6 +15,7 @@ mod f32_surface;
 mod model;
 mod ordered_program_v17;
 mod ordered_region_v16;
+mod physical_entry_v20;
 mod preflight;
 mod reduce;
 mod resident;

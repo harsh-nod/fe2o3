@@ -185,7 +185,9 @@ impl Operation {
             OperationKind::Gfx942OrderedRegion(_)
             | OperationKind::Gfx942OrderedProgram(_)
             | OperationKind::Gfx942CompleteBodyDeclaration(_)
-            | OperationKind::Gfx942CompleteBodyStep(_) => {
+            | OperationKind::Gfx942CompleteBodyStep(_)
+            | OperationKind::Gfx942PhysicalEntryDeclaration(_)
+            | OperationKind::Gfx942PhysicalEntryStep(_) => {
                 CompilerOrderingEffectSummaryV12::ordered_region()
             }
             OperationKind::Execution(_) => CompilerOrderingEffectSummaryV12::ordered_execution(),

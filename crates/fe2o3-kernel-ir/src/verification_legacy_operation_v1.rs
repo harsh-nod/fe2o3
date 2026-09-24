@@ -395,6 +395,10 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
             | OperationKind::Gfx942CompleteBodyStep(_) => {
                 self.verify_complete_body_operation_v19(operation, location)
             }
+            OperationKind::Gfx942PhysicalEntryDeclaration(_)
+            | OperationKind::Gfx942PhysicalEntryStep(_) => {
+                self.verify_physical_entry_operation_v20(operation, location)
+            }
         }
     }
 

@@ -320,6 +320,8 @@ pub(super) fn transfer(
         | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::Gfx942OrderedProgram(_)
         | OperationKind::Gfx942CompleteBodyDeclaration(_)
-        | OperationKind::Gfx942CompleteBodyStep(_) => Transfer::one(Value::Dynamic),
+        | OperationKind::Gfx942CompleteBodyStep(_)
+        | OperationKind::Gfx942PhysicalEntryDeclaration(_)
+        | OperationKind::Gfx942PhysicalEntryStep(_) => Transfer::one(Value::Dynamic),
     }
 }

@@ -37,6 +37,8 @@ pub mod memory;
 pub mod mx;
 #[doc(hidden)]
 pub mod ordered_program;
+/// Explicit bounded physical-entry marker source language.
+pub mod physical_entry_v1;
 pub mod simd;
 pub mod sync;
 pub mod tensor;

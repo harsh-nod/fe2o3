@@ -476,7 +476,9 @@ impl Operation {
                 AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_some()
                     || FloatOperation::from_intrinsic_call(callee, arguments).is_some()
             }
-            OperationKind::InlineAssembly(_) => false,
+            OperationKind::InlineAssembly(_)
+            | OperationKind::Gfx942PhysicalEntryDeclaration(_)
+            | OperationKind::Gfx942PhysicalEntryStep(_) => false,
             _ => true,
         }
     }
@@ -602,6 +604,10 @@ pub enum OperationKind {
     Gfx942CompleteBodyDeclaration(crate::Gfx942CompleteBodyDeclarationVNext),
     /// One ordered typed step with actual SSA operands/result in its real block.
     Gfx942CompleteBodyStep(crate::Gfx942CompleteBodyStepVNext),
+    /// Exact physical-entry initialization; five explicit physical live-ins.
+    Gfx942PhysicalEntryDeclaration(crate::Gfx942PhysicalEntryDeclarationVNext),
+    /// One author-owned physical instruction with actual canonical SSA operands.
+    Gfx942PhysicalEntryStep(crate::Gfx942PhysicalEntryStepVNext),
 }
 
 impl OperationKind {

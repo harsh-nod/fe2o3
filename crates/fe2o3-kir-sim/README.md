@@ -21,14 +21,44 @@ changing the source owner's canonical bytes. It does not add a simulation-bundle
 CLI, or debugger import route. Its canonical/resident limits retain the existing
 post-decode accounting contract, not an allocator/RSS cap on rejected attempts.
 
+`admit_v20` borrows exact verified V20 custody for the separate
+`gfx942:xnack-` / Wave64 / `physical_entry_u32_out_v1` profile.
+Each physical instruction is an actual canonical SSA operation and the existing
+canonical branches/edge arguments are the only CFG. Preflight requires one
+kernel/function, exact capability declarations at all three scopes, a full
+`[64,1,1]` workgroup and at most two workgroups. Source authentication,
+LLVM/native equivalence, deployment and hardware execution remain separate.
+
+The CPU engine keeps kernarg/output pointer halves and address-add carry symbolic;
+it never invents device address bits or numerical VCC carry values. Matching
+pointer-load, scaled-offset and low-add lineage is required to reconstruct the
+allocation-relative store pointer. Bounds comparison synchronizes the actual
+64 resident invocations and yields a numerical U64 VCC. EXEC is explicit SSA,
+distinct from resident lanes. Every VALU definition requires full entry EXEC;
+the canonical verifier admits only the exact masked store/wait/restore/end tail.
+An inactive store skips before pointer/data lookup, validation or memory events.
+Scalar waits and restore still run at zero EXEC. Existing memory validation,
+initialization, access tracking, event delivery and resource accounting apply.
+Kernarg reads resolve the admitted logical argument table; they do not create a
+numerical kernarg allocation address or model asynchronous hardware latency.
+
+Public debug and observed-capture entry points refuse with
+`SimulationPreflightErrorV1::PhysicalEntrySymbolicDebugUnavailableV20`
+before execution/capture publication, including requests with capture disabled.
+The existing wire cannot represent these symbolic values; no new debug wire,
+partial checkpoint or reverse state is admitted. Ordinary simulation and exact
+semantic schedule replay remain supported. CPU zero/short-buffer mask tests
+are not production formal bounds admission: a conservative 512-byte launch
+obligation still refuses shorter runtime buffers.
+
 The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
 ownership matrix as stable JSON. It covers every top-level KIR operation and
 terminator for each simulator-facing profile, plus every scalar
 unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
-identifies V7, V9, V10, V11, V12, and V16 separately, names those rows as declared tool-contract facts with no authority, and
+identifies V7, V9, V10, V11, V12, V16, V17, V19, and V20 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
-compact V1 document is fixed at 4,852,346 bytes and its regression test rejects
+compact V1 document is fixed at 4,968,180 bytes and its regression test rejects
 any unreviewed schema-size change.
 
 The named `gfx942` and `gfx950` profiles describe CPU simulation contracts,

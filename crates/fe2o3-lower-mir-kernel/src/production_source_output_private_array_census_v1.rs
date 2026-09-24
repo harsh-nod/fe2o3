@@ -68,6 +68,8 @@ fn private_array_output_closed_operation_v1(kind: &OperationKind) -> bool {
         | Op::Gfx942OrderedProgram(_)
         | Op::Gfx942CompleteBodyDeclaration(_)
         | Op::Gfx942CompleteBodyStep(_)
+        | Op::Gfx942PhysicalEntryDeclaration(_)
+        | Op::Gfx942PhysicalEntryStep(_)
         | Op::InlineAssembly(_) => false,
     }
 }

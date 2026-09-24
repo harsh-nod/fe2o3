@@ -74,6 +74,21 @@ mod observed_debug;
 mod ordered_program_v17;
 #[path = "execute_ordered_region_v16.rs"]
 mod ordered_region_v16;
+#[path = "execute_physical_entry_collective_v20.rs"]
+mod physical_entry_collective_v20;
+#[path = "execute_physical_entry_state_v20.rs"]
+mod physical_entry_state_v20;
+#[path = "execute_physical_entry_v20.rs"]
+mod physical_entry_v20;
+#[cfg(test)]
+#[path = "execute_physical_entry_v20_tests.rs"]
+mod physical_entry_v20_tests;
+#[path = "execute_pointer_view_operation_v1.rs"]
+mod pointer_view_operation_v1;
+#[path = "execute_scalar_memory_operation_v1.rs"]
+mod scalar_memory_operation_v1;
+#[path = "execute_value_operation_v1.rs"]
+mod value_operation_v1;
 
 /// Ephemeral execution event kind. This is an in-process adapter, not a durable trace schema.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1069,6 +1084,8 @@ impl AdmittedSimulationModuleV1 {
         capture: SimulationDebugCaptureLimitsV1,
         debug_sink: &mut impl SimulationDebugSinkV1,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        self.check_debug_capture_supported_v20()
+            .map_err(SimulationErrorV1::Preflight)?;
         let plan = self
             .preflight(request, target, limits)
             .map_err(SimulationErrorV1::Preflight)?;
@@ -1102,6 +1119,8 @@ impl AdmittedSimulationModuleV1 {
         capture: SimulationDebugCaptureLimitsV1,
         debug_sink: &mut impl SimulationDebugSinkV1,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        self.check_debug_capture_supported_v20()
+            .map_err(SimulationErrorV1::Preflight)?;
         let plan = self
             .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
             .map_err(SimulationErrorV1::Preflight)?;
@@ -1135,6 +1154,8 @@ impl AdmittedSimulationModuleV1 {
         capture: SimulationDebugCaptureLimitsV1,
         debug_sink: &mut impl SimulationDebugSinkV1,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        self.check_debug_capture_supported_v20()
+            .map_err(SimulationErrorV1::Preflight)?;
         let plan = self
             .preflight(request, target, limits)
             .map_err(SimulationErrorV1::Preflight)?;
@@ -1170,6 +1191,8 @@ impl AdmittedSimulationModuleV1 {
         capture: SimulationDebugCaptureLimitsV1,
         debug_sink: &mut impl SimulationDebugSinkV1,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        self.check_debug_capture_supported_v20()
+            .map_err(SimulationErrorV1::Preflight)?;
         let plan = self
             .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
             .map_err(SimulationErrorV1::Preflight)?;
@@ -1230,6 +1253,7 @@ enum RuntimeValue {
     Scalar(ScalarBitsV1),
     Pointer(PointerValue),
     Slice(SliceValue),
+    PhysicalEntry(physical_entry_state_v20::Value),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1846,8 +1870,9 @@ enum CallTarget {
     Trap,
 }
 
-fn debug_value(value: &RuntimeValue) -> SimulationDebugValueV1 {
-    match value {
+fn debug_value(value: &RuntimeValue) -> Option<SimulationDebugValueV1> {
+    Some(match value {
+        RuntimeValue::PhysicalEntry(_) => return None,
         RuntimeValue::Scalar(value) => SimulationDebugValueV1::Scalar(*value),
         RuntimeValue::Pointer(value) => SimulationDebugValueV1::Pointer {
             allocation: value.allocation,
@@ -1867,7 +1892,7 @@ fn debug_value(value: &RuntimeValue) -> SimulationDebugValueV1 {
             byte_offset: value.byte_offset,
             byte_len: value.byte_len,
         },
-    }
+    })
 }
 
 fn capture_debug_stack(
@@ -1920,14 +1945,20 @@ fn capture_debug_stack(
                 required: u64::try_from(value_count).unwrap_or(u64::MAX),
             };
         }
-        values.extend(
-            ordered
-                .into_iter()
-                .map(|(value, observed)| SimulationDebugBindingV1 {
-                    value: *value,
-                    observed: debug_value(observed),
-                }),
-        );
+        for (value, observed) in ordered {
+            let Some(observed) = debug_value(observed) else {
+                // Defensive fence; physical capture is refused before execution.
+                // Never manufacture a scalar or silently omit a symbolic binding.
+                return SimulationDebugCollectionV1::Unavailable {
+                    reason: SimulationDebugUnavailableReasonV1::NotCaptured,
+                    required: u64::try_from(value_count).unwrap_or(u64::MAX),
+                };
+            };
+            values.push(SimulationDebugBindingV1 {
+                value: *value,
+                observed,
+            });
+        }
         let Some(function_ordinal) = function_module_indices.get(frame.function_index).copied()
         else {
             return SimulationDebugCollectionV1::Unavailable {
@@ -2044,6 +2075,9 @@ pub(crate) fn conservative_execution_resident_bytes(
     let shared = request.shared_buffers.len();
     let mut resident = ResidentLedger::new(admitted_resident_bytes);
     resident.add_bytes(size_of::<Engine<'static, NoopSimulationEventSinkV1>>())?;
+    // Physical values own no heap. SSA/frame/table size_of charges include them;
+    // reserve two fixed result temporaries conservatively for return/binding moves.
+    resident.add_product(size_of::<physical_entry_state_v20::Results>(), 2)?;
     resident.add_bytes(reserved_vec_bytes::<RaceTracker>(1)?)?;
     resident.add_bytes(size_of::<SimulationRequestV1>())?;
     resident.add_bytes(size_of::<SimulationPlanV1>())?;
@@ -3338,6 +3372,13 @@ fn execute(
     sink: &mut impl SimulationEventSinkV1,
     debug_sink: &mut impl SimulationDebugSinkV1,
 ) -> Result<SimulationExecutionV1, SimulationExecutionErrorV1> {
+    if configuration.debug_capture.is_enabled() && admitted.uses_physical_entry_v20() {
+        return Err(top_level_error(
+            SimulationExecutionErrorKindV1::InternalInvariant(
+                "physical symbolic capture must be refused before execution",
+            ),
+        ));
+    }
     let ExecutionConfiguration {
         target,
         limits,
@@ -4192,6 +4233,11 @@ fn resolve_ready_collectives<'a>(
             }
         }
 
+        if physical_entry_collective_v20::resolve(engine, machines, arrival, start)? {
+            resolved += 1;
+            continue;
+        }
+
         if matches!(
             arrival.operation,
             OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
@@ -4940,6 +4986,7 @@ struct WaveArrival<'a> {
 
 #[derive(Clone)]
 enum CollectiveInput {
+    PhysicalEntryPredicate(bool),
     MatrixLdsLoad {
         base: PointerValue,
     },
@@ -5212,7 +5259,7 @@ impl<'a> InvocationMachine<'a> {
                         matches!(
                             operation.kind,
                             OperationKind::Matrix(_) | OperationKind::Gfx950LdsTranspose(_)
-                        )
+                        ) || physical_entry_v20::is_collective(&operation.kind)
                     })
             {
                 let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
@@ -6076,6 +6123,19 @@ fn prepare_collective_wait(
             };
             (transpose.width, input)
         }
+        OperationKind::Gfx942PhysicalEntryStep(_)
+            if physical_entry_v20::is_collective(operation) =>
+        {
+            (
+                WaveWidth::Wave64,
+                CollectiveInput::PhysicalEntryPredicate(physical_entry_v20::comparison_input(
+                    engine,
+                    &frame.values,
+                    operation,
+                    &site,
+                )?),
+            )
+        }
         _ => {
             return Err(engine.at(
                 site,
@@ -6230,22 +6290,26 @@ fn advance_non_control_operation<'a>(
     operation: &Operation,
     site: CompactSite,
 ) -> Result<FrameAction<'a>, SimulationExecutionErrorV1> {
-    let results = execute_operation(
-        engine,
-        frame.function_index,
-        block,
-        frame.operation,
-        operation,
-        &frame.values,
-        &mut frame.allocations,
-    )?;
-    bind_small_results(
-        engine,
-        &mut frame.values,
-        &operation.results,
-        results,
-        &site,
-    )?;
+    if physical_entry_v20::is_operation(&operation.kind) {
+        physical_entry_v20::execute_and_bind(engine, &mut frame.values, operation, &site)?;
+    } else {
+        let results = execute_operation(
+            engine,
+            frame.function_index,
+            block,
+            frame.operation,
+            operation,
+            &frame.values,
+            &mut frame.allocations,
+        )?;
+        bind_small_results(
+            engine,
+            &mut frame.values,
+            &operation.results,
+            results,
+            &site,
+        )?;
+    }
     frame.active_operation = None;
     engine.end_lifecycle(
         &site,
@@ -6476,104 +6540,14 @@ fn execute_non_assembly_operation(
     let site = operation_site(function_index, block, ordinal);
     let one = |value| Ok(SmallResults::One(value));
     match &operation.kind {
-        OperationKind::Constant(constant) => one(RuntimeValue::Scalar(
-            constant_scalar(constant, engine.target).map_err(|kind| engine.at(site, kind))?,
-        )),
-        OperationKind::Intrinsic(intrinsic) => {
-            let invocation = engine.invocation.ok_or_else(|| {
-                engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::InternalInvariant("intrinsic invocation"),
-                )
-            })?;
-            let value = intrinsic_value(intrinsic.kind, invocation);
-            one(RuntimeValue::Scalar(
-                ScalarBitsV1::index(value, engine.target).map_err(|_| {
-                    engine.at(site, SimulationExecutionErrorKindV1::IntegerOutOfRange)
-                })?,
-            ))
-        }
-        OperationKind::Unary { op, operand } => {
-            let value = scalar_value(engine, values, *operand, &site)?;
-            one(RuntimeValue::Scalar(
-                execute_unary(*op, value, engine.target).map_err(|kind| engine.at(site, kind))?,
-            ))
-        }
-        OperationKind::Binary { op, lhs, rhs } => {
-            let lhs = scalar_value(engine, values, *lhs, &site)?;
-            let rhs = scalar_value(engine, values, *rhs, &site)?;
-            let scalars = execute_binary(*op, lhs, rhs, engine.target)
-                .map_err(|kind| engine.at(site, kind))?;
-            Ok(match scalars {
-                SmallResults::None => SmallResults::None,
-                SmallResults::One(value) => SmallResults::One(RuntimeValue::Scalar(value)),
-                SmallResults::Two(first, second) => {
-                    SmallResults::Two(RuntimeValue::Scalar(first), RuntimeValue::Scalar(second))
-                }
-            })
-        }
-        OperationKind::Compare {
-            predicate,
-            lhs,
-            rhs,
-        } => {
-            let lhs = scalar_value(engine, values, *lhs, &site)?;
-            let rhs = scalar_value(engine, values, *rhs, &site)?;
-            one(RuntimeValue::Scalar(ScalarBitsV1::boolean(
-                execute_compare(*predicate, lhs, rhs, engine.target)
-                    .map_err(|kind| engine.at(site, kind))?,
-            )))
-        }
-        OperationKind::Cast { kind, value, to } => {
-            if *kind == CastKind::RestrictPointerAccess {
-                let RuntimeValue::Pointer(mut pointer) =
-                    runtime_value(engine, values, *value, &site)?.clone()
-                else {
-                    return Err(engine.at(
-                        site,
-                        SimulationExecutionErrorKindV1::InternalInvariant(
-                            "preflighted pointer access restriction",
-                        ),
-                    ));
-                };
-                pointer.access = AccessMode::ReadOnly;
-                return one(RuntimeValue::Pointer(pointer));
-            }
-            let value = scalar_value(engine, values, *value, &site)?;
-            let Type::Scalar(to) = to else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::InternalInvariant("preflighted scalar cast"),
-                ));
-            };
-            one(RuntimeValue::Scalar(
-                execute_cast(*kind, value, *to, engine.target)
-                    .map_err(|kind| engine.at(site, kind))?,
-            ))
-        }
-        OperationKind::Select {
-            condition,
-            true_value,
-            false_value,
-        } => {
-            let condition = scalar_value(engine, values, *condition, &site)?
-                .as_bool()
-                .ok_or_else(|| {
-                    engine.at(
-                        site,
-                        SimulationExecutionErrorKindV1::RuntimeType {
-                            value: Some(*condition),
-                            expected: "boolean select condition",
-                        },
-                    )
-                })?;
-            one(runtime_value(
-                engine,
-                values,
-                if condition { *true_value } else { *false_value },
-                &site,
-            )?
-            .clone())
+        OperationKind::Constant(_)
+        | OperationKind::Intrinsic(_)
+        | OperationKind::Unary { .. }
+        | OperationKind::Binary { .. }
+        | OperationKind::Compare { .. }
+        | OperationKind::Cast { .. }
+        | OperationKind::Select { .. } => {
+            value_operation_v1::execute(engine, values, operation, site)
         }
         OperationKind::Call {
             callee: _,
@@ -6611,198 +6585,16 @@ fn execute_non_assembly_operation(
                 "outlined private allocation dispatch",
             ),
         )),
-        OperationKind::SliceLength { slice } => {
-            let RuntimeValue::Slice(slice) = runtime_value(engine, values, *slice, &site)? else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::RuntimeType {
-                        value: Some(*slice),
-                        expected: "slice",
-                    },
-                ));
-            };
-            one(RuntimeValue::Scalar(
-                ScalarBitsV1::index(slice.elements as u64, engine.target).map_err(|_| {
-                    engine.at(site, SimulationExecutionErrorKindV1::IntegerOutOfRange)
-                })?,
-            ))
+        OperationKind::SliceLength { .. }
+        | OperationKind::SliceData { .. }
+        | OperationKind::GetElementPointer { .. } => {
+            pointer_view_operation_v1::execute(engine, values, operation, site)
         }
-        OperationKind::SliceData { slice } => {
-            let RuntimeValue::Slice(slice) = runtime_value(engine, values, *slice, &site)? else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::RuntimeType {
-                        value: Some(*slice),
-                        expected: "slice",
-                    },
-                ));
-            };
-            let upper_bound = slice
-                .byte_offset
-                .checked_add(slice.byte_len)
-                .ok_or_else(|| {
-                    engine.at(
-                        site,
-                        SimulationExecutionErrorKindV1::InternalInvariant(
-                            "preflighted slice view bounds",
-                        ),
-                    )
-                })?;
-            one(RuntimeValue::Pointer(PointerValue {
-                allocation: slice.allocation,
-                byte_offset: slice.byte_offset,
-                element: slice.element,
-                address_space: slice.address_space,
-                access: slice.access,
-                lower_bound: slice.byte_offset,
-                upper_bound,
-                abi_argument_ordinal: slice.abi_argument_ordinal,
-            }))
-        }
-        OperationKind::GetElementPointer { base, offset } => {
-            let RuntimeValue::Pointer(pointer) = runtime_value(engine, values, *base, &site)?
-            else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::RuntimeType {
-                        value: Some(*base),
-                        expected: "pointer",
-                    },
-                ));
-            };
-            let offset = scalar_nonnegative_usize(
-                scalar_value(engine, values, *offset, &site)?,
-                engine.target,
-            )
-            .map_err(|kind| engine.at(site, kind))?;
-            let element_bytes = engine.target.scalar_bytes(pointer.element).ok_or_else(|| {
-                engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::InternalInvariant(
-                        "preflighted pointer element",
-                    ),
-                )
-            })?;
-            let byte_delta = offset.checked_mul(element_bytes).ok_or_else(|| {
-                engine.at(site, SimulationExecutionErrorKindV1::PointerOffsetOverflow)
-            })?;
-            let byte_offset = pointer.byte_offset.checked_add(byte_delta).ok_or_else(|| {
-                engine.at(site, SimulationExecutionErrorKindV1::PointerOffsetOverflow)
-            })?;
-            one(RuntimeValue::Pointer(PointerValue {
-                byte_offset,
-                ..pointer.clone()
-            }))
-        }
-        OperationKind::Load { pointer, access } => one(RuntimeValue::Scalar(execute_scalar_load(
-            engine, values, *pointer, *access, &site,
-        )?)),
-        OperationKind::GuardedLoad {
-            pointer,
-            predicate,
-            fallback,
-            access,
-        } => {
-            let predicate = scalar_value(engine, values, *predicate, &site)?
-                .as_bool()
-                .ok_or_else(|| {
-                    engine.at(
-                        site,
-                        SimulationExecutionErrorKindV1::RuntimeType {
-                            value: Some(*predicate),
-                            expected: "boolean guarded-load predicate",
-                        },
-                    )
-                })?;
-            let value = if predicate {
-                execute_scalar_load(engine, values, *pointer, *access, &site)?
-            } else {
-                scalar_value(engine, values, *fallback, &site)?
-            };
-            one(RuntimeValue::Scalar(value))
-        }
-        OperationKind::Store {
-            pointer,
-            value,
-            access,
-        } => {
-            let RuntimeValue::Pointer(pointer_value) =
-                runtime_value(engine, values, *pointer, &site)?
-            else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::RuntimeType {
-                        value: Some(*pointer),
-                        expected: "pointer",
-                    },
-                ));
-            };
-            let stored = scalar_value(engine, values, *value, &site)?;
-            let bytes = engine
-                .memory
-                .validate_store(pointer_value, *access, stored, engine.target)
-                .map_err(|kind| engine.memory_error_at(site, pointer_value, kind))?;
-            if pointer_value.address_space == AddressSpace::Global {
-                engine.record_access(
-                    &site,
-                    pointer_value.allocation,
-                    pointer_value.byte_offset,
-                    bytes,
-                    true,
-                    false,
-                )?;
-            }
-            engine.observe_and_commit_store(&site, pointer_value, stored, bytes)?;
-            Ok(SmallResults::None)
-        }
-        OperationKind::GuardedStore {
-            pointer,
-            value,
-            predicate,
-            access,
-        } => {
-            let predicate = scalar_value(engine, values, *predicate, &site)?
-                .as_bool()
-                .ok_or_else(|| {
-                    engine.at(
-                        site,
-                        SimulationExecutionErrorKindV1::RuntimeType {
-                            value: Some(*predicate),
-                            expected: "boolean guarded-store predicate",
-                        },
-                    )
-                })?;
-            if !predicate {
-                return Ok(SmallResults::None);
-            }
-            let RuntimeValue::Pointer(pointer_value) =
-                runtime_value(engine, values, *pointer, &site)?
-            else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::RuntimeType {
-                        value: Some(*pointer),
-                        expected: "pointer",
-                    },
-                ));
-            };
-            let stored = scalar_value(engine, values, *value, &site)?;
-            let bytes = engine
-                .memory
-                .validate_store(pointer_value, *access, stored, engine.target)
-                .map_err(|kind| engine.at(site, kind))?;
-            if pointer_value.address_space == AddressSpace::Global {
-                engine.record_access(
-                    &site,
-                    pointer_value.allocation,
-                    pointer_value.byte_offset,
-                    bytes,
-                    true,
-                    false,
-                )?;
-            }
-            engine.observe_and_commit_store(&site, pointer_value, stored, bytes)?;
-            Ok(SmallResults::None)
+        OperationKind::Load { .. }
+        | OperationKind::GuardedLoad { .. }
+        | OperationKind::Store { .. }
+        | OperationKind::GuardedStore { .. } => {
+            scalar_memory_operation_v1::execute(engine, values, operation, site)
         }
         OperationKind::WorkgroupMemory(memory) => one(RuntimeValue::Pointer(
             engine.workgroup_pointer(site, memory)?,
@@ -6838,6 +6630,8 @@ fn execute_non_assembly_operation(
         | OperationKind::Gfx942OrderedProgram(_)
         | OperationKind::Gfx942CompleteBodyDeclaration(_)
         | OperationKind::Gfx942CompleteBodyStep(_)
+        | OperationKind::Gfx942PhysicalEntryDeclaration(_)
+        | OperationKind::Gfx942PhysicalEntryStep(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)
@@ -8057,6 +7851,7 @@ fn bind_runtime_value(
 fn runtime_type(value: &RuntimeValue) -> Type {
     match value {
         RuntimeValue::Scalar(value) => Type::Scalar(value.ty()),
+        RuntimeValue::PhysicalEntry(value) => Type::Scalar(value.scalar_type()),
         RuntimeValue::Pointer(pointer) => Type::pointer(
             Type::Scalar(pointer.element),
             pointer.address_space,

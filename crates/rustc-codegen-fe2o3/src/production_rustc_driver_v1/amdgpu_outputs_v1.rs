@@ -56,6 +56,9 @@ pub(super) fn extract_amdgpu_llvm_in_active_session_v1(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
     )?;
+    if transaction.has_authenticated_physical_entry_v20() {
+        return Err("MIR37/KIR20 physical-entry production LLVM requires mandatory ranked/formal/descriptor continuation; only explicit pre-ranked diagnostics are available".into());
+    }
     if transaction.has_authenticated_complete_body_v19() {
         return complete_body_v19::extract_llvm(transaction, output, expected_target);
     }
@@ -125,6 +128,9 @@ pub(super) fn extract_amdgpu_compiler_handoff_in_active_session_v1(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
     )?;
+    if transaction.has_authenticated_physical_entry_v20() {
+        return Err("MIR37/KIR20 physical-entry normal worker handoff is unavailable before mandatory ranked/formal/descriptor continuation".into());
+    }
     if transaction.has_authenticated_complete_body_v19() {
         return complete_body_v19::extract_handoff(transaction, output, expected_target);
     }
@@ -166,6 +172,9 @@ fn extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
     )?;
+    if transaction.has_authenticated_physical_entry_v20() {
+        return Err("MIR37/KIR20 physical-entry kernels have no admitted semantic V3/protected handoff route".into());
+    }
     if transaction.has_authenticated_complete_body_v19() {
         return Err("MIR36/KIR19 complete-body kernels have no admitted semantic V3/protected handoff route".to_owned());
     }

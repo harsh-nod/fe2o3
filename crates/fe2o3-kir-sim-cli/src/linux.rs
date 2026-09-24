@@ -133,6 +133,8 @@ enum UnsupportedFeatureCode {
     OrderedProgramProfile,
     CompleteBody,
     CompleteBodyProfile,
+    PhysicalEntry,
+    PhysicalEntryProfile,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
 }
@@ -3375,6 +3377,9 @@ fn admission_error_kind(error: &SimulationAdmissionErrorV1) -> ErrorKind {
 
 fn preflight_kind(error: &SimulationPreflightErrorV1) -> ErrorKind {
     match error {
+        SimulationPreflightErrorV1::PhysicalEntrySymbolicDebugUnavailableV20 => {
+            ErrorKind::PreflightPhysicalEntrySymbolicDebugUnavailableV20
+        }
         SimulationPreflightErrorV1::InvalidLimits(_) => ErrorKind::PreflightInvalidLimits,
         SimulationPreflightErrorV1::UnknownKernel(_) => ErrorKind::PreflightUnknownKernel,
         SimulationPreflightErrorV1::MissingEntry(_) => ErrorKind::PreflightMissingEntry,
@@ -3625,6 +3630,8 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         }
         UnsupportedFeatureV1::CompleteBody => UnsupportedFeatureCode::CompleteBody,
         UnsupportedFeatureV1::CompleteBodyProfile => UnsupportedFeatureCode::CompleteBodyProfile,
+        UnsupportedFeatureV1::PhysicalEntry => UnsupportedFeatureCode::PhysicalEntry,
+        UnsupportedFeatureV1::PhysicalEntryProfile => UnsupportedFeatureCode::PhysicalEntryProfile,
         UnsupportedFeatureV1::UnsupportedScalarOperation => {
             UnsupportedFeatureCode::UnsupportedScalarOperation
         }
@@ -4828,6 +4835,10 @@ impl Write for FallibleVecWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "linux_physical_entry_v20_tests.rs"]
+mod physical_entry_v20_tests;
 
 #[cfg(test)]
 mod tests {

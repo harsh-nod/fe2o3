@@ -51,6 +51,9 @@ for an author to invent or copy. An explicit namespace remains accepted only
 for compiler compatibility and adversarial fixtures; public kernels must use
 the compiler-derived form.
 
+For experimental instruction-level control, see [physical-entry source authoring](docs/physical-entry-source-v20.md). That bounded diagnostic route is separate
+from normal production admission; its [qualification report](docs/physical-entry-source-qualification-20260924.md) records simulation and native inspection limits.
+
 The project currently ships only from a source checkout and makes no crates.io
 installation promise. The first developer-preview release remains blocked on
 the conditions in the [release process](docs/release-process.md) and

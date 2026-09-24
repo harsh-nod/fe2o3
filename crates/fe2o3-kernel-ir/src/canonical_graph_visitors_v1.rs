@@ -263,6 +263,8 @@ impl Operation {
             | Op::Gfx942OrderedProgram(_)
             | Op::Gfx942CompleteBodyDeclaration(_)
             | Op::Gfx942CompleteBodyStep(_)
+            | Op::Gfx942PhysicalEntryDeclaration(_)
+            | Op::Gfx942PhysicalEntryStep(_)
             | Op::VerificationContract(_)
             | Op::VectorLayoutConvert(_)
             | Op::Constant(_)

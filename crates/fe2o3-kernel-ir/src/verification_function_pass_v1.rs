@@ -129,6 +129,7 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
         }
 
         let mut has_complete_body = false;
+        let mut has_physical_entry = false;
         self.budget.charge_work(body.blocks.len())?;
         for block in &body.blocks {
             self.budget.charge_work(block.operations.len())?;
@@ -137,6 +138,11 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                     operation.kind,
                     OperationKind::Gfx942CompleteBodyDeclaration(_)
                         | OperationKind::Gfx942CompleteBodyStep(_)
+                );
+                has_physical_entry |= matches!(
+                    operation.kind,
+                    OperationKind::Gfx942PhysicalEntryDeclaration(_)
+                        | OperationKind::Gfx942PhysicalEntryStep(_)
                 );
                 let location = clone_diagnostic_location_v1(&base_location, self.budget)?
                     .at_block(block.id)
@@ -175,6 +181,9 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
         }
         if has_complete_body {
             self.verify_complete_body_function_v19(&base_location)?;
+        }
+        if has_physical_entry {
+            self.verify_physical_entry_function_v20(&base_location)?;
         }
         if has_execution_roles {
             crate::verification_execution_lifecycle_v15::verify_execution_lifecycle_v15(
