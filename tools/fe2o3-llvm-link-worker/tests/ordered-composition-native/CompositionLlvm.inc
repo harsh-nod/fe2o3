@@ -1,5 +1,14 @@
 // LLVM is observed intact. This validator does not replay source or perform lowering.
-std::string compositionAssembly(size_t Kind) {
+StringRef compositionConstraints(CompositionProfile P) {
+  return P==CompositionProfile::LegacyV32?StringRef(Constraints):
+    StringRef("=&{v9},{v10},{v11},{v12},~{v8}");
+}
+std::string compositionAssembly(size_t Kind,CompositionProfile P=CompositionProfile::LegacyV32) {
+  if(P==CompositionProfile::PromotedV8) {
+    if(Kind==0)return "v_xor_b32_e32 v8, $1, $2\n\tv_and_b32_e32 $0, v8, $3";
+    if(Kind==1)return "v_mov_b32_e32 $0, $3";
+    fail("closed promoted region kind");
+  }
   if(Kind==0)return "v_xor_b32_e32 v32, $1, $2\n\tv_and_b32_e32 $0, v32, $3";
   if(Kind==1)return "v_mov_b32_e32 $0, $1";
   if(Kind==2)return "v_mov_b32_e32 $0, $2";
@@ -51,13 +60,14 @@ bool compositionLlvmMatches(const Module &M,const CompositionRecord &R) {
         if(!isa<CallInst>(Call))return false;
         if(const auto *Asm=dyn_cast<InlineAsm>(Call->getCalledOperand())) {
           if(!Asm->hasSideEffects() || Asm->isAlignStack() || Asm->canThrow() ||
-             Asm->getDialect()!=InlineAsm::AD_ATT || Asm->getConstraintString()!=Constraints ||
+             Asm->getDialect()!=InlineAsm::AD_ATT || Asm->getConstraintString()!=compositionConstraints(R.Profile) ||
              Call->arg_size()!=3 || !Call->getType()->isIntegerTy(32) ||
              Call->getFunctionType()!=Asm->getFunctionType() ||
              !llvm::all_of(Call->args(),[](const Use &A){return A->getType()->isIntegerTy(32);}))return false;
           size_t Kind=0;
-          for(;Kind<3 && Asm->getAsmString()!=compositionAssembly(Kind);++Kind){}
-          if(Kind==3 || Regions.size()>=8)return false;
+          const size_t PatternCount=compositionPatternCount(R.Profile);
+          for(;Kind<PatternCount && Asm->getAsmString()!=compositionAssembly(Kind,R.Profile);++Kind){}
+          if(Kind==PatternCount || Regions.size()>=8)return false;
           Regions.emplace_back(F.getName().str(),Kind);
         } else {
           const auto *Callee=Call->getCalledFunction();
@@ -74,7 +84,7 @@ bool compositionLlvmMatches(const Module &M,const CompositionRecord &R) {
   }
   if(Defined!=In.Helpers.size()+1 || Regions.size()!=R.Definitions.size())return false;
   std::vector<std::pair<std::string,size_t>> Expected;
-  for(const auto &D:R.Definitions)Expected.emplace_back(D.Symbol,compositionKind(D.Descriptors));
+  for(const auto &D:R.Definitions)Expected.emplace_back(D.Symbol,compositionKind(D.Descriptors,R.Profile));
   std::sort(Regions.begin(),Regions.end());std::sort(Expected.begin(),Expected.end());
   auto ExpectedCalls=R.Calls;std::sort(Calls.begin(),Calls.end());std::sort(ExpectedCalls.begin(),ExpectedCalls.end());
   return Regions==Expected && Calls==ExpectedCalls;
@@ -105,6 +115,9 @@ json::Object compositionLlvm(CompositionRecord &R) {
     require(!compositionLlvmMatches(*M,Changed),"LLVM negative accidentally admitted");++Refusals;
   };
   auto Changed=R;Changed.Input.Entry+="_wrong";Reject(std::move(Changed));
+  if(R.Profile==CompositionProfile::PromotedV8) {
+    Changed=R;Changed.Profile=CompositionProfile::LegacyV32;Reject(std::move(Changed));
+  }
   Changed=R;Changed.Definitions[0].Symbol+="_wrong";Reject(std::move(Changed));
   Changed=R;Changed.Definitions.pop_back();Reject(std::move(Changed));
   if(!R.Calls.empty()) {Changed=R;Changed.Calls[0]+="_wrong";Reject(std::move(Changed));}

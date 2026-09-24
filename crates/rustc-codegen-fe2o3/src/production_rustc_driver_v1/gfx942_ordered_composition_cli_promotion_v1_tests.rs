@@ -421,3 +421,6 @@ fn binary_case_counts_include_selectors_without_minting_frontend_callbacks() {
         assert!(!"generic compilation failure".contains(selector_refusal(case)));
     }
 }
+
+#[path = "gfx942_ordered_composition_promoted_normal_v1_tests.rs"]
+mod promoted_normal;

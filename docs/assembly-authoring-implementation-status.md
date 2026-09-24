@@ -1,5 +1,19 @@
 # Assembly authoring implementation status
 
+## Fresh promoted-source normal and native continuation — 2026-09-24
+
+The [fresh promoted-source qualification](ordered-composition-promoted-qualification-20260924.md)
+completed 23 actual extractor/frontend children, three publications, 128 CPU
+cases and 15 descriptor/cross-candidate refusals. The candidates retain their
+own canonical, normal LLVM and handoff files; no generated source was patched.
+Their distinct static native matrix passed **6/6** O0/O3 cases, 42 LLVM,
+108 metadata and 66 decoded controls. Rebuilt original-profile compatibility
+passed **14/14** with byte-identical artifacts to its earlier R7 run.
+
+Physical helper value transport, full native functional equivalence, runtime
+conditions, tiled promotion and live debugger capture remain separate.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Fresh repeated-call and one-stop CPU qualification — 2026-09-24
 
 The ordinary static composition matrix now passes **14/14** cases at O0/O3,
@@ -21,7 +35,8 @@ The combined CPU gate passed 2,057 test executions across 18 result groups
 (overlapping configurations, not unique tests), selected all-target strict lint,
 and unsafe-source inventory. Earlier lint failures remain retained; the fixes
 only enumerate two pure test loops and end two test borrows with lexical scopes.
-Fresh edited-source normal/native continuation, physical helper ABI transport,
+At that gate, fresh edited-source normal/native continuation was still pending;
+its later completed slice is recorded above. Physical helper ABI transport,
 GPU behavior and protected finalization remain separate work. Original accepted
 milestone exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
 

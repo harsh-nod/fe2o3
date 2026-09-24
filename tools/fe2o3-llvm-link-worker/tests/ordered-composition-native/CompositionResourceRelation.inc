@@ -19,10 +19,11 @@ bool compositionGfx942HiddenQueuePointer(uint64_t Offset, uint64_t Size) {
   return Offset == CompositionQueuePointerOffset && Size == 8;
 }
 bool compositionGfx942Allocation(uint64_t Arch, uint64_t Acc, uint64_t Total,
-                                uint32_t Rsrc1, uint32_t Rsrc3) {
-  // Preserve the original observer's bounded 37..256 total-register envelope.
-  // This is deliberately narrower than all allocations supported by gfx942.
-  if (Arch < 37 || Arch > 256 || Acc > 256 || Total < 37 || Total > 256)
+                                uint32_t Rsrc1, uint32_t Rsrc3, uint64_t Minimum = 37) {
+  // The two closed test profiles need v36 or v12 respectively. This is a
+  // minimum observed architectural coverage, not exact footprint or no-AGPR.
+  if ((Minimum != 37 && Minimum != 13) || Arch < Minimum || Arch > 256 ||
+      Acc > 256 || Total < Minimum || Total > 256)
     return false;
   const uint64_t AlignedArch = ((Arch + 3) / 4) * 4;
   const uint64_t ExpectedTotal = Acc ? AlignedArch + Acc : Arch;

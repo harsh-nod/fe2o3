@@ -21,12 +21,11 @@ fn edited_program() -> Gfx942U32ProgramV1 {
     }])
     .unwrap()
 }
-fn cpu(
-    target:&crate::production_pipeline::ordered_composition_v1::AuthenticatedOrderedCompositionDiagnosticV1<'_>,
+pub(super) fn cpu(
+    owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17,
     edited: bool,
     started: std::time::Instant,
 ) -> Value {
-    let owner = target.materialized().executable();
     let limits = SimulationLimitsV1 {
         max_canonical_bytes: 256 * 1024,
         max_reachable_functions: 3,
@@ -190,7 +189,7 @@ pub(super) fn observe(
                 )
             })
             .map_err(|e| e.to_string())?;
-        let observed = cpu(&target, edited, started);
+        let observed = cpu(target.materialized().executable(), edited, started);
         return Ok(
             json!({"stage":"fresh_promoted_source_frontend","cpu":observed,
             "semantic_sha256":super::super::super::lower_hex_v1(&semantic_identity),
@@ -337,7 +336,7 @@ pub(super) fn observe(
                 budget.reserve_storage(receipt.retained_storage_bytes())
             })
             .map_err(|e| e.to_string())?;
-        let observed = cpu(&target, false, started);
+        let observed = cpu(target.materialized().executable(), false, started);
         Ok(
             json!({"stage":"actual_source_publication","facts":facts,"cpu":observed,
             "semantic_sha256":super::super::super::lower_hex_v1(&semantic_identity),

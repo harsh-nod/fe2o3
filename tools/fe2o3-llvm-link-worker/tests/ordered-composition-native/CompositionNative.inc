@@ -1,10 +1,21 @@
 // Reuses the existing strict production analyzer unchanged. In particular,
-// SCRATCH/BUFFER families and duplicate direct edges still refuse. Such refusal
+// SCRATCH/BUFFER families remain closed. Unsupported effects refuse. Such refusal
 // is recorded as incomplete observation, never reclassified as qualification.
 constexpr std::array<Step,2> CompositionPair{{{Opcode::Xor,32,34,35},{Opcode::And,33,32,36}}};
 constexpr std::array<Step,1> CompositionMove0{{{Opcode::Mov,33,34,0}}};
 constexpr std::array<Step,1> CompositionMove1{{{Opcode::Mov,33,35,0}}};
-ArrayRef<Step> compositionSteps(size_t Kind) {
+// Independently transcribed promoted program, not decoded from the report.
+constexpr std::array<Step,2> PromotedPair{{{Opcode::Xor,8,10,11},{Opcode::And,9,8,12}}};
+constexpr std::array<Step,1> PromotedMove2{{{Opcode::Mov,9,12,0}}};
+static_assert(expectedWord(PromotedPair[0])==0x2a10170a);
+static_assert(expectedWord(PromotedPair[1])==0x26121908);
+static_assert(expectedWord(PromotedMove2[0])==0x7e12030c);
+ArrayRef<Step> compositionSteps(size_t Kind,CompositionProfile P=CompositionProfile::LegacyV32) {
+  if(P==CompositionProfile::PromotedV8) {
+    if(Kind==0)return PromotedPair;
+    if(Kind==1)return PromotedMove2;
+    fail("native closed promoted program");
+  }
   if (Kind==0) return CompositionPair;
   if (Kind==1) return CompositionMove0;
   if (Kind==2) return CompositionMove1;
@@ -42,8 +53,8 @@ bool compositionNativeRelation(const PhysicalMachineEffectEvidence &E,ArrayRef<u
       for(const auto &I:E.Instructions)if(I.BranchKind==PhysicalMachineBranchKind::DirectCall &&
           I.FunctionSymbol==R.Input.Entry && I.BranchTarget==F.CodeOffset)++Weight;
     if(Weight==0 || Weight>8)return false; // No unreferenced/recursive native clone.
-    for(size_t Kind=0;Kind<3;++Kind) {
-      const auto Steps=compositionSteps(Kind);
+    for(size_t Kind=0;Kind<compositionPatternCount(R.Profile);++Kind) {
+      const auto Steps=compositionSteps(Kind,R.Profile);
       for(size_t I=0;I+Steps.size()<=E.Instructions.size();++I) {
         const auto &First=E.Instructions[I];bool Match=true;
         for(size_t J=0;J<Steps.size();++J) {

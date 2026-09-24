@@ -89,7 +89,8 @@ std::optional<CompositionResources> compositionMetadata(ArrayRef<uint8_t> Bytes,
       {".sgpr_spill_count",&Result.SgprSpills},{".vgpr_spill_count",&Result.VgprSpills}}}) {
     const auto V=compositionUnsigned(Kernel,Key);if(!V || *V>1024*1024)return std::nullopt;*Ptr=*V;
   }
-  if(Result.Sgprs==0 || Result.Sgprs>112 || Result.Vgprs<37 || Result.Vgprs>256 ||
+  const uint64_t Minimum=R.Profile==CompositionProfile::LegacyV32?37:13;
+  if(Result.Sgprs==0 || Result.Sgprs>112 || Result.Vgprs<Minimum || Result.Vgprs>256 ||
       Result.Agprs>256 || Result.SgprSpills>1024 || Result.VgprSpills>1024)return std::nullopt;
   auto Args=Kernel.find(".args");
   if(Args==Kernel.end() || !Args->second.isArray() || Args->second.getArray().size()<18 ||
@@ -192,7 +193,7 @@ std::optional<CompositionResources> compositionMetadata(ArrayRef<uint8_t> Bytes,
         Result.UsesDynamicStack,Result.Properties))return std::nullopt;
   Result.HasDynSizedStack=*StackSymbols[0];Result.HasRecursion=*StackSymbols[1];
   if(Found!=1 || !ArchVgprs || !AccVgprs || *AccVgprs!=Result.Agprs ||
-      !compositionGfx942Allocation(*ArchVgprs,*AccVgprs,Result.Vgprs,Result.Rsrc1,Result.Rsrc3))
+      !compositionGfx942Allocation(*ArchVgprs,*AccVgprs,Result.Vgprs,Result.Rsrc1,Result.Rsrc3,Minimum))
     return std::nullopt;
   Result.ArchVgprs=*ArchVgprs;Result.AccumStart=((Result.Rsrc3&63)+1)*4;
   return Result;

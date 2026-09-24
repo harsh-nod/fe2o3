@@ -165,6 +165,11 @@ pub(super) fn fixture_source() -> Vec<u8> {
     actual
 }
 pub(super) fn package(root: &Path, name: &str, original: bool) -> PathBuf {
+    let seed = original.then(fixture_source);
+    package_with_source(root, name, seed.as_deref())
+}
+/// Test-only new-package seed, supplied before any compiler or publication.
+pub(super) fn package_with_source(root: &Path, name: &str, seed: Option<&[u8]>) -> PathBuf {
     assert!(matches!(
         name,
         "package-original"
@@ -196,8 +201,8 @@ pub(super) fn package(root: &Path, name: &str, original: bool) -> PathBuf {
     ));
     create(&package.join("Cargo.toml"), manifest.as_bytes(), 64 * 1024);
     create(&package.join("src/lib.rs"), ROOT, 4096);
-    if original {
-        create(&package.join(LEAF), &fixture_source(), 64 * 1024);
+    if let Some(seed) = seed {
+        create(&package.join(LEAF), seed, 64 * 1024);
     }
     package
 }

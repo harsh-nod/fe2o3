@@ -1,16 +1,25 @@
 // Exact report/file joins remain observations, never typed source authority.
+enum class CompositionProfile { LegacyV32, PromotedV8 };
 struct CompositionDefinition { std::string Symbol; std::vector<uint16_t> Descriptors; };
 struct CompositionRecord {
   HelperInput Input;
+  CompositionProfile Profile = CompositionProfile::LegacyV32;
   std::vector<CompositionDefinition> Definitions;
   std::vector<std::string> Calls;
   std::array<size_t,3> Expanded{}; // pair, mov input0, mov input1
   std::array<std::string,5> ArgumentNames;
 };
-size_t compositionKind(ArrayRef<uint16_t> D) {
+size_t compositionPatternCount(CompositionProfile P) {
+  return P==CompositionProfile::LegacyV32?3:2;
+}
+size_t compositionKind(ArrayRef<uint16_t> D,CompositionProfile P=CompositionProfile::LegacyV32) {
   if(D.size()==2 && D[0]==133 && D[1]==315) return 0;
-  if(D.size()==1 && D[0]==8) return 1;
-  if(D.size()==1 && D[0]==24) return 2;
+  if(P==CompositionProfile::PromotedV8) {
+    if(D.size()==1 && D[0]==40)return 1;
+  } else {
+    if(D.size()==1 && D[0]==8)return 1;
+    if(D.size()==1 && D[0]==24)return 2;
+  }
   fail("canonical rows outside independent literal composition source programs");
 }
 std::array<size_t,4> compositionRoster(StringRef Feature) {
