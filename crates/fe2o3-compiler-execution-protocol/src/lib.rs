@@ -27,6 +27,8 @@ mod receipt_publication_codec;
 mod receipt_publication_v2;
 mod service;
 mod service_ready;
+mod service_ready_codec;
+mod service_ready_v2;
 mod supervisor_deployment;
 mod supervisor_handoff;
 mod supervisor_handoff_codec;
@@ -216,6 +218,11 @@ pub use service::{
 pub use service_ready::{
     COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionServiceReadyErrorV1,
     CompilerExecutionServiceReadyIdentityV1, CompilerExecutionServiceReadyV1,
+};
+pub use service_ready_v2::{
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V2, COMPILER_EXECUTION_SERVICE_READY_STORAGE_V2,
+    COMPILER_EXECUTION_SERVICE_READY_WORK_V2, CompilerExecutionServiceReadyErrorV2,
+    CompilerExecutionServiceReadyV2,
 };
 pub use supervisor_deployment::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1,

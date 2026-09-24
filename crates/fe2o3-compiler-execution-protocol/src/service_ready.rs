@@ -2,37 +2,29 @@
 
 use std::{error::Error, fmt};
 
-use sha2::{Digest, Sha256};
-
 use crate::{
     CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionServiceLaunchManifestIdentityV1, CompilerExecutionServiceLaunchManifestV1,
+    service_ready_codec as codec,
 };
 
 const SHA256_BYTES: usize = 32;
-const HEADER_BYTES: usize = 24;
-const PREIMAGE_BYTES: usize = HEADER_BYTES + (2 * SHA256_BYTES);
-const MAGIC: [u8; 8] = *b"F2O3CER1";
-const VERSION_V1: u16 = 1;
-const IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-SERVICE-READY/V1\0";
 
 /// Exact canonical byte length of one protected-issuer readiness record.
-pub const COMPILER_EXECUTION_SERVICE_READY_BYTES_V1: usize = PREIMAGE_BYTES + SHA256_BYTES;
+pub const COMPILER_EXECUTION_SERVICE_READY_BYTES_V1: usize = codec::BYTES;
 
 /// Domain-separated identity of one exact readiness record.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerExecutionServiceReadyIdentityV1([u8; SHA256_BYTES]);
 
 impl CompilerExecutionServiceReadyIdentityV1 {
+    pub(crate) const fn from_bytes_for_protocol(bytes: [u8; SHA256_BYTES]) -> Self {
+        Self(bytes)
+    }
+
     /// Returns the exact identity bytes.
     pub const fn as_bytes(&self) -> &[u8; SHA256_BYTES] {
         &self.0
-    }
-
-    fn matches_canonical_bytes(self, bytes: &[u8]) -> bool {
-        bytes.len() == COMPILER_EXECUTION_SERVICE_READY_BYTES_V1
-            && bytes[PREIMAGE_BYTES..] == self.0
-            && derive_identity(&bytes[..PREIMAGE_BYTES]) == self.0
     }
 }
 
@@ -71,83 +63,31 @@ impl CompilerExecutionServiceReadyV1 {
         if !launch.matches_policy(policy) {
             return Err(CompilerExecutionServiceReadyErrorV1::PolicyMismatch);
         }
-        Ok(Self::from_parts(
+        Ok(Self::from_record(codec::encode(
             issuer_pid,
-            launch.identity(),
-            policy.identity(),
-        ))
+            *launch.identity().as_bytes(),
+            *policy.identity().as_bytes(),
+        )))
     }
 
-    fn from_parts(
-        issuer_pid: u32,
-        launch_manifest_identity: CompilerExecutionServiceLaunchManifestIdentityV1,
-        policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
-    ) -> Self {
-        let mut bytes = [0_u8; COMPILER_EXECUTION_SERVICE_READY_BYTES_V1];
-        bytes[..8].copy_from_slice(&MAGIC);
-        bytes[8..10].copy_from_slice(&VERSION_V1.to_le_bytes());
-        bytes[12..16]
-            .copy_from_slice(&(COMPILER_EXECUTION_SERVICE_READY_BYTES_V1 as u32).to_le_bytes());
-        bytes[16..20].copy_from_slice(&issuer_pid.to_le_bytes());
-        bytes[24..56].copy_from_slice(launch_manifest_identity.as_bytes());
-        bytes[56..88].copy_from_slice(policy_identity.as_bytes());
-        let identity =
-            CompilerExecutionServiceReadyIdentityV1(derive_identity(&bytes[..PREIMAGE_BYTES]));
-        bytes[PREIMAGE_BYTES..].copy_from_slice(identity.as_bytes());
+    fn from_record(record: codec::Record) -> Self {
         Self {
-            issuer_pid,
-            launch_manifest_identity,
-            policy_identity,
-            identity,
-            bytes,
+            issuer_pid: record.issuer_pid,
+            launch_manifest_identity:
+                CompilerExecutionServiceLaunchManifestIdentityV1::from_bytes_for_protocol(
+                    record.launch_manifest,
+                ),
+            policy_identity: CompilerExecutionIssuerPolicyIdentityV1::from_bytes_for_protocol(
+                record.policy,
+            ),
+            identity: CompilerExecutionServiceReadyIdentityV1(record.identity),
+            bytes: record.bytes,
         }
     }
 
     /// Strictly decodes and independently re-encodes one readiness record.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionServiceReadyErrorV1> {
-        if bytes.len() != COMPILER_EXECUTION_SERVICE_READY_BYTES_V1 {
-            return Err(CompilerExecutionServiceReadyErrorV1::Length);
-        }
-        if bytes[..8] != MAGIC {
-            return Err(CompilerExecutionServiceReadyErrorV1::Magic);
-        }
-        if u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != VERSION_V1 {
-            return Err(CompilerExecutionServiceReadyErrorV1::Version);
-        }
-        if bytes[10..12].iter().any(|byte| *byte != 0)
-            || bytes[20..24].iter().any(|byte| *byte != 0)
-        {
-            return Err(CompilerExecutionServiceReadyErrorV1::Reserved);
-        }
-        if read_u32(bytes, 12) as usize != COMPILER_EXECUTION_SERVICE_READY_BYTES_V1 {
-            return Err(CompilerExecutionServiceReadyErrorV1::Length);
-        }
-        let issuer_pid = read_u32(bytes, 16);
-        if issuer_pid == 0 {
-            return Err(CompilerExecutionServiceReadyErrorV1::IssuerPid);
-        }
-        let launch_bytes: [u8; SHA256_BYTES] = bytes[24..56].try_into().unwrap();
-        if launch_bytes == [0; SHA256_BYTES] {
-            return Err(CompilerExecutionServiceReadyErrorV1::LaunchManifestIdentity);
-        }
-        let policy_bytes: [u8; SHA256_BYTES] = bytes[56..88].try_into().unwrap();
-        if policy_bytes == [0; SHA256_BYTES] {
-            return Err(CompilerExecutionServiceReadyErrorV1::PolicyIdentity);
-        }
-        let identity =
-            CompilerExecutionServiceReadyIdentityV1(bytes[PREIMAGE_BYTES..].try_into().unwrap());
-        if !identity.matches_canonical_bytes(bytes) {
-            return Err(CompilerExecutionServiceReadyErrorV1::Identity);
-        }
-        let launch_manifest_identity =
-            CompilerExecutionServiceLaunchManifestIdentityV1::from_bytes_for_protocol(launch_bytes);
-        let policy_identity =
-            CompilerExecutionIssuerPolicyIdentityV1::from_bytes_for_protocol(policy_bytes);
-        let canonical = Self::from_parts(issuer_pid, launch_manifest_identity, policy_identity);
-        if canonical.bytes.as_slice() != bytes {
-            return Err(CompilerExecutionServiceReadyErrorV1::Canonical);
-        }
-        Ok(canonical)
+        codec::decode(bytes).map(Self::from_record)
     }
 
     /// Returns the exact protected issuer PID.
@@ -191,18 +131,6 @@ impl CompilerExecutionServiceReadyV1 {
     }
 }
 
-fn derive_identity(bytes: &[u8]) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(IDENTITY_DOMAIN);
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
-    digest.finalize().into()
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
-}
-
 /// Stable strict readiness codec failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompilerExecutionServiceReadyErrorV1 {
@@ -243,6 +171,7 @@ impl Error for CompilerExecutionServiceReadyErrorV1 {}
 mod tests {
     use ed25519_dalek::SigningKey;
 
+    use super::codec::{PREIMAGE_BYTES, derive_identity};
     use super::*;
     use crate::{
         CompilerExecutionClientProcessIdentityV1, CompilerExecutionExternalAnchorServiceIdentityV1,

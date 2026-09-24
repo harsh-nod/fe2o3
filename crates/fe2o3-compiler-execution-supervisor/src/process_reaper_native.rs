@@ -391,6 +391,11 @@ impl NativeAccount {
 pub struct ProtectedIssuerCleanupReservationV2 {
     slot: Option<ReapSlotV1<'static>>,
 }
+impl ProtectedIssuerCleanupReservationV2 {
+    pub(crate) fn into_slot(mut self) -> ReapSlotV1<'static> {
+        self.slot.take().expect("unused native cleanup reservation")
+    }
+}
 impl Drop for ProtectedIssuerCleanupReservationV2 {
     fn drop(&mut self) {
         drop(self.slot.take());

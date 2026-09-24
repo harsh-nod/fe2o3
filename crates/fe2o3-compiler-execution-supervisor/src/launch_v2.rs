@@ -79,6 +79,15 @@ pub struct PreparedProtectedIssuerLaunchV2 {
 }
 type Prepared = PreparedProtectedIssuerLaunchV2;
 
+pub(crate) struct LaunchedInputsV2 {
+    pub(crate) control: Option<OwnedFd>,
+    // Retain the read ends until custody ends, even when diagnostics are unused.
+    _stdout_reader: OwnedFd,
+    _stderr_reader: OwnedFd,
+    pub(crate) readiness_reader: Option<OwnedFd>,
+    pub(crate) capability: Capability,
+}
+
 impl Prepared {
     /// Logical charge for each retained pipe endpoint, including receipt padding.
     pub const PIPE_STORAGE: usize = size_of::<(OwnedFd, Storage)>();
@@ -104,6 +113,27 @@ impl Prepared {
     /// Full retained charge; retire only after drop or consuming transfer.
     pub const fn retained_storage(&self) -> usize {
         self.retained
+    }
+
+    pub(crate) fn staged_input(&self) -> crate::process_staging::StagedLaunchInputV1<'_> {
+        crate::process_staging::StagedLaunchInputV1 {
+            launcher: &self.launcher,
+            issuer: &self.issuer,
+            manifest: &self.static_manifest_file,
+            sources: &self.sources,
+        }
+    }
+
+    // The caller prepays this transfer and preserves the consumed owner charge.
+    // Closing every parent writer is required before private readiness EOF.
+    pub(crate) fn into_launched(self) -> LaunchedInputsV2 {
+        LaunchedInputsV2 {
+            control: Some(self.accepted.into_control()),
+            _stdout_reader: self.stdout_reader,
+            _stderr_reader: self.stderr_reader,
+            readiness_reader: Some(self.readiness_reader),
+            capability: self.launch_capability,
+        }
     }
 
     /// Rechecks every retained native owner, transferred object and parent identity.

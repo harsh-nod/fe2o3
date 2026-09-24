@@ -21,6 +21,12 @@ publication. See the [publication contract](../../docs/compiler-execution-public
 Versioned durable state, service transport and production consumer integration
 remain pending.
 
+`CompilerExecutionServiceReadyV2` provides move-only, metered readiness framing
+and exact native PID/manifest/policy matching. It shares the unchanged 120-byte
+V1 wire codec, not admitted V1 owners. A decoded frame is inert: private-channel
+provenance, live process custody and production issuer integration remain separate
+obligations. See the [native lifecycle](../../docs/compiler-execution-consuming-launch-v2.md).
+
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
 current-record verification, and bounded service packet records. The sole

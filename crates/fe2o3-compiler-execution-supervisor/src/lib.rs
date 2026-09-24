@@ -89,6 +89,11 @@ pub use process::{
     ProtectedIssuerLaunchErrorV1, ProtectedIssuerTerminationV1, ReadyProtectedIssuerV1,
     ServingProtectedIssuerV1, validate_current_issuer_service_profile_v1,
 };
+pub use process::{
+    ExitedProtectedIssuerV2, LaunchedProtectedIssuerV2, PROTECTED_ISSUER_LAUNCH_SCRATCH_V2,
+    PROTECTED_ISSUER_LAUNCH_WORK_V2, ProtectedIssuerBoundaryV2, ProtectedIssuerLaunchErrorV2,
+    ProtectedIssuerWaitV2, ReadyProtectedIssuerV2, ServingProtectedIssuerV2,
+};
 pub use process_reaper::{
     ProtectedIssuerCleanupAdmissionErrorV2, ProtectedIssuerCleanupErrorV2,
     ProtectedIssuerCleanupReportV2, ProtectedIssuerCleanupReservationV2,

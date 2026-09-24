@@ -43,22 +43,29 @@ Process-profile and namespace observations now have native metered owners in
 predicates as the existing service path. The supervisor no longer has its own
 profile parser or namespace implementation. Descriptor staging is also one
 shared fixed fourteen-entry table, with deterministic cleanup on partial failure.
-These are launch prerequisites, not a native consuming process-launch API. See
-the [process-observation contract](../../docs/compiler-execution-process-observations-v2.md).
+See the [process-observation contract](../../docs/compiler-execution-process-observations-v2.md).
 
 `ProtectedIssuerCleanupServiceV2` now funds the existing fixed cleanup pool from
 one persistent owned ledger. Native turns prepay bounded work, retain cumulative
 history, and use the same cleanup engine as V1. Controller Drop/recovery retains
 the account and records; only empty orderly shutdown releases pool storage.
-Native and legacy modes are mutually exclusive. A prepaid launch reservation
-is capacity only, not an enabled native child launch. See the
+Native and legacy modes are mutually exclusive. Consuming native launch transfers
+the prepaid reservation into the shared child owner. See the
 [cleanup custody contract](../../docs/compiler-execution-cleanup-custody.md).
 
-Full child confinement, consuming native process creation, readiness,
-serving/recovery and producer activation remain open. Every nested check uses
-the caller's ledger; reserve returned growth while preserving consumed input
-reservations. Logical work/retained/scratch charges are not wall-time, RSS,
-kernel-memory or generated-stack bounds. See the
+`ProtectedIssuerSupervisorV2::launch` now consumes prepared custody into separate
+launched, ready, serving and exited states over the existing clone3/pidfd engine.
+It requires the protected process profile, gates exec on native revalidation,
+and prepays finite child and parent attempts. Exact native readiness and EOF
+precede spawn-lease release; publication and terminal reaping are distinct steps.
+The session exclusively borrows the original request ledger until its final Drop.
+See the [consuming-launch contract](../../docs/compiler-execution-consuming-launch-v2.md).
+
+Production native issuer/service/recovery integration and producer activation
+remain open. The new lifecycle is not yet validated by a full isolated native
+child-to-readiness run. Every nested check uses the caller's ledger. Logical
+work/retained/scratch charges are not wall-time, RSS, kernel-memory or
+generated-stack bounds. See the
 [prepared-launch contract](../../docs/compiler-execution-prepared-launch-v2.md),
 [handoff contract](../../docs/compiler-execution-handoff-v2.md),
 [binding resource contract](../../docs/compiler-execution-capabilities-v2.md#native-supervisor-binding)

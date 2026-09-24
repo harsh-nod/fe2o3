@@ -120,13 +120,13 @@ scheduled without explicit logical work grants and therefore is not native
 prepaid cleanup. A quarantined record requires outer service recovery; no API
 currently certifies its release.
 
-Native consuming launch still needs to transfer the funded reservation into
-the shared foreground child owner, account for all parent/child protocol work,
-and connect funded pumping to the production service lifecycle. A request-local
-scratch scope or expired ledger identity cannot pay for cleanup that outlives
-that request. Native V2 launch remains unavailable until these obligations are
-integrated with the existing engine. The V1 periodic worker remains unmetered
-and is never a fallback for native refusal.
+Native [consuming launch](compiler-execution-consuming-launch-v2.md) transfers the
+funded reservation into the shared foreground child owner and prepays bounded
+parent/child protocol work. Explicit cancellation and Drop share one emergency
+transition; after transfer Drop cannot signal or wait again. Production service
+integration must still connect funded pumping to service lifetime. A request-local
+scratch scope or expired ledger identity cannot pay for deferred custody. The
+V1 periodic worker remains unmetered and is never a fallback for native refusal.
 
 ## Tests
 

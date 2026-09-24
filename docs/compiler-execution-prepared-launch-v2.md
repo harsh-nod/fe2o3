@@ -241,12 +241,12 @@ kernel objects/pipe buffers, page cache, syscall scheduling or wall-clock time.
 
 ## Remaining Integration
 
-Native prepared custody still needs a consuming process lifecycle: prepaid
-descriptor staging and child custody, gated child-profile and parent checks,
-exact descriptor installation and static exec, and bounded pidfd cancellation,
-reaping and abnormal-exit cleanup. Execution, validated readiness, readiness
-publication and serving must remain distinct states. The existing V1
-`run_session` is not a native prepared-state consumer or a permitted fallback.
+Native prepared custody now has a [consuming process lifecycle](compiler-execution-consuming-launch-v2.md)
+with prepaid staging, gated profile checks, exact static exec and bounded pidfd
+cleanup. Execution, validated readiness, publication and serving remain distinct
+states. Isolated full native process validation and production integration are
+still required. The existing V1 `run_session` is not a native prepared-state
+consumer or a permitted fallback.
 
 Native service handlers and durable-state families, independent broker V4
 occurrence observation, anchor/Worker/issuer-ACK ordering, Cargo recovery and

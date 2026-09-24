@@ -101,6 +101,11 @@ impl Accepted {
         self.retained
     }
 
+    // Consuming launch prepays closure of the unused peer/frame/client owners.
+    pub(crate) fn into_control(self) -> OwnedFd {
+        self.control
+    }
+
     /// Rechecks native supervisor, policy, roles, socket custody and live client.
     pub fn revalidate(&self, supervisor: &Supervisor, budget: &mut Budget<'_>) -> Result<()> {
         budget.charge_work(ENTRY)?;

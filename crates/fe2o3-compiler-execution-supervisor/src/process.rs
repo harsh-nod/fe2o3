@@ -1,5 +1,9 @@
 //! Pidfd-owned launch and readiness lifecycle for the protected issuer.
 
+#[path = "process_native.rs"]
+mod native;
+pub use native::*;
+
 use core::ffi::{c_char, c_int, c_long, c_void};
 use std::error::Error;
 use std::fmt;
@@ -65,6 +69,7 @@ const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const PROFILE_READY_V1: u8 = 0xa5;
 const GATE_RELEASE_V1: u8 = 0x5a;
+const MAX_CHILD_GATE_ATTEMPTS: usize = 64;
 const MAX_LAUNCH_WAIT_V1: Duration = Duration::from_secs(120);
 const POLL_INTERVAL_V1: Duration = Duration::from_millis(1);
 const MAX_CANCEL_POLLS_V1: usize = 1024;
@@ -131,6 +136,15 @@ struct ChildProfileV1 {
     gid: u32,
     securebits: u32,
     cap_last_cap: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChildProcessError {
+    State(&'static str),
+    Io {
+        operation: &'static str,
+        errno: rustix::io::Errno,
+    },
 }
 
 /// Stable failure launching, admitting, or terminating one protected issuer process.
@@ -272,7 +286,7 @@ impl Error for ProtectedIssuerLaunchErrorV1 {
 /// require_as_fd::<LaunchedProtectedIssuerV1>();
 /// ```
 pub struct LaunchedProtectedIssuerV1 {
-    process: ProtectedIssuerChildV1,
+    process: IssuerChild,
     control: OwnedFd,
     stdout_reader: OwnedFd,
     stderr_reader: OwnedFd,
@@ -380,7 +394,7 @@ impl LaunchedProtectedIssuerV1 {
 /// require_as_fd::<ReadyProtectedIssuerV1>();
 /// ```
 pub struct ReadyProtectedIssuerV1 {
-    process: ProtectedIssuerChildV1,
+    process: IssuerChild,
     control: OwnedFd,
     _stdout_reader: OwnedFd,
     _stderr_reader: OwnedFd,
@@ -489,7 +503,7 @@ impl ReadyProtectedIssuerV1 {
 /// require_as_fd::<ServingProtectedIssuerV1>();
 /// ```
 pub struct ServingProtectedIssuerV1 {
-    process: ProtectedIssuerChildV1,
+    process: IssuerChild,
     _stdout_reader: OwnedFd,
     _stderr_reader: OwnedFd,
     readiness: CompilerExecutionServiceReadyV1,
@@ -521,9 +535,7 @@ impl ProtectedIssuerTerminationV1 {
         matches!(self, Self::Exited { status: 0 })
     }
 
-    fn from_wait_status(
-        status: &rustix::process::WaitIdStatus,
-    ) -> Result<Self, ProtectedIssuerLaunchErrorV1> {
+    fn from_wait_status(status: &rustix::process::WaitIdStatus) -> Result<Self, ChildProcessError> {
         if let Some(status) = status.exit_status() {
             return Ok(Self::Exited { status });
         }
@@ -533,7 +545,7 @@ impl ProtectedIssuerTerminationV1 {
                 core_dumped: status.dumped(),
             });
         }
-        Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+        Err(ChildProcessError::State(
             "waitid returned a nonterminal issuer state",
         ))
     }
@@ -704,69 +716,20 @@ impl ProtectedIssuerSupervisorV1 {
         if Instant::now() >= deadline {
             return Err(ProtectedIssuerLaunchErrorV1::Timeout("child creation"));
         }
-        let mut pidfd_raw = -1_i32;
-        let clone_arguments = CloneArgsV1 {
-            flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND,
-            pidfd: (&raw mut pidfd_raw).addr() as u64,
-            child_tid: 0,
-            parent_tid: 0,
-            exit_signal: SIGCHLD,
-            stack: 0,
-            stack_size: 0,
-            tls: 0,
-            set_tid: 0,
-            set_tid_size: 0,
-            cgroup: 0,
-        };
-        // SAFETY: clone3 receives the exact 88-byte Linux ABI record and no VM/thread-sharing
-        // flags. The child executes only direct syscalls over preallocated state and never
-        // returns into Rust cleanup. CLONE_PIDFD installs one descriptor before parent return.
-        let clone_result = unsafe {
-            syscall(
-                SYS_CLONE3,
-                &raw const clone_arguments,
-                std::mem::size_of::<CloneArgsV1>(),
-            )
-        };
-        if clone_result < 0 {
-            return Err(io_error(
-                "clone3 protected issuer with atomic pidfd",
-                io::Error::last_os_error(),
-            ));
-        }
-        if clone_result == 0 {
-            // SAFETY: this is the post-clone child. child_exec performs direct syscalls only
-            // and terminates with execveat or _exit, so no Rust destructor can run here.
-            unsafe {
-                child_exec(
-                    &staged,
-                    child_profile,
-                    expected_parent_pid,
-                    profile_ready_reader.as_raw_fd(),
-                    gate_writer.as_raw_fd(),
-                    exec_status_reader.as_raw_fd(),
-                )
-            }
-        }
-
-        let raw_pid = i32::try_from(clone_result).unwrap_or_else(|_| std::process::abort());
-        let pid = rustix::process::Pid::from_raw(raw_pid).unwrap_or_else(|| std::process::abort());
-        // Adopt all cleanup obligations before the first fallible parent operation.
-        // A missing pidfd violates clone3's contract but must still retain the child
-        // reservation and inherited artifact-lock obligation for recovery.
-        let pidfd = if pidfd_raw < 0 {
-            None
-        } else {
-            // SAFETY: successful CLONE_PIDFD installed one newly owned descriptor.
-            Some(unsafe { OwnedFd::from_raw_fd(pidfd_raw) })
-        };
-        let cleanup = ChildCleanupV1::new(pidfd, pid, Some(spawn_lease));
-        let mut process = ProtectedIssuerChildV1::new(cleanup, reap_slot);
-        if pidfd_raw < 0 {
-            return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                "clone3 did not return the requested pidfd",
-            ));
-        }
+        let mut process = spawn_child(
+            &staged,
+            child_profile,
+            expected_parent_pid,
+            [
+                profile_ready_reader.as_raw_fd(),
+                gate_writer.as_raw_fd(),
+                exec_status_reader.as_raw_fd(),
+            ],
+            reap_slot,
+            spawn_lease,
+        )
+        .map_err(map_child_error)?;
+        let pid = process.pid;
         if let Err(error) = process.validate_pidfd() {
             let _ = process.cancel_and_reap();
             return Err(error);
@@ -832,6 +795,124 @@ impl ProtectedIssuerSupervisorV1 {
     }
 }
 
+/// Clones and immediately adopts all child custody; callers validate the pidfd next.
+/// Native callers prepay `child_work` before reaching this helper.
+fn spawn_child(
+    staged: &StagedLaunchV1,
+    child_profile: Option<ChildProfileV1>,
+    expected_parent_pid: i32,
+    close_in_child: [i32; 3],
+    reap_slot: ReapSlotV1<'static>,
+    spawn_lease: fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1,
+) -> Result<IssuerChild, ChildProcessError> {
+    let mut pidfd_raw = -1_i32;
+    let clone_arguments = CloneArgsV1 {
+        flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND,
+        pidfd: (&raw mut pidfd_raw).addr() as u64,
+        child_tid: 0,
+        parent_tid: 0,
+        exit_signal: SIGCHLD,
+        stack: 0,
+        stack_size: 0,
+        tls: 0,
+        set_tid: 0,
+        set_tid_size: 0,
+        cgroup: 0,
+    };
+    // SAFETY: clone3 receives the exact 88-byte Linux ABI record and no VM/thread-sharing
+    // flags. The child executes only direct syscalls over preallocated state and never
+    // returns into Rust cleanup. CLONE_PIDFD installs one descriptor before parent return.
+    let clone_result = unsafe {
+        syscall(
+            SYS_CLONE3,
+            &raw const clone_arguments,
+            std::mem::size_of::<CloneArgsV1>(),
+        )
+    };
+    if clone_result < 0 {
+        // SAFETY: syscall set the calling thread's libc errno on failure.
+        let errno = unsafe { rustix::io::Errno::from_raw_os_error(*libc::__errno_location()) };
+        // No child exists: ordinary Drop releases the unused lease and reservation.
+        return Err(ChildProcessError::Io {
+            operation: "clone3 protected issuer with atomic pidfd",
+            errno,
+        });
+    }
+    if clone_result == 0 {
+        // SAFETY: child_exec uses only direct syscalls and preallocated state, then
+        // execveat or _exit. No Rust destructor runs in the post-clone child.
+        unsafe {
+            child_exec(
+                staged,
+                child_profile,
+                expected_parent_pid,
+                close_in_child[0],
+                close_in_child[1],
+                close_in_child[2],
+            )
+        }
+    }
+
+    let raw_pid = i32::try_from(clone_result).unwrap_or_else(|_| std::process::abort());
+    let pid = rustix::process::Pid::from_raw(raw_pid).unwrap_or_else(|| std::process::abort());
+    // Adopt all cleanup obligations before the first fallible parent operation.
+    // A missing atomic pidfd must retain both the slot and the inherited-lock lease.
+    let pidfd = if pidfd_raw < 0 {
+        None
+    } else {
+        // SAFETY: successful CLONE_PIDFD installed one newly owned descriptor.
+        Some(unsafe { OwnedFd::from_raw_fd(pidfd_raw) })
+    };
+    let cleanup = ChildCleanupV1::new(pidfd, pid, Some(spawn_lease));
+    let process = IssuerChild::new(cleanup, reap_slot);
+    if pidfd_raw < 0 {
+        return Err(ChildProcessError::State(
+            "clone3 did not return the requested pidfd",
+        ));
+    }
+    Ok(process)
+}
+
+/// Conservative prepayment for child_exec through execveat or failure write/exit.
+///
+/// Each operation reserves 1024 syscall units plus 64 scalar/field-work units;
+/// 256 additional units cover stack records and fixed control flow. Count three
+/// closes, all 64 signal slots (including the two skipped signals), signal-mask
+/// reset, four parent-death checks, readiness write, every gate read attempt,
+/// close_range, three stdio and SOURCE_COUNT_V1 + 2 descriptor installs, execveat,
+/// and failure write + exit. A profile adds eleven fixed syscalls and two for
+/// every capability in 0..=cap_last_cap, including all associated field checks.
+/// Checked arithmetic fails closed to usize::MAX even for unsupported ceilings.
+/// This is logical work, not a bound on syscall latency or executed launcher work.
+fn child_work(profile: Option<ChildProfileV1>) -> usize {
+    const OPERATION_WORK: usize = 1024 + 64;
+    const FIXED_OPERATIONS: usize = 3
+        + KERNEL_SIGNAL_COUNT as usize
+        + 1
+        + 4
+        + 1
+        + MAX_CHILD_GATE_ATTEMPTS
+        + 1
+        + 3
+        + crate::launch_checks::SOURCE_COUNT_V1
+        + 2
+        + 1
+        + 2;
+    let profile_operations = match profile {
+        None => Some(0),
+        Some(profile) => usize::try_from(profile.cap_last_cap)
+            .ok()
+            .and_then(|ceiling| ceiling.checked_add(1))
+            .and_then(|capabilities| capabilities.checked_mul(2))
+            .and_then(|operations| operations.checked_add(11)),
+    };
+    profile_operations
+        .and_then(|operations| operations.checked_add(FIXED_OPERATIONS))
+        .and_then(|operations| operations.checked_mul(OPERATION_WORK))
+        .and_then(|work| work.checked_add(256))
+        .unwrap_or(usize::MAX)
+}
+
 fn protected_pipe(
     extra: PipeFlags,
     operation: &'static str,
@@ -890,25 +971,24 @@ unsafe fn child_exec(
         {
             child_fail(staged.exec_status_writer.as_raw_fd(), 4);
         }
-        let mut release = 0_u8;
-        loop {
+        let release = match read_child_gate(|release| {
             let count = syscall(
                 libc::SYS_read,
                 staged.gate_reader.as_raw_fd(),
-                &raw mut release,
+                std::ptr::from_mut(release),
                 1_usize,
             );
-            if count == 1 {
-                break;
+            if count < 0 {
+                Err(rustix::io::Errno::from_raw_os_error(
+                    *libc::__errno_location(),
+                ))
+            } else {
+                Ok(count as usize)
             }
-            if count == 0 {
-                child_fail(staged.exec_status_writer.as_raw_fd(), 5);
-            }
-            if count < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            child_fail(staged.exec_status_writer.as_raw_fd(), 5);
-        }
+        }) {
+            Ok(release) => release,
+            Err(()) => child_fail(staged.exec_status_writer.as_raw_fd(), 5),
+        };
         if release != GATE_RELEASE_V1 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 6);
         }
@@ -938,6 +1018,18 @@ unsafe fn child_exec(
         );
         child_fail(staged.exec_status_writer.as_raw_fd(), 10);
     }
+}
+
+fn read_child_gate(mut read: impl FnMut(&mut u8) -> rustix::io::Result<usize>) -> Result<u8, ()> {
+    let mut release = 0_u8;
+    for _ in 0..MAX_CHILD_GATE_ATTEMPTS {
+        match read(&mut release) {
+            Ok(1) => return Ok(release),
+            Err(rustix::io::Errno::INTR) => {}
+            Ok(_) | Err(_) => return Err(()),
+        }
+    }
+    Err(())
 }
 
 unsafe fn arm_parent_death(expected_parent_pid: i32) -> c_int {
@@ -1089,7 +1181,7 @@ unsafe fn child_fail(status: c_int, stage: u8) -> ! {
 fn await_profile_ready(
     ready: &OwnedFd,
     exec_status: &OwnedFd,
-    process: &ProtectedIssuerChildV1,
+    process: &IssuerChild,
     deadline: Instant,
 ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
     let mut record = [0_u8; 2];
@@ -1135,7 +1227,7 @@ fn write_gate_release(gate: &OwnedFd) -> Result<(), ProtectedIssuerLaunchErrorV1
 
 fn await_exec_status(
     status: &OwnedFd,
-    process: &ProtectedIssuerChildV1,
+    process: &IssuerChild,
     deadline: Instant,
 ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
     let mut record = [0_u8; 2];
@@ -1166,7 +1258,7 @@ fn await_exec_status(
 
 fn exec_failure_or_exit(
     status: &OwnedFd,
-    process: &ProtectedIssuerChildV1,
+    process: &IssuerChild,
     boundary: &'static str,
 ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
     let mut record = [0_u8; 2];
@@ -1184,7 +1276,7 @@ fn exec_failure_or_exit(
 
 fn await_readiness_record(
     reader: &OwnedFd,
-    process: &ProtectedIssuerChildV1,
+    process: &IssuerChild,
     launch: &CompilerExecutionServiceLaunchManifestV1,
     policy: &CompilerExecutionIssuerPolicyV1,
     deadline: Instant,
@@ -1230,7 +1322,7 @@ fn await_readiness_record(
 fn publish_control_readiness(
     control: &OwnedFd,
     bytes: &[u8],
-    process: &ProtectedIssuerChildV1,
+    process: &IssuerChild,
     deadline: Instant,
 ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
     loop {
@@ -1292,28 +1384,31 @@ fn map_profile_error(error: ProtectedServiceProfileErrorV1) -> ProtectedIssuerLa
     }
 }
 
-struct ProtectedIssuerChildV1 {
+struct IssuerChild {
     cleanup: Option<ChildCleanupV1>,
     pid: rustix::process::Pid,
     reap_slot: Option<ReapSlotV1<'static>>,
+    cleanup_poll: CleanupPollV1,
 }
 
-impl ProtectedIssuerChildV1 {
+impl IssuerChild {
     fn new(cleanup: ChildCleanupV1, reap_slot: ReapSlotV1<'static>) -> Self {
         let pid = cleanup.pid();
         Self {
             cleanup: Some(cleanup),
             pid,
             reap_slot: Some(reap_slot),
+            cleanup_poll: CleanupPollV1::Pending,
         }
     }
 
-    fn pidfd(&self) -> Result<&OwnedFd, ProtectedIssuerLaunchErrorV1> {
-        self.cleanup.as_ref().and_then(ChildCleanupV1::pidfd).ok_or(
-            ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+    fn pidfd(&self) -> Result<&OwnedFd, ChildProcessError> {
+        self.cleanup
+            .as_ref()
+            .and_then(ChildCleanupV1::pidfd)
+            .ok_or(ChildProcessError::State(
                 "pidfd is absent or cleanup custody was transferred",
-            ),
-        )
+            ))
     }
 
     fn release_spawn_after_exec(&mut self) {
@@ -1322,22 +1417,18 @@ impl ProtectedIssuerChildV1 {
         }
     }
 
-    fn record_wait_error(&self, source: rustix::io::Errno) {
-        if source == rustix::io::Errno::CHILD
-            && let Some(cleanup) = self.cleanup.as_ref()
-        {
-            cleanup.ownership_lost();
-        }
+    fn validate_pidfd(&self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
+        self.check_pidfd().map_err(map_child_error)
     }
 
-    fn validate_pidfd(&self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
+    fn check_pidfd(&self) -> Result<(), ChildProcessError> {
         let pidfd = self.pidfd()?;
-        let flags = rustix::io::fcntl_getfd(pidfd)
-            .map_err(|source| io_error("inspect clone3 pidfd", source.into()))?;
+        let flags = rustix::io::fcntl_getfd(pidfd).map_err(|errno| ChildProcessError::Io {
+            operation: "inspect clone3 pidfd",
+            errno,
+        })?;
         if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
-            return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                "clone3 pidfd is inheritable",
-            ));
+            return Err(ChildProcessError::State("clone3 pidfd is inheritable"));
         }
         Ok(())
     }
@@ -1347,40 +1438,77 @@ impl ProtectedIssuerChildV1 {
     }
 
     fn is_live(&self) -> Result<bool, ProtectedIssuerLaunchErrorV1> {
-        let pidfd = self.pidfd()?;
-        match rustix::process::waitid(
-            rustix::process::WaitId::PidFd(pidfd.as_fd()),
+        self.observe_live().map_err(map_child_error)
+    }
+
+    fn observe_live(&self) -> Result<bool, ChildProcessError> {
+        self.wait_once(
             rustix::process::WaitIdOptions::EXITED
                 | rustix::process::WaitIdOptions::NOHANG
                 | rustix::process::WaitIdOptions::NOWAIT,
+            "observe exact issuer pidfd",
+        )
+        .map(|status| status.is_none())
+    }
+
+    fn wait_once(
+        &self,
+        options: rustix::process::WaitIdOptions,
+        operation: &'static str,
+    ) -> Result<Option<rustix::process::WaitIdStatus>, ChildProcessError> {
+        let pidfd = self.pidfd()?;
+        let result =
+            rustix::process::waitid(rustix::process::WaitId::PidFd(pidfd.as_fd()), options);
+        child_wait_result(self.cleanup.as_ref(), operation, result)
+    }
+
+    /// Performs one consuming NOHANG wait without retrying or formatting diagnostics.
+    fn try_reap(&mut self) -> Result<Option<ProtectedIssuerTerminationV1>, ChildProcessError> {
+        let Some(status) = self.wait_once(
+            rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOHANG,
+            "reap naturally exited issuer pidfd",
+        )?
+        else {
+            return Ok(None);
+        };
+        if matches!(
+            status.raw_code(),
+            libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
         ) {
-            Ok(None) => Ok(true),
-            Ok(Some(_)) => Ok(false),
-            Err(source) => {
-                self.record_wait_error(source);
-                Err(io_error("observe exact issuer pidfd", source.into()))
-            }
+            // Record the consuming terminal wait before any fallible status decoding.
+            // Even an unexpected decoding failure must never provoke another wait.
+            self.complete_reaped();
         }
+        ProtectedIssuerTerminationV1::from_wait_status(&status).map(Some)
     }
 
     fn exited_error(&self, context: &str) -> ProtectedIssuerLaunchErrorV1 {
         let detail = self
-            .pidfd()
+            .wait_once(
+                rustix::process::WaitIdOptions::EXITED
+                    | rustix::process::WaitIdOptions::NOHANG
+                    | rustix::process::WaitIdOptions::NOWAIT,
+                "observe exact issuer pidfd",
+            )
             .ok()
-            .and_then(|pidfd| {
-                rustix::process::waitid(
-                    rustix::process::WaitId::PidFd(pidfd.as_fd()),
-                    rustix::process::WaitIdOptions::EXITED
-                        | rustix::process::WaitIdOptions::NOHANG
-                        | rustix::process::WaitIdOptions::NOWAIT,
-                )
-                .inspect_err(|source| self.record_wait_error(*source))
-                .ok()
-                .flatten()
-            })
+            .flatten()
             .map(|status| describe_exit(&status))
             .unwrap_or_else(|| context.to_owned());
         ProtectedIssuerLaunchErrorV1::ChildExited(detail)
+    }
+
+    /// Makes one shared cleanup attempt, then completes or transfers all custody.
+    /// Repeated calls preserve the disposition; later Drop performs no further I/O.
+    fn cancel_once(&mut self) -> CleanupPollV1 {
+        let Some(cleanup) = self.cleanup.as_mut() else {
+            return self.cleanup_poll;
+        };
+        let poll = cleanup.step();
+        match poll {
+            CleanupPollV1::Reaped => self.complete_reaped(),
+            CleanupPollV1::Pending | CleanupPollV1::Quarantined => self.defer_cleanup(poll),
+        }
+        poll
     }
 
     fn cancel_and_reap(&mut self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
@@ -1400,7 +1528,7 @@ impl ProtectedIssuerChildV1 {
                     return Ok(());
                 }
                 CleanupPollV1::Quarantined => {
-                    self.defer_cleanup();
+                    self.defer_cleanup(CleanupPollV1::Quarantined);
                     return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
                         "issuer cleanup ownership is uncertain; custody retained in quarantine",
                     ));
@@ -1413,7 +1541,7 @@ impl ProtectedIssuerChildV1 {
             std::thread::sleep(POLL_INTERVAL_V1);
         }
         let last_errno = self.cleanup.as_ref().and_then(ChildCleanupV1::last_errno);
-        self.defer_cleanup();
+        self.defer_cleanup(CleanupPollV1::Pending);
         Err(match last_errno {
             Some(source) => io_error(
                 "cancel issuer; deferred cleanup retains custody",
@@ -1429,33 +1557,27 @@ impl ProtectedIssuerChildV1 {
         &mut self,
         deadline: Instant,
     ) -> Result<ProtectedIssuerTerminationV1, ProtectedIssuerLaunchErrorV1> {
-        let status = loop {
-            let pidfd = self.pidfd()?;
-            match rustix::process::waitid(
-                rustix::process::WaitId::PidFd(pidfd.as_fd()),
-                rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOHANG,
-            ) {
-                Ok(Some(status)) => break status,
-                Ok(None) | Err(rustix::io::Errno::INTR) => {
-                    wait_for_pidfd_exit(pidfd, deadline)?;
+        loop {
+            match self.try_reap() {
+                Ok(Some(termination)) => return Ok(termination),
+                Ok(None)
+                | Err(ChildProcessError::Io {
+                    errno: rustix::io::Errno::INTR,
+                    ..
+                }) => {
+                    wait_for_pidfd_exit(self.pidfd().map_err(map_child_error)?, deadline)?;
                 }
-                Err(rustix::io::Errno::CHILD) => {
-                    self.record_wait_error(rustix::io::Errno::CHILD);
+                Err(ChildProcessError::Io {
+                    errno: rustix::io::Errno::CHILD,
+                    ..
+                }) => {
                     return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
                         "issuer child was reaped outside its pidfd owner",
                     ));
                 }
-                Err(source) => {
-                    return Err(io_error(
-                        "reap naturally exited issuer pidfd",
-                        source.into(),
-                    ));
-                }
+                Err(error) => return Err(map_child_error(error)),
             }
-        };
-        let termination = ProtectedIssuerTerminationV1::from_wait_status(&status)?;
-        self.complete_reaped();
-        Ok(termination)
+        }
     }
 
     fn complete_reaped(&mut self) {
@@ -1467,9 +1589,10 @@ impl ProtectedIssuerChildV1 {
             .take()
             .expect("live issuer child retains one reap slot")
             .complete();
+        self.cleanup_poll = CleanupPollV1::Reaped;
     }
 
-    fn defer_cleanup(&mut self) {
+    fn defer_cleanup(&mut self, poll: CleanupPollV1) {
         let Some(cleanup) = self.cleanup.take() else {
             return;
         };
@@ -1478,7 +1601,23 @@ impl ProtectedIssuerChildV1 {
             .take()
             .expect("live issuer child retains one reap slot");
         slot.defer(cleanup);
+        self.cleanup_poll = poll;
     }
+}
+
+fn child_wait_result<T>(
+    cleanup: Option<&ChildCleanupV1>,
+    operation: &'static str,
+    result: rustix::io::Result<Option<T>>,
+) -> Result<Option<T>, ChildProcessError> {
+    result.map_err(|errno| {
+        if errno == rustix::io::Errno::CHILD
+            && let Some(cleanup) = cleanup
+        {
+            cleanup.ownership_lost();
+        }
+        ChildProcessError::Io { operation, errno }
+    })
 }
 
 fn wait_for_pidfd_exit(
@@ -1524,13 +1663,18 @@ fn wait_for_pidfd_exit(
     }
 }
 
-impl Drop for ProtectedIssuerChildV1 {
+impl Drop for IssuerChild {
     fn drop(&mut self) {
-        match self.cleanup.as_mut().map(ChildCleanupV1::step) {
-            Some(CleanupPollV1::Reaped) => self.complete_reaped(),
-            Some(CleanupPollV1::Pending | CleanupPollV1::Quarantined) => self.defer_cleanup(),
-            None => {}
+        let _ = self.cancel_once();
+    }
+}
+
+fn map_child_error(error: ChildProcessError) -> ProtectedIssuerLaunchErrorV1 {
+    match error {
+        ChildProcessError::State(reason) => {
+            ProtectedIssuerLaunchErrorV1::InvalidProcessState(reason)
         }
+        ChildProcessError::Io { operation, errno } => io_error(operation, errno.into()),
     }
 }
 
@@ -1547,6 +1691,10 @@ fn describe_exit(status: &rustix::process::WaitIdStatus) -> String {
 fn io_error(operation: &'static str, source: io::Error) -> ProtectedIssuerLaunchErrorV1 {
     ProtectedIssuerLaunchErrorV1::Io { operation, source }
 }
+
+#[cfg(test)]
+#[path = "process_mechanics_tests.rs"]
+mod mechanics_tests;
 
 #[cfg(test)]
 mod tests {
