@@ -9,6 +9,8 @@ pub(crate) mod complete_body_v19;
 pub(crate) mod physical_entry_v20;
 #[path = "compiler_descriptor_physical_global_copy_v21.rs"]
 pub(crate) mod physical_global_copy_v21;
+#[path = "compiler_descriptor_physical_lds_exchange_v22.rs"]
+pub(crate) mod physical_lds_exchange_v22;
 
 #[path = "compiler_descriptor_checked_output_policy3_v1.rs"]
 pub(crate) mod checked_output_policy3_v1;
@@ -701,6 +703,14 @@ fn validate_production_descriptor_root_with_physical_matcher_v1(
                     SemanticCallableDeclV1::CompilerIntrinsic {
                         operation, binding, ..
                     } => match operation {
+                        SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeBegin(_)
+                            if binding.abi().source_input_types().get(1)
+                                == Some(&semantic_type_id) =>
+                        {
+                            // Actual checked V22 source and full LDS/global/ABI report
+                            // remain required by the private descriptor admission.
+                            Some(SemanticDisjointIndexSpaceV1::Index1d)
+                        }
                         SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyBegin
                             if binding.abi().source_input_types().get(1)
                                 == Some(&semantic_type_id) =>
@@ -1196,6 +1206,9 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
 enum DescriptorCapabilityAdmissionV1<'a> {
     Ordinary,
     CompleteBodyV19,
+    PhysicalLdsExchangeV22(
+        &'a physical_lds_exchange_v22::PhysicalLdsExchangeDescriptorAdmissionV22<'a>,
+    ),
     InlineHelpersV30(&'a inline_helpers_v30::InlineHelperDescriptorAdmissionV30<'a>),
     PhysicalEntryV20(&'a physical_entry_v20::PhysicalEntryDescriptorAdmissionV20<'a>),
     PhysicalGlobalCopyV21(
@@ -1567,6 +1580,11 @@ fn descriptor_capabilities_with_admission_v1(
             // Only execution requirements enter the runtime descriptor.
             continue;
         }
+        if let DescriptorCapabilityAdmissionV1::PhysicalLdsExchangeV22(checked) = admission
+            && checked.admits(module, &capability)
+        {
+            continue;
+        }
         if let DescriptorCapabilityAdmissionV1::PhysicalGlobalCopyV21(checked) = admission
             && checked.admits(module, &capability)
         {
@@ -1730,6 +1748,8 @@ pub(crate) enum CompilerDescriptorError {
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     CompleteBodyV19(Box<fe2o3_lower_mir_kernel::ProductionCompleteBodyCheckErrorV19>),
     PhysicalGlobalCopyV21(Box<fe2o3_lower_mir_kernel::ProductionPhysicalGlobalCopyCheckErrorV21>),
+    PhysicalLdsExchangeV22(Box<fe2o3_lower_mir_kernel::ProductionPhysicalLdsExchangeCheckErrorV22>),
+    PhysicalLdsExchangeResourceV22(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     PhysicalGlobalCopyResourceV21(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     PhysicalEntryV20(Box<fe2o3_lower_mir_kernel::ProductionPhysicalEntryCheckErrorV20>),
     PhysicalEntryResourceV20(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
@@ -1827,6 +1847,14 @@ impl fmt::Display for CompilerDescriptorError {
             Self::UnexpectedWorkgroupSize { kernel, expected } => write!(
                 formatter,
                 "typed descriptor kernel `{kernel}` does not have the exact {expected:?} workgroup"
+            ),
+            Self::PhysicalLdsExchangeV22(error) => write!(
+                formatter,
+                "physical LDS-exchange checked source/ABI descriptor relation failed: {error}"
+            ),
+            Self::PhysicalLdsExchangeResourceV22(error) => write!(
+                formatter,
+                "physical LDS-exchange descriptor resource accounting failed: {error}"
             ),
             Self::PhysicalGlobalCopyV21(error) => write!(
                 formatter,

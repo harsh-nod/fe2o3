@@ -72,8 +72,11 @@ mod canonical_kir_v17;
 mod canonical_kir_v19;
 mod canonical_kir_v20;
 mod canonical_kir_v21;
+mod canonical_kir_v22;
 #[cfg(test)]
 use crate as physical_global_copy_fixture_ir;
+#[cfg(test)]
+use crate as physical_lds_exchange_fixture_ir;
 mod canonical_kir_v5;
 mod canonical_kir_v6;
 mod canonical_kir_v7;
@@ -98,6 +101,9 @@ mod gfx942_ordered_region_v1;
 #[path = "../tests/fixtures/physical_global_copy_v21.rs"]
 pub(crate) mod gfx942_physical_global_copy_fixture_v21_tests;
 #[cfg(test)]
+#[path = "../tests/fixtures/physical_lds_exchange_v22.rs"]
+pub(crate) mod gfx942_physical_lds_exchange_fixture_v22_tests;
+#[cfg(test)]
 use crate as physical_entry_fixture_ir;
 #[cfg(test)]
 #[path = "../tests/fixtures/physical_entry_v20.rs"]
@@ -106,6 +112,8 @@ mod gfx942_physical_entry_profile_v20;
 mod gfx942_physical_entry_v20;
 mod gfx942_physical_global_copy_profile_v21;
 mod gfx942_physical_global_copy_v21;
+mod gfx942_physical_lds_exchange_profile_v22;
+mod gfx942_physical_lds_exchange_v22;
 mod integer_semantic_oracle_v1;
 mod interprocedural_effects;
 mod ir;
@@ -149,6 +157,7 @@ mod verification_ordered_program_v17;
 mod verification_ordered_region_v16;
 mod verification_physical_entry_v20;
 mod verification_physical_global_copy_v21;
+mod verification_physical_lds_exchange_v22;
 mod verification_public_preflight_v1;
 mod verification_registered_operation_v1;
 mod verification_reserved_call_v1;
@@ -178,6 +187,7 @@ pub use canonical_kir_v17::*;
 pub use canonical_kir_v19::*;
 pub use canonical_kir_v20::*;
 pub use canonical_kir_v21::*;
+pub use canonical_kir_v22::*;
 pub use canonical_work_budget_v1::*;
 pub use conditional_total_view_v1::*;
 pub use contract_catalog_v1::*;
@@ -196,6 +206,8 @@ pub use gfx942_physical_entry_profile_v20::gfx942_physical_entry_declaration_v20
 pub use gfx942_physical_entry_v20::*;
 pub use gfx942_physical_global_copy_profile_v21::gfx942_physical_global_copy_declaration_v21;
 pub use gfx942_physical_global_copy_v21::*;
+pub use gfx942_physical_lds_exchange_profile_v22::gfx942_physical_lds_exchange_declaration_v22;
+pub use gfx942_physical_lds_exchange_v22::*;
 pub use integer_semantic_oracle_v1::*;
 pub use interprocedural_effects::{
     InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,

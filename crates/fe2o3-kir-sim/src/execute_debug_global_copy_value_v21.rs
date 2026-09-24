@@ -75,7 +75,7 @@ impl PhysicalGlobalCopyDebugSymbolicV21 {
             Value::CarryLow(_) => K::CarryLow,
             Value::CarryHigh { .. } => K::CarryHigh,
             // A V20 source-parameter family must not be relabelled V21.
-            Value::Kernarg { .. } => return None,
+            Value::Kernarg { .. } | Value::LdsPendingRead { .. } => return None,
         };
         Some(Self {
             value: value.clone(),

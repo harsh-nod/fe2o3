@@ -3,9 +3,76 @@
 use super::*;
 use fe2o3_kernel_ir::{
     Gfx942PhysicalEntryRegisterV20 as Register, Gfx942PhysicalGlobalCopyOpcodeV1 as Opcode,
-    Gfx942PhysicalGlobalCopyStepV1 as Step,
+    Gfx942PhysicalGlobalCopyStepV1,
 };
 use physical_entry_state_v20::{Half, Results, Value};
+/// Borrowed execution operands from an already admitted actual operation.
+/// Not an IR operation, graph, origin or authority constructor.
+pub(super) struct Step<'a> {
+    instruction: InstructionView,
+    pub(super) operands: &'a [Option<ValueId>; 5],
+    pub(super) workgroup_width: u32,
+}
+struct InstructionView {
+    opcode: Opcode,
+    source0: u8,
+    immediate: u32,
+    operand_registers: [Option<Register>; 5],
+}
+impl InstructionView {
+    fn operand_registers(&self) -> [Option<Register>; 5] {
+        self.operand_registers
+    }
+}
+impl<'a> Step<'a> {
+    fn copy(step: &'a Gfx942PhysicalGlobalCopyStepV1) -> Self {
+        Self {
+            instruction: InstructionView {
+                opcode: step.instruction.opcode,
+                source0: step.instruction.source0,
+                immediate: step.instruction.immediate,
+                operand_registers: step.instruction.operand_registers(),
+            },
+            operands: &step.operands,
+            workgroup_width: 64,
+        }
+    }
+    pub(super) fn lds(step: &'a fe2o3_kernel_ir::Gfx942PhysicalLdsExchangeStepV1) -> Option<Self> {
+        use fe2o3_kernel_ir::Gfx942PhysicalLdsExchangeOpcodeV1 as L;
+        let opcode = match step.instruction.opcode {
+            L::LoadKernargPair => Opcode::LoadKernargPair,
+            L::WaitLgkm0 => Opcode::WaitLgkm0,
+            L::ScalarLshl32 => Opcode::ScalarLshl32,
+            L::VectorAddU32 => Opcode::VectorAddU32,
+            L::VectorMove32 => Opcode::VectorMove32,
+            L::VectorLshlrev64 => Opcode::VectorLshlrev64,
+            L::VectorAddCarry => Opcode::VectorAddCarry,
+            L::VectorAddCarryIn => Opcode::VectorAddCarryIn,
+            L::GlobalLoadDword => Opcode::GlobalLoadDword,
+            L::WaitVm0 => Opcode::WaitVm0,
+            L::VectorCompareGtU64 => Opcode::VectorCompareGtU64,
+            L::SaveAndMaskExec => Opcode::SaveAndMaskExec,
+            L::GlobalStoreDword => Opcode::GlobalStoreDword,
+            L::RestoreExec => Opcode::RestoreExec,
+            L::Endpgm0 => Opcode::Endpgm0,
+            L::VectorLshlrev32
+            | L::VectorXor32
+            | L::LdsWriteB32
+            | L::LdsReadB32
+            | L::WorkgroupPublishBarrier => return None,
+        };
+        Some(Self {
+            instruction: InstructionView {
+                opcode,
+                source0: step.instruction.source0,
+                immediate: step.instruction.immediate,
+                operand_registers: step.instruction.operand_registers(),
+            },
+            operands: &step.operands,
+            workgroup_width: 128,
+        })
+    }
+}
 
 fn failure(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
@@ -184,7 +251,6 @@ pub(super) fn execute(
     operation: &Operation,
     site: &CompactSite,
 ) -> Result<Results, SimulationExecutionErrorV1> {
-    let mut results = Results::empty();
     let step = match &operation.kind {
         OperationKind::Gfx942PhysicalGlobalCopyDeclaration(declaration) => {
             if declaration.validate_shape().is_err() || operation.results.len() != 5 {
@@ -194,60 +260,83 @@ pub(super) fn execute(
                     "physical declaration shape after admission",
                 ));
             }
-            // Bind actual argument values. These identities are not numerical addresses.
-            let input = slice_value(engine, values, declaration.parameters[0], site)?;
-            let output = slice_value(engine, values, declaration.parameters[1], site)?;
-            if input.element != ScalarType::U32
-                || input.address_space != AddressSpace::Global
-                || input.access != AccessMode::ReadOnly
-                || input.abi_argument_ordinal != 0
-                || output.element != ScalarType::U32
-                || output.address_space != AddressSpace::Global
-                || output.access != AccessMode::ReadWrite
-                || output.abi_argument_ordinal != 1
-                || input.allocation == output.allocation
-            {
-                return Err(failure(
-                    engine,
-                    site,
-                    "global copy two separate ABI allocations/permissions",
-                ));
-            }
-            for half in [Half::Low, Half::High] {
-                push(
-                    engine,
-                    &mut results,
-                    RuntimeValue::PhysicalEntry(Value::GlobalCopyKernarg {
-                        half,
-                        declaration: *site,
-                        parameters: declaration.parameters,
-                    }),
-                    site,
-                )?;
-            }
-            let invocation = engine
-                .invocation
-                .ok_or_else(|| failure(engine, site, "physical invocation"))?;
-            let group = u32::try_from(invocation.workgroup[0])
-                .map_err(|_| failure(engine, site, "physical workgroup index"))?;
-            push_scalar(engine, &mut results, ScalarBitsV1::u32(group), site)?;
-            push_scalar(
-                engine,
-                &mut results,
-                ScalarBitsV1::u32(invocation.local[0]),
-                site,
-            )?;
-            push_scalar(
-                engine,
-                &mut results,
-                u64_scalar(engine, u64::MAX, site)?,
-                site,
-            )?;
-            return Ok(results);
+            return declaration_results(engine, values, declaration.parameters, site);
         }
-        OperationKind::Gfx942PhysicalGlobalCopyStep(step) if step.validate_shape().is_ok() => step,
+        OperationKind::Gfx942PhysicalGlobalCopyStep(step) if step.validate_shape().is_ok() => {
+            Step::copy(step)
+        }
         _ => return Err(failure(engine, site, "physical step shape after admission")),
     };
+    execute_step(engine, values, operation, site, &step)
+}
+pub(super) fn declaration_results(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    parameters: [ValueId; 2],
+    site: &CompactSite,
+) -> Result<Results, SimulationExecutionErrorV1> {
+    let mut results = Results::empty();
+    // Bind actual argument values. These identities are not numerical addresses.
+    let input = slice_value(engine, values, parameters[0], site)?;
+    let output = slice_value(engine, values, parameters[1], site)?;
+    if input.element != ScalarType::U32
+        || input.address_space != AddressSpace::Global
+        || input.access != AccessMode::ReadOnly
+        || input.abi_argument_ordinal != 0
+        || output.element != ScalarType::U32
+        || output.address_space != AddressSpace::Global
+        || output.access != AccessMode::ReadWrite
+        || output.abi_argument_ordinal != 1
+        || input.allocation == output.allocation
+    {
+        return Err(failure(
+            engine,
+            site,
+            "global copy two separate ABI allocations/permissions",
+        ));
+    }
+    for half in [Half::Low, Half::High] {
+        push(
+            engine,
+            &mut results,
+            RuntimeValue::PhysicalEntry(Value::GlobalCopyKernarg {
+                half,
+                declaration: *site,
+                parameters,
+            }),
+            site,
+        )?;
+    }
+    let invocation = engine
+        .invocation
+        .ok_or_else(|| failure(engine, site, "physical invocation"))?;
+    let group = u32::try_from(invocation.workgroup[0])
+        .map_err(|_| failure(engine, site, "physical workgroup index"))?;
+    push_scalar(engine, &mut results, ScalarBitsV1::u32(group), site)?;
+    push_scalar(
+        engine,
+        &mut results,
+        ScalarBitsV1::u32(invocation.local[0]),
+        site,
+    )?;
+    push_scalar(
+        engine,
+        &mut results,
+        u64_scalar(engine, u64::MAX, site)?,
+        site,
+    )?;
+
+    Ok(results)
+}
+#[inline(never)]
+pub(super) fn execute_step(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    operation: &Operation,
+    site: &CompactSite,
+    step: &Step<'_>,
+) -> Result<Results, SimulationExecutionErrorV1> {
+    let mut results = Results::empty();
     if step.instruction.opcode.is_vector_definition() {
         full_exec(engine, values, step, site)?;
     }
@@ -321,7 +410,7 @@ pub(super) fn execute(
                 engine,
                 BinaryOp::ShiftLeft,
                 scalar(engine, values, step, 0, ScalarType::U32, site)?,
-                ScalarBitsV1::u32(6),
+                ScalarBitsV1::u32(step.instruction.immediate),
                 site,
             )?;
             push_scalar(engine, &mut results, value, site)?;
@@ -513,12 +602,12 @@ pub(super) fn execute(
                 .invocation
                 .ok_or_else(|| failure(engine, site, "physical store invocation"))?
                 .local[0];
-            if lane >= 64 {
+            if lane >= step.workgroup_width {
                 return Err(failure(engine, site, "physical store lane"));
             }
             // Skip before even looking up pointer/data SSA values, validating the
             // pointer, recording accesses/events, or changing initialized memory.
-            if exec & (1u64 << lane) == 0 {
+            if exec & (1u64 << (lane % 64)) == 0 {
                 return Ok(results);
             }
             let chain = physical_entry_state_v20::store_chain(
@@ -583,6 +672,15 @@ pub(super) fn comparison_input(
     if step.validate_shape().is_err() || step.instruction.opcode != Opcode::VectorCompareGtU64 {
         return Err(failure(engine, site, "physical collective shape"));
     }
+    let step = Step::copy(step);
+    comparison_step(engine, values, &step, site)
+}
+pub(super) fn comparison_step(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    step: &Step<'_>,
+    site: &CompactSite,
+) -> Result<bool, SimulationExecutionErrorV1> {
     full_exec(engine, values, step, site)?;
     let lhs = u64_scalar(engine, pair(engine, values, step, 0, site)?, site)?;
     let rhs = u64_scalar(engine, pair(engine, values, step, 2, site)?, site)?;

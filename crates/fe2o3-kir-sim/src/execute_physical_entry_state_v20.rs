@@ -20,6 +20,13 @@ pub(super) struct AddressChain {
 /// Symbolic carries are deliberately not ScalarBits, even though canonical VCC is U64.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Value {
+    /// Small pending LDS read; only the exact V22 LGKM wait exposes its bits.
+    LdsPendingRead {
+        generation: CompactSite,
+        result: ValueId,
+        bits: ScalarBitsV1,
+        epoch: u8,
+    },
     GlobalCopyKernarg {
         half: Half,
         declaration: CompactSite,
@@ -70,7 +77,8 @@ impl Value {
     pub(super) const fn scalar_type(&self) -> ScalarType {
         match self {
             Self::CarryLow(_) | Self::CarryHigh { .. } => ScalarType::U64,
-            Self::GlobalCopyKernarg { .. }
+            Self::LdsPendingRead { .. }
+            | Self::GlobalCopyKernarg { .. }
             | Self::GlobalCopyPendingPointer { .. }
             | Self::GlobalCopyPendingLength { .. }
             | Self::GlobalCopyPendingRead { .. }

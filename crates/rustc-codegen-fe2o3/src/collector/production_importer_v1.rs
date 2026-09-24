@@ -89,6 +89,8 @@ const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V7: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v7";
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V8: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v8";
+const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V9: &[u8] =
+    b"fe2o3/semantic-mir/production-compiler-intrinsic/v9";
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V6: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v6";
 
@@ -105,6 +107,7 @@ enum TerminalIdentitySchemaV1 {
     CombinedV6,
     CombinedV7,
     CombinedV8,
+    CombinedV9,
 }
 
 #[derive(Debug)]
@@ -541,6 +544,9 @@ fn construct_complete_request_v1<'tcx>(
         .terminal_producers()
         .iter()
         .any(|terminal| crate::production_physical_entry_call_v37::is_physical(terminal.expansion));
+    let contains_physical_lds_exchange = plan.terminal_producers().iter().any(|terminal| {
+        crate::production_physical_lds_exchange_call_v39::is_physical(terminal.expansion)
+    });
     let contains_physical_global_copy = plan.terminal_producers().iter().any(|terminal| {
         crate::production_physical_global_copy_call_v38::is_physical(terminal.expansion)
     });
@@ -570,6 +576,11 @@ fn construct_complete_request_v1<'tcx>(
     if contains_physical_entry {
         body_owner
             .prepare_physical_entry_annotations_v37(tcx, plan)
+            .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    }
+    if contains_physical_lds_exchange {
+        body_owner
+            .prepare_physical_lds_exchange_annotations_v39(tcx, plan)
             .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     }
     if contains_physical_global_copy {
@@ -774,6 +785,9 @@ fn construct_complete_request_v1<'tcx>(
         .require_physical_entry_annotations_consumed_v37()
         .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     body_owner
+        .require_physical_lds_exchange_annotations_consumed_v39()
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    body_owner
         .require_physical_global_copy_annotations_consumed_v38()
         .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     body_owner
@@ -799,7 +813,10 @@ fn construct_complete_request_v1<'tcx>(
         plan.roots().to_vec(),
     )
     .and_then(|request| {
-        if contains_physical_global_copy {
+        if contains_physical_lds_exchange {
+            // Only actual authenticated V39 providers select this exact sibling grammar.
+            request.admit_exact_v39(SemanticMirLimitsV1::default())
+        } else if contains_physical_global_copy {
             // Only the actual authenticated V38 provider roster selects this sibling schema.
             request.admit_exact_v38(SemanticMirLimitsV1::default())
         } else if contains_physical_entry {
@@ -1147,6 +1164,11 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Gfx942PhysicalEntryLabel
         | ProductionTerminalExpansionV1::Gfx942PhysicalEntryStep => {
             crate::production_physical_entry_terminal_v37::operation(tcx,instance,&signature,abi,types).map_err(body_owner_table_mismatch_v1)
+        }
+        ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeBegin
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeLabel
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeStep => {
+            crate::production_physical_lds_exchange_terminal_v39::operation(tcx,instance,&signature,abi,types).map_err(body_owner_table_mismatch_v1)
         }
         ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyBegin
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyLabel
@@ -4347,6 +4369,12 @@ const fn compiler_intrinsic_identity_schema_v1(
             PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V7,
             TerminalIdentitySchemaV1::CombinedV7,
         ),
+        ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeBegin
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeLabel
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeStep => (
+            PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V9,
+            TerminalIdentitySchemaV1::CombinedV9,
+        ),
         ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyBegin
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyLabel
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyStep => (
@@ -4373,6 +4401,15 @@ const fn terminal_operation_tag_for_schema_v1(
     schema: TerminalIdentitySchemaV1,
 ) -> u8 {
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
+    // V9 belongs only to the three physical-lds-exchange primitives.
+    if matches!(schema, TerminalIdentitySchemaV1::CombinedV9) {
+        return match expansion {
+            ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeBegin => 151,
+            ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeLabel => 152,
+            ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeStep => 153,
+            _ => u8::MAX,
+        };
+    }
     // V8 belongs only to the three physical-global-copy primitives.
     if matches!(schema, TerminalIdentitySchemaV1::CombinedV8) {
         return match expansion {
@@ -4409,6 +4446,9 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyBegin
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyLabel
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyStep => u8::MAX,
+        ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeBegin
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeLabel
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeStep => u8::MAX,
         ProductionTerminalExpansionV1::Gfx942CompleteBodyE32 => u8::MAX,
         ProductionTerminalExpansionV1::Gfx942OrderedProgramE32 => {
             if matches!(schema, TerminalIdentitySchemaV1::CombinedV5) {
@@ -4561,7 +4601,8 @@ const fn terminal_operation_tag_for_schema_v1(
             | TerminalIdentitySchemaV1::CombinedV5 => 111,
             TerminalIdentitySchemaV1::CombinedV6
             | TerminalIdentitySchemaV1::CombinedV7
-            | TerminalIdentitySchemaV1::CombinedV8 => u8::MAX,
+            | TerminalIdentitySchemaV1::CombinedV8
+            | TerminalIdentitySchemaV1::CombinedV9 => u8::MAX,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
             #[cfg(test)]
@@ -4571,7 +4612,8 @@ const fn terminal_operation_tag_for_schema_v1(
             | TerminalIdentitySchemaV1::CombinedV5 => 112,
             TerminalIdentitySchemaV1::CombinedV6
             | TerminalIdentitySchemaV1::CombinedV7
-            | TerminalIdentitySchemaV1::CombinedV8 => u8::MAX,
+            | TerminalIdentitySchemaV1::CombinedV8
+            | TerminalIdentitySchemaV1::CombinedV9 => u8::MAX,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
         ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar) => scalar.terminal_tag(),
@@ -4587,7 +4629,8 @@ const fn terminal_operation_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 116,
             TerminalIdentitySchemaV1::CombinedV6
             | TerminalIdentitySchemaV1::CombinedV7
-            | TerminalIdentitySchemaV1::CombinedV8 => u8::MAX,
+            | TerminalIdentitySchemaV1::CombinedV8
+            | TerminalIdentitySchemaV1::CombinedV9 => u8::MAX,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
             #[cfg(test)]
@@ -4596,7 +4639,8 @@ const fn terminal_operation_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 117,
             TerminalIdentitySchemaV1::CombinedV6
             | TerminalIdentitySchemaV1::CombinedV7
-            | TerminalIdentitySchemaV1::CombinedV8 => u8::MAX,
+            | TerminalIdentitySchemaV1::CombinedV8
+            | TerminalIdentitySchemaV1::CombinedV9 => u8::MAX,
         },
         ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent => 118,
         ProductionTerminalExpansionV1::DisjointBlockComponentIndex => 119,
@@ -4613,7 +4657,8 @@ const fn terminal_operation_tag_for_schema_v1(
                 | TerminalIdentitySchemaV1::CombinedV5 => 100,
                 TerminalIdentitySchemaV1::CombinedV6
                 | TerminalIdentitySchemaV1::CombinedV7
-                | TerminalIdentitySchemaV1::CombinedV8 => {
+                | TerminalIdentitySchemaV1::CombinedV8
+                | TerminalIdentitySchemaV1::CombinedV9 => {
                     return u8::MAX;
                 }
             };
@@ -4853,6 +4898,7 @@ mod tests {
     include!("production_importer_complete_body_v36_tests.rs");
     include!("production_importer_physical_entry_v37_tests.rs");
     include!("production_importer_physical_global_copy_v38_tests.rs");
+    include!("production_importer_physical_lds_exchange_v39_tests.rs");
 
     #[test]
     fn ordered_region_v31_terminal_133_never_enters_frozen_source_histories() {

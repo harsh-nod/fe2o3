@@ -480,7 +480,9 @@ impl Operation {
             | OperationKind::Gfx942PhysicalEntryDeclaration(_)
             | OperationKind::Gfx942PhysicalEntryStep(_)
             | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
-            | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => false,
+            | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+            | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+            | OperationKind::Gfx942PhysicalLdsExchangeStep(_) => false,
             _ => true,
         }
     }
@@ -614,6 +616,10 @@ pub enum OperationKind {
     Gfx942PhysicalGlobalCopyDeclaration(crate::Gfx942PhysicalGlobalCopyDeclarationV1),
     /// Actual ordered instruction, including pending global read and exact wait.
     Gfx942PhysicalGlobalCopyStep(crate::Gfx942PhysicalGlobalCopyStepV1),
+    /// Single declared static LDS frame and five exact physical live-ins.
+    Gfx942PhysicalLdsExchangeDeclaration(crate::Gfx942PhysicalLdsExchangeDeclarationV1),
+    /// Actual ordered LDS/global instruction, readiness fence or publication barrier.
+    Gfx942PhysicalLdsExchangeStep(crate::Gfx942PhysicalLdsExchangeStepV1),
 }
 
 impl OperationKind {

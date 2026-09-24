@@ -2,6 +2,29 @@
 use super::*;
 use fe2o3_kernel_ir::Gfx942PhysicalGlobalCopyOpcodeV1 as Opcode;
 use physical_entry_state_v20::{Half, Value};
+#[derive(Clone, Copy)]
+pub(super) enum Profile {
+    CopyV21,
+    LdsV22,
+}
+fn memory_step(operation: &Operation, profile: Profile) -> Option<(Opcode, u32)> {
+    match (profile, &operation.kind) {
+        (Profile::CopyV21, OperationKind::Gfx942PhysicalGlobalCopyStep(step)) => {
+            Some((step.instruction.opcode, step.instruction.immediate))
+        }
+        (Profile::LdsV22, OperationKind::Gfx942PhysicalLdsExchangeStep(step)) => {
+            use fe2o3_kernel_ir::Gfx942PhysicalLdsExchangeOpcodeV1 as L;
+            let opcode = match step.instruction.opcode {
+                L::LoadKernargPair => Opcode::LoadKernargPair,
+                L::GlobalLoadDword => Opcode::GlobalLoadDword,
+                L::GlobalStoreDword => Opcode::GlobalStoreDword,
+                _ => return None,
+            };
+            Some((opcode, step.instruction.immediate))
+        }
+        _ => None,
+    }
+}
 
 pub(super) fn kernarg_parameters(low: &RuntimeValue, high: &RuntimeValue) -> Option<[ValueId; 2]> {
     match (low, high) {
@@ -30,7 +53,7 @@ fn failure(
         SimulationExecutionErrorKindV1::InternalInvariant(text),
     )
 }
-fn prior_operation<'a>(
+pub(super) fn prior_operation<'a>(
     engine: &'a Engine<'_, impl SimulationEventSinkV1>,
     site: CompactSite,
     ordinal: u32,
@@ -112,6 +135,14 @@ pub(super) fn complete_lgkm(
     values: &mut HashMap<ValueId, RuntimeValue>,
     site: CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
+    complete_initial_lgkm(engine, values, site, Profile::CopyV21)
+}
+pub(super) fn complete_initial_lgkm(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &mut HashMap<ValueId, RuntimeValue>,
+    site: CompactSite,
+    profile: Profile,
+) -> Result<(), SimulationExecutionErrorV1> {
     let ordinal = site
         .operation
         .filter(|n| *n == 5)
@@ -121,16 +152,13 @@ pub(super) fn complete_lgkm(
     let mut slots = [0u32; 8];
     for (pair, previous) in (ordinal - 4..ordinal).enumerate() {
         let (operation, source) = prior_operation(engine, site, previous)?;
-        if !matches!(&operation.kind, OperationKind::Gfx942PhysicalGlobalCopyStep(step)
-            if step.instruction.opcode == Opcode::LoadKernargPair)
-            || operation.results.len() != 2
-        {
+        let Some((Opcode::LoadKernargPair, immediate)) = memory_step(operation, profile) else {
             return Err(failure(engine, site, "global-copy LGKM predecessor roster"));
-        }
-        let OperationKind::Gfx942PhysicalGlobalCopyStep(step) = &operation.kind else {
-            return Err(failure(engine, site, "global-copy LGKM step"));
         };
-        let slot = step.instruction.immediate / 8;
+        if operation.results.len() != 2 {
+            return Err(failure(engine, site, "global-copy LGKM result roster"));
+        }
+        let slot = immediate / 8;
         for (part, half) in [Half::Low, Half::High].into_iter().enumerate() {
             let id = operation.results[part].id;
             let value = values
@@ -171,15 +199,23 @@ pub(super) fn complete_vm(
     values: &mut HashMap<ValueId, RuntimeValue>,
     site: CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
+    complete_vm_for(engine, values, site, Profile::CopyV21)
+}
+pub(super) fn complete_vm_for(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &mut HashMap<ValueId, RuntimeValue>,
+    site: CompactSite,
+    profile: Profile,
+) -> Result<(), SimulationExecutionErrorV1> {
     let ordinal = site
         .operation
         .and_then(|n| n.checked_sub(1))
         .ok_or_else(|| failure(engine, site, "global-copy VM wait predecessor"))?;
     let (operation, source) = prior_operation(engine, site, ordinal)?;
-    let OperationKind::Gfx942PhysicalGlobalCopyStep(step) = &operation.kind else {
+    let Some((opcode, _)) = memory_step(operation, profile) else {
         return Err(failure(engine, site, "global-copy VM predecessor kind"));
     };
-    match step.instruction.opcode {
+    match opcode {
         Opcode::GlobalLoadDword if operation.results.len() == 1 => {
             let id = operation.results[0].id;
             let value = values

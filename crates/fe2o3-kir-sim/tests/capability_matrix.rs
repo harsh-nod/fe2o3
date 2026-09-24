@@ -69,6 +69,7 @@ fn integer_assembly_is_scalar_bits_owned_with_explicit_remaining_rejection() {
         .iter()
         .filter(|row| {
             row.kir_wire_version != SimulationKirWireVersionV1::V21
+                && row.kir_wire_version != SimulationKirWireVersionV1::V22
                 && row.operation == SimulationOperationSurfaceV1::InlineAssembly
         })
         .collect();
@@ -103,7 +104,9 @@ fn inert_v12_surfaces_keep_stable_ids_and_have_no_simulation_owner() {
             .top_level_rows
             .iter()
             .filter(|row| {
-                row.kir_wire_version != SimulationKirWireVersionV1::V21 && row.operation == surface
+                row.kir_wire_version != SimulationKirWireVersionV1::V21
+                    && row.kir_wire_version != SimulationKirWireVersionV1::V22
+                    && row.operation == surface
             })
             .collect();
         assert_eq!(rows.len(), 4 * 9); // Four target profiles, nine wire versions.
@@ -172,6 +175,7 @@ fn execution_v15_surface_is_additive_and_has_no_simulation_owner() {
         .iter()
         .filter(|row| {
             row.kir_wire_version != SimulationKirWireVersionV1::V21
+                && row.kir_wire_version != SimulationKirWireVersionV1::V22
                 && row.operation == SimulationOperationSurfaceV1::Execution
         })
         .collect();
@@ -192,7 +196,7 @@ fn v12_inherits_every_v11_disposition_without_activating_inert_carriers() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V12)
         .collect::<Vec<_>>();
-    assert_eq!(inherited.len(), 4 * 46); // Every surface, including distinct V20/V21 refusals.
+    assert_eq!(inherited.len(), 4 * 48); // Every surface, including distinct V20/V21 refusals.
     for row in inherited {
         let previous = matrix
             .top_level_rows
@@ -219,7 +223,7 @@ fn v17_extends_only_the_v12_baseline_and_never_owns_the_v16_pair() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V17)
         .collect();
-    assert_eq!(rows.len(), 4 * 46); // Every surface, including distinct V20/V21 refusals.
+    assert_eq!(rows.len(), 4 * 48); // Every surface, including distinct V20/V21 refusals.
     for row in rows {
         if row.operation == SimulationOperationSurfaceV1::OrderedProgram {
             continue; // Its exact single owned profile is tested by canonical_v17.

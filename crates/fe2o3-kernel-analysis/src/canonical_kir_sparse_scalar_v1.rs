@@ -324,6 +324,8 @@ pub(super) fn transfer(
         | OperationKind::Gfx942PhysicalEntryDeclaration(_)
         | OperationKind::Gfx942PhysicalEntryStep(_)
         | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
-        | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => Transfer::one(Value::Dynamic),
+        | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeStep(_) => Transfer::one(Value::Dynamic),
     }
 }

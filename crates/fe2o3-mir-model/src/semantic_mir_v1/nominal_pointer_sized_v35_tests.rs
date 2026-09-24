@@ -553,7 +553,7 @@ fn nominal_v35_unknown_versions_truncation_and_trailing_bytes_refuse() {
         .admit_exact_v35(SemanticMirLimitsV1::default())
         .unwrap();
     let bytes = admitted.canonical_encoding();
-    for version in [0, 1, 16, 27, 39, u16::MAX] {
+    for version in [0, 1, 16, 27, 40, u16::MAX] {
         let mut invalid = bytes.to_vec();
         invalid[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&version.to_le_bytes());
         assert_eq!(

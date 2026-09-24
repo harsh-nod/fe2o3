@@ -335,7 +335,10 @@ fn physical_capability_rows_are_exact_v20_gfx942_symbolic_cpu_ownership() {
     let matrix = semantic_capability_matrix_v1();
     let mut rows = 0;
     for row in &matrix.top_level_rows {
-        if row.kir_wire_version == SimulationKirWireVersionV1::V21 {
+        if matches!(
+            row.kir_wire_version,
+            SimulationKirWireVersionV1::V21 | SimulationKirWireVersionV1::V22
+        ) {
             continue;
         }
         if !matches!(

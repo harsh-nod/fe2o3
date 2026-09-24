@@ -5,6 +5,7 @@
 mod complete_body_materialization_vnext;
 mod physical_entry_materialization_v20;
 mod physical_global_copy_materialization_v21;
+mod physical_lds_exchange_materialization_v22;
 pub use complete_body_materialization_vnext::*;
 mod production_context_roots_v1;
 mod production_correspondence_evidence_v4;

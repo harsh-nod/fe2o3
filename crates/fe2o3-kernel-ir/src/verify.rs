@@ -70,6 +70,7 @@ pub enum DiagnosticCode {
     InvalidCompleteBodyV19,
     InvalidPhysicalEntryV20,
     InvalidPhysicalGlobalCopyV21,
+    InvalidPhysicalLdsExchangeV22,
     InvalidTerminator,
 }
 

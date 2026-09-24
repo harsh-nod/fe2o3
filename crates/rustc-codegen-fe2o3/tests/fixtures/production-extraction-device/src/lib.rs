@@ -1,6 +1,29 @@
 #![no_std]
 
 #[cfg(any(
+    feature = "physical-lds-exchange-one-v22",
+    feature = "physical-lds-exchange-registers-v22",
+    feature = "physical-lds-exchange-wrong-launch-v22",
+    feature = "physical-lds-exchange-dynamic-grid-v22",
+    feature = "physical-lds-exchange-frame-base-v22",
+    feature = "physical-lds-exchange-frame-size-v22",
+    feature = "physical-lds-exchange-frame-alignment-v22",
+    feature = "physical-lds-exchange-frame-epoch-v22",
+    feature = "physical-lds-exchange-missing-write-wait-v22",
+    feature = "physical-lds-exchange-missing-barrier-v22",
+    feature = "physical-lds-exchange-missing-read-wait-v22",
+    feature = "physical-lds-exchange-wrong-peer-v22",
+    feature = "physical-lds-exchange-wrong-lds-address-v22",
+    feature = "physical-lds-exchange-wrong-store-v22",
+    feature = "physical-lds-exchange-missing-vm-v22",
+    feature = "physical-lds-exchange-wrong-carry-v22",
+    feature = "physical-lds-exchange-foreign-input-v22",
+    feature = "physical-lds-exchange-foreign-marker-v22",
+    feature = "physical-lds-exchange-mixed-marker-v22",
+))]
+mod physical_lds_exchange_v22;
+
+#[cfg(any(
     feature = "physical-global-copy-one-v21",
     feature = "physical-global-copy-registers-v21",
     feature = "physical-global-copy-wrong-launch-v21",
@@ -180,6 +203,25 @@ mod complete_body_v19;
 mod physical_entry_v20;
 
 #[cfg(not(any(
+    feature = "physical-lds-exchange-one-v22",
+    feature = "physical-lds-exchange-registers-v22",
+    feature = "physical-lds-exchange-wrong-launch-v22",
+    feature = "physical-lds-exchange-dynamic-grid-v22",
+    feature = "physical-lds-exchange-frame-base-v22",
+    feature = "physical-lds-exchange-frame-size-v22",
+    feature = "physical-lds-exchange-frame-alignment-v22",
+    feature = "physical-lds-exchange-frame-epoch-v22",
+    feature = "physical-lds-exchange-missing-write-wait-v22",
+    feature = "physical-lds-exchange-missing-barrier-v22",
+    feature = "physical-lds-exchange-missing-read-wait-v22",
+    feature = "physical-lds-exchange-wrong-peer-v22",
+    feature = "physical-lds-exchange-wrong-lds-address-v22",
+    feature = "physical-lds-exchange-wrong-store-v22",
+    feature = "physical-lds-exchange-missing-vm-v22",
+    feature = "physical-lds-exchange-wrong-carry-v22",
+    feature = "physical-lds-exchange-foreign-input-v22",
+    feature = "physical-lds-exchange-foreign-marker-v22",
+    feature = "physical-lds-exchange-mixed-marker-v22",
     feature = "physical-global-copy-one-v21",
     feature = "physical-global-copy-registers-v21",
     feature = "physical-global-copy-wrong-launch-v21",

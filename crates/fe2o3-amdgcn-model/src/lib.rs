@@ -18,6 +18,7 @@ mod gfx942_complete_body_emission_v1;
 mod gfx942_complete_body_v1;
 mod gfx942_physical_entry_emission_v20;
 mod gfx942_physical_global_copy_emission_v21;
+mod gfx942_physical_lds_exchange_emission_v22;
 #[cfg(test)]
 use fe2o3_kernel_ir as physical_entry_fixture_ir;
 #[cfg(test)]
@@ -47,6 +48,7 @@ pub use gfx942_complete_body_emission_v1::*;
 pub use gfx942_complete_body_v1::*;
 pub use gfx942_physical_entry_emission_v20::*;
 pub use gfx942_physical_global_copy_emission_v21::*;
+pub use gfx942_physical_lds_exchange_emission_v22::*;
 pub use gfx950::*;
 pub use lowering::*;
 pub use native_v12_text_descriptor_replay_v1::*;

@@ -1093,3 +1093,13 @@ pub(crate) const fn mask(width: u16) -> u128 {
         (1_u128 << width) - 1
     }
 }
+
+impl From<fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV22> for SimulationKernelIrIdentityV1 {
+    fn from(identity: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV22) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V22,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}

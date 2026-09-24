@@ -47,13 +47,13 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xfb, 0x53, 0x38, 0xc8, 0x5b, 0xc5, 0x11, 0x0f, 0xad, 0xe2, 0xdc, 0xe0, 0xca, 0xdf, 0x90, 0x5b,
-    0x2a, 0x94, 0xf2, 0x3e, 0x15, 0xc7, 0x03, 0x3c, 0xa9, 0x51, 0x25, 0x4e, 0x4d, 0x06, 0xa8, 0xba,
+    0x1e, 0x80, 0xb2, 0x55, 0x87, 0x11, 0x2d, 0x19, 0xee, 0x4e, 0xde, 0x55, 0xac, 0x86, 0xa5, 0x0d,
+    0x77, 0xe3, 0xcb, 0xab, 0xb5, 0x50, 0x3a, 0xdd, 0xd7, 0xec, 0x7a, 0xc2, 0x01, 0xf5, 0x15, 0x35,
 ];
 // The pinned Cargo-produced manifest fixture is checked with the complete source tree.
 const REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x13, 0x74, 0x7f, 0xdb, 0xf8, 0x1c, 0x6b, 0x7d, 0xe2, 0x81, 0x3c, 0x0c, 0xd8, 0x68, 0x66, 0xc9,
-    0x94, 0x68, 0x3e, 0x1c, 0x03, 0x1d, 0xe3, 0xd9, 0x66, 0xcd, 0xaf, 0xe7, 0x88, 0x55, 0x95, 0x77,
+    0xeb, 0xcb, 0x99, 0xe9, 0xb9, 0xb1, 0xfb, 0x82, 0x7b, 0xdc, 0x32, 0xf1, 0xd8, 0x45, 0x66, 0x0e,
+    0x69, 0xa0, 0x2b, 0xe2, 0x56, 0xd7, 0x2a, 0xf9, 0xa9, 0xcd, 0x67, 0x01, 0x13, 0xc7, 0xbd, 0xdd,
 ];
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 2] = [
     REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
@@ -387,8 +387,11 @@ pub(crate) enum TrustedDeviceItem {
     AmdGpuPhysicalEntryLabelGfx942,
     AmdGpuPhysicalEntryStepGfx942,
     AmdGpuPhysicalGlobalCopyBeginGfx942,
+    AmdGpuPhysicalLdsExchangeBeginGfx942,
     AmdGpuPhysicalGlobalCopyLabelGfx942,
+    AmdGpuPhysicalLdsExchangeLabelGfx942,
     AmdGpuPhysicalGlobalCopyStepGfx942,
+    AmdGpuPhysicalLdsExchangeStepGfx942,
     AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation),
     KernelContext,
     KernelContextIssue,
@@ -1369,6 +1372,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::physical_global_copy_v1::__amdgpu_physical_global_copy_begin_gfx942_v1",
     ),
     (
+        TrustedDeviceItem::AmdGpuPhysicalLdsExchangeBeginGfx942,
+        "fe2o3_device_amdgpu_physical_lds_exchange_begin_gfx942_v1",
+        "fe2o3_device::physical_lds_exchange_v1::__amdgpu_physical_lds_exchange_begin_gfx942_v1",
+    ),
+    (
         TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942,
         "fe2o3_device_amdgpu_physical_entry_label_gfx942_v1",
         "fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_label_gfx942_v1",
@@ -1379,6 +1387,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::physical_global_copy_v1::__amdgpu_physical_global_copy_label_gfx942_v1",
     ),
     (
+        TrustedDeviceItem::AmdGpuPhysicalLdsExchangeLabelGfx942,
+        "fe2o3_device_amdgpu_physical_lds_exchange_label_gfx942_v1",
+        "fe2o3_device::physical_lds_exchange_v1::__amdgpu_physical_lds_exchange_label_gfx942_v1",
+    ),
+    (
         TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942,
         "fe2o3_device_amdgpu_physical_entry_step_gfx942_v1",
         "fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_step_gfx942_v1",
@@ -1387,6 +1400,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::AmdGpuPhysicalGlobalCopyStepGfx942,
         "fe2o3_device_amdgpu_physical_global_copy_step_gfx942_v1",
         "fe2o3_device::physical_global_copy_v1::__amdgpu_physical_global_copy_step_gfx942_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuPhysicalLdsExchangeStepGfx942,
+        "fe2o3_device_amdgpu_physical_lds_exchange_step_gfx942_v1",
+        "fe2o3_device::physical_lds_exchange_v1::__amdgpu_physical_lds_exchange_step_gfx942_v1",
     ),
     (
         TrustedDeviceItem::AmdGpuCompleteBodyE32,
@@ -1691,17 +1709,26 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         TrustedDeviceItem::AmdGpuPhysicalGlobalCopyBeginGfx942 => Some(
             "fe2o3_device::physical_global_copy_v1::__amdgpu_physical_global_copy_begin_gfx942_v1",
         ),
+        TrustedDeviceItem::AmdGpuPhysicalLdsExchangeBeginGfx942 => Some(
+            "fe2o3_device::physical_lds_exchange_v1::__amdgpu_physical_lds_exchange_begin_gfx942_v1",
+        ),
         TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942 => {
             Some("fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_label_gfx942_v1")
         }
         TrustedDeviceItem::AmdGpuPhysicalGlobalCopyLabelGfx942 => Some(
             "fe2o3_device::physical_global_copy_v1::__amdgpu_physical_global_copy_label_gfx942_v1",
         ),
+        TrustedDeviceItem::AmdGpuPhysicalLdsExchangeLabelGfx942 => Some(
+            "fe2o3_device::physical_lds_exchange_v1::__amdgpu_physical_lds_exchange_label_gfx942_v1",
+        ),
         TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942 => {
             Some("fe2o3_device::physical_entry_v1::__amdgpu_physical_entry_step_gfx942_v1")
         }
         TrustedDeviceItem::AmdGpuPhysicalGlobalCopyStepGfx942 => Some(
             "fe2o3_device::physical_global_copy_v1::__amdgpu_physical_global_copy_step_gfx942_v1",
+        ),
+        TrustedDeviceItem::AmdGpuPhysicalLdsExchangeStepGfx942 => Some(
+            "fe2o3_device::physical_lds_exchange_v1::__amdgpu_physical_lds_exchange_step_gfx942_v1",
         ),
         TrustedDeviceItem::AmdGpuCompleteBodyE32 => {
             Some("fe2o3_device::diagnostics::__amdgpu_complete_body_gfx942_v1")

@@ -1849,3 +1849,8 @@ mod physical_global_copy_v21;
 pub use physical_global_copy_v21::{
     PhysicalGlobalCopyDebugNavigationV21, PhysicalGlobalCopyDebugSessionV21,
 };
+
+mod physical_lds_exchange_v22;
+pub use physical_lds_exchange_v22::{
+    PhysicalLdsExchangeDebugNavigationV22, PhysicalLdsExchangeDebugSessionV22,
+};

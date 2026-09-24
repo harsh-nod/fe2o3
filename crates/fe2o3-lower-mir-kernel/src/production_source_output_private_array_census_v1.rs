@@ -72,6 +72,8 @@ fn private_array_output_closed_operation_v1(kind: &OperationKind) -> bool {
         | Op::Gfx942PhysicalEntryStep(_)
         | Op::Gfx942PhysicalGlobalCopyDeclaration(_)
         | Op::Gfx942PhysicalGlobalCopyStep(_)
+        | Op::Gfx942PhysicalLdsExchangeDeclaration(_)
+        | Op::Gfx942PhysicalLdsExchangeStep(_)
         | Op::InlineAssembly(_) => false,
     }
 }

@@ -19,6 +19,13 @@ pub(super) fn validate_request_schema(
     request: &InertSemanticMirRequestV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if wire_version != SemanticMirWireVersionV1::V39 && physical_lds_exchange_v39::uses_v39(request)
+    {
+        return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version,
+            required: SemanticMirWireVersionV1::V39,
+        });
+    }
     if wire_version != SemanticMirWireVersionV1::V38 && physical_global_copy_v38::uses_v38(request)
     {
         return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
@@ -98,6 +105,21 @@ pub(super) fn encode_direct_call(
 ) -> Result<(), SemanticMirErrorV1> {
     if call.has_mixed_physical_sources() {
         return Err(SemanticMirErrorV1::InvalidPhysicalGlobalCopyV38);
+    }
+    if call.physical_lds_exchange_source_v39().is_some() {
+        if wire_version != SemanticMirWireVersionV1::V39 {
+            return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: wire_version,
+                required: SemanticMirWireVersionV1::V39,
+            });
+        }
+        if call.inline_assembly_source_v30.is_some()
+            || call.ordered_region_source_v31.is_some()
+            || call.ordered_program_source_v32.is_some()
+            || call.complete_body_source_vnext.is_some()
+        {
+            return Err(SemanticMirErrorV1::InvalidPhysicalLdsExchangeV39);
+        }
     }
     if call.physical_global_copy_source_v38().is_some() {
         if wire_version != SemanticMirWireVersionV1::V38 {
@@ -225,6 +247,9 @@ pub(super) fn encode_direct_call(
     }
     if wire_version == SemanticMirWireVersionV1::V36 {
         complete_body_v36::encode_source(writer, call.complete_body_source_vnext)?;
+    }
+    if wire_version == SemanticMirWireVersionV1::V39 {
+        physical_lds_exchange_v39::encode_source(writer, call.physical_lds_exchange_source_v39())?;
     }
     if wire_version == SemanticMirWireVersionV1::V38 {
         physical_global_copy_v38::encode_source(writer, call.physical_global_copy_source_v38())?;

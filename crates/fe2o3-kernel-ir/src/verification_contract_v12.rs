@@ -189,7 +189,9 @@ impl Operation {
             | OperationKind::Gfx942PhysicalEntryDeclaration(_)
             | OperationKind::Gfx942PhysicalEntryStep(_)
             | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
-            | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => {
+            | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+            | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+            | OperationKind::Gfx942PhysicalLdsExchangeStep(_) => {
                 CompilerOrderingEffectSummaryV12::ordered_region()
             }
             OperationKind::Execution(_) => CompilerOrderingEffectSummaryV12::ordered_execution(),

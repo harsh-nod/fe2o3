@@ -4913,6 +4913,14 @@ impl<'a> FunctionLowerer<'a> {
                     "physical global copies require the exact canonical V21 owner entry point",
                 ));
             }
+            OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+            | OperationKind::Gfx942PhysicalLdsExchangeStep(_) => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedOperation,
+                    "physical LDS exchanges require the exact canonical V22 owner entry point",
+                ));
+            }
             OperationKind::Matrix(matrix) => {
                 self.validate_matrix(matrix, &location)?;
             }

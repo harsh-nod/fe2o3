@@ -258,7 +258,9 @@ fn call_splice_check_callee_operation_v1(
         | Op::Gfx942PhysicalEntryDeclaration(_)
         | Op::Gfx942PhysicalEntryStep(_)
         | Op::Gfx942PhysicalGlobalCopyDeclaration(_)
-        | Op::Gfx942PhysicalGlobalCopyStep(_) => Err(Error::CalleeInlineAssembly),
+        | Op::Gfx942PhysicalGlobalCopyStep(_)
+        | Op::Gfx942PhysicalLdsExchangeDeclaration(_)
+        | Op::Gfx942PhysicalLdsExchangeStep(_) => Err(Error::CalleeInlineAssembly),
         Op::Intrinsic(intrinsic) => match intrinsic.kind {
             fe2o3_kernel_ir::IntrinsicKind::InvocationIndex { .. }
             | fe2o3_kernel_ir::IntrinsicKind::LaunchExtent { .. } => Ok(()),

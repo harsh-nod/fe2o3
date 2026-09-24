@@ -137,6 +137,8 @@ pub(crate) enum ErrorKind {
     PreflightAllocationFailure,
     PreflightPhysicalEntrySymbolicDebugUnavailableV20,
     PreflightPhysicalGlobalCopyPendingDebugUnavailableV21,
+    PreflightPhysicalLdsExchangeDebugUnavailableV22,
+    PreflightPhysicalLdsExchangeAliasedArgumentsV22,
     PreflightPhysicalGlobalCopyAliasedArgumentsV21,
     ExecutionStepLimit,
     ExecutionEventLimit,

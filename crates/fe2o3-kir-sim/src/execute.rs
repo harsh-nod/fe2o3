@@ -79,6 +79,12 @@ pub use debug_global_copy_value_v21::*;
 #[path = "execute_debug_global_copy_capture_v21.rs"]
 mod debug_global_copy_capture_v21;
 pub use debug_global_copy_capture_v21::*;
+#[path = "execute_debug_lds_exchange_value_v22.rs"]
+mod debug_lds_exchange_value_v22;
+pub use debug_lds_exchange_value_v22::*;
+#[path = "execute_debug_lds_exchange_capture_v22.rs"]
+mod debug_lds_exchange_capture_v22;
+pub use debug_lds_exchange_capture_v22::*;
 #[path = "execute_debug_frames.rs"]
 mod debug_frames;
 #[path = "execute_debug_identity.rs"]
@@ -100,6 +106,13 @@ mod physical_entry_v20;
 mod physical_entry_v20_tests;
 #[path = "execute_physical_global_copy_pending_v21.rs"]
 mod physical_global_copy_pending_v21;
+#[path = "execute_physical_lds_context_v22.rs"]
+mod physical_lds_context_v22;
+#[path = "execute_physical_lds_exchange_v22.rs"]
+mod physical_lds_exchange_v22;
+pub(crate) fn physical_lds_runtime_resident_bytes() -> Option<usize> {
+    physical_lds_context_v22::resident_bytes()
+}
 #[path = "execute_physical_global_copy_v21.rs"]
 mod physical_global_copy_v21;
 #[path = "execute_pointer_view_operation_v1.rs"]
@@ -1800,6 +1813,8 @@ fn out_of_bounds_detail_v2(
 
 struct Engine<'a, S> {
     module: &'a fe2o3_kernel_ir::Module,
+    physical_lds_context: Option<&'a physical_lds_context_v22::Context>,
+    physical_lds_state: Option<physical_lds_context_v22::State>,
     function_module_indices: Vec<usize>,
     block_indices: Vec<HashMap<BlockId, usize>>,
     function_ssa_values: Vec<usize>,
@@ -3421,7 +3436,9 @@ fn execute_with_physical_debug(
     physical_debug: Option<&mut debug_physical_capture_v20::State>,
 ) -> Result<SimulationExecutionV1, SimulationExecutionErrorV1> {
     if configuration.debug_capture.is_enabled()
-        && (admitted.uses_physical_global_copy_v21() || admitted.uses_physical_entry_v20())
+        && (admitted.uses_physical_global_copy_v21()
+            || admitted.uses_physical_entry_v20()
+            || admitted.uses_physical_lds_exchange_v22())
         && !physical_debug
             .as_ref()
             .is_some_and(|capture| capture.matches(admitted))
@@ -3520,7 +3537,22 @@ fn execute_with_physical_debug(
         debug_observation_requested && debug_sink.wants_checkpoint_frames_v1();
     let debug_origin_requested = debug_capture.is_enabled()
         && (debug_sink.wants_operation_origin_v1() || debug_frames_requested);
+    // Plan resident admission includes this descriptor, barrier set and all
+    // pending-write slots before their allocation. Context outlives Engine and
+    // every FrameAction/BarrierArrival borrowing its barrier.
+    let physical_lds_context = if admitted.uses_physical_lds_exchange_v22() {
+        Some(physical_lds_context_v22::Context::new(&admitted.module)?)
+    } else {
+        None
+    };
+    let physical_lds_state = if physical_lds_context.is_some() {
+        Some(physical_lds_context_v22::State::new()?)
+    } else {
+        None
+    };
     let mut engine = Engine {
+        physical_lds_context: physical_lds_context.as_ref(),
+        physical_lds_state,
         module: &admitted.module,
         function_module_indices,
         block_indices,
@@ -4590,6 +4622,8 @@ fn release_workgroup_barrier<'a>(
             SimulationExecutionErrorKindV1::InternalInvariant("workgroup participant count"),
         )
     })?;
+    let physical_lds_release =
+        physical_lds_context_v22::validate_release(engine, expected.site, participants)?;
     engine.select_debug_invocation(Some(representative));
     engine.event(
         &expected.site,
@@ -4606,6 +4640,9 @@ fn release_workgroup_barrier<'a>(
     );
     schedule.barrier_released();
     engine.publish_workgroup();
+    if physical_lds_release {
+        physical_lds_context_v22::mark_published(engine);
+    }
     engine.publish_global_happens_before(expected.barrier);
     for machine in machines.iter_mut() {
         machine.waiting = None;
@@ -5315,6 +5352,7 @@ impl<'a> InvocationMachine<'a> {
                             OperationKind::Matrix(_) | OperationKind::Gfx950LdsTranspose(_)
                         ) || physical_entry_v20::is_collective(&operation.kind)
                             || physical_global_copy_v21::is_collective(&operation.kind)
+                            || physical_lds_exchange_v22::is_collective(&operation.kind)
                     })
             {
                 let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
@@ -5850,7 +5888,14 @@ fn advance_frame<'a, S: SimulationEventSinkV1>(
                 });
             }
         }
-        if let OperationKind::WorkgroupBarrier(barrier) = &operation.kind {
+        let barrier = match &operation.kind {
+            OperationKind::WorkgroupBarrier(barrier) => Some(barrier),
+            kind if physical_lds_exchange_v22::is_barrier(kind) => {
+                Some(physical_lds_context_v22::barrier(engine, site)?)
+            }
+            _ => None,
+        };
+        if let Some(barrier) = barrier {
             engine.event(
                 &site,
                 SimulationEventKindV1::WorkgroupBarrierArrive { phase },
@@ -6193,6 +6238,21 @@ fn prepare_collective_wait(
                 ),
             )
         }
+        OperationKind::Gfx942PhysicalLdsExchangeStep(_)
+            if physical_lds_exchange_v22::is_collective(operation) =>
+        {
+            (
+                WaveWidth::Wave64,
+                CollectiveInput::PhysicalEntryPredicate(
+                    physical_lds_exchange_v22::comparison_input(
+                        engine,
+                        &frame.values,
+                        operation,
+                        &site,
+                    )?,
+                ),
+            )
+        }
         OperationKind::Gfx942PhysicalEntryStep(_)
             if physical_entry_v20::is_collective(operation) =>
         {
@@ -6360,7 +6420,9 @@ fn advance_non_control_operation<'a>(
     operation: &Operation,
     site: CompactSite,
 ) -> Result<FrameAction<'a>, SimulationExecutionErrorV1> {
-    if physical_global_copy_v21::is_operation(&operation.kind) {
+    if physical_lds_exchange_v22::is_operation(&operation.kind) {
+        physical_lds_exchange_v22::execute_and_bind(engine, &mut frame.values, operation, &site)?;
+    } else if physical_global_copy_v21::is_operation(&operation.kind) {
         physical_global_copy_v21::execute_and_bind(engine, &mut frame.values, operation, &site)?;
     } else if physical_entry_v20::is_operation(&operation.kind) {
         physical_entry_v20::execute_and_bind(engine, &mut frame.values, operation, &site)?;
@@ -6706,6 +6768,8 @@ fn execute_non_assembly_operation(
         | OperationKind::Gfx942PhysicalEntryStep(_)
         | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
         | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeStep(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)
@@ -8542,6 +8606,8 @@ mod tests {
         let mut debug_sink = NoopSimulationDebugSinkV1;
         let mut engine = Engine {
             module: &module,
+            physical_lds_context: None,
+            physical_lds_state: None,
             function_module_indices: vec![0],
             block_indices: vec![HashMap::new()],
             function_ssa_values: vec![0],

@@ -2,6 +2,7 @@
 use crate::PhysicalEntryDebugNavigationV20 as Navigation;
 use fe2o3_kir_sim::{
     PhysicalEntryDebugCaptureV20, PhysicalEntryDebugOutcomeV20, PhysicalGlobalCopyDebugCaptureV21,
+    PhysicalLdsExchangeDebugCaptureV22,
 };
 
 pub(super) trait Capture {
@@ -42,6 +43,7 @@ macro_rules! capture {
 }
 capture!(PhysicalEntryDebugCaptureV20);
 capture!(PhysicalGlobalCopyDebugCaptureV21);
+capture!(PhysicalLdsExchangeDebugCaptureV22);
 
 #[derive(Default)]
 pub(super) struct Cursor(Option<usize>);

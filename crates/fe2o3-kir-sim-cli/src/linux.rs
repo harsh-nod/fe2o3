@@ -139,6 +139,7 @@ enum UnsupportedFeatureCode {
     PhysicalEntry,
     PhysicalEntryProfile,
     PhysicalGlobalCopyProfile,
+    PhysicalLdsExchangeProfile,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
 }
@@ -3386,6 +3387,12 @@ fn preflight_kind(error: &SimulationPreflightErrorV1) -> ErrorKind {
         SimulationPreflightErrorV1::PhysicalEntrySymbolicDebugUnavailableV20 => {
             ErrorKind::PreflightPhysicalEntrySymbolicDebugUnavailableV20
         }
+        SimulationPreflightErrorV1::PhysicalLdsExchangeDebugUnavailableV22 => {
+            ErrorKind::PreflightPhysicalLdsExchangeDebugUnavailableV22
+        }
+        SimulationPreflightErrorV1::PhysicalLdsExchangeAliasedArgumentsV22 => {
+            ErrorKind::PreflightPhysicalLdsExchangeAliasedArgumentsV22
+        }
         SimulationPreflightErrorV1::PhysicalGlobalCopyPendingDebugUnavailableV21 => {
             ErrorKind::PreflightPhysicalGlobalCopyPendingDebugUnavailableV21
         }
@@ -3644,6 +3651,9 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::CompleteBodyProfile => UnsupportedFeatureCode::CompleteBodyProfile,
         UnsupportedFeatureV1::PhysicalEntry => UnsupportedFeatureCode::PhysicalEntry,
         UnsupportedFeatureV1::PhysicalEntryProfile => UnsupportedFeatureCode::PhysicalEntryProfile,
+        UnsupportedFeatureV1::PhysicalLdsExchangeProfile => {
+            UnsupportedFeatureCode::PhysicalLdsExchangeProfile
+        }
         UnsupportedFeatureV1::PhysicalGlobalCopyProfile => {
             UnsupportedFeatureCode::PhysicalGlobalCopyProfile
         }
@@ -6252,3 +6262,7 @@ mod tests {
 #[cfg(test)]
 #[path = "linux_physical_global_copy_v21_tests.rs"]
 mod physical_global_copy_v21_tests;
+
+#[cfg(test)]
+#[path = "linux_physical_lds_exchange_v22_tests.rs"]
+mod physical_lds_exchange_v22_tests;

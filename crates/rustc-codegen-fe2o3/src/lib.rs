@@ -52,6 +52,11 @@ mod production_physical_global_copy_call_v38;
 mod production_physical_global_copy_census_v38;
 mod production_physical_global_copy_source_abi_v38;
 mod production_physical_global_copy_terminal_v38;
+mod production_physical_lds_exchange_annotation_v39;
+mod production_physical_lds_exchange_call_v39;
+mod production_physical_lds_exchange_census_v39;
+mod production_physical_lds_exchange_source_abi_v39;
+mod production_physical_lds_exchange_terminal_v39;
 mod production_pipeline;
 mod production_policy;
 mod production_primitive_from_v1;
@@ -145,6 +150,7 @@ pub use production_rustc_driver_v1::{
     run_diagnostic_ordered_region_kir_extraction_driver_v16,
     run_diagnostic_physical_entry_extraction_driver_v20,
     run_diagnostic_physical_global_copy_extraction_driver_v21,
+    run_diagnostic_physical_lds_exchange_extraction_driver_v22,
     run_production_amdgpu_compiler_handoff_extraction_driver_v1,
     run_production_amdgpu_llvm_extraction_driver_v1, run_production_extraction_driver_v1,
     run_production_fixed_checked_output_extraction_driver_v1,

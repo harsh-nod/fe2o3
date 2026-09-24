@@ -311,6 +311,7 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     complete_body_annotation: Option<crate::production_complete_body_annotation_vnext::CompleteBodyCallAnnotationVNext<'tcx>>,
     physical_entry_annotations: Option<crate::production_physical_entry_annotation_v37::PhysicalEntryAnnotationsV37<'tcx>>,
     physical_global_copy_annotations: Option<crate::production_physical_global_copy_annotation_v38::PhysicalGlobalCopyAnnotationsV38<'tcx>>,
+    physical_lds_exchange_annotations: Option<crate::production_physical_lds_exchange_annotation_v39::PhysicalLdsExchangeAnnotationsV39<'tcx>>,
     defined_functions: usize,
     context_entries: Vec<crate::collector::RetainedContextEntryV29>,
     function_commitments: Option<PendingFunctionCommitmentsV29<'tcx>>,
@@ -398,6 +399,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             complete_body_annotation: None,
             physical_entry_annotations: None,
             physical_global_copy_annotations: None,
+            physical_lds_exchange_annotations: None,
             defined_functions,
             context_entries: Vec::new(),
             function_commitments: None,
@@ -475,6 +477,39 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         &self,
     ) -> Result<(), ProductionSemanticBodyErrorV1> {
         if let Some(annotations) = &self.physical_entry_annotations {
+            annotations.require_drained().map_err(table)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_physical_lds_exchange_annotations_v39(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        plan: &crate::rustc_semantic_plan_v1::ProductionSemanticPreflightPlanV1<'tcx>,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        use crate::production_physical_lds_exchange_annotation_v39 as physical;
+        if self.physical_lds_exchange_annotations.is_some() {
+            return Err(table("physical-lds-exchange annotation cannot be replaced"));
+        }
+        self.charge(
+            SemanticMirResourceV1::ValidationWork,
+            physical::PREPAID_CONSTRUCTION_WORK_V39,
+        )?;
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+            physical::PREPAID_CONSTRUCTION_WORK_V39,
+        );
+        let mut budget =
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 0);
+        self.physical_lds_exchange_annotations = Some(
+            physical::prepare(tcx, plan, &mut budget).map_err(|e| unsupported(e, None, None))?,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn require_physical_lds_exchange_annotations_consumed_v39(
+        &self,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        if let Some(annotations) = &self.physical_lds_exchange_annotations {
             annotations.require_drained().map_err(table)?;
         }
         Ok(())
@@ -1975,6 +2010,53 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                         )
                         .map_err(table)?;
                 }
+                let requires_lds_exchange = self
+                    .terminal_expansions_by_raw
+                    .get(raw_block as usize)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|recipe| {
+                        crate::production_physical_lds_exchange_call_v39::is_physical(
+                            recipe.expansion,
+                        )
+                    });
+                if requires_lds_exchange {
+                    let actual = match args.len() {
+                        0 => crate::production_physical_lds_exchange_call_v39::observe(
+                            self.tcx,
+                            self.instance,
+                            self.body,
+                            func,
+                            &[],
+                        ),
+                        2 => crate::production_physical_lds_exchange_call_v39::observe(
+                            self.tcx,
+                            self.instance,
+                            self.body,
+                            func,
+                            &[&args[0].node, &args[1].node],
+                        ),
+                        _ => {
+                            return Err(table("physical-lds-exchange actual marker runtime arity"));
+                        }
+                    }
+                    .map_err(table)?;
+                    let semantic_block = self.block_id(raw_block as usize)?;
+                    let annotation = self
+                        .owner
+                        .physical_lds_exchange_annotations
+                        .as_mut()
+                        .ok_or_else(|| table("physical-lds-exchange source annotation absent"))?;
+                    call = annotation
+                        .attach(
+                            self.instance,
+                            (self.function, raw_block, semantic_callee),
+                            semantic_block,
+                            actual,
+                            call,
+                        )
+                        .map_err(table)?;
+                }
                 let requires_global_copy = self
                     .terminal_expansions_by_raw
                     .get(raw_block as usize)
@@ -3133,6 +3215,9 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         ProductionTerminalExpansionV1::Gfx942PhysicalEntryBegin => Some(5),
         ProductionTerminalExpansionV1::Gfx942PhysicalEntryLabel
         | ProductionTerminalExpansionV1::Gfx942PhysicalEntryStep => Some(0),
+        ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeBegin => Some(2),
+        ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeLabel
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeStep => Some(0),
         ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyBegin => Some(2),
         ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyLabel
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyStep => Some(0),
@@ -3542,6 +3627,7 @@ mod tests {
             complete_body_annotation: None,
             physical_entry_annotations: None,
             physical_global_copy_annotations: None,
+            physical_lds_exchange_annotations: None,
             defined_functions: 0,
             context_entries: Vec::new(),
             function_commitments: None,

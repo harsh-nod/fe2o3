@@ -16,6 +16,11 @@ mod model;
 mod ordered_program_v17;
 mod ordered_region_v16;
 mod physical_entry_v20;
+mod physical_lds_exchange_v22;
+pub use physical_lds_exchange_v22::{
+    PHYSICAL_LDS_EXCHANGE_ADMISSION_WORK_V22, PhysicalLdsExchangeSimulationAdmissionErrorV22,
+    PhysicalLdsExchangeSimulationStorageV22,
+};
 mod physical_global_copy_v21;
 pub use physical_global_copy_v21::{
     PHYSICAL_GLOBAL_COPY_ADMISSION_WORK_V21, PhysicalGlobalCopySimulationAdmissionErrorV21,
@@ -140,4 +145,19 @@ pub use execute::{
     PhysicalGlobalCopyDebugOutcomeV21, PhysicalGlobalCopyDebugRecordRefV21,
     PhysicalGlobalCopyDebugSymbolicKindV21, PhysicalGlobalCopyDebugSymbolicV21,
     PhysicalGlobalCopyDebugUsageV21,
+};
+
+#[cfg(test)]
+use fe2o3_kernel_ir as physical_lds_exchange_fixture_ir;
+#[cfg(test)]
+#[path = "../../fe2o3-kernel-ir/tests/fixtures/physical_lds_exchange_v22.rs"]
+mod physical_lds_exchange_test_fixture;
+
+pub use execute::{
+    MAX_PHYSICAL_LDS_EXCHANGE_DEBUG_RECORDS_V22, PhysicalLdsExchangeDebugBindingRefV22,
+    PhysicalLdsExchangeDebugCaptureErrorV22, PhysicalLdsExchangeDebugCaptureStopV22,
+    PhysicalLdsExchangeDebugCaptureV22, PhysicalLdsExchangeDebugOptionsV22,
+    PhysicalLdsExchangeDebugOutcomeV22, PhysicalLdsExchangeDebugRecordRefV22,
+    PhysicalLdsExchangeDebugSymbolicKindV22, PhysicalLdsExchangeDebugSymbolicV22,
+    PhysicalLdsExchangeDebugUsageV22,
 };

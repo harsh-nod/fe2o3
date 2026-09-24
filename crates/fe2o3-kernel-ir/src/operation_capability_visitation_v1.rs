@@ -741,6 +741,18 @@ impl Operation {
                 ))?;
                 visitor(TargetCapabilityRefV1::WaveWidth(WaveWidth::Wave64))?;
             }
+            OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+            | OperationKind::Gfx942PhysicalLdsExchangeStep(_) => {
+                visitor(TargetCapabilityRefV1::extension(
+                    crate::AMDGPU_GFX942_PHYSICAL_LDS_EXCHANGE_CAPABILITY_NAMESPACE_V22,
+                    crate::AMDGPU_GFX942_PHYSICAL_LDS_EXCHANGE_CAPABILITY_NAME_V22,
+                ))?;
+                visitor(TargetCapabilityRefV1::extension(
+                    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE,
+                    crate::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+                ))?;
+                visitor(TargetCapabilityRefV1::WaveWidth(WaveWidth::Wave64))?;
+            }
             OperationKind::Gfx942OrderedProgram(_) => {
                 visitor(TargetCapabilityRefV1::extension(
                     crate::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAMESPACE,

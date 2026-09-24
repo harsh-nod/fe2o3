@@ -82,6 +82,12 @@ include!("production_ordered_program_pre_ranked_v17.rs");
 include!("production_complete_body_source_vnext.rs");
 include!("production_physical_entry_source_v20.rs");
 include!("production_physical_global_copy_source_v21.rs");
+include!("production_physical_lds_exchange_source_v22.rs");
+#[path = "production_physical_lds_exchange_checks_v22.rs"]
+mod physical_lds_exchange_checks_v22;
+pub use physical_lds_exchange_checks_v22::{
+    ProductionPhysicalLdsExchangeCheckErrorV22, ProductionPhysicalLdsExchangeCheckedKirOwnerV22,
+};
 #[path = "production_physical_global_copy_checks_v21.rs"]
 mod physical_global_copy_checks_v21;
 pub use physical_global_copy_checks_v21::{
@@ -16359,7 +16365,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyBegin
             | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyLabel(_)
-            | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_) => {
+            | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_)
+            | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeBegin(_)
+            | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeLabel(_)
+            | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeStep(_) => {
                 return Err(unsupported(
                     0,
                     Some(block.index()),
@@ -24758,6 +24767,11 @@ fn authenticated_disjoint_slice_parameter(
         })
         .or_else(|| {
             physical_global_copy_parameter_v21::physical_global_copy_slice_parameter_v21(
+                types, callables, function, argument, ty,
+            )
+        })
+        .or_else(|| {
+            physical_lds_exchange_parameter_v22::physical_lds_exchange_slice_parameter_v22(
                 types, callables, function, argument, ty,
             )
         })?;

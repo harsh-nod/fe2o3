@@ -49,6 +49,8 @@ fn project(value: &RuntimeValue, profile: Profile) -> Result<SimulationDebugValu
                 .map(PhysicalDebugSymbolicV1::from_entry),
             Profile::GlobalCopyV21 => PhysicalGlobalCopyDebugSymbolicV21::from_runtime(value)
                 .map(PhysicalDebugSymbolicV1::from_global_copy),
+            Profile::LdsExchangeV22 => PhysicalLdsExchangeDebugSymbolicV22::from_runtime(value)
+                .map(PhysicalDebugSymbolicV1::from_lds_exchange),
         }
         .map(SimulationDebugValueV1::PhysicalSymbolicV1)
         .ok_or(Failure::Unavailable),

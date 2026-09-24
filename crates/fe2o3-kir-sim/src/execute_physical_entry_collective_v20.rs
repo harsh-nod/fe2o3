@@ -9,6 +9,7 @@ pub(super) fn resolve<'a>(
 ) -> Result<bool, SimulationExecutionErrorV1> {
     if !physical_entry_v20::is_collective(arrival.operation)
         && !physical_global_copy_v21::is_collective(arrival.operation)
+        && !physical_lds_exchange_v22::is_collective(arrival.operation)
     {
         return Ok(false);
     }

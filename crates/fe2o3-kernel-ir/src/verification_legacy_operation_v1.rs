@@ -403,6 +403,10 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
             | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => {
                 self.verify_physical_global_copy_operation_v21(operation, location)
             }
+            OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+            | OperationKind::Gfx942PhysicalLdsExchangeStep(_) => {
+                self.verify_physical_lds_exchange_operation_v22(operation, location)
+            }
         }
     }
 

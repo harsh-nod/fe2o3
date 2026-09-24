@@ -827,7 +827,9 @@ impl<'a> Analyzer<'a> {
             | OperationKind::Gfx942PhysicalEntryDeclaration(_)
             | OperationKind::Gfx942PhysicalEntryStep(_)
             | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
-            | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => Variation::Varying,
+            | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+            | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+            | OperationKind::Gfx942PhysicalLdsExchangeStep(_) => Variation::Varying,
             OperationKind::Matrix(_) => Variation::Varying,
             OperationKind::Gfx950LdsTranspose(transpose) => match transpose.kind {
                 fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current { .. }

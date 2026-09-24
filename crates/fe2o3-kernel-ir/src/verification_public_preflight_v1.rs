@@ -168,6 +168,8 @@ fn operation_kind_exceeds_public_verifier_depth_v1<E>(
         | OperationKind::Gfx942PhysicalEntryStep(_)
         | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
         | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeStep(_)
         | OperationKind::Execution(_) => None,
     };
     match ty {

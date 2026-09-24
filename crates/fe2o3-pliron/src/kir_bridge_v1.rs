@@ -843,6 +843,8 @@ fn preflight_operation(
         | OperationKind::Gfx942PhysicalEntryStep(_)
         | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
         | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeStep(_)
         | OperationKind::VerificationContract(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
@@ -2758,6 +2760,8 @@ fn remap_preserved_operation(
         | OperationKind::Gfx942PhysicalEntryStep(_)
         | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
         | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeStep(_)
         | OperationKind::Constant(_)
         | OperationKind::Unary { .. }
         | OperationKind::Binary { .. }

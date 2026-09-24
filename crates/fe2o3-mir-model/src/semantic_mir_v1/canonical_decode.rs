@@ -8,6 +8,8 @@ mod complete_body_v36;
 mod physical_entry_v37;
 #[path = "canonical_decode/physical_global_copy_v38.rs"]
 mod physical_global_copy_v38;
+#[path = "canonical_decode/physical_lds_exchange_v39.rs"]
+mod physical_lds_exchange_v39;
 
 /// Failure to decode the bounded canonical inert semantic MIR representation.
 ///
@@ -458,6 +460,18 @@ impl AdmittedInertSemanticMirV1 {
             bytes,
             limits,
             CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V37),
+        )
+    }
+
+    /// Exact per-occurrence physical-lds-exchange grammar; decoded data grants no source custody.
+    pub fn decode_exact_v39_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V39),
         )
     }
 
@@ -1807,7 +1821,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V38 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V39 {
+            101
+        } else if self.wire_version == SemanticMirWireVersionV1::V38 {
             98
         } else if self.wire_version == SemanticMirWireVersionV1::V37 {
             95
@@ -1868,6 +1884,7 @@ impl<'a> CanonicalDecoderV1<'a> {
             || (tag == 92 && self.wire_version != SemanticMirWireVersionV1::V36)
             || (matches!(tag, 93..=95) && self.wire_version != SemanticMirWireVersionV1::V37)
             || (matches!(tag, 96..=98) && self.wire_version != SemanticMirWireVersionV1::V38)
+            || (matches!(tag, 99..=101) && self.wire_version != SemanticMirWireVersionV1::V39)
         {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
@@ -1877,6 +1894,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         }
         Ok(match tag {
             96..=98 => return self.physical_global_copy_operation_v38(tag),
+            99..=101 => return self.physical_lds_exchange_operation_v39(tag),
             93..=95 => return self.physical_entry_operation_v37(tag),
             92 => return self.complete_body_packing_v36(),
             89 => {
@@ -2905,6 +2923,11 @@ impl<'a> CanonicalDecoderV1<'a> {
                 {
                     call = call.with_complete_body_source_vnext(source);
                 }
+                if self.wire_version == SemanticMirWireVersionV1::V39
+                    && let Some(source) = self.physical_lds_exchange_source_v39()?
+                {
+                    call = call.with_physical_lds_exchange_source_v39(source);
+                }
                 if self.wire_version == SemanticMirWireVersionV1::V38
                     && let Some(source) = self.physical_global_copy_source_v38()?
                 {
@@ -3027,6 +3050,7 @@ mod tests {
     mod nominal_pointer_sized_v35_tests;
     mod physical_entry_v37_tests;
     mod physical_global_copy_v38_tests;
+    mod physical_lds_exchange_v39_tests;
     mod rust_call_local_tests;
     mod saturating_integer_v30_tests;
     mod wave64_shuffle_v33_tests;

@@ -29,9 +29,14 @@ mod physical_entry_v20;
 pub(crate) use physical_entry_v20::retain_verified_physical_entry_compiler_module_text_v20;
 #[path = "kernel_ir_codegen_physical_global_copy_v21.rs"]
 mod physical_global_copy_v21;
+#[path = "kernel_ir_codegen_physical_lds_exchange_v22.rs"]
+mod physical_lds_exchange_v22;
 #[cfg(test)]
 pub(crate) use physical_global_copy_v21::exact_inert_descriptor_extension_v21;
 pub(crate) use physical_global_copy_v21::retain_verified_physical_global_copy_compiler_module_text_v21;
+#[cfg(test)]
+pub(crate) use physical_lds_exchange_v22::exact_inert_descriptor_extension_v22;
+pub(crate) use physical_lds_exchange_v22::retain_verified_physical_lds_exchange_compiler_module_text_v22;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DescriptorSourceIdentity {
@@ -128,6 +133,7 @@ pub(crate) enum CompilerModuleConstructionError {
     CompleteBodyIdentityMismatch,
     PhysicalEntryIdentityMismatchV20,
     PhysicalGlobalCopyIdentityMismatchV21,
+    PhysicalLdsExchangeIdentityMismatchV22,
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
     UnsupportedExecutionType,
@@ -146,6 +152,7 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::LimitExceeded { field, actual, max } => {
                 write!(formatter, "{field} count/size {actual} exceeds limit {max}")
             }
+            Self::PhysicalLdsExchangeIdentityMismatchV22 => formatter.write_str("physical LDS-exchange compiler module does not match the retained canonical owner and frame"),
             Self::PhysicalGlobalCopyIdentityMismatchV21 => formatter.write_str(
                 "physical global-copy compiler module does not match the retained canonical owner",
             ),

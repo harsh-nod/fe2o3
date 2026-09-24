@@ -13,12 +13,14 @@ mod snapshot;
 pub(super) enum Profile {
     EntryV20,
     GlobalCopyV21,
+    LdsExchangeV22,
 }
 impl Profile {
     pub(super) fn matches(self, admitted: &AdmittedSimulationModuleV1) -> bool {
         match self {
             Self::EntryV20 => admitted.uses_physical_entry_v20(),
             Self::GlobalCopyV21 => admitted.uses_physical_global_copy_v21(),
+            Self::LdsExchangeV22 => admitted.uses_physical_lds_exchange_v22(),
         }
     }
 }
@@ -28,24 +30,28 @@ impl Profile {
 pub(super) enum CanonicalOwner<'a> {
     Entry(&'a VerifiedCanonicalKernelIrModuleV20),
     GlobalCopy(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV21),
+    LdsExchange(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV22),
 }
 impl CanonicalOwner<'_> {
     fn profile(self) -> Profile {
         match self {
             Self::Entry(_) => Profile::EntryV20,
             Self::GlobalCopy(_) => Profile::GlobalCopyV21,
+            Self::LdsExchange(_) => Profile::LdsExchangeV22,
         }
     }
     fn identity(self) -> SimulationKernelIrIdentityV1 {
         match self {
             Self::Entry(o) => (*o.identity()).into(),
             Self::GlobalCopy(o) => (*o.identity()).into(),
+            Self::LdsExchange(o) => (*o.identity()).into(),
         }
     }
     fn bytes_len(self) -> usize {
         match self {
             Self::Entry(o) => o.canonical_bytes().len(),
             Self::GlobalCopy(o) => o.canonical_bytes().len(),
+            Self::LdsExchange(o) => o.canonical_bytes().len(),
         }
     }
 }

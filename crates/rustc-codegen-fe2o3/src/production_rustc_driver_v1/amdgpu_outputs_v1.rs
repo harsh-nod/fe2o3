@@ -56,6 +56,9 @@ pub(super) fn extract_amdgpu_llvm_in_active_session_v1(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
     )?;
+    if transaction.has_authenticated_physical_lds_exchange_v22() {
+        return physical_lds_exchange_v22::extract_llvm(transaction, output, expected_target);
+    }
     if transaction.has_authenticated_physical_global_copy_v21() {
         return physical_global_copy_v21::extract_llvm(transaction, output, expected_target);
     }
@@ -131,6 +134,9 @@ pub(super) fn extract_amdgpu_compiler_handoff_in_active_session_v1(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
     )?;
+    if transaction.has_authenticated_physical_lds_exchange_v22() {
+        return physical_lds_exchange_v22::extract_handoff(transaction, output, expected_target);
+    }
     if transaction.has_authenticated_physical_global_copy_v21() {
         return physical_global_copy_v21::extract_handoff(transaction, output, expected_target);
     }
@@ -178,6 +184,9 @@ fn extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
     )?;
+    if transaction.has_authenticated_physical_lds_exchange_v22() {
+        return Err("MIR39/KIR22 physical-lds-exchange kernels have no admitted semantic V3/protected handoff route".to_owned());
+    }
     if transaction.has_authenticated_physical_global_copy_v21() {
         return Err("MIR38/KIR21 physical-global-copy kernels have no admitted semantic V3/protected handoff route".to_owned());
     }

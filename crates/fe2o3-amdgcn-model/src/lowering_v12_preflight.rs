@@ -113,6 +113,14 @@ fn reject_unsupported_module(
                             "physical global copies require the exact canonical V21 owner entry point",
                         ));
                     }
+                    OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+                    | OperationKind::Gfx942PhysicalLdsExchangeStep(_) => {
+                        return Err(LoweringErrors::one(
+                            LoweringLocation::device_operation(module, function, block.id, ordinal),
+                            LoweringDiagnosticCode::UnsupportedOperation,
+                            "physical LDS exchanges require the exact canonical V22 owner entry point",
+                        ));
+                    }
                     OperationKind::Execution(_) => {
                         return Err(LoweringErrors::one(
                             LoweringLocation::device_operation(module, function, block.id, ordinal),

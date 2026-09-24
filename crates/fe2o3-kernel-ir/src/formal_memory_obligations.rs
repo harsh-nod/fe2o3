@@ -17,6 +17,7 @@ mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
 mod physical_entry_v20;
 mod physical_global_copy_v21;
+mod physical_lds_exchange_v22;
 mod pointer_derivation;
 mod private_slots;
 mod receipt_v1;
@@ -30,6 +31,7 @@ pub use physical_entry_v20::{
     derive_physical_entry_memory_obligations_v20,
 };
 pub use physical_global_copy_v21::*;
+pub use physical_lds_exchange_v22::*;
 pub use receipt_v1::*;
 
 use guarded_access_v1::{GuardedAnalysisV1, GuardedControlV1, GuardedResourceErrorV1};
@@ -1038,6 +1040,8 @@ fn derive_kernel_memory_obligations_with_v19_context(
                 | OperationKind::Gfx942PhysicalEntryStep(_)
                 | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
                 | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+                | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+                | OperationKind::Gfx942PhysicalLdsExchangeStep(_)
                 | OperationKind::VerificationContract(_)
                 | OperationKind::VectorLoad(_)
                 | OperationKind::VectorStore(_)

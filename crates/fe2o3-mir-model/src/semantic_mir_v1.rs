@@ -30,6 +30,8 @@ mod physical_entry_source_v37;
 mod physical_entry_v37;
 mod physical_global_copy_source_v38;
 mod physical_global_copy_v38;
+mod physical_lds_exchange_source_v39;
+mod physical_lds_exchange_v39;
 mod saturating_integer_v30;
 mod target_properties;
 mod wave64_shuffle_v33;
@@ -67,6 +69,11 @@ pub use physical_entry_v37::{
 pub use physical_global_copy_source_v38::SemanticPhysicalGlobalCopySourceV38;
 pub use physical_global_copy_v38::{
     SEMANTIC_PHYSICAL_GLOBAL_COPY_MAX_OCCURRENCES_V38, SemanticPhysicalGlobalCopyInstructionV38,
+};
+pub use physical_lds_exchange_source_v39::SemanticPhysicalLdsExchangeSourceV39;
+pub use physical_lds_exchange_v39::{
+    SEMANTIC_PHYSICAL_LDS_EXCHANGE_MAX_OCCURRENCES_V39, SemanticPhysicalLdsExchangeFrameV39,
+    SemanticPhysicalLdsExchangeInstructionV39,
 };
 pub use saturating_integer_v30::SemanticSaturatingIntegerOpV1;
 use target_properties::{
@@ -111,6 +118,8 @@ pub const INERT_SEMANTIC_MIR_VERSION_V36: u16 = 36;
 pub const INERT_SEMANTIC_MIR_VERSION_V37: u16 = 37;
 /// Explicit two-slice authored global-copy primitives and inert source observations.
 pub const INERT_SEMANTIC_MIR_VERSION_V38: u16 = 38;
+/// Exact frame-bearing physical LDS source grammar.
+pub const INERT_SEMANTIC_MIR_VERSION_V39: u16 = 39;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -144,6 +153,7 @@ pub enum SemanticMirWireVersionV1 {
     V36,
     V37,
     V38,
+    V39,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -174,6 +184,7 @@ impl SemanticMirWireVersionV1 {
             Self::V36 => INERT_SEMANTIC_MIR_VERSION_V36,
             Self::V37 => INERT_SEMANTIC_MIR_VERSION_V37,
             Self::V38 => INERT_SEMANTIC_MIR_VERSION_V38,
+            Self::V39 => INERT_SEMANTIC_MIR_VERSION_V39,
         }
     }
 
@@ -204,6 +215,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V36 => Some(Self::V36),
             INERT_SEMANTIC_MIR_VERSION_V37 => Some(Self::V37),
             INERT_SEMANTIC_MIR_VERSION_V38 => Some(Self::V38),
+            INERT_SEMANTIC_MIR_VERSION_V39 => Some(Self::V39),
             _ => None,
         }
     }
@@ -4879,6 +4891,7 @@ impl SemanticCallDestinationV1 {
 enum PhysicalSourceTailV1 {
     EntryV37(SemanticPhysicalEntrySourceV37),
     GlobalCopyV38(SemanticPhysicalGlobalCopySourceV38),
+    LdsExchangeV39(SemanticPhysicalLdsExchangeSourceV39),
     Mixed,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5045,6 +5058,27 @@ impl SemanticDirectCallV1 {
         }
     }
 
+    /// Inert observations only; decoded records do not grant source custody.
+    pub fn with_physical_lds_exchange_source_v39(
+        mut self,
+        source: SemanticPhysicalLdsExchangeSourceV39,
+    ) -> Self {
+        self.physical_source = Some(match self.physical_source {
+            None | Some(PhysicalSourceTailV1::LdsExchangeV39(_)) => {
+                PhysicalSourceTailV1::LdsExchangeV39(source)
+            }
+            _ => PhysicalSourceTailV1::Mixed,
+        });
+        self
+    }
+    pub const fn physical_lds_exchange_source_v39(
+        &self,
+    ) -> Option<SemanticPhysicalLdsExchangeSourceV39> {
+        match self.physical_source {
+            Some(PhysicalSourceTailV1::LdsExchangeV39(source)) => Some(source),
+            _ => None,
+        }
+    }
     /// Inert observations only; decoded records do not grant source custody.
     pub fn with_physical_global_copy_source_v38(
         mut self,
@@ -5577,6 +5611,9 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     Gfx942PhysicalGlobalCopyBegin,
     Gfx942PhysicalGlobalCopyLabel(u8),
     Gfx942PhysicalGlobalCopyStep(SemanticPhysicalGlobalCopyInstructionV38),
+    Gfx942PhysicalLdsExchangeBegin(SemanticPhysicalLdsExchangeFrameV39),
+    Gfx942PhysicalLdsExchangeLabel(u8),
+    Gfx942PhysicalLdsExchangeStep(SemanticPhysicalLdsExchangeInstructionV39),
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
@@ -6577,6 +6614,13 @@ impl InertSemanticMirRequestV1 {
     }
 
     /// Explicit-only two-slice source grammar; inert data is not source custody.
+    pub fn admit_exact_v39(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V39, limits)
+    }
+    /// Explicit-only two-slice source grammar; inert data is not source custody.
     pub fn admit_exact_v38(
         self,
         limits: SemanticMirLimitsV1,
@@ -6601,6 +6645,9 @@ impl InertSemanticMirRequestV1 {
         self,
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        if physical_lds_exchange_v39::uses_v39(&self) {
+            return Err(SemanticMirErrorV1::InvalidPhysicalLdsExchangeV39);
+        }
         if physical_global_copy_v38::uses_v38(&self) {
             return Err(SemanticMirErrorV1::InvalidPhysicalGlobalCopyV38);
         }
@@ -7100,6 +7147,7 @@ pub enum SemanticMirErrorV1 {
     InvalidCompleteBodyV36,
     InvalidPhysicalEntryV37,
     InvalidPhysicalGlobalCopyV38,
+    InvalidPhysicalLdsExchangeV39,
     EmptyModel {
         entity: SemanticMirEntityV1,
     },
@@ -7214,6 +7262,9 @@ impl fmt::Display for SemanticMirErrorV1 {
             Self::InvalidOrderedProgramV32 => {
                 formatter.write_str("closed gfx942 ordered program or source occurrence is invalid")
             }
+            Self::InvalidPhysicalLdsExchangeV39 => formatter.write_str(
+                "invalid bounded physical-lds-exchange V39 primitive or source occurrence",
+            ),
             Self::InvalidPhysicalGlobalCopyV38 => formatter.write_str(
                 "invalid bounded physical-global-copy V38 primitive or source occurrence",
             ),
@@ -7931,6 +7982,9 @@ fn validate_callables(context: &mut ValidationContextV1<'_>) -> Result<(), Seman
                 ) {
                     charge_validation_work(context, complete_body_v36::VALIDATION_WORK)?;
                 }
+                if physical_lds_exchange_v39::is_physical(*operation) {
+                    charge_validation_work(context, physical_lds_exchange_v39::VALIDATION_WORK)?;
+                }
                 if physical_global_copy_v38::is_physical(*operation) {
                     charge_validation_work(context, physical_global_copy_v38::VALIDATION_WORK)?;
                 }
@@ -8012,7 +8066,10 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryStep(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyBegin
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyLabel(_)
-        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_) => true,
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeBegin(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeLabel(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeStep(_) => true,
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, .. } => {
             claims.claim_mapping(index_witness, SemanticDisjointIndexSpaceV1::Index1d)
         }
@@ -8459,6 +8516,9 @@ fn compiler_intrinsic_signature_matches(
     }
     let inputs = abi.source_input_types();
     let output = abi.source_output_type();
+    if physical_lds_exchange_v39::is_physical(operation) {
+        return physical_lds_exchange_v39::signature_matches(request, operation, abi);
+    }
     if physical_global_copy_v38::is_physical(operation) {
         return physical_global_copy_v38::signature_matches(request, operation, abi);
     }
@@ -8511,7 +8571,10 @@ fn compiler_intrinsic_signature_matches(
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryStep(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyBegin
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyLabel(_)
-        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_) => {
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeBegin(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeLabel(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeStep(_) => {
             unreachable!("handled before generic signature walk")
         }
         SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(packed) => {
@@ -15664,11 +15727,17 @@ fn validate_call(
     if call.has_mixed_physical_sources() {
         return Err(SemanticMirErrorV1::InvalidPhysicalGlobalCopyV38);
     }
+    if call.physical_lds_exchange_source_v39().is_some()
+        || matches!(context.request.callables.get(call.callee.0 as usize), Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) if physical_lds_exchange_v39::is_physical(*operation))
+    {
+        charge_validation_work(context, physical_lds_exchange_v39::VALIDATION_WORK)?;
+    }
     if call.physical_global_copy_source_v38().is_some()
         || matches!(context.request.callables.get(call.callee.0 as usize), Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) if physical_global_copy_v38::is_physical(*operation))
     {
         charge_validation_work(context, physical_global_copy_v38::VALIDATION_WORK)?;
     }
+    physical_lds_exchange_v39::validate_call_source(context.request, function, location, call)?;
     physical_global_copy_v38::validate_call_source(context.request, function, location, call)?;
     if call.physical_entry_source_v37().is_some()
         || matches!(context.request.callables.get(call.callee.0 as usize), Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) if physical_entry_v37::is_physical(*operation))
@@ -16355,6 +16424,9 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyBegin
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyLabel(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeBegin(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeLabel(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeStep(_)
         | SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_) => {}
         SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
             pending.push_back(scope);
@@ -17224,6 +17296,9 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
 fn minimum_wire_version_without_nominal(
     request: &InertSemanticMirRequestV1,
 ) -> SemanticMirWireVersionV1 {
+    if physical_lds_exchange_v39::uses_v39(request) {
+        return SemanticMirWireVersionV1::V39;
+    }
     if physical_global_copy_v38::uses_v38(request) {
         return SemanticMirWireVersionV1::V38;
     }
@@ -18355,6 +18430,9 @@ fn encode_compiler_intrinsic_operation(
     operation: SemanticCompilerIntrinsicOperationV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if physical_lds_exchange_v39::is_physical(operation) {
+        return physical_lds_exchange_v39::encode_operation(writer, operation, wire_version);
+    }
     if physical_global_copy_v38::is_physical(operation) {
         return physical_global_copy_v38::encode_operation(writer, operation, wire_version);
     }
@@ -18449,6 +18527,7 @@ fn encode_compiler_intrinsic_operation(
             | SemanticMirWireVersionV1::V36
             | SemanticMirWireVersionV1::V37
             | SemanticMirWireVersionV1::V38
+            | SemanticMirWireVersionV1::V39
     ) {
         SemanticMirWireVersionV1::V15
     } else {
@@ -18464,7 +18543,10 @@ fn encode_compiler_intrinsic_operation(
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryStep(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyBegin
         | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyLabel(_)
-        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_) => {
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeBegin(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeLabel(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeStep(_) => {
             unreachable!("encoded above")
         }
         SemanticCompilerIntrinsicOperationV1::Execution(operation) => operation.encode(writer),

@@ -268,6 +268,8 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         | OperationKind::Gfx942PhysicalEntryStep(_)
         | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
         | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
+        | OperationKind::Gfx942PhysicalLdsExchangeStep(_)
         | OperationKind::MemoryIntrinsic(_)
         | OperationKind::Unary { .. }
         | OperationKind::Binary { .. }

@@ -115,6 +115,7 @@ enum TerminalIdentitySchemaV1 {
     CombinedV6,
     CombinedV7,
     CombinedV8,
+    CombinedV9,
 }
 
 #[derive(Clone, Debug)]
@@ -3959,6 +3960,11 @@ const fn terminal_identity_schema_v1(
         | ProductionTerminalExpansionV1::Gfx942PhysicalEntryStep => {
             TerminalIdentitySchemaV1::CombinedV7
         }
+        ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeBegin
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeLabel
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeStep => {
+            TerminalIdentitySchemaV1::CombinedV9
+        }
         ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyBegin
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyLabel
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyStep => {
@@ -3978,6 +3984,15 @@ const fn terminal_expansion_tag_for_schema_v1(
     expansion: ProductionTerminalExpansionV1,
     schema: TerminalIdentitySchemaV1,
 ) -> u8 {
+    // V9 belongs only to the three physical-lds-exchange primitives.
+    if matches!(schema, TerminalIdentitySchemaV1::CombinedV9) {
+        return match expansion {
+            ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeBegin => 151,
+            ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeLabel => 152,
+            ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeStep => 153,
+            _ => u8::MAX,
+        };
+    }
     // V8 belongs only to the three physical-global-copy primitives.
     if matches!(schema, TerminalIdentitySchemaV1::CombinedV8) {
         return match expansion {
@@ -4014,6 +4029,9 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyBegin
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyLabel
         | ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyStep => u8::MAX,
+        ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeBegin
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeLabel
+        | ProductionTerminalExpansionV1::Gfx942PhysicalLdsExchangeStep => u8::MAX,
         ProductionTerminalExpansionV1::Gfx942CompleteBodyE32 => u8::MAX,
         ProductionTerminalExpansionV1::Gfx942OrderedProgramE32 => {
             if matches!(schema, TerminalIdentitySchemaV1::CombinedV5) {
@@ -4142,7 +4160,8 @@ const fn terminal_expansion_tag_for_schema_v1(
             | TerminalIdentitySchemaV1::CombinedV5 => 111,
             TerminalIdentitySchemaV1::CombinedV6
             | TerminalIdentitySchemaV1::CombinedV7
-            | TerminalIdentitySchemaV1::CombinedV8 => u8::MAX,
+            | TerminalIdentitySchemaV1::CombinedV8
+            | TerminalIdentitySchemaV1::CombinedV9 => u8::MAX,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
             #[cfg(test)]
@@ -4152,7 +4171,8 @@ const fn terminal_expansion_tag_for_schema_v1(
             | TerminalIdentitySchemaV1::CombinedV5 => 112,
             TerminalIdentitySchemaV1::CombinedV6
             | TerminalIdentitySchemaV1::CombinedV7
-            | TerminalIdentitySchemaV1::CombinedV8 => u8::MAX,
+            | TerminalIdentitySchemaV1::CombinedV8
+            | TerminalIdentitySchemaV1::CombinedV9 => u8::MAX,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
         ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar) => scalar.terminal_tag(),
@@ -4168,7 +4188,8 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 116,
             TerminalIdentitySchemaV1::CombinedV6
             | TerminalIdentitySchemaV1::CombinedV7
-            | TerminalIdentitySchemaV1::CombinedV8 => u8::MAX,
+            | TerminalIdentitySchemaV1::CombinedV8
+            | TerminalIdentitySchemaV1::CombinedV9 => u8::MAX,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
             #[cfg(test)]
@@ -4177,7 +4198,8 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 117,
             TerminalIdentitySchemaV1::CombinedV6
             | TerminalIdentitySchemaV1::CombinedV7
-            | TerminalIdentitySchemaV1::CombinedV8 => u8::MAX,
+            | TerminalIdentitySchemaV1::CombinedV8
+            | TerminalIdentitySchemaV1::CombinedV9 => u8::MAX,
         },
         ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent => 118,
         ProductionTerminalExpansionV1::DisjointBlockComponentIndex => 119,
@@ -4194,7 +4216,8 @@ const fn terminal_expansion_tag_for_schema_v1(
                 | TerminalIdentitySchemaV1::CombinedV5 => 100,
                 TerminalIdentitySchemaV1::CombinedV6
                 | TerminalIdentitySchemaV1::CombinedV7
-                | TerminalIdentitySchemaV1::CombinedV8 => {
+                | TerminalIdentitySchemaV1::CombinedV8
+                | TerminalIdentitySchemaV1::CombinedV9 => {
                     return u8::MAX;
                 }
             };
@@ -4242,6 +4265,7 @@ mod tests {
     include!("rustc_semantic_plan_v1/complete_body_v36_tests.rs");
     include!("rustc_semantic_plan_v1/physical_entry_v37_tests.rs");
     include!("rustc_semantic_plan_v1/physical_global_copy_v38_tests.rs");
+    include!("rustc_semantic_plan_v1/physical_lds_exchange_v39_tests.rs");
 
     #[test]
     fn ordered_region_v31_preflight_tag_is_only_combined_v4_133() {

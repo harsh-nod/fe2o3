@@ -40,6 +40,8 @@ fn with_engine(test: impl FnOnce(&mut Engine<'_, NoopSimulationEventSinkV1>)) {
     let mut debug_sink = NoopSimulationDebugSinkV1;
     let mut engine = Engine {
         module: &module,
+        physical_lds_context: None,
+        physical_lds_state: None,
         function_module_indices: vec![0],
         block_indices: vec![HashMap::from([(BlockId(0), 0)])],
         function_ssa_values: vec![200],

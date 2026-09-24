@@ -41,7 +41,10 @@ mod physical_entry_v20;
 pub(crate) use physical_entry_v20::prepare_physical_entry_worker_handoff_v20;
 #[path = "production_worker_physical_global_copy_v21.rs"]
 mod physical_global_copy_v21;
+#[path = "production_worker_physical_lds_exchange_v22.rs"]
+mod physical_lds_exchange_v22;
 pub(crate) use physical_global_copy_v21::prepare_physical_global_copy_worker_handoff_v21;
+pub(crate) use physical_lds_exchange_v22::prepare_physical_lds_exchange_worker_handoff_v22;
 
 #[path = "production_worker_refined_forwarding_v1.rs"]
 pub(crate) mod refined_forwarding_v1;
