@@ -84,6 +84,7 @@ pub enum UnsupportedFeatureV1 {
     CompleteBodyProfile,
     PhysicalEntry,
     PhysicalEntryProfile,
+    PhysicalGlobalCopyProfile,
 }
 
 /// One typed unsupported finding in the selected kernel's reachable call graph.
@@ -312,6 +313,8 @@ impl Error for DynamicWorkgroupMemoryUnavailableV1 {}
 pub enum SimulationPreflightErrorV1 {
     /// Existing debug/checkpoint schema cannot retain symbolic pointer/carry state.
     PhysicalEntrySymbolicDebugUnavailableV20,
+    PhysicalGlobalCopyPendingDebugUnavailableV21,
+    PhysicalGlobalCopyAliasedArgumentsV21,
     InvalidLimits(SimulationLimitsErrorV1),
     UnknownKernel(fe2o3_kernel_ir::KernelId),
     MissingEntry(FunctionId),
@@ -366,6 +369,8 @@ pub enum SimulationPreflightErrorV1 {
 impl fmt::Display for SimulationPreflightErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::PhysicalGlobalCopyPendingDebugUnavailableV21 => formatter.write_str("physical-global-copy symbolic/pending values are unavailable in the current debugger/checkpoint schema"),
+            Self::PhysicalGlobalCopyAliasedArgumentsV21 => formatter.write_str("physical-global-copy input and output require separate request-local allocations"),
             Self::InvalidLimits(error) => error.fmt(formatter),
             Self::PhysicalEntrySymbolicDebugUnavailableV20 => write!(
                 formatter,
@@ -565,6 +570,13 @@ pub(crate) fn preflight(
                 program: crate::ordered_program_v17::launch_profile_matches(
                     module, kernel, request, target,
                 ),
+                physical_global_copy: crate::physical_global_copy_v21::launch_profile_matches(
+                    module,
+                    kernel,
+                    request,
+                    target,
+                    wire_version,
+                ),
                 physical_entry: crate::physical_entry_v20::launch_profile_matches(
                     module,
                     kernel,
@@ -586,6 +598,9 @@ pub(crate) fn preflight(
     }
     let reserved_call_depth = validate_acyclic_call_depth(module, entry, limits)?;
     validate_arguments(entry, request, target, limits)?;
+    if wire_version == fe2o3_kernel_ir::KERNEL_IR_VERSION_V21 {
+        crate::physical_global_copy_v21::validate_separate_bindings(request)?;
+    }
     let workgroup_resources = validate_workgroup_resources(
         module,
         &reachable_function_indices,
@@ -921,7 +936,7 @@ fn validate_workgroup_resources(
     })
 }
 
-fn conservative_preflight_input_bytes(
+pub(crate) fn conservative_preflight_input_bytes(
     admitted_resident_bytes: usize,
     module: &Module,
     request: &SimulationRequestV1,
@@ -958,7 +973,7 @@ fn conservative_preflight_input_bytes(
     Some(resident.bytes())
 }
 
-fn conservative_preflight_scratch_bytes(
+pub(crate) fn conservative_preflight_scratch_bytes(
     module: &Module,
     request: &SimulationRequestV1,
     limits: SimulationLimitsV1,
@@ -1165,6 +1180,7 @@ struct OrderedProfiles {
     program: bool,
     complete_body: bool,
     physical_entry: bool,
+    physical_global_copy: bool,
 }
 
 fn scan_reachable(
@@ -1267,6 +1283,10 @@ fn scan_reachable(
                         program: ordered_program_profile,
                         complete_body: complete_body_profile,
                         physical_entry: physical_entry_profile,
+                        physical_global_copy: launch_profiles.physical_global_copy
+                            && crate::physical_global_copy_v21::scope_profile_matches(
+                                &function.required_capabilities,
+                            ),
                     },
                 )?;
             }
@@ -1911,6 +1931,51 @@ fn scan_operation(
             .is_err()
             {
                 reject!(UnsupportedFeatureV1::OrderedProgram);
+            }
+        }
+        OperationKind::Gfx942PhysicalGlobalCopyDeclaration(declaration) => {
+            if !ordered_profiles.physical_global_copy {
+                reject!(UnsupportedFeatureV1::PhysicalGlobalCopyProfile);
+            }
+            let registers = fe2o3_kernel_ir::GFX942_PHYSICAL_ENTRY_REGISTERS_V20;
+            if declaration.validate_shape().is_err()
+                || operation.results.len() != registers.len()
+                || operation
+                    .results
+                    .iter()
+                    .zip(registers)
+                    .any(|(value, register)| value.ty != Type::Scalar(register.scalar_type()))
+                || declaration.parameters.iter().zip([AccessMode::ReadOnly, AccessMode::ReadWrite]).any(|(id, access)| !matches!(value_types.get(id),Some(Type::Slice(slice)) if slice.address_space == AddressSpace::Global && slice.access == access && slice.element.as_ref() == &Type::Scalar(ScalarType::U32)))
+            {
+                reject!(UnsupportedFeatureV1::PhysicalGlobalCopyProfile);
+            }
+        }
+        OperationKind::Gfx942PhysicalGlobalCopyStep(step) => {
+            if !ordered_profiles.physical_global_copy {
+                reject!(UnsupportedFeatureV1::PhysicalGlobalCopyProfile);
+            }
+            let registers = step.instruction.result_registers();
+            if step.validate_shape().is_err()
+                || operation.results.len() != registers.iter().flatten().count()
+                || operation
+                    .results
+                    .iter()
+                    .zip(registers.iter().flatten())
+                    .any(|(value, register)| value.ty != Type::Scalar(register.scalar_type()))
+                || step
+                    .operands
+                    .iter()
+                    .zip(step.instruction.operand_registers())
+                    .any(|(value, register)| match (value, register) {
+                        (Some(value), Some(register)) => {
+                            value_types.get(value).copied()
+                                != Some(&Type::Scalar(register.scalar_type()))
+                        }
+                        (None, None) => false,
+                        _ => true,
+                    })
+            {
+                reject!(UnsupportedFeatureV1::PhysicalGlobalCopyProfile);
             }
         }
         OperationKind::Gfx942PhysicalEntryDeclaration(declaration) => {
@@ -2859,6 +2924,7 @@ mod tests {
                 program: false,
                 complete_body: false,
                 physical_entry: false,
+                physical_global_copy: false,
             },
         )
         .unwrap();
@@ -2917,6 +2983,7 @@ mod tests {
                 program: false,
                 complete_body: false,
                 physical_entry: false,
+                physical_global_copy: false,
             },
         )
         .unwrap();
@@ -2980,6 +3047,7 @@ mod tests {
                 program: false,
                 complete_body: false,
                 physical_entry: false,
+                physical_global_copy: false,
             },
         )
         .unwrap();
@@ -3026,6 +3094,7 @@ mod tests {
                 program: false,
                 complete_body: false,
                 physical_entry: false,
+                physical_global_copy: false,
             },
         )
         .unwrap();

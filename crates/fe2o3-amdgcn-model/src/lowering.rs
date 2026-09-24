@@ -4905,6 +4905,14 @@ impl<'a> FunctionLowerer<'a> {
                     "physical entries require the exact canonical V20 owner entry point",
                 ));
             }
+            OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
+            | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedOperation,
+                    "physical global copies require the exact canonical V21 owner entry point",
+                ));
+            }
             OperationKind::Matrix(matrix) => {
                 self.validate_matrix(matrix, &location)?;
             }

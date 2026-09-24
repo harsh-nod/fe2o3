@@ -51,6 +51,7 @@ use crate::schema::{ErrorKind, Stage};
 pub(super) mod diagnostic_kir_v16;
 pub(super) mod diagnostic_kir_v17;
 pub(super) mod diagnostic_kir_v19;
+pub(super) mod physical_entry_debug_v20;
 
 const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --kir-v12 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --diagnostic-kir-v19 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH] (diagnostic V16/V17/V19 do not support schedule options)";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
@@ -135,6 +136,7 @@ enum UnsupportedFeatureCode {
     CompleteBodyProfile,
     PhysicalEntry,
     PhysicalEntryProfile,
+    PhysicalGlobalCopyProfile,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
 }
@@ -142,6 +144,7 @@ enum UnsupportedFeatureCode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum InputCode {
+    KirV20,
     KirV7,
     KirV12,
     KirV16,
@@ -3380,6 +3383,12 @@ fn preflight_kind(error: &SimulationPreflightErrorV1) -> ErrorKind {
         SimulationPreflightErrorV1::PhysicalEntrySymbolicDebugUnavailableV20 => {
             ErrorKind::PreflightPhysicalEntrySymbolicDebugUnavailableV20
         }
+        SimulationPreflightErrorV1::PhysicalGlobalCopyPendingDebugUnavailableV21 => {
+            ErrorKind::PreflightPhysicalGlobalCopyPendingDebugUnavailableV21
+        }
+        SimulationPreflightErrorV1::PhysicalGlobalCopyAliasedArgumentsV21 => {
+            ErrorKind::PreflightPhysicalGlobalCopyAliasedArgumentsV21
+        }
         SimulationPreflightErrorV1::InvalidLimits(_) => ErrorKind::PreflightInvalidLimits,
         SimulationPreflightErrorV1::UnknownKernel(_) => ErrorKind::PreflightUnknownKernel,
         SimulationPreflightErrorV1::MissingEntry(_) => ErrorKind::PreflightMissingEntry,
@@ -3632,6 +3641,9 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::CompleteBodyProfile => UnsupportedFeatureCode::CompleteBodyProfile,
         UnsupportedFeatureV1::PhysicalEntry => UnsupportedFeatureCode::PhysicalEntry,
         UnsupportedFeatureV1::PhysicalEntryProfile => UnsupportedFeatureCode::PhysicalEntryProfile,
+        UnsupportedFeatureV1::PhysicalGlobalCopyProfile => {
+            UnsupportedFeatureCode::PhysicalGlobalCopyProfile
+        }
         UnsupportedFeatureV1::UnsupportedScalarOperation => {
             UnsupportedFeatureCode::UnsupportedScalarOperation
         }
@@ -6233,3 +6245,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "linux_physical_global_copy_v21_tests.rs"]
+mod physical_global_copy_v21_tests;

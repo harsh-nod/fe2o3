@@ -265,6 +265,8 @@ impl Operation {
             | Op::Gfx942CompleteBodyStep(_)
             | Op::Gfx942PhysicalEntryDeclaration(_)
             | Op::Gfx942PhysicalEntryStep(_)
+            | Op::Gfx942PhysicalGlobalCopyDeclaration(_)
+            | Op::Gfx942PhysicalGlobalCopyStep(_)
             | Op::VerificationContract(_)
             | Op::VectorLayoutConvert(_)
             | Op::Constant(_)

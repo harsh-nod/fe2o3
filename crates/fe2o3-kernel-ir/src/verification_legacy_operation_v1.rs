@@ -399,6 +399,10 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
             | OperationKind::Gfx942PhysicalEntryStep(_) => {
                 self.verify_physical_entry_operation_v20(operation, location)
             }
+            OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
+            | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => {
+                self.verify_physical_global_copy_operation_v21(operation, location)
+            }
         }
     }
 

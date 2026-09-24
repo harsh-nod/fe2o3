@@ -268,6 +268,7 @@ fn absent_source_refusal_preserves_the_other_borrowed_file() {
 
 #[test]
 fn fixed_native_slots_are_admitted_after_a_real_process_exec() {
+    let _fork_guard = crate::TEST_FORK_FD_LOCK.lock().unwrap();
     for mode in [
         "valid",
         "consistent-other",

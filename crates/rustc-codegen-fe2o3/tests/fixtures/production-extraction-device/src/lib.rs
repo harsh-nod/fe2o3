@@ -1,5 +1,18 @@
 #![no_std]
 
+#[cfg(any(
+    feature = "physical-global-copy-one-v21",
+    feature = "physical-global-copy-registers-v21",
+    feature = "physical-global-copy-wrong-launch-v21",
+    feature = "physical-global-copy-missing-lgkm-v21",
+    feature = "physical-global-copy-missing-vm-v21",
+    feature = "physical-global-copy-wrong-carry-v21",
+    feature = "physical-global-copy-wrong-store-v21",
+    feature = "physical-global-copy-wrong-offset-v21",
+    feature = "physical-global-copy-reserved-register-v21",
+))]
+mod physical_global_copy_v21;
+
 #[cfg(feature = "unannotated-fill")]
 mod unannotated_fill;
 
@@ -167,6 +180,15 @@ mod complete_body_v19;
 mod physical_entry_v20;
 
 #[cfg(not(any(
+    feature = "physical-global-copy-one-v21",
+    feature = "physical-global-copy-registers-v21",
+    feature = "physical-global-copy-wrong-launch-v21",
+    feature = "physical-global-copy-missing-lgkm-v21",
+    feature = "physical-global-copy-missing-vm-v21",
+    feature = "physical-global-copy-wrong-carry-v21",
+    feature = "physical-global-copy-wrong-store-v21",
+    feature = "physical-global-copy-wrong-offset-v21",
+    feature = "physical-global-copy-reserved-register-v21",
     feature = "physical-entry-one-v20",
     feature = "physical-entry-diamond-v20",
     feature = "physical-entry-registers-v20",

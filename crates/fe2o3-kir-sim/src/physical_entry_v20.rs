@@ -94,6 +94,7 @@ impl AdmittedSimulationModuleV1 {
     pub(crate) fn check_debug_capture_supported_v20(
         &self,
     ) -> Result<(), crate::SimulationPreflightErrorV1> {
+        self.check_debug_capture_supported_v21()?;
         if self.uses_physical_entry_v20() {
             Err(crate::SimulationPreflightErrorV1::PhysicalEntrySymbolicDebugUnavailableV20)
         } else {

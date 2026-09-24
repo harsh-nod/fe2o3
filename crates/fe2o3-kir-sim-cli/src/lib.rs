@@ -937,3 +937,10 @@ pub fn load_debug_sidecar_v1(
         })
     }
 }
+
+#[cfg(target_os = "linux")]
+pub use linux::physical_entry_debug_v20::{
+    MAX_PHYSICAL_DEBUG_KIR_BYTES_V20, MAX_PHYSICAL_DEBUG_REQUEST_BYTES_V20,
+    PhysicalEntryDebugInputErrorV20, PhysicalEntryDebugInputStorageV20, PhysicalEntryDebugInputV20,
+    load_physical_entry_debug_input_v20,
+};

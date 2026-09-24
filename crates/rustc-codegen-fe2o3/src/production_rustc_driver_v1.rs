@@ -40,6 +40,7 @@ use amdgpu_outputs_v1::{
 #[path = "production_rustc_driver_v1/complete_body_v19.rs"]
 mod complete_body_v19;
 mod physical_entry_v20;
+mod physical_global_copy_v21;
 
 #[path = "production_rustc_driver_v1/ordered_region_diagnostic_export_v16.rs"]
 mod ordered_region_diagnostic_export_v16;
@@ -51,6 +52,9 @@ mod complete_body_diagnostic_export_v19;
 mod physical_entry_diagnostic_export_v20;
 pub use complete_body_diagnostic_export_v19::run_diagnostic_complete_body_kir_extraction_driver_v19;
 pub use physical_entry_diagnostic_export_v20::run_diagnostic_physical_entry_extraction_driver_v20;
+#[path = "production_rustc_driver_v1/physical_global_copy_diagnostic_export_v21.rs"]
+mod physical_global_copy_diagnostic_export_v21;
+pub use physical_global_copy_diagnostic_export_v21::run_diagnostic_physical_global_copy_extraction_driver_v21;
 
 #[path = "production_rustc_driver_v1/ordered_program_diagnostic_export_v17.rs"]
 mod ordered_program_diagnostic_export_v17;
@@ -1031,6 +1035,12 @@ mod gfx942_physical_entry_qualification_v20_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod gfx942_physical_entry_production_v20_tests;
 
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_physical_global_copy_qualification_v21_tests;
+
 #[cfg(test)]
 #[path = "production_rustc_driver_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod gfx942_physical_global_copy_production_v21_tests;

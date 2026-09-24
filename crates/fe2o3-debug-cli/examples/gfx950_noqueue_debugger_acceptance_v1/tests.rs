@@ -601,6 +601,9 @@ fn fixed_startup_setting_after_setup_refuses_before_entry_continuation() {
     assert_eq!(fake.0.resumes, 0);
 }
 
+#[path = "native_runtime_protocol_v1_tests.rs"]
+mod native_runtime_protocol_v1_tests;
+
 fn breakpoint_result(raw: &str) -> crate::rocgdb_mi_parser_v3::MiResultsV3 {
     let line = format!("1^done,{raw}\n");
     let crate::rocgdb_mi_parser_v3::MiRecordV3::Result { results, .. } =

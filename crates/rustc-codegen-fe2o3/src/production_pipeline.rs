@@ -121,6 +121,12 @@ pub(crate) enum ProductionPipelineError {
     CompleteBodyStage(Box<complete_body_vnext::CompleteBodyStageErrorVNext>),
     PhysicalEntryDiagnosticStage(Box<physical_entry_diagnostic_v20::PhysicalEntryStageErrorV20>),
     PhysicalEntryTargetStage(Box<physical_entry_target_v20::PhysicalEntryTargetStageErrorV20>),
+    PhysicalGlobalCopyTargetStage(
+        Box<physical_global_copy_target_v21::PhysicalGlobalCopyTargetStageErrorV21>,
+    ),
+    PhysicalGlobalCopyDiagnosticStage(
+        Box<physical_global_copy_diagnostic_v21::PhysicalGlobalCopyStageErrorV21>,
+    ),
     PrivateCellNativeStage(private_cell_native_v1::PrivateCellNativeStageErrorV1),
     LoopPreheadersNativeStage(private_cell_native_v1::LoopPreheadersNativeStageErrorV1),
     LicmNativeStage(private_cell_native_v1::LicmNativeStageErrorV1),
@@ -166,6 +172,8 @@ impl fmt::Display for ProductionPipelineError {
             Self::CompleteBodyStage(error) => write!(formatter, "complete-body source preparation failed: {error}"),
             Self::PhysicalEntryDiagnosticStage(error) => write!(formatter, "physical-entry pre-ranked diagnostic preparation failed: {error}"),
             Self::PhysicalEntryTargetStage(error) => write!(formatter, "physical-entry checked target preparation failed: {error}"),
+            Self::PhysicalGlobalCopyTargetStage(error) => write!(formatter, "physical-global-copy checked target preparation failed: {error}"),
+            Self::PhysicalGlobalCopyDiagnosticStage(error) => write!(formatter, "physical-global-copy pre-ranked diagnostic preparation failed: {error}"),
             Self::PrivateCellNativeStage(error) => write!(formatter, "private-cell native stage failed: {error}"),
             Self::LoopPreheadersNativeStage(error) => write!(formatter, "loop-preheaders native stage failed: {error}"),
             Self::LicmNativeStage(error) => write!(formatter, "LICM native stage failed: {error}"),
@@ -383,6 +391,8 @@ impl std::error::Error for ProductionPipelineError {
             Self::CompleteBodyStage(error) => Some(error.as_ref()),
             Self::PhysicalEntryDiagnosticStage(error) => Some(error.as_ref()),
             Self::PhysicalEntryTargetStage(error) => Some(error.as_ref()),
+            Self::PhysicalGlobalCopyTargetStage(error) => Some(error.as_ref()),
+            Self::PhysicalGlobalCopyDiagnosticStage(error) => Some(error.as_ref()),
             Self::PrivateCellNativeStage(error) => Some(error),
             Self::LoopPreheadersNativeStage(error) => Some(error),
             Self::LicmNativeStage(error) => Some(error),
@@ -3938,6 +3948,7 @@ pub(crate) mod guarded_loop_source_v1;
 pub(crate) mod loop_capture_v1;
 pub(crate) mod physical_entry_diagnostic_v20;
 pub(crate) mod physical_entry_target_v20;
+pub(crate) mod physical_global_copy_diagnostic_v21;
 pub(crate) use complete_body_vnext::AuthenticatedCompleteBodyTargetModuleV19;
 pub(crate) use physical_entry_target_v20::AuthenticatedPhysicalEntryTargetModuleV20;
 pub(crate) mod ordered_program_diagnostic_v32;
@@ -4535,3 +4546,6 @@ mod tests {
         }
     }
 }
+
+mod physical_global_copy_target_v21;
+pub(crate) use physical_global_copy_target_v21::AuthenticatedPhysicalGlobalCopyTargetModuleV21;

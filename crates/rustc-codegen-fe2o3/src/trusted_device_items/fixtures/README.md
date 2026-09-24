@@ -170,3 +170,29 @@ Materialization controls cover changing, removing and renaming the new leaf
 in canonical and vendor images, in addition to the existing manifest and source
 controls. Fresh matching compiler/source gates are still required. These pins
 are reviewed inputs, not evidence of successful compilation or execution.
+
+## Exact MIR38 global-copy terminal source refresh
+
+The new reviewed image contains 33 regular source leaves. The only device
+changes from the MIR37 image above are the registered physical_global_copy_v1
+module and its three no-inline typed markers. Actual authenticated calls select
+terminals 148..150, CombinedV8 and MIR38 intrinsics 96..98; earlier identities
+remain unchanged. The source root has precisely an immutable shared u32 slice
+and an exclusive DisjointSlice<u32>. Input/output pointer and length components
+are not four logical arguments and do not create a ghost kernarg allocation.
+
+The new physical_global_copy_v1.rs is 7031 bytes, SHA-256
+`5c4ded93cfecb22512fd74b619a8c237063af21ec5a44c4c727b69be3c1742d0`.
+The exact canonical source closure is
+`fb5338c85bc5110fade2dce0cadf905b2a94f23e15c7033ca951254e4d06a8ba`; the Cargo-vendor closure is
+`13747fdbf81c6b7de2813c0cd86866c994683e1c031de3d966cdafe788559577`.
+Only these two complete current images are accepted. The MIR37 image hashes
+above are now historical, not fallback exceptions. The unchanged diagnostics.rs
+remains 7490 bytes with the same SHA-256 pin above. The 1922-byte vendor manifest
+and its historical producer are unchanged; no new Cargo vendor run is claimed.
+
+Materialization controls additionally change, remove and rename the global-copy
+leaf in both canonical and vendor images. Complete source bytes, sorted paths,
+length framing, actual source definition, FnABI and occurrence checks remain
+mandatory. These are reviewed input pins, not evidence of source qualification,
+native compilation, GPU execution or a completed memory-validation milestone.

@@ -16,6 +16,11 @@ mod model;
 mod ordered_program_v17;
 mod ordered_region_v16;
 mod physical_entry_v20;
+mod physical_global_copy_v21;
+pub use physical_global_copy_v21::{
+    PHYSICAL_GLOBAL_COPY_ADMISSION_WORK_V21, PhysicalGlobalCopySimulationAdmissionErrorV21,
+    PhysicalGlobalCopySimulationStorageV21,
+};
 mod preflight;
 mod reduce;
 mod resident;
@@ -104,4 +109,25 @@ pub use schedule::{
     PersistedSimulationScheduleCodecErrorV1, PersistedSimulationScheduleDocumentV1,
     SimulationScheduleCoverageV1, SimulationScheduleDecisionV1, SimulationScheduleIdentityV1,
     SimulationScheduleRecordV1, SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1,
+};
+
+// Typed budget-owned physical CPU observations; no serialized schema extension.
+pub use execute::{
+    MAX_PHYSICAL_ENTRY_DEBUG_RECORDS_V20, PhysicalEntryDebugBindingRefV20,
+    PhysicalEntryDebugCaptureErrorV20, PhysicalEntryDebugCaptureStopV20,
+    PhysicalEntryDebugCaptureV20, PhysicalEntryDebugOptionsV20, PhysicalEntryDebugOutcomeV20,
+    PhysicalEntryDebugRecordRefV20, PhysicalEntryDebugSymbolicKindV20,
+    PhysicalEntryDebugSymbolicV20, PhysicalEntryDebugUsageV20,
+};
+
+#[cfg(test)]
+use fe2o3_kernel_ir as physical_global_copy_fixture_ir;
+#[cfg(test)]
+#[path = "../../fe2o3-kernel-ir/tests/fixtures/physical_global_copy_v21.rs"]
+mod physical_global_copy_test_fixture;
+
+mod physical_entry_budgeted_v20;
+pub use physical_entry_budgeted_v20::{
+    PHYSICAL_ENTRY_ADMISSION_WORK_V20, PhysicalEntrySimulationAdmissionErrorV20,
+    PhysicalEntrySimulationStorageV20,
 };

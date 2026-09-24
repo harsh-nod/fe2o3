@@ -3,18 +3,18 @@
 //! KIR constructors after prepayment; this is NOT a host-OOM recovery promise.
 use super::{Budget, Error, Resource};
 
-pub(super) struct Scope<'a, 'work> {
+pub(crate) struct Scope<'a, 'work> {
     budget: &'a mut Budget<'work>,
     reserved: usize,
 }
 impl<'a, 'work> Scope<'a, 'work> {
-    pub(super) fn new(budget: &'a mut Budget<'work>) -> Self {
+    pub(crate) fn new(budget: &'a mut Budget<'work>) -> Self {
         Self {
             budget,
             reserved: 0,
         }
     }
-    pub(super) fn reserve(&mut self, amount: usize) -> Result<(), Error> {
+    pub(crate) fn reserve(&mut self, amount: usize) -> Result<(), Error> {
         let next = self
             .reserved
             .checked_add(amount)
@@ -23,7 +23,7 @@ impl<'a, 'work> Scope<'a, 'work> {
         self.reserved = next;
         Ok(())
     }
-    pub(super) fn vec<T>(&mut self, count: usize) -> Result<Vec<T>, Error> {
+    pub(crate) fn vec<T>(&mut self, count: usize) -> Result<Vec<T>, Error> {
         self.reserve(
             count
                 .checked_mul(std::mem::size_of::<T>())
@@ -35,12 +35,12 @@ impl<'a, 'work> Scope<'a, 'work> {
             .map_err(|_| Resource::Allocation)?;
         Ok(values)
     }
-    pub(super) fn copy<T: Copy>(&mut self, values: &[T]) -> Result<Vec<T>, Error> {
+    pub(crate) fn copy<T: Copy>(&mut self, values: &[T]) -> Result<Vec<T>, Error> {
         let mut output = self.vec(values.len())?;
         output.extend_from_slice(values);
         Ok(output)
     }
-    pub(super) fn string(&mut self, value: &str) -> Result<String, Error> {
+    pub(crate) fn string(&mut self, value: &str) -> Result<String, Error> {
         self.reserve(value.len())?;
         let mut output = String::new();
         output
@@ -49,7 +49,7 @@ impl<'a, 'work> Scope<'a, 'work> {
         output.push_str(value);
         Ok(output)
     }
-    pub(super) fn bytes(&self) -> usize {
+    pub(crate) fn bytes(&self) -> usize {
         self.reserved
     }
 }

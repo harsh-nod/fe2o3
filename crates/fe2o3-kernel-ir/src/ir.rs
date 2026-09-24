@@ -478,7 +478,9 @@ impl Operation {
             }
             OperationKind::InlineAssembly(_)
             | OperationKind::Gfx942PhysicalEntryDeclaration(_)
-            | OperationKind::Gfx942PhysicalEntryStep(_) => false,
+            | OperationKind::Gfx942PhysicalEntryStep(_)
+            | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
+            | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => false,
             _ => true,
         }
     }
@@ -608,6 +610,10 @@ pub enum OperationKind {
     Gfx942PhysicalEntryDeclaration(crate::Gfx942PhysicalEntryDeclarationVNext),
     /// One author-owned physical instruction with actual canonical SSA operands.
     Gfx942PhysicalEntryStep(crate::Gfx942PhysicalEntryStepVNext),
+    /// Closed two-slice physical-entry global copy; five actual entry live-ins.
+    Gfx942PhysicalGlobalCopyDeclaration(crate::Gfx942PhysicalGlobalCopyDeclarationV1),
+    /// Actual ordered instruction, including pending global read and exact wait.
+    Gfx942PhysicalGlobalCopyStep(crate::Gfx942PhysicalGlobalCopyStepV1),
 }
 
 impl OperationKind {

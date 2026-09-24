@@ -83,7 +83,7 @@ fn reviewed_materialization_fixture(vendored: bool) -> ProviderPackageFixture {
     let original = Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT);
     let mut files = Vec::new();
     super::collect_reviewed_source_files(&original.join("src"), &mut files).unwrap();
-    assert_eq!(files.len(), 32);
+    assert_eq!(files.len(), 33);
     for file in files {
         let target = fixture.root.join(file.strip_prefix(original).unwrap());
         fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -180,7 +180,7 @@ fn canonical_and_cargo_vendor_materializations_preserve_actual_identities() {
 #[test]
 fn reviewed_materializations_reject_manifest_and_source_mutations() {
     for vendored in [false, true] {
-        for mutation in 0..12 {
+        for mutation in 0..15 {
             let fixture = reviewed_materialization_fixture(vendored);
             admit_reviewed_materialization(&fixture).unwrap();
             match mutation {
@@ -227,6 +227,20 @@ fn reviewed_materializations_reject_manifest_and_source_mutations() {
                 11 => fs::rename(
                     fixture.source_root().join("physical_entry_v1.rs"),
                     fixture.source_root().join("physical_entry_renamed.rs"),
+                )
+                .unwrap(),
+                12 => fs::write(
+                    fixture.source_root().join("physical_global_copy_v1.rs"),
+                    b"// substituted global-copy provider\n",
+                )
+                .unwrap(),
+                13 => fs::remove_file(fixture.source_root().join("physical_global_copy_v1.rs"))
+                    .unwrap(),
+                14 => fs::rename(
+                    fixture.source_root().join("physical_global_copy_v1.rs"),
+                    fixture
+                        .source_root()
+                        .join("physical_global_copy_renamed.rs"),
                 )
                 .unwrap(),
                 _ => unreachable!(),
@@ -306,5 +320,34 @@ fn materialization_policy_rejects_empty_or_zero_identities() {
             )
             .is_err()
         );
+    }
+}
+#[test]
+fn physical_global_copy_provider_uses_the_exact_reviewed_materialization() {
+    for vendored in [false, true] {
+        let fixture = reviewed_materialization_fixture(vendored);
+        let admitted = reviewed_provider_source_closure_from_definition(
+            &fixture.source_root().join("physical_global_copy_v1.rs"),
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+            &super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1,
+        )
+        .unwrap();
+        assert_eq!(
+            admitted.identity,
+            admit_reviewed_materialization(&fixture).unwrap().identity
+        );
+        for item in [
+            TrustedDeviceItem::AmdGpuPhysicalGlobalCopyBeginGfx942,
+            TrustedDeviceItem::AmdGpuPhysicalGlobalCopyLabelGfx942,
+            TrustedDeviceItem::AmdGpuPhysicalGlobalCopyStepGfx942,
+        ] {
+            let path = exact_provider_compiler_definition_path_v1(item)
+                .unwrap()
+                .strip_prefix("fe2o3_device::")
+                .unwrap();
+            assert!(path.starts_with("physical_global_copy_v1::"));
+            let definition = semantic_definition(path, admitted.identity, [6; 32]);
+            validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition).unwrap();
+        }
     }
 }

@@ -123,6 +123,7 @@ fn with_engine(test: impl FnOnce(&mut Engine<'_, NoopSimulationEventSinkV1>)) {
         sink: &mut sink,
         debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
         debug_sink: &mut debug_sink,
+        physical_debug: None,
         debug_origin_requested: false,
         debug_observation_requested: false,
         debug_frames_requested: false,

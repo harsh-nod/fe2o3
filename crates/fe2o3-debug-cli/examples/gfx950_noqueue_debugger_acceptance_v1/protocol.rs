@@ -17,7 +17,7 @@ pub(super) trait Peer {
     fn finish(&mut self) -> Result<Cleanup, Refusal>;
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Phase {
+pub(super) enum Phase {
     Setup,
     ToEntry,
     Entry,
@@ -28,6 +28,33 @@ enum Phase {
     Exiting,
     Exited,
 }
+// Private closed hook surface shared by the unchanged installed-debugger route
+// and staged native-producer CPU tests. No hook creates process custody.
+pub(super) trait EventJoin {
+    fn prompt_barrier(&self) -> bool {
+        false
+    }
+    fn native_line(&mut self, _line: &[u8], _phase: Phase) -> Result<(), Refusal> {
+        Err(Refusal::Shape)
+    }
+    fn owned_entry(&mut self, _pid: u32, _thread: &[u8]) -> Result<(), Refusal> {
+        Ok(())
+    }
+    fn cold_absence(&mut self) -> Result<(), Refusal> {
+        Ok(())
+    }
+    fn original_elf_joined(&mut self, _object: MemoryObject) -> Result<(), Refusal> {
+        Ok(())
+    }
+    fn close_stop(&mut self) -> Result<(), Refusal> {
+        Ok(())
+    }
+    fn completed_teardown(&mut self) -> Result<(), Refusal> {
+        Ok(())
+    }
+}
+struct NoNativeEvents;
+impl EventJoin for NoNativeEvents {}
 #[derive(Serialize)]
 pub(super) struct Observation {
     pub(super) process_id: u32,
@@ -143,8 +170,9 @@ pub(super) fn breakpoint(r: &MiResultsV3, symbol: &str) -> Result<Vec<u8>, Refus
     }
     id(text(b, "number")?)
 }
-struct Session<'a, P: Peer> {
+struct Session<'a, P: Peer, E: EventJoin> {
     peer: &'a mut P,
+    events: &'a mut E,
     phase: Phase,
     token: u64,
     pid: Option<u32>,
@@ -158,10 +186,11 @@ struct Session<'a, P: Peer> {
     stop: Option<Vec<u8>>,
     producer: Vec<u8>,
 }
-impl<'a, P: Peer> Session<'a, P> {
-    fn new(peer: &'a mut P) -> Self {
+impl<'a, P: Peer, E: EventJoin> Session<'a, P, E> {
+    fn new(peer: &'a mut P, events: &'a mut E) -> Self {
         Self {
             peer,
+            events,
             phase: Phase::Setup,
             token: 0,
             pid: None,
@@ -386,6 +415,10 @@ impl<'a, P: Peer> Session<'a, P> {
                 self.output(&line)?;
                 continue;
             }
+            if line.starts_with(b"=amd-runtime-observation-v1,") {
+                self.events.native_line(&line, self.phase)?;
+                continue;
+            }
             let value = parser::record(&line)?;
             return Ok(Some((line, value)));
         }
@@ -412,6 +445,17 @@ impl<'a, P: Peer> Session<'a, P> {
                 if class != expected {
                     return Err(Refusal::State);
                 }
+                if self.events.prompt_barrier() && expected != "exit" {
+                    // The producer flushes buffered invalidations immediately
+                    // before the MI prompt. A result alone is not that barrier.
+                    loop {
+                        let (next_line, next) = self.next()?.ok_or(Refusal::Incomplete)?;
+                        if matches!(next, MiRecordV3::Prompt) {
+                            break;
+                        }
+                        self.background(next_line, next)?;
+                    }
+                }
                 return Ok((line, results, token));
             }
             self.background(line, value)?;
@@ -437,6 +481,10 @@ impl<'a, P: Peer> Session<'a, P> {
         )?;
         if index == 0 {
             self.peer.entry()?;
+            self.events.owned_entry(
+                self.pid.ok_or(Refusal::Process)?,
+                self.thread.as_deref().ok_or(Refusal::Process)?,
+            )?;
             self.phase = Phase::Entry;
         } else {
             self.peer.current()?;
@@ -460,10 +508,18 @@ pub(super) fn run<P: Peer>(
     observer: &str,
     arguments: &[String; 12],
 ) -> Result<Observation, Refusal> {
+    run_with_events(peer, observer, arguments, &mut NoNativeEvents)
+}
+pub(super) fn run_with_events<P: Peer, E: EventJoin>(
+    peer: &mut P,
+    observer: &str,
+    arguments: &[String; 12],
+    events: &mut E,
+) -> Result<Observation, Refusal> {
     super::config::validate_arguments(arguments)?;
     let bytes = usize::try_from(decimal(arguments[5].as_bytes())?).map_err(|_| Refusal::Bound)?;
     let sha = hash(&arguments[6])?;
-    let mut s = Session::new(peer);
+    let mut s = Session::new(peer, events);
     // No attach, eval, arbitrary CLI, signal command, kernel breakpoint or
     // register command exists in this closed production flow.
     for command in [
@@ -511,6 +567,7 @@ pub(super) fn run<P: Peer>(
     if s.list(bytes)?.is_some() {
         return Err(Refusal::State);
     }
+    s.events.cold_absence()?;
     // Native activation is attempted once. A refusal never retries it.
     s.peer.current()?;
     s.phase = Phase::ToPublished;
@@ -527,6 +584,11 @@ pub(super) fn run<P: Peer>(
     )?;
     s.peer.current()?;
     parser::parse_original_elf(&line, token, selected, sha)?;
+    if s.events.prompt_barrier() {
+        s.peer.current()?;
+    }
+    s.events.original_elf_joined(selected)?;
+    s.events.close_stop()?;
     s.phase = Phase::Exiting;
     s.empty("-exec-continue", "running")?;
     while !(s.group_exited && s.thread_exited && s.normal_exit) {
@@ -549,6 +611,7 @@ pub(super) fn run<P: Peer>(
     {
         return Err(Refusal::Incomplete);
     }
+    s.events.completed_teardown()?;
     Ok(Observation {
         process_id: s.pid.ok_or(Refusal::Process)?,
         actual_entry_executable_and_start_identity_checked: true,

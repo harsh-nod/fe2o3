@@ -108,3 +108,15 @@ fn main() -> std::process::ExitCode {
 ))]
 #[path = "gfx950_noqueue_debugger_acceptance_v1/tests.rs"]
 mod tests;
+
+// The native producer's replacement ELF is not yet built/pinned/qualified.
+// Staged join implementation is exercised only by CPU fixtures until a
+// separately reviewed fixed-executable route is allocated.
+#[cfg(all(
+    test,
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_endian = "little"
+))]
+#[path = "gfx950_noqueue_debugger_acceptance_v1/native_runtime_events_v1.rs"]
+mod native_runtime_events_v1;

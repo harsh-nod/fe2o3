@@ -1840,3 +1840,6 @@ impl fmt::Display for DebuggerErrorV1 {
 
 impl Error for DebuggerErrorV1 {}
 pub mod resource_projection_v1;
+
+mod physical_entry_v20;
+pub use physical_entry_v20::{PhysicalEntryDebugNavigationV20, PhysicalEntryDebugSessionV20};

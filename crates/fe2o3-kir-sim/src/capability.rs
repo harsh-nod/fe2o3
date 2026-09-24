@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_968_180;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_010_139;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -120,10 +120,11 @@ pub enum SimulationKirWireVersionV1 {
     V17,
     V19,
     V20,
+    V21,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::V7,
         Self::V9,
         Self::V10,
@@ -133,6 +134,7 @@ impl SimulationKirWireVersionV1 {
         Self::V17,
         Self::V19,
         Self::V20,
+        Self::V21,
     ];
     const COUNT: usize = Self::ALL.len();
 }
@@ -186,10 +188,12 @@ pub enum SimulationOperationSurfaceV1 {
     CompleteBodyStep = 41,
     PhysicalEntryDeclaration = 42,
     PhysicalEntryStep = 43,
+    PhysicalGlobalCopyDeclaration = 44,
+    PhysicalGlobalCopyStep = 45,
 }
 
 impl SimulationOperationSurfaceV1 {
-    const ALL: [Self; 44] = [
+    const ALL: [Self; 46] = [
         Self::Constant,
         Self::Intrinsic,
         Self::MemoryIntrinsic,
@@ -234,8 +238,10 @@ impl SimulationOperationSurfaceV1 {
         Self::CompleteBodyStep,
         Self::PhysicalEntryDeclaration,
         Self::PhysicalEntryStep,
+        Self::PhysicalGlobalCopyDeclaration,
+        Self::PhysicalGlobalCopyStep,
     ];
-    const COUNT: usize = Self::PhysicalEntryStep as usize + 1;
+    const COUNT: usize = Self::PhysicalGlobalCopyStep as usize + 1;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -253,6 +259,8 @@ pub enum SimulationSemanticOwnerV1 {
     ControlFlow,
     /// Symbolic CPU pointer/carry provenance and explicit EXEC; no hardware samples.
     SymbolicPhysicalEntry,
+    /// Actual checked global read and pending readiness, not hardware execution.
+    SymbolicPhysicalGlobalCopy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -300,6 +308,7 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     CompleteBodyProfile,
     PhysicalEntry,
     PhysicalEntryProfile,
+    PhysicalGlobalCopyProfile,
 }
 
 impl UnsupportedFeatureV1 {
@@ -312,6 +321,9 @@ impl UnsupportedFeatureV1 {
             Self::OrderedProgramProfile => SimulationUnsupportedReasonCodeV1::OrderedProgramProfile,
             Self::PhysicalEntry => SimulationUnsupportedReasonCodeV1::PhysicalEntry,
             Self::PhysicalEntryProfile => SimulationUnsupportedReasonCodeV1::PhysicalEntryProfile,
+            Self::PhysicalGlobalCopyProfile => {
+                SimulationUnsupportedReasonCodeV1::PhysicalGlobalCopyProfile
+            }
             Self::CompleteBody => SimulationUnsupportedReasonCodeV1::CompleteBody,
             Self::CompleteBodyProfile => SimulationUnsupportedReasonCodeV1::CompleteBodyProfile,
             Self::InertV12Carrier => SimulationUnsupportedReasonCodeV1::InertV12Carrier,
@@ -598,6 +610,21 @@ fn top_level_capability(
         typed_rejections,
     };
     let unsupported = |reason| SimulationCapabilityDispositionV1::Unsupported { reason };
+    if kir_wire_version == SimulationKirWireVersionV1::V21 {
+        return match (profile, operation) {
+            (
+                SimulationCapabilityProfileV1::Gfx942XnackMinus,
+                Surface::PhysicalGlobalCopyDeclaration | Surface::PhysicalGlobalCopyStep,
+            ) => owned(
+                Owner::SymbolicPhysicalGlobalCopy,
+                &[Reason::PhysicalGlobalCopyProfile],
+            ),
+            (SimulationCapabilityProfileV1::Gfx942XnackMinus, Surface::Return) => {
+                owned(Owner::ControlFlow, &[])
+            }
+            _ => unsupported(Reason::PhysicalGlobalCopyProfile),
+        };
+    }
     match operation {
         Surface::Constant => owned(
             Owner::ScalarBits,
@@ -729,6 +756,9 @@ fn top_level_capability(
         Surface::CompleteBodyDeclaration | Surface::CompleteBodyStep => {
             unsupported(Reason::CompleteBodyProfile)
         }
+        Surface::PhysicalGlobalCopyDeclaration | Surface::PhysicalGlobalCopyStep => {
+            unsupported(Reason::PhysicalGlobalCopyProfile)
+        }
         Surface::PhysicalEntryDeclaration | Surface::PhysicalEntryStep
             if kir_wire_version == SimulationKirWireVersionV1::V20
                 && profile == SimulationCapabilityProfileV1::Gfx942XnackMinus =>
@@ -798,6 +828,12 @@ pub(crate) fn operation_surface_v1(operation: &OperationKind) -> SimulationOpera
             SimulationOperationSurfaceV1::CompleteBodyDeclaration
         }
         OperationKind::Gfx942CompleteBodyStep(_) => SimulationOperationSurfaceV1::CompleteBodyStep,
+        OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_) => {
+            SimulationOperationSurfaceV1::PhysicalGlobalCopyDeclaration
+        }
+        OperationKind::Gfx942PhysicalGlobalCopyStep(_) => {
+            SimulationOperationSurfaceV1::PhysicalGlobalCopyStep
+        }
         OperationKind::Gfx942PhysicalEntryDeclaration(_) => {
             SimulationOperationSurfaceV1::PhysicalEntryDeclaration
         }

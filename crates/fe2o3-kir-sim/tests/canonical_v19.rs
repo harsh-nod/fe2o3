@@ -590,7 +590,7 @@ fn capability_rows_activate_only_v19_gfx942_and_keep_previous_ids_and_baseline()
         let rows: Vec<_> = matrix
             .top_level_rows
             .iter()
-            .filter(|row| row.operation == surface)
+            .filter(|row| row.kir_wire_version != Wire::V21 && row.operation == surface)
             .collect();
         assert_eq!(rows.len(), 4 * 9); // four targets across all nine exact wire profiles
         for row in rows {

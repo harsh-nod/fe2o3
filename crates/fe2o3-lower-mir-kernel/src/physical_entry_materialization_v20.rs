@@ -14,6 +14,7 @@ use fe2o3_kernel_ir::{
 #[path = "physical_entry_materialization_storage_v20.rs"]
 mod storage;
 use storage::Scope;
+pub(crate) use storage::Scope as SharedConstructionScope;
 #[cfg(test)]
 #[path = "physical_entry_materialization_v20_tests.rs"]
 pub(crate) mod tests;
