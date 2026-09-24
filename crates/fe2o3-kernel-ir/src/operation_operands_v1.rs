@@ -207,6 +207,18 @@ impl OperationKind {
             Self::Gfx942OrderedRegion(region) => {
                 region.inputs().iter().copied().try_for_each(&mut visitor)?;
             }
+            Self::Gfx942CompleteBodyDeclaration(declaration) => {
+                declaration
+                    .parameters
+                    .into_iter()
+                    .try_for_each(&mut visitor)?;
+            }
+            Self::Gfx942CompleteBodyStep(step) => {
+                step.operands
+                    .into_iter()
+                    .flatten()
+                    .try_for_each(&mut visitor)?;
+            }
             Self::Gfx942OrderedProgram(program) => {
                 program
                     .inputs()

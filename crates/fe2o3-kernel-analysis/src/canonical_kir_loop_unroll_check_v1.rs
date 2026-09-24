@@ -97,7 +97,9 @@ fn closed_op(k: &OperationKind) -> bool {
         | OperationKind::Wave(_)
         | OperationKind::InlineAssembly(_)
         | OperationKind::Gfx942OrderedRegion(_)
-        | OperationKind::Gfx942OrderedProgram(_) => false,
+        | OperationKind::Gfx942OrderedProgram(_)
+        | OperationKind::Gfx942CompleteBodyDeclaration(_)
+        | OperationKind::Gfx942CompleteBodyStep(_) => false,
     }
 }
 

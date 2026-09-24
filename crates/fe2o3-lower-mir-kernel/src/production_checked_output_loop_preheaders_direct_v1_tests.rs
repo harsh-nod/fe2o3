@@ -418,7 +418,7 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
             );
             // Both targets use the same canonical fixture and exact replay schedule.
             let expected = if mutation {
-                (845_556, 2_671_762)
+                (845_738, 2_671_762)
             } else {
                 (65_552, 1_655_457)
             };

@@ -112,6 +112,7 @@ enum TerminalIdentitySchemaV1 {
     CombinedV3,
     CombinedV4,
     CombinedV5,
+    CombinedV6,
 }
 
 #[derive(Clone, Debug)]
@@ -3951,6 +3952,9 @@ const fn terminal_identity_schema_v1(
     expansion: ProductionTerminalExpansionV1,
 ) -> TerminalIdentitySchemaV1 {
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942CompleteBodyE32 => {
+            TerminalIdentitySchemaV1::CombinedV6
+        }
         ProductionTerminalExpansionV1::Gfx942OrderedProgramE32 => {
             TerminalIdentitySchemaV1::CombinedV5
         }
@@ -3962,7 +3966,19 @@ const fn terminal_expansion_tag_for_schema_v1(
     expansion: ProductionTerminalExpansionV1,
     schema: TerminalIdentitySchemaV1,
 ) -> u8 {
+    // V6 belongs only to terminal144. Never re-label an old terminal identity.
+    if matches!(schema, TerminalIdentitySchemaV1::CombinedV6) {
+        return if matches!(
+            expansion,
+            ProductionTerminalExpansionV1::Gfx942CompleteBodyE32
+        ) {
+            144
+        } else {
+            u8::MAX
+        };
+    }
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942CompleteBodyE32 => u8::MAX,
         ProductionTerminalExpansionV1::Gfx942OrderedProgramE32 => {
             if matches!(schema, TerminalIdentitySchemaV1::CombinedV5) {
                 134
@@ -4088,6 +4104,7 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV3
             | TerminalIdentitySchemaV1::CombinedV4
             | TerminalIdentitySchemaV1::CombinedV5 => 111,
+            TerminalIdentitySchemaV1::CombinedV6 => u8::MAX,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
             #[cfg(test)]
@@ -4095,6 +4112,7 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV3
             | TerminalIdentitySchemaV1::CombinedV4
             | TerminalIdentitySchemaV1::CombinedV5 => 112,
+            TerminalIdentitySchemaV1::CombinedV6 => u8::MAX,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
         ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar) => scalar.terminal_tag(),
@@ -4108,12 +4126,14 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 113,
             TerminalIdentitySchemaV1::CombinedV3 => 113,
             TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 116,
+            TerminalIdentitySchemaV1::CombinedV6 => u8::MAX,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 114,
             TerminalIdentitySchemaV1::CombinedV3 => 114,
             TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 117,
+            TerminalIdentitySchemaV1::CombinedV6 => u8::MAX,
         },
         ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent => 118,
         ProductionTerminalExpansionV1::DisjointBlockComponentIndex => 119,
@@ -4128,6 +4148,7 @@ const fn terminal_expansion_tag_for_schema_v1(
                 TerminalIdentitySchemaV1::CombinedV3
                 | TerminalIdentitySchemaV1::CombinedV4
                 | TerminalIdentitySchemaV1::CombinedV5 => 100,
+                TerminalIdentitySchemaV1::CombinedV6 => return u8::MAX,
             };
             base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
@@ -4170,6 +4191,7 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
 mod tests {
     include!("rustc_semantic_plan_v1/tests.rs");
     include!("rustc_semantic_plan_v1/ordered_program_v32_tests.rs");
+    include!("rustc_semantic_plan_v1/complete_body_v36_tests.rs");
 
     #[test]
     fn ordered_region_v31_preflight_tag_is_only_combined_v4_133() {

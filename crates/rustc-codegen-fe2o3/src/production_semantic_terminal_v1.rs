@@ -30,6 +30,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     Gfx942InlineU32(TrustedAmdGpuInlineOperation),
     Gfx942OrderedXorAddE32,
     Gfx942OrderedProgramE32,
+    Gfx942CompleteBodyE32,
     ContextIssue,
     WorkgroupDerive,
     MaskedTileLoadU32,
@@ -178,6 +179,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::AmdGpuOrderedProgramE32 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedProgramE32)
+            }
+            TrustedDeviceItem::AmdGpuCompleteBodyE32 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942CompleteBodyE32)
             }
             TrustedDeviceItem::AmdGpuInline(operation) => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942InlineU32(operation))
@@ -866,6 +870,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedProgramE32) => {
                 TrustedDeviceItem::AmdGpuOrderedProgramE32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942CompleteBodyE32) => {
+                TrustedDeviceItem::AmdGpuCompleteBodyE32
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942InlineU32(operation)) => {
                 TrustedDeviceItem::AmdGpuInline(operation)

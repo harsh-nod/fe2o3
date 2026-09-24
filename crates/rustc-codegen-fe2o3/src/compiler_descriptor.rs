@@ -1,5 +1,8 @@
 //! Workload-neutral rustc-derived descriptor input for production typed kernels.
 
+#[path = "compiler_descriptor_complete_body_v19.rs"]
+pub(crate) mod complete_body_v19;
+
 #[path = "compiler_descriptor_checked_output_policy3_v1.rs"]
 pub(crate) mod checked_output_policy3_v1;
 
@@ -685,7 +688,17 @@ fn validate_production_descriptor_root_with_physical_matcher_v1(
                 .callables()
                 .iter()
                 .filter_map(|callable| match callable {
-                    SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } => match operation {
+                    SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation, binding, ..
+                    } => match operation {
+                        SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_)
+                            if binding.abi().source_input_types().first()
+                                == Some(&semantic_type_id) =>
+                        {
+                            // The new checked V19 owner separately authenticates
+                            // the actual trusted marker and Index1D source type.
+                            Some(SemanticDisjointIndexSpaceV1::Index1d)
+                        }
                         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
                             disjoint_slice,
                             ..
@@ -1140,6 +1153,26 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
     typed_roots: &[TypedDescriptorRootV1],
     profiles: &[DescriptorConstructionProfileV1],
 ) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
+    construct_compiler_descriptor_source_with_profiles_and_complete_body_v19(
+        envelope,
+        module,
+        compiler_module,
+        typed_roots,
+        profiles,
+        false,
+    )
+}
+
+// Only the child V19 constructor passes true, after the genuine source/ranked/
+// formal owner and actual module/typed-root/geometry relations have been joined.
+fn construct_compiler_descriptor_source_with_profiles_and_complete_body_v19(
+    envelope: &CompilerFfiEnvelopeV1,
+    module: &Module,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    profiles: &[DescriptorConstructionProfileV1],
+    complete_body_v19: bool,
+) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
     if typed_roots.is_empty() {
         return Ok(None);
     }
@@ -1190,7 +1223,7 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
         device_layouts.push(layout);
     }
 
-    let module_capabilities = descriptor_capabilities(
+    let module_capabilities = descriptor_capabilities_with_complete_body_v19(
         module,
         profiles
             .iter()
@@ -1198,6 +1231,7 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
         profiles
             .iter()
             .any(|profile| profile.allow_workgroup_memory),
+        complete_body_v19,
     )?;
     let mut seen_exports = BTreeSet::new();
     let mut kernels = Vec::with_capacity(typed_roots.len());
@@ -1389,10 +1423,25 @@ fn descriptor_records(
     }
 }
 
+#[cfg(test)]
 fn descriptor_capabilities(
     module: &Module,
     allow_exact_tiled_matrix: bool,
     allow_workgroup_memory: bool,
+) -> Result<Vec<CapabilityV1>, CompilerDescriptorError> {
+    descriptor_capabilities_with_complete_body_v19(
+        module,
+        allow_exact_tiled_matrix,
+        allow_workgroup_memory,
+        false,
+    )
+}
+
+fn descriptor_capabilities_with_complete_body_v19(
+    module: &Module,
+    allow_exact_tiled_matrix: bool,
+    allow_workgroup_memory: bool,
+    complete_body_v19: bool,
 ) -> Result<Vec<CapabilityV1>, CompilerDescriptorError> {
     let mut result = BTreeSet::new();
     let mut effective = module.effective_capabilities();
@@ -1421,6 +1470,15 @@ fn descriptor_capabilities(
         )
     });
     for capability in effective {
+        if complete_body_v19
+            && matches!(&capability, TargetCapability::Extension { namespace, name }
+                if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_COMPLETE_BODY_CAPABILITY_NAMESPACE_V19
+                    && name == fe2o3_kernel_ir::AMDGPU_GFX942_COMPLETE_BODY_CAPABILITY_NAME_V19)
+        {
+            // Closed whole-body structural contract; target and Wave64 continue
+            // through the existing runtime-capability projection below.
+            continue;
+        }
         let Some(projected) = dialect_amdgcn::project_descriptor_capability_v1(
             fe2o3_kernel_ir::TargetCapabilityRefV1::from_owned(&capability),
             allow_exact_tiled_matrix,
@@ -1570,6 +1628,7 @@ pub(crate) enum CompilerDescriptorError {
         expected: [u32; 3],
     },
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
+    CompleteBodyV19(Box<fe2o3_lower_mir_kernel::ProductionCompleteBodyCheckErrorV19>),
     CheckedOutputPolicy3(fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy3V1),
     CheckedOutputPolicy4(
         Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy4V1>,
@@ -1664,6 +1723,10 @@ impl fmt::Display for CompilerDescriptorError {
             Self::UnexpectedWorkgroupSize { kernel, expected } => write!(
                 formatter,
                 "typed descriptor kernel `{kernel}` does not have the exact {expected:?} workgroup"
+            ),
+            Self::CompleteBodyV19(error) => write!(
+                formatter,
+                "complete-body checked source/formal relation failed: {error}"
             ),
             Self::ProductionFormalMemory(error) => {
                 write!(

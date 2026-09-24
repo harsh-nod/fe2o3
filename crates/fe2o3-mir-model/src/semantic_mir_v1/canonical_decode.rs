@@ -2,6 +2,9 @@ use std::fmt;
 
 use super::*;
 
+#[path = "canonical_decode/complete_body_v36.rs"]
+mod complete_body_v36;
+
 /// Failure to decode the bounded canonical inert semantic MIR representation.
 ///
 /// Decoding performs structural admission and exact canonical re-encoding. It
@@ -430,6 +433,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Exact whole-body grammar, with no source or artifact authentication.
+    pub fn decode_exact_v36_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V36),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -477,6 +492,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V33
                         | SemanticMirWireVersionV1::V34
                         | SemanticMirWireVersionV1::V35
+                        | SemanticMirWireVersionV1::V36
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1763,7 +1779,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V34 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V36 {
+            92
+        } else if self.wire_version == SemanticMirWireVersionV1::V34 {
             91
         } else if self.wire_version == SemanticMirWireVersionV1::V33 {
             90
@@ -1815,6 +1833,7 @@ impl<'a> CanonicalDecoderV1<'a> {
             || (tag == 89 && self.wire_version != SemanticMirWireVersionV1::V32)
             || (tag == 90 && self.wire_version != SemanticMirWireVersionV1::V33)
             || (tag == 91 && self.wire_version != SemanticMirWireVersionV1::V34)
+            || (tag == 92 && self.wire_version != SemanticMirWireVersionV1::V36)
         {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
@@ -1823,6 +1842,7 @@ impl<'a> CanonicalDecoderV1<'a> {
             });
         }
         Ok(match tag {
+            92 => return self.complete_body_packing_v36(),
             89 => {
                 self.tagged("gfx942 ordered program revision", 0)?;
                 let count = self.u8()?;
@@ -2844,6 +2864,11 @@ impl<'a> CanonicalDecoderV1<'a> {
                         call = call.with_ordered_program_source_v32(source);
                     }
                 }
+                if self.wire_version == SemanticMirWireVersionV1::V36
+                    && let Some(source) = self.complete_body_source_v36()?
+                {
+                    call = call.with_complete_body_source_vnext(source);
+                }
                 SemanticTerminatorKindV1::Call(call)
             }
             3 => {
@@ -2947,6 +2972,7 @@ mod tests {
     use std::fmt::Debug;
 
     mod capability_v29_tests;
+    mod complete_body_v36_tests;
     mod frozen_v15;
     mod gfx942_inline_v30_tests;
     mod gfx942_ordered_program_v32_tests;

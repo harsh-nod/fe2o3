@@ -308,6 +308,7 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     inline_sources: crate::production_inline_source_occurrences_v30::InlineSourceOccurrencesV30,
     ordered_sources: crate::production_ordered_source_occurrences_v31::OrderedSourceOccurrencesV31,
     program_sources: crate::production_ordered_program_source_occurrences_v32::OrderedProgramSourceOccurrencesV32<'tcx>,
+    complete_body_annotation: Option<crate::production_complete_body_annotation_vnext::CompleteBodyCallAnnotationVNext<'tcx>>,
     defined_functions: usize,
     context_entries: Vec<crate::collector::RetainedContextEntryV29>,
     function_commitments: Option<PendingFunctionCommitmentsV29<'tcx>>,
@@ -392,6 +393,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             inline_sources: Default::default(),
             ordered_sources: Default::default(),
             program_sources: Default::default(),
+            complete_body_annotation: None,
             defined_functions,
             context_entries: Vec::new(),
             function_commitments: None,
@@ -439,6 +441,41 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         &self,
     ) -> Result<(), ProductionSemanticBodyErrorV1> {
         self.program_sources.require_drained().map_err(table)
+    }
+
+    pub(crate) fn prepare_complete_body_annotation_vnext(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        plan: &crate::rustc_semantic_plan_v1::ProductionSemanticPreflightPlanV1<'tcx>,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        use crate::production_complete_body_annotation_vnext as body;
+        if self.complete_body_annotation.is_some() {
+            return Err(table("complete-body annotation cannot be replaced"));
+        }
+        // Charge the EXISTING cumulative semantic-construction account first.
+        // The bounded local adapter spends only that named prepaid allowance.
+        self.charge(
+            SemanticMirResourceV1::ValidationWork,
+            body::PREPAID_CONSTRUCTION_WORK_VNEXT,
+        )?;
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+            body::PREPAID_CONSTRUCTION_WORK_VNEXT,
+        );
+        let mut budget =
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 0);
+        let annotation = body::prepare_complete_body_annotation_vnext(tcx, plan, &mut budget)
+            .map_err(|error| unsupported(error, None, None))?;
+        self.complete_body_annotation = Some(annotation);
+        Ok(())
+    }
+
+    pub(crate) fn require_complete_body_annotation_consumed_vnext(
+        &self,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        if let Some(annotation) = &self.complete_body_annotation {
+            annotation.require_drained().map_err(table)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn seal_context_entries(
@@ -1818,6 +1855,55 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 if let Some(source) = program_source {
                     call = call.with_ordered_program_source_v32(source);
                 }
+
+                let requires_complete_body = self
+                    .terminal_expansions_by_raw
+                    .get(raw_block as usize)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|recipe| {
+                        recipe.expansion == ProductionTerminalExpansionV1::Gfx942CompleteBodyE32
+                    });
+                if requires_complete_body {
+                    if args.len() != 10 {
+                        return Err(table("complete-body actual ten arguments"));
+                    }
+                    let actual =
+                        crate::production_complete_body_call_vnext::observe_complete_body_call(
+                            self.tcx,
+                            self.instance,
+                            self.body,
+                            func,
+                            [
+                                &args[0].node,
+                                &args[1].node,
+                                &args[2].node,
+                                &args[3].node,
+                                &args[4].node,
+                                &args[5].node,
+                                &args[6].node,
+                                &args[7].node,
+                                &args[8].node,
+                                &args[9].node,
+                            ],
+                        )
+                        .map_err(table)?;
+                    let semantic_block = self.block_id(raw_block as usize)?;
+                    let annotation = self
+                        .owner
+                        .complete_body_annotation
+                        .as_mut()
+                        .ok_or_else(|| table("complete-body source annotation absent"))?;
+                    call = annotation
+                        .attach(
+                            self.instance,
+                            (self.function, raw_block, semantic_callee),
+                            semantic_block,
+                            &actual,
+                            call,
+                        )
+                        .map_err(table)?;
+                }
                 Ok(SemanticTerminatorKindV1::Call(call))
             }
             TerminatorKind::TailCall { .. } => Err(unsupported("TailCall terminator", block, None)),
@@ -2879,6 +2965,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
     match expansion {
         ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32 => Some(8),
         ProductionTerminalExpansionV1::Gfx942OrderedProgramE32 => Some(8),
+        ProductionTerminalExpansionV1::Gfx942CompleteBodyE32 => Some(10),
         ProductionTerminalExpansionV1::Gfx942InlineU32(operation) => Some(
             crate::production_inline_assembly_v30::input_count(operation),
         ),
@@ -3083,6 +3170,10 @@ fn unsupported(
 }
 
 #[cfg(test)]
+#[path = "production_complete_body_terminal144_tests.rs"]
+mod complete_body_terminal144_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use rustc_middle::mir::FakeBorrowKind;
@@ -3278,6 +3369,7 @@ mod tests {
             inline_sources: Default::default(),
             ordered_sources: Default::default(),
             program_sources: Default::default(),
+            complete_body_annotation: None,
             defined_functions: 0,
             context_entries: Vec::new(),
             function_commitments: None,

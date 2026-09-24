@@ -64,6 +64,11 @@ pub const KERNEL_IR_VERSION_V15: u16 = 15;
 pub const KERNEL_IR_VERSION_V16: u16 = 16;
 /// V12 grammar plus bounded ordered programs; excludes V15 Execution and V16 pairs.
 pub const KERNEL_IR_VERSION_V17: u16 = 17;
+/// V12 carriers plus exact typed complete bodies; this profile assigns no meaning to V18.
+pub const KERNEL_IR_VERSION_V19: u16 = 19;
+
+#[path = "wire/complete_body_v19.rs"]
+mod complete_body_v19;
 
 #[path = "wire/ordered_program_v17.rs"]
 mod ordered_program_v17;
@@ -357,6 +362,11 @@ pub fn encode_module_v17(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V17)
 }
 
+/// Encodes exact V19 structure; no source, physical or proof authority.
+pub fn encode_module_v19(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V19)
+}
+
 /// Authority-free storage extents observed through the V12 encoding schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelIrV12WireExtentV1 {
@@ -571,6 +581,23 @@ pub fn decode_module_v17(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V17, false)
 }
 
+/// Decodes exact V19 only; no older, V18, or execution-profile fallback.
+pub fn decode_module_v19(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V19, false)
+}
+
+pub(crate) fn decode_module_v19_with_allocation_budget_v1(
+    bytes: &[u8],
+    budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Module, KernelIrDecodeError> {
+    decode_module_impl_v1(
+        bytes,
+        KERNEL_IR_VERSION_V19,
+        false,
+        Some(DecodeBudgetV12::Resources(budget)),
+    )
+}
+
 pub(crate) fn decode_module_v17_with_allocation_budget_v1(
     bytes: &[u8],
     budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
@@ -648,7 +675,11 @@ fn decode_module_impl_v1(
         || (!accept_older && version != maximum_version)
         || !matches!(
             version,
-            1..=12 | KERNEL_IR_VERSION_V15 | KERNEL_IR_VERSION_V16 | KERNEL_IR_VERSION_V17
+            1..=12
+                | KERNEL_IR_VERSION_V15
+                | KERNEL_IR_VERSION_V16
+                | KERNEL_IR_VERSION_V17
+                | KERNEL_IR_VERSION_V19
         )
     {
         return Err(KernelIrDecodeError::UnknownVersion(version));
@@ -1264,6 +1295,26 @@ fn encode_operation_kind(
             writer.u8(24)?;
             encode_gfx950_lds_transpose_operation(writer, transpose)?;
         }
+        OperationKind::Gfx942CompleteBodyDeclaration(declaration) => {
+            if writer.version != KERNEL_IR_VERSION_V19 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "gfx942 complete body declaration",
+                });
+            }
+            writer.u8(40)?;
+            complete_body_v19::encode_declaration(writer, declaration)?;
+        }
+        OperationKind::Gfx942CompleteBodyStep(step) => {
+            if writer.version != KERNEL_IR_VERSION_V19 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "gfx942 complete body step",
+                });
+            }
+            writer.u8(41)?;
+            complete_body_v19::encode_step(writer, step)?;
+        }
         OperationKind::Gfx942OrderedProgram(program) => {
             if writer.version != KERNEL_IR_VERSION_V17 {
                 return Err(KernelIrEncodeError::UnsupportedInVersion {
@@ -1297,6 +1348,14 @@ fn decode_operation_kind(
     reader: &mut Reader<'_, '_>,
 ) -> Result<OperationKind, KernelIrDecodeError> {
     Ok(match reader.u8()? {
+        40 if reader.version == KERNEL_IR_VERSION_V19 => {
+            OperationKind::Gfx942CompleteBodyDeclaration(complete_body_v19::decode_declaration(
+                reader,
+            )?)
+        }
+        41 if reader.version == KERNEL_IR_VERSION_V19 => {
+            OperationKind::Gfx942CompleteBodyStep(complete_body_v19::decode_step(reader)?)
+        }
         39 if reader.version == KERNEL_IR_VERSION_V17 => {
             OperationKind::Gfx942OrderedProgram(ordered_program_v17::decode(reader)?)
         }

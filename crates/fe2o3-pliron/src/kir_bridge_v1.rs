@@ -837,6 +837,8 @@ fn preflight_operation(
         OperationKind::Execution(_)
         | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::Gfx942OrderedProgram(_)
+        | OperationKind::Gfx942CompleteBodyDeclaration(_)
+        | OperationKind::Gfx942CompleteBodyStep(_)
         | OperationKind::VerificationContract(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
@@ -2746,6 +2748,8 @@ fn remap_preserved_operation(
         OperationKind::Execution(_)
         | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::Gfx942OrderedProgram(_)
+        | OperationKind::Gfx942CompleteBodyDeclaration(_)
+        | OperationKind::Gfx942CompleteBodyStep(_)
         | OperationKind::Constant(_)
         | OperationKind::Unary { .. }
         | OperationKind::Binary { .. }

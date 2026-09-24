@@ -318,6 +318,8 @@ pub(super) fn transfer(
         // Exact region order/register bindings cannot be replaced by a folded
         // scalar result through this older sparse-analysis contract.
         | OperationKind::Gfx942OrderedRegion(_)
-        | OperationKind::Gfx942OrderedProgram(_) => Transfer::one(Value::Dynamic),
+        | OperationKind::Gfx942OrderedProgram(_)
+        | OperationKind::Gfx942CompleteBodyDeclaration(_)
+        | OperationKind::Gfx942CompleteBodyStep(_) => Transfer::one(Value::Dynamic),
     }
 }

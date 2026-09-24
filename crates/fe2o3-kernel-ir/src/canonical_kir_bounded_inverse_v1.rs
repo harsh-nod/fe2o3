@@ -12,6 +12,7 @@ pub(crate) enum Profile {
     V12,
     V16,
     V17,
+    V19,
 }
 
 pub(crate) enum InverseError {
@@ -45,6 +46,7 @@ pub(crate) fn verified_inverse(
         Profile::V12 => crate::KERNEL_IR_VERSION_V12,
         Profile::V16 => crate::KERNEL_IR_VERSION_V16,
         Profile::V17 => crate::KERNEL_IR_VERSION_V17,
+        Profile::V19 => crate::KERNEL_IR_VERSION_V19,
     };
     let extent =
         crate::wire::count_module_with_work_v1(module, version, budget.work_budget_v1(), false)
@@ -72,6 +74,7 @@ pub(crate) fn verified_inverse(
         Profile::V12 => crate::wire::decode_module_v12_with_allocation_budget_v1(&encoded, budget),
         Profile::V16 => crate::wire::decode_module_v16_with_allocation_budget_v1(&encoded, budget),
         Profile::V17 => crate::wire::decode_module_v17_with_allocation_budget_v1(&encoded, budget),
+        Profile::V19 => crate::wire::decode_module_v19_with_allocation_budget_v1(&encoded, budget),
     }
     .map_err(InverseError::Decode)?;
     verify_exact_decoded_module_with_budget_v1(&decoded, None, budget).map_err(

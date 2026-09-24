@@ -62,6 +62,8 @@ pub use observed_storage::ObservationExecutionOptionsV1;
 
 #[path = "execute_alloca_v1.rs"]
 mod alloca_v1;
+#[path = "execute_complete_body_v19.rs"]
+mod complete_body_v19;
 #[path = "execute_debug_frames.rs"]
 mod debug_frames;
 #[path = "execute_debug_identity.rs"]
@@ -6438,6 +6440,12 @@ fn execute_operation(
     } else if matches!(&operation.kind, OperationKind::Gfx942OrderedProgram(_)) {
         let site = operation_site(function_index, block, ordinal);
         ordered_program_v17::execute(engine, values, operation, &site)
+    } else if matches!(
+        &operation.kind,
+        OperationKind::Gfx942CompleteBodyDeclaration(_) | OperationKind::Gfx942CompleteBodyStep(_)
+    ) {
+        let site = operation_site(function_index, block, ordinal);
+        complete_body_v19::execute(engine, values, operation, &site)
     } else if matches!(&operation.kind, OperationKind::Alloca { .. }) {
         let site = operation_site(function_index, block, ordinal);
         alloca_v1::execute(engine, values, operation, site, frame_allocations)
@@ -6828,6 +6836,8 @@ fn execute_non_assembly_operation(
         | OperationKind::InlineAssembly(_)
         | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::Gfx942OrderedProgram(_)
+        | OperationKind::Gfx942CompleteBodyDeclaration(_)
+        | OperationKind::Gfx942CompleteBodyStep(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)

@@ -49,3 +49,34 @@ fn semantic_kernel_metadata_v1(
         .extend(entry_function.required_capabilities.iter().cloned());
     Ok(kernel)
 }
+
+/// Common final root shell for ordinary and source-owned complete-body imports.
+/// This helper derives metadata from the actual retained root/function/launch;
+/// it does not authenticate a raw Function or create a checked output owner.
+fn finish_semantic_root_module_v1(
+    module: &mut Module,
+    symbol: &str,
+    required_workgroup: Option<[u32; 3]>,
+    launch_rank: u8,
+    authenticated_launch: Option<RetainedRankedLaunchRootV1>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    if !module.kernels.is_empty() {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    let entry = module
+        .function(&FunctionId::new(symbol))
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    let kernel = semantic_kernel_metadata_v1(
+        symbol,
+        entry,
+        required_workgroup,
+        launch_rank,
+        authenticated_launch,
+    )?;
+    module
+        .kernels
+        .try_reserve_exact(1)
+        .map_err(|_| ArgumentResourceV1::Allocation)?;
+    module.kernels.push(kernel);
+    Ok(())
+}

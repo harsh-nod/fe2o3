@@ -121,6 +121,12 @@ pub struct Gfx942CompleteBodyEmissionV1 {
     tail: Gfx942CompleteBodyEmittedTailV1,
 }
 impl Gfx942CompleteBodyEmissionV1 {
+    pub(crate) fn into_llvm_ir_v19(self) -> String {
+        self.llvm
+    }
+    pub(crate) fn retained_text_capacity_v19(&self) -> usize {
+        self.llvm.capacity() + self.assembly.capacity()
+    }
     pub fn llvm_ir(&self) -> &str {
         &self.llvm
     }
@@ -157,5 +163,13 @@ pub fn render_gfx942_complete_body_llvm_v1(
 ) -> Result<Gfx942CompleteBodyEmissionV1, Gfx942CompleteBodyEmissionErrorV1> {
     work.charge_work(GFX942_COMPLETE_BODY_RENDER_WORK_V1)
         .map_err(Gfx942CompleteBodyEmissionErrorV1::Work)?;
+    emit::render(plan, symbol)
+}
+
+/// Only for the canonical bridge after its full same-ledger RENDER_WORK debit.
+pub(crate) fn render_prepaid_v19(
+    plan: &Gfx942CompleteBodyPlanV1,
+    symbol: Gfx942CompleteBodySymbolV1<'_>,
+) -> Result<Gfx942CompleteBodyEmissionV1, Gfx942CompleteBodyEmissionErrorV1> {
     emit::render(plan, symbol)
 }

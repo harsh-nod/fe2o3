@@ -24,8 +24,28 @@ pub(super) fn configuration_identity(
     capture: SimulationDebugCaptureLimitsV1,
     debugger: DebuggerLimitsV1,
 ) -> Result<OpaqueIdentityV1, String> {
-    if input.module.identity().wire_version() != 17 {
-        return Err("diagnostic configuration requires exact canonical V17".to_owned());
+    configuration_identity_for_profile(
+        input,
+        wave,
+        capture,
+        debugger,
+        17,
+        b"fe2o3-debug-sim-diagnostic-kir-v17-config-v1\0",
+    )
+}
+
+pub(super) fn configuration_identity_for_profile(
+    input: &AdmittedSimulationInputV1,
+    wave: DebugWaveWidthV1,
+    capture: SimulationDebugCaptureLimitsV1,
+    debugger: DebuggerLimitsV1,
+    version: u16,
+    domain: &[u8],
+) -> Result<OpaqueIdentityV1, String> {
+    if input.module.identity().wire_version() != version {
+        return Err(format!(
+            "diagnostic configuration requires exact canonical V{version}"
+        ));
     }
     input
         .simulation_limits
@@ -37,9 +57,7 @@ pub(super) fn configuration_identity(
     };
     // Cover the fixed domain, identities and all limit fields before hashing.
     state.charge(512)?;
-    state
-        .hash
-        .update(b"fe2o3-debug-sim-diagnostic-kir-v17-config-v1\0");
+    state.hash.update(domain);
     state
         .hash
         .update(input.module.identity().wire_version().to_le_bytes());

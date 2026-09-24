@@ -16,6 +16,63 @@ For each exact profile one, output_diamond, scratch_diamond, two_terminals, maxi
 
 Thus five generator calls and ten independently retained native case reports are expected. Paths must be fresh, exclusive, owned output leaves; failed files are evidence and must not be overwritten/reused. Each native call checks and reobserves exact LLVM bytes, writes a fresh HSACO with O_EXCL/O_NOFOLLOW, flushes it and independently reads it back. Exact emitted bytes are retained before the ABI relations run, including on later refusal; a retained file alone is never a successful qualification. Root must additionally pin executable/shared-library/source closure and pre/post selected-file identity. This fixture does not establish executable custody merely by placing synthetic request fields in an existing test request.
 
+
+## Opt-in actual-source entry symbol
+
+The original four-argument command still requires the exact entry
+`complete_body_fixture`. It does not infer an entry from input LLVM. To observe
+unchanged LLVM from the actual-source continuation, root may explicitly select
+its already joined entry:
+
+`complete-body-abi-candidate PROFILE O0|O3 ABS_LLVM ABS_NEW_HSACO --entry-symbol SYMBOL`
+
+The flag must occur exactly in that position, without extra arguments.
+`SYMBOL` must be 1..128 ASCII bytes matching
+`[_A-Za-z][_A-Za-z0-9]{0,127}`, and must exactly equal the sole typed kernel
+definition. No quoting, dots, dollar signs, Unicode, leading digits, embedded
+controls, inference, normalization, or LLVM renaming is accepted. This is inert
+syntax and equality, not an authenticated source identity.
+
+Before invocation, root must retain and join the actual authenticated source
+case, exact canonical KIR19 identity and its sole kernel/entry, exact decoded
+handoff entry and executable LLVM, and exact selected LLVM bytes/hash. The
+supplied symbol must be that single joined entry. Pin and reobserve the same
+compiler/source/toolchain/executable closure, selected files, and fresh output
+leaves used in the qualification ladder. This C++ tool has no canonical owner
+or handoff decoder and does not establish that join itself.
+
+The current finite-grid Rust fixtures in
+`production-extraction-device/src/complete_body_v19.rs` independently match:
+
+| Actual source feature | Native independent profile | Exact authored body |
+| --- | --- | --- |
+| `complete-body-one-v19` | `one` | Label 255: move v34 to v33, then compiler tail. |
+| `complete-body-diamond-v19` | `output_diamond` | Label 240 branches on selector zero to label 17 (v34 to v33), else label 2 (v35 to v33); both reach label 4 and compiler tail. |
+
+Both declare scratch v32, output v33, inputs v34/v35/v36, exact gfx942:xnack-
+wave64 and 64x1x1 workgroup. Their source max_grid is 2x1x1; source/formal
+qualification owns that 128-invocation envelope. This native ABI fixture checks
+the workgroup/argument/tail mechanism, not the max-grid contract or actual
+launch. The plan remains the independently handwritten C++ roster, not a
+decoded source record or a renderer-provided oracle.
+
+Run both positive source cases at O0 and O3 with fresh payload leaves. Every
+existing typed LLVM, native branch/arithmetic/tail, metadata, descriptor, and
+selector-provenance control still runs. A new CPU-only control group additionally
+checks four valid identifier boundaries, twelve invalid identifiers (including
+embedded NUL and 129 bytes), wrong expected-symbol refusal, a substituted symbol
+in a temporary negative LLVM copy, and retention of the old exact default.
+The original source LLVM is passed unchanged to the worker and reobserved after
+native compilation; only the negative copy is mutated.
+
+Reports add `entry_symbol`, `entry_symbol_selection`, and
+`entry_symbol_controls`. The explicit selection is named
+`explicit_inert_symbol`; `source_handoff_symbol_join_verified_by_fixture` is
+always false. Existing synthetic worker identity, source_authentication=false,
+canonical_owner_admission=false, protected_finalizer_admission=false, and
+hardware_execution=false fields are unchanged. Successful static native checks
+do not make this tool a protected finalizer or confer launch authority.
+
 ## Actual checks
 
 The typed LLVM parser verifies the whole module, Function ABI, complete 18-instruction operand graph, target/layout/launch, attributes/metadata, side-effecting inline unit and exact constraints. Six explicit arguments are required; selector is the actual sixth u32 argument and actual tenth inline input bound to s22. Entire inline-assembly text must equal the independent closed plan. Generated labels use LLVM's unique-instance substitution, not caller labels or PCs.

@@ -12,12 +12,14 @@ use crate::{
     analyze_control_flow, analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
 };
 
+mod complete_body_v19;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
 mod pointer_derivation;
 mod private_slots;
 mod receipt_v1;
 
+pub use complete_body_v19::derive_complete_body_memory_obligations_v19;
 pub use guarded_access_v1::FormalGuardedMemoryResourceErrorV1;
 pub use receipt_v1::*;
 
@@ -758,7 +760,29 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
     launch_extent: ExplicitLaunchExtent,
     index_width: FormalIndexWidth,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
+    derive_kernel_memory_obligations_with_v19_context(
+        verified,
+        kernel_id,
+        launch_extent,
+        index_width,
+        None,
+    )
+}
+
+/// Only the exact typed V19 entry supplies context. Generic callers retain all
+/// previous unsupported-effect cases and cannot opt into this extension.
+fn derive_kernel_memory_obligations_with_v19_context(
+    verified: VerifiedKernelIrModuleV1<'_>,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
     let module = verified.module();
+    let complete_body_v19 = canonical_v19.is_some_and(|owner| {
+        std::ptr::eq(module, owner.module())
+            && complete_body_v19::contains_verified_complete_body(owner, kernel_id)
+    });
     let effect_summaries = analyze_interprocedural_effects_from_verified_v1(verified)
         .expect("verified module remains valid while deriving effect summaries");
     let kernel = module
@@ -990,9 +1014,17 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                         operation,
                         &value_types,
                     ) => {}
+                // U32 declaration/steps have no address or memory effect only
+                // in this actual immutable whole-profile V19 context. Their
+                // compiler ordering is unchanged; the real tail is above.
+                OperationKind::Gfx942CompleteBodyDeclaration(_)
+                | OperationKind::Gfx942CompleteBodyStep(_)
+                    if complete_body_v19 => {}
                 OperationKind::Execution(_)
                 | OperationKind::Gfx942OrderedRegion(_)
                 | OperationKind::Gfx942OrderedProgram(_)
+                | OperationKind::Gfx942CompleteBodyDeclaration(_)
+                | OperationKind::Gfx942CompleteBodyStep(_)
                 | OperationKind::VerificationContract(_)
                 | OperationKind::VectorLoad(_)
                 | OperationKind::VectorStore(_)

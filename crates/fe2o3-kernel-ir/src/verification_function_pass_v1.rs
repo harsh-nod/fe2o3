@@ -128,10 +128,16 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
             }
         }
 
+        let mut has_complete_body = false;
         self.budget.charge_work(body.blocks.len())?;
         for block in &body.blocks {
             self.budget.charge_work(block.operations.len())?;
             for (operation_index, operation) in block.operations.iter().enumerate() {
+                has_complete_body |= matches!(
+                    operation.kind,
+                    OperationKind::Gfx942CompleteBodyDeclaration(_)
+                        | OperationKind::Gfx942CompleteBodyStep(_)
+                );
                 let location = clone_diagnostic_location_v1(&base_location, self.budget)?
                     .at_block(block.id)
                     .at_operation(operation_index);
@@ -166,6 +172,9 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                 self.verify_terminator_uses_v1(terminator, block.id, &location)?;
                 self.verify_terminator_v1(block, terminator, &location)?;
             }
+        }
+        if has_complete_body {
+            self.verify_complete_body_function_v19(&base_location)?;
         }
         if has_execution_roles {
             crate::verification_execution_lifecycle_v15::verify_execution_lifecycle_v15(

@@ -646,6 +646,56 @@ pub fn load_debug_simulation_input_bytes_v16(
     }
 }
 
+/// Securely admits exact canonical V19 bytes and a strict simulation request.
+///
+/// This diagnostic CPU route authenticates neither source nor hardware and
+/// grants no compiler, artifact, launch, source-map or persisted-schedule
+/// authority. Canonical admission uses a cumulative work/storage ledger;
+/// simulator admission separately checks resident storage after bounded decode,
+/// not as a process-wide pre-allocation or RSS guarantee.
+pub fn load_debug_simulation_input_v19(
+    kir_v19: &Path,
+    request: &Path,
+) -> Result<AdmittedSimulationInputV1, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::diagnostic_kir_v19::load_debug_simulation_input_v19(kir_v19, request)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (kir_v19, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "diagnostic V19 input admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Admits bounded, already captured diagnostic V19 and strict request bytes.
+///
+/// Unlike the path route this does not authenticate a filesystem capture. Its
+/// canonical ledger accounts borrowed slice extents, not unknown caller-owned
+/// allocation capacities. It otherwise uses the same admission and CPU limits.
+pub fn load_debug_simulation_input_bytes_v19(
+    kir_v19: &[u8],
+    request: &[u8],
+) -> Result<AdmittedSimulationInputV1, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::diagnostic_kir_v19::load_debug_simulation_input_bytes_v19(kir_v19, request)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (kir_v19, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "diagnostic V19 byte admission requires Linux".to_owned(),
+        })
+    }
+}
+
 /// Securely admits exact canonical V17 bytes and a strict simulation request.
 ///
 /// This diagnostic CPU route authenticates neither source nor hardware and

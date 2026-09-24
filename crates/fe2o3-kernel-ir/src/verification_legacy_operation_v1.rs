@@ -391,6 +391,10 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
             OperationKind::Gfx942OrderedProgram(_) => {
                 self.verify_ordered_program_v17(operation, location)
             }
+            OperationKind::Gfx942CompleteBodyDeclaration(_)
+            | OperationKind::Gfx942CompleteBodyStep(_) => {
+                self.verify_complete_body_operation_v19(operation, location)
+            }
         }
     }
 

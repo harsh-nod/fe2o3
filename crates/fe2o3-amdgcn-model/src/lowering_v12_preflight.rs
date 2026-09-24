@@ -89,6 +89,14 @@ fn reject_unsupported_module(
                         }
                         None
                     }
+                    OperationKind::Gfx942CompleteBodyDeclaration(_)
+                    | OperationKind::Gfx942CompleteBodyStep(_) => {
+                        return Err(LoweringErrors::one(
+                            LoweringLocation::device_operation(module, function, block.id, ordinal),
+                            LoweringDiagnosticCode::UnsupportedOperation,
+                            "complete bodies require the exact canonical V19 owner entry point",
+                        ));
+                    }
                     OperationKind::Execution(_) => {
                         return Err(LoweringErrors::one(
                             LoweringLocation::device_operation(module, function, block.id, ordinal),

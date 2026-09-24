@@ -269,6 +269,29 @@ pub(crate) mod source_census_v1;
 pub(crate) mod ordered_origin_v1;
 
 impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
+    /// Observes an exact trusted terminal in the already sealed closure.
+    /// This chooses a continuation only; import repeats all source/provider,
+    /// signature, FnABI and source-record checks before admitting MIR36.
+    pub(crate) fn contains_complete_body_terminal_v19(&self, tcx: TyCtxt<'tcx>) -> bool {
+        self.collection.functions.iter().any(|function| {
+            let body = tcx.instance_mir(function.instance.def);
+            body.basic_blocks.iter().any(|block| {
+                let TerminatorKind::Call { func, .. } = &block.terminator().kind else {
+                    return false;
+                };
+                let TyKind::FnDef(def_id, _) = *func.ty(body, tcx).kind() else {
+                    return false;
+                };
+                matches!(
+                    crate::production_semantic_terminal_v1::classify(tcx, def_id),
+                    Some(crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1::Expand(
+                        crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::Gfx942CompleteBodyE32
+                    ))
+                )
+            })
+        })
+    }
+
     pub(crate) fn function_count(&self) -> usize {
         self.collection.functions.len()
     }

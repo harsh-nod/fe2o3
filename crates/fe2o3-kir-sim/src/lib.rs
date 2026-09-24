@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod capability;
+mod complete_body_v19;
 mod debug;
 mod debug_allocation_lifecycle_v1;
 mod debug_identity_state;

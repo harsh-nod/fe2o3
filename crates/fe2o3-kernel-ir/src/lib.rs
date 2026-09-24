@@ -25,6 +25,10 @@
 //! not authenticate contract keys or grant execution or proof authority.
 //! Target lowering, optimization and simulation require their own support.
 //! Decoding establishes wire well-formedness only.
+//! Exact KIR19 adds complete-body declarations and typed steps in the ordinary
+//! SSA/CFG. It excludes the V15 execution, V16 pair and V17 program payloads.
+//! Its immutable owner checks the complete decoded graph; retained source
+//! digests alone never authenticate source or grant lowering/launch authority.
 //! Consumers must call [`verify_module`] before relying on semantic invariants. V1-V12
 //! reconstruct kernel-entry and import roles from their legacy records; they
 //! reject device-FFI exports because the frozen function records cannot
@@ -65,6 +69,7 @@ mod canonical_kir_v12;
 mod canonical_kir_v15;
 mod canonical_kir_v16;
 mod canonical_kir_v17;
+mod canonical_kir_v19;
 mod canonical_kir_v5;
 mod canonical_kir_v6;
 mod canonical_kir_v7;
@@ -79,7 +84,9 @@ mod debug_source_map_v2;
 mod effect_extraction;
 mod execution_operations_v15;
 mod formal_memory_obligations;
+mod gfx942_complete_body_canonical_vnext;
 mod gfx942_complete_body_packing_v1;
+mod gfx942_complete_body_profile_v19;
 mod gfx942_inline_assembly_v1;
 mod gfx942_ordered_program_v1;
 mod gfx942_ordered_region_v1;
@@ -110,6 +117,7 @@ mod terminator_operands_v1;
 mod types;
 mod vector_v12;
 mod verification_borrowed_v1;
+mod verification_complete_body_v19;
 mod verification_contract_v12;
 mod verification_diagnostics_v1;
 mod verification_engine_v1;
@@ -149,6 +157,7 @@ pub use canonical_kir_v12::*;
 pub use canonical_kir_v15::*;
 pub use canonical_kir_v16::*;
 pub use canonical_kir_v17::*;
+pub use canonical_kir_v19::*;
 pub use canonical_work_budget_v1::*;
 pub use conditional_total_view_v1::*;
 pub use contract_catalog_v1::*;
@@ -158,6 +167,7 @@ pub use debug_source_map_v2::*;
 pub use effect_extraction::*;
 pub use execution_operations_v15::*;
 pub use formal_memory_obligations::*;
+pub use gfx942_complete_body_canonical_vnext::*;
 pub use gfx942_complete_body_packing_v1::*;
 pub use gfx942_inline_assembly_v1::*;
 pub use gfx942_ordered_program_v1::*;

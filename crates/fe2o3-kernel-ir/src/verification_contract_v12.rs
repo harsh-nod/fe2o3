@@ -182,7 +182,10 @@ impl Operation {
     /// Local compiler effects. Calls require the transitive interprocedural analysis.
     pub fn compiler_ordering_effects_v12(&self) -> CompilerOrderingEffectSummaryV12 {
         match &self.kind {
-            OperationKind::Gfx942OrderedRegion(_) | OperationKind::Gfx942OrderedProgram(_) => {
+            OperationKind::Gfx942OrderedRegion(_)
+            | OperationKind::Gfx942OrderedProgram(_)
+            | OperationKind::Gfx942CompleteBodyDeclaration(_)
+            | OperationKind::Gfx942CompleteBodyStep(_) => {
                 CompilerOrderingEffectSummaryV12::ordered_region()
             }
             OperationKind::Execution(_) => CompilerOrderingEffectSummaryV12::ordered_execution(),

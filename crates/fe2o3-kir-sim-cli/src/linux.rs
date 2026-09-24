@@ -50,8 +50,9 @@ use crate::schema::{ErrorKind, Stage};
 
 pub(super) mod diagnostic_kir_v16;
 pub(super) mod diagnostic_kir_v17;
+pub(super) mod diagnostic_kir_v19;
 
-const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --kir-v12 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH] (diagnostic V16/V17 do not support schedule options)";
+const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --kir-v12 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --diagnostic-kir-v19 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH] (diagnostic V16/V17/V19 do not support schedule options)";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
 const RESULT_SCHEMA: &str = "fe2o3-simulation-result-v1";
 const EXPLORATION_SCHEMA: &str = "fe2o3-simulation-exploration-v1";
@@ -130,6 +131,8 @@ enum UnsupportedFeatureCode {
     OrderedRegionProfile,
     OrderedProgram,
     OrderedProgramProfile,
+    CompleteBody,
+    CompleteBodyProfile,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
 }
@@ -141,6 +144,7 @@ enum InputCode {
     KirV12,
     KirV16,
     KirV17,
+    KirV19,
     SimulationBundle,
     Request,
     DebugSidecar,
@@ -522,6 +526,7 @@ enum ProgramInput {
     KirV12(OsString),
     DiagnosticKirV16(OsString),
     DiagnosticKirV17(OsString),
+    DiagnosticKirV19(OsString),
     Bundle(OsString),
     BundleV5(OsString),
     BundleV6(OsString),
@@ -1240,6 +1245,11 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
         ProgramInput::DiagnosticKirV16(path) => {
             let input =
                 diagnostic_kir_v16::load_admitted_kir_v16(Path::new(&path), Path::new(&request))?;
+            run_with_admitted_input(input, policy)
+        }
+        ProgramInput::DiagnosticKirV19(path) => {
+            let input =
+                diagnostic_kir_v19::load_admitted_kir_v19(Path::new(&path), Path::new(&request))?;
             run_with_admitted_input(input, policy)
         }
         ProgramInput::DiagnosticKirV17(path) => {
@@ -2395,6 +2405,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
     let mut kir_v12 = None;
     let mut diagnostic_kir_v16 = None;
     let mut diagnostic_kir_v17 = None;
+    let mut diagnostic_kir_v19 = None;
     let mut bundle = None;
     let mut bundle_v5 = None;
     let mut bundle_v6 = None;
@@ -2440,6 +2451,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             (&mut kir_v12, "--kir-v12")
         } else if argument == OsStr::new("--diagnostic-kir-v16") {
             (&mut diagnostic_kir_v16, "--diagnostic-kir-v16")
+        } else if argument == OsStr::new("--diagnostic-kir-v19") {
+            (&mut diagnostic_kir_v19, "--diagnostic-kir-v19")
         } else if argument == OsStr::new("--diagnostic-kir-v17") {
             (&mut diagnostic_kir_v17, "--diagnostic-kir-v17")
         } else if argument == OsStr::new("--bundle") {
@@ -2504,15 +2517,23 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
         bundle,
         bundle_v5,
         bundle_v6,
+        diagnostic_kir_v19,
     ) {
-        (Some(path), None, None, None, None, None, None) => ProgramInput::KirV7(path),
-        (None, Some(path), None, None, None, None, None) => ProgramInput::KirV12(path),
-        (None, None, Some(path), None, None, None, None) => ProgramInput::DiagnosticKirV16(path),
-        (None, None, None, Some(path), None, None, None) => ProgramInput::DiagnosticKirV17(path),
-        (None, None, None, None, Some(path), None, None) => ProgramInput::Bundle(path),
-        (None, None, None, None, None, Some(path), None) => ProgramInput::BundleV5(path),
-        (None, None, None, None, None, None, Some(path)) => ProgramInput::BundleV6(path),
-        (None, None, None, None, None, None, None) => {
+        (Some(path), None, None, None, None, None, None, None) => ProgramInput::KirV7(path),
+        (None, Some(path), None, None, None, None, None, None) => ProgramInput::KirV12(path),
+        (None, None, Some(path), None, None, None, None, None) => {
+            ProgramInput::DiagnosticKirV16(path)
+        }
+        (None, None, None, Some(path), None, None, None, None) => {
+            ProgramInput::DiagnosticKirV17(path)
+        }
+        (None, None, None, None, Some(path), None, None, None) => ProgramInput::Bundle(path),
+        (None, None, None, None, None, Some(path), None, None) => ProgramInput::BundleV5(path),
+        (None, None, None, None, None, None, Some(path), None) => ProgramInput::BundleV6(path),
+        (None, None, None, None, None, None, None, Some(path)) => {
+            ProgramInput::DiagnosticKirV19(path)
+        }
+        (None, None, None, None, None, None, None, None) => {
             return Err(Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
@@ -2529,7 +2550,9 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
     };
     if matches!(
         &program,
-        ProgramInput::DiagnosticKirV16(_) | ProgramInput::DiagnosticKirV17(_)
+        ProgramInput::DiagnosticKirV16(_)
+            | ProgramInput::DiagnosticKirV17(_)
+            | ProgramInput::DiagnosticKirV19(_)
     ) && (record_canonical_schedule.is_some()
         || record_seeded_schedule.is_some()
         || replay_schedule.is_some()
@@ -2543,7 +2566,9 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
         return Err(Failure::new(
             Stage::Arguments,
             ErrorKind::ScheduleInputUnsupported,
-            if matches!(&program, ProgramInput::DiagnosticKirV17(_)) {
+            if matches!(&program, ProgramInput::DiagnosticKirV19(_)) {
+                "diagnostic KIR V19 does not support persisted schedules, exploration, reduction, or schedule controls"
+            } else if matches!(&program, ProgramInput::DiagnosticKirV17(_)) {
                 "diagnostic KIR V17 does not support persisted schedules, exploration, reduction, or schedule controls"
             } else {
                 "diagnostic KIR V16 does not support persisted schedules, exploration, reduction, or schedule controls"
@@ -3598,6 +3623,8 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::OrderedProgramProfile => {
             UnsupportedFeatureCode::OrderedProgramProfile
         }
+        UnsupportedFeatureV1::CompleteBody => UnsupportedFeatureCode::CompleteBody,
+        UnsupportedFeatureV1::CompleteBodyProfile => UnsupportedFeatureCode::CompleteBodyProfile,
         UnsupportedFeatureV1::UnsupportedScalarOperation => {
             UnsupportedFeatureCode::UnsupportedScalarOperation
         }

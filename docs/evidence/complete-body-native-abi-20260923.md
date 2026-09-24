@@ -211,3 +211,17 @@ this final receipt paragraph and the status summary are subsequent doc-only edit
 Stdout/stderr are 444 / 110 bytes, SHA-256
 `7c6b5fc4f6eb5133b64d1abcfa948dd07d9fd431a64a54cad02f5cbadc62f4c8` /
 `ce895947b8ffcb2e77addf8382970fd1c07ecab9486fbbfca209319a47c37f4f`.
+
+## Follow-on actual-source continuation — 2026-09-24
+
+The [separate source evidence](complete-body-source-v19-20260924.md) now records
+21 passing actual-source sessions, 384 CPU cases and 15 exact refusals through
+MIR36/KIR19, ranked/formal checks and ordinary LLVM/worker preparation. This
+does not retroactively turn this renderer matrix's synthetic input into source
+custody. Separate gates in that record now pass seven public source commands,
+two actual-source CPU/debugger commands and four O0/O3 compilations of unchanged
+actual-source executable LLVM (138 mutation refusals). That native test compiles
+the exact executable prefix, not descriptor-bearing worker.ll or a protected
+finalizer path, and performs no native functional execution or GPU dispatch.
+Fully author-owned ABI/termination, protected M6 and physical V4 exits remain
+outside this slice.

@@ -705,6 +705,18 @@ impl Operation {
                 ))?;
                 visitor(TargetCapabilityRefV1::WaveWidth(WaveWidth::Wave64))?;
             }
+            OperationKind::Gfx942CompleteBodyDeclaration(_)
+            | OperationKind::Gfx942CompleteBodyStep(_) => {
+                visitor(TargetCapabilityRefV1::extension(
+                    crate::AMDGPU_GFX942_COMPLETE_BODY_CAPABILITY_NAMESPACE_V19,
+                    crate::AMDGPU_GFX942_COMPLETE_BODY_CAPABILITY_NAME_V19,
+                ))?;
+                visitor(TargetCapabilityRefV1::extension(
+                    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE,
+                    crate::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+                ))?;
+                visitor(TargetCapabilityRefV1::WaveWidth(WaveWidth::Wave64))?;
+            }
             OperationKind::Gfx942OrderedProgram(_) => {
                 visitor(TargetCapabilityRefV1::extension(
                     crate::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAMESPACE,

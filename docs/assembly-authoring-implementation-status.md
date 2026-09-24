@@ -1,5 +1,29 @@
 # Assembly authoring implementation status
 
+## Actual complete-body Rust source and CPU debugger — 2026-09-24
+
+The [source continuation qualification](evidence/complete-body-source-v19-20260924.md)
+passes 21 actual compiler sessions, 384 CPU cases and 15 exact source refusals.
+Fresh public commands pass both LLVM/handoff exports, all five negative profiles,
+and six CPU/logical-debugger selector cases. Four unchanged-source native
+compilation cases pass at O0/O3 with 138 mutation refusals; they compile the
+canonical executable prefix, not the descriptor-bearing protected worker chain.
+
+The final merged-tree core regression passes 609 MIR, 1,564 lowerer and 1,945
+backend tests (1/0/129 ignored). The separate consumer gate passes 3,261 tests
+(11 ignored); counts overlap other gates. Fourteen new large-error lint findings
+remain explicit, alongside existing broader lint debt. No global strict pass
+is claimed.
+
+Authors now have actual KIR19 SSA/control flow and explicit register roles,
+normal checked continuation, and diagnostic CPU/debugger commands. The compiler
+still owns entry/index setup and the guarded store/wait/termination tail.
+This is not fully author-owned physical entry ABI, GPU functional execution,
+physical register capture, a website V19 adapter or protected finalization.
+M2/M5/V3 advance; original accepted exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
+
 ## Actual gfx950 no-queue metadata registration — 2026-09-24
 
 The [registration qualification](evidence/gfx950-debug-noqueue-20260924.md)
