@@ -4,6 +4,10 @@ This checkpoint follows [shared source argument checking](source-argument-live-l
 and advances #272. It does not complete a milestone or change the 47-kernel
 production-to-safe-GPU-launch qualification matrix.
 
+Follow-up: [conditional proof retention and original-account replay](conditional-proof-retention-20260924.md)
+integrates receipt retention and target-entry replay while preserving the typed
+conditional-finalizer refusal.
+
 ## Integrated Changes
 
 The conditional aggregate now requires the checked source-argument relation,
