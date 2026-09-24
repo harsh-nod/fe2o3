@@ -57,10 +57,15 @@ mod dispatch_timestamps;
 mod ordered_batch;
 #[path = "engineering_gfx950_peer.rs"]
 mod peer;
+#[path = "engineering_gfx950_token_program.rs"]
+mod token_program;
+#[path = "engineering_gfx950_wait_policy.rs"]
+mod wait_policy;
 pub use peer::{
     Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
     Gfx950EngineeringPeerKernelV1, Gfx950EngineeringPeerPointerV1,
 };
+use wait_policy::{ActivePollCounters, Ordered64WaitPolicy};
 
 #[cfg(target_endian = "little")]
 pub(crate) use debug_cold::{DebugLocalTeardownWitnessV1, DebugOneStopTeardownWitnessV1};
@@ -136,6 +141,11 @@ struct Context {
     performance: Option<PerformanceOptions>,
     counters: PerformanceCountersV1,
     ordered_batch_poisoned: bool,
+    ordered64_wait_policy: Ordered64WaitPolicy,
+    active_poll_counters: ActivePollCounters,
+    token_program_enabled: bool,
+    next_token_program: u64,
+    token_program: Option<token_program::RegisteredProgram>,
 }
 
 #[derive(Clone, Copy)]
@@ -341,6 +351,11 @@ impl Context {
             performance: None,
             counters: PerformanceCountersV1::default(),
             ordered_batch_poisoned: false,
+            ordered64_wait_policy: Ordered64WaitPolicy::default(),
+            active_poll_counters: ActivePollCounters::default(),
+            token_program_enabled: false,
+            next_token_program: 1,
+            token_program: None,
         };
         if let Err(error) = context.initialize() {
             std::mem::forget(context);
@@ -1374,6 +1389,54 @@ fn patch_pointer_arguments(
 /// fe2o3_kfd::run_gfx950_engineering_worker_unchecked_v1(1).unwrap();
 /// ```
 pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Result<()> {
+    // SAFETY: retain the same dedicated-process and trusted-code obligations.
+    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, false) }
+}
+
+/// Runs the engineering worker with diagnostic-only bounded active ordered64 waits.
+///
+/// Only `DispatchOrderedBatch64` changes its host pause policy. All packet,
+/// completion, timeout, currentness and ownership checks remain unchanged.
+/// One diagnostic record is written to stderr only after successful close.
+///
+/// # Safety
+/// The caller must satisfy every dedicated disposable-process, device consent,
+/// trusted-kernel and terminal-error obligation of
+/// [`run_gfx950_engineering_worker_unchecked_v1`]. This is not service authority.
+///
+/// ```compile_fail
+/// fe2o3_kfd::run_gfx950_engineering_worker_active_poll_10ms_unchecked_v1(1).unwrap();
+/// ```
+pub unsafe fn run_gfx950_engineering_worker_active_poll_10ms_unchecked_v1(
+    unique_id: u64,
+) -> Result<()> {
+    // SAFETY: this additive entry preserves the legacy expert trust boundary.
+    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::ActivePoll10msV1, false) }
+}
+
+/// Runs the separate default-off owned token-program engineering experiment.
+/// Ordinary 50us completion waits remain selected. Active polling is not enabled.
+///
+/// # Safety
+/// All dedicated disposable-process, device-consent, trusted-machine-code and
+/// terminal-error obligations of [`run_gfx950_engineering_worker_unchecked_v1`]
+/// apply. Partial execution is possible on any error; never retry in this process.
+///
+/// ```compile_fail
+/// fe2o3_kfd::run_gfx950_engineering_worker_token_program_unchecked_v1(1).unwrap();
+/// ```
+pub unsafe fn run_gfx950_engineering_worker_token_program_unchecked_v1(
+    unique_id: u64,
+) -> Result<()> {
+    // SAFETY: the caller accepts the same terminal expert execution boundary.
+    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, true) }
+}
+
+unsafe fn run_worker_with_wait_policy(
+    unique_id: u64,
+    wait_policy: Ordered64WaitPolicy,
+    token_program_enabled: bool,
+) -> Result<()> {
     let kfd = OpenedKfd::open_default()
         .map_err(explain)?
         .admit_uapi()
@@ -1382,6 +1445,9 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
         .bind_gfx950_xnack_minus(DeviceSelector::UniqueId(unique_id))
         .map_err(explain)?;
     let mut context = Context::open(device)?;
+    // Immutable for the worker lifetime, selected before Ready or any command.
+    context.ordered64_wait_policy = wait_policy;
+    context.token_program_enabled = token_program_enabled;
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut fatal_response_written = false;
@@ -1407,6 +1473,27 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
             let command_started = context.profile_started();
             let mut response_payload = Vec::new();
             let response = match command {
+                CommandV1::RegisterTokenProgram {
+                    definition_bytes,
+                    kernarg_bytes,
+                } => context.register_token_program(definition_bytes, kernarg_bytes, payload)?,
+                CommandV1::ExecuteTokenProgram {
+                    program,
+                    expected_epoch,
+                    expected_completed_packets,
+                    timeout_ms,
+                    updates,
+                } => context.execute_token_program(
+                    program,
+                    expected_epoch,
+                    expected_completed_packets,
+                    timeout_ms,
+                    updates,
+                )?,
+                CommandV1::ReleaseTokenProgram {
+                    program,
+                    expected_epoch,
+                } => context.release_token_program(program, expected_epoch)?,
                 CommandV1::ConfigurePerformance {
                     cache_kernel_admission,
                     operational_currentness,
@@ -1431,7 +1518,10 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                 CommandV1::RolloverQueue {
                     expected_epoch,
                     expected_completed_packets,
-                } => context.rollover_queue(expected_epoch, expected_completed_packets)?,
+                } => {
+                    context.require_program_resource_mutation()?;
+                    context.rollover_queue(expected_epoch, expected_completed_packets)?
+                }
                 CommandV1::DispatchSequence { dispatches } => {
                     // SAFETY: the entry's disposable-process/trusted-code contract
                     // covers every item, and the complete sequence is prevalidated.
@@ -1457,14 +1547,21 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                     dispatches,
                     timeout_ms,
                 } => {
+                    context
+                        .ordered64_wait_policy
+                        .require_timestamp_compatibility()?;
                     // SAFETY: the explicit engineering command retains the
                     // existing trusted-code and terminal-failure obligations.
                     unsafe {
                         context.dispatch_ordered_batch64_profiled(dispatches, payload, timeout_ms)
                     }?
                 }
-                CommandV1::Allocate { bytes } => context.allocate(bytes)?,
+                CommandV1::Allocate { bytes } => {
+                    context.require_program_resource_mutation()?;
+                    context.allocate(bytes)?
+                }
                 CommandV1::Free { buffer } => {
+                    context.require_program_resource_mutation()?;
                     context.free(buffer)?;
                     ResponseV1::Freed
                 }
@@ -1486,7 +1583,10 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                     object_sha256,
                     symbol,
                     ..
-                } => context.load(payload, object_sha256, symbol)?,
+                } => {
+                    context.require_program_resource_mutation()?;
+                    context.load(payload, object_sha256, symbol)?
+                }
                 CommandV1::Dispatch {
                     kernel,
                     workgroup,
@@ -1529,20 +1629,28 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
             }
         }
     })();
-    if let Err(error) = &result {
-        if !fatal_response_written {
-            let _ = write_header_v1(
-                &mut output,
-                &ResponseV1::Error {
-                    message: error.clone(),
-                    fatal: true,
-                },
-            );
-            let _ = output.flush();
+    match result {
+        Ok(()) if wait_policy == Ordered64WaitPolicy::Sleep50usV1 => Ok(()),
+        Ok(()) => wait_policy.write_terminal_report(
+            context.unique_id,
+            context.active_poll_counters,
+            std::io::stderr().lock(),
+        ),
+        Err(error) => {
+            if !fatal_response_written {
+                let _ = write_header_v1(
+                    &mut output,
+                    &ResponseV1::Error {
+                        message: error.clone(),
+                        fatal: true,
+                    },
+                );
+                let _ = output.flush();
+            }
+            std::mem::forget(context);
+            Err(error)
         }
-        std::mem::forget(context);
     }
-    result
 }
 
 #[cfg(test)]

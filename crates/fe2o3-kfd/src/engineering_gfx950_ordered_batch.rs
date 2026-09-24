@@ -109,7 +109,7 @@ trait OrderedBackend {
     fn poison(&mut self);
 }
 
-fn require_deadline(now: Instant, deadline: Instant) -> Result<()> {
+pub(super) fn require_deadline(now: Instant, deadline: Instant) -> Result<()> {
     if now >= deadline {
         return Err("ordered batch aggregate deadline expired; process teardown required".into());
     }
@@ -130,18 +130,40 @@ fn run_ordered_batch_mode(
     timeout_ms: u32,
     mode: OrderedMode,
 ) -> Result<u64> {
+    run_ordered_batch_deadline(backend, count, timeout_ms, mode, None)
+}
+
+fn run_ordered_batch_deadline(
+    backend: &mut impl OrderedBackend,
+    count: usize,
+    timeout_ms: u32,
+    mode: OrderedMode,
+    aggregate_deadline: Option<Instant>,
+) -> Result<u64> {
     let result = (|| {
         if !(1..=mode.maximum()).contains(&count) || !(1..=600_000).contains(&timeout_ms) {
             return Err("ordered batch count or aggregate timeout".into());
         }
         backend.dispatch_fence()?;
+        if let Some(deadline) = aggregate_deadline {
+            require_deadline(Instant::now(), deadline)?;
+        }
         let prepared = backend.prepare_all(count)?;
         backend.preparation_fence()?;
+        if let Some(deadline) = aggregate_deadline {
+            require_deadline(Instant::now(), deadline)?;
+        }
         let staged = backend.stage(prepared)?;
         let started = Instant::now();
-        let deadline = started
-            .checked_add(Duration::from_millis(u64::from(timeout_ms)))
-            .ok_or("ordered batch deadline overflow")?;
+        let deadline = match aggregate_deadline {
+            Some(deadline) => {
+                require_deadline(started, deadline)?;
+                deadline
+            }
+            None => started
+                .checked_add(Duration::from_millis(u64::from(timeout_ms)))
+                .ok_or("ordered batch deadline overflow")?,
+        };
         let mut pending = backend.publish(staged, deadline)?;
         loop {
             require_deadline(Instant::now(), deadline)?;
@@ -171,6 +193,8 @@ struct NativeOrdered<'a> {
     payload: Vec<u8>,
     offset: usize,
     count: u32,
+    active_wait: Option<wait_policy::ActivePollWait>,
+    prepared_for_execution: Option<Vec<PreparedDispatch>>,
 }
 
 struct OrderedPending {
@@ -269,6 +293,10 @@ impl NativeOrdered<'_> {
             &mut self.context.counters.dispatch_publish_ns,
             publish_started,
         )?;
+        self.active_wait = self
+            .context
+            .ordered64_wait_policy
+            .start(self.mode == OrderedMode::Batch64, deadline)?;
         Ok(OrderedPending {
             unique_id: self.context.unique_id,
             queue_epoch: self.context.queue_epoch,
@@ -308,6 +336,12 @@ impl OrderedBackend for NativeOrdered<'_> {
     }
 
     fn prepare_all(&mut self, count: usize) -> Result<Vec<PreparedDispatch>> {
+        if let Some(prepared) = self.prepared_for_execution.take() {
+            if prepared.len() != count || !self.commands.is_empty() || !self.payload.is_empty() {
+                return Err("token program prepared group identity".into());
+            }
+            return Ok(prepared);
+        }
         // The scope borrows ownership maps immutably for the whole CPU phase.
         // It has no queue/backend access and cannot stage or publish anything.
         let mut scope = self.context.preparation_scope();
@@ -502,8 +536,12 @@ impl OrderedBackend for NativeOrdered<'_> {
     }
 
     fn pause(&mut self) -> Result<()> {
-        std::thread::sleep(Duration::from_micros(50));
-        Ok(())
+        if let Some(wait) = &mut self.active_wait {
+            wait.pause()
+        } else {
+            std::thread::sleep(Duration::from_micros(50));
+            Ok(())
+        }
     }
 
     fn poison(&mut self) {
@@ -651,6 +689,10 @@ impl Context {
         mode: OrderedMode,
     ) -> Result<ResponseV1> {
         let result = (|| {
+            self.ordered64_wait_policy.require_profile(
+                mode == OrderedMode::Batch64,
+                self.performance.is_some_and(|options| options.profile),
+            )?;
             let expected = mode.payload_bytes(&dispatches, timeout_ms)?;
             if expected != payload.len() {
                 return Err("ordered batch payload length".into());
@@ -664,6 +706,8 @@ impl Context {
                 payload,
                 offset: 0,
                 count: u32::try_from(count).map_err(explain)?,
+                active_wait: None,
+                prepared_for_execution: None,
             };
             let elapsed_ns = match mode {
                 OrderedMode::V1 => run_ordered_batch(&mut native, count, timeout_ms)?,
@@ -671,6 +715,9 @@ impl Context {
                     run_ordered_batch_mode(&mut native, count, timeout_ms, mode)?
                 }
             };
+            if let Some(wait) = &native.active_wait {
+                native.context.active_poll_counters.record_completed(wait)?;
+            }
             Ok(match mode {
                 OrderedMode::V1 => ResponseV1::DispatchOrderedBatchCompleted {
                     completed_dispatches: native.count,
@@ -686,6 +733,36 @@ impl Context {
             self.ordered_batch_poisoned = true;
         }
         result
+    }
+}
+
+impl Context {
+    /// Receives only freshly prepared CPU data from this execution, never a
+    /// retained packet or completion object. Every group uses the same deadline.
+    pub(super) fn run_prepared_token_group(
+        &mut self,
+        prepared: Vec<PreparedDispatch>,
+        deadline: Instant,
+    ) -> Result<()> {
+        let count = prepared.len();
+        let mut native = NativeOrdered {
+            context: self,
+            mode: OrderedMode::Batch64,
+            commands: Vec::new(),
+            payload: Vec::new(),
+            offset: 0,
+            count: u32::try_from(count).map_err(explain)?,
+            active_wait: None,
+            prepared_for_execution: Some(prepared),
+        };
+        run_ordered_batch_deadline(
+            &mut native,
+            count,
+            600_000,
+            OrderedMode::Batch64,
+            Some(deadline),
+        )?;
+        Ok(())
     }
 }
 
