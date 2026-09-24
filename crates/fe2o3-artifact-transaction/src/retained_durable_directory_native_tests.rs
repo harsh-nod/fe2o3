@@ -61,7 +61,6 @@ fn native_record_commit_and_ambiguous_recovery_share_the_legacy_namespace() {
         io.read_private("native.state", 64).unwrap().unwrap(),
         b"second"
     );
-    drop(io);
     assert_eq!(budget.storage(), floor);
     assert!(budget.work() > MeteredRetainedDurableDirectoryV2::FIXED_WORK);
     assert_eq!(
@@ -103,7 +102,6 @@ fn native_record_quota_refusal_precedes_io_and_preserves_existing_state() {
             Err(RetainedDurableDirectoryErrorV2::Resource(_))
         ));
         assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 0);
-        drop(io);
         assert_eq!(budget.storage(), floor);
     }
 }

@@ -136,7 +136,7 @@ mod observed_barrier_tests {
         function
     }
 
-    fn receipt() -> Receipt {
+    fn receipt() -> Receipt<'static> {
         Receipt::new(
             Default::default(),
             ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),

@@ -51,7 +51,7 @@ fn exact_canonical_read_join_checks_origin_index_space_width_and_source_occurren
     let fe2o3_kernel_ir::ConditionalTotalViewAnalysisV1::Established(facts) =
         derive_conditional_total_view_from_verified_v1(
             verified,
-            &KernelId::new("coverage"),
+            &fe2o3_kernel_ir::KernelId::new("coverage"),
             &mut budget,
         )
         .unwrap()
@@ -84,16 +84,9 @@ fn exact_canonical_read_join_checks_origin_index_space_width_and_source_occurren
     )
     .unwrap();
     for change in 0..6 {
-        let mut blocks = ranked_kernel(
-            ProductionRankedValueV1::Argument(0),
-            ProductionRankedOperationV1::Access {
-                kind: AccessKindAttr::Read,
-                view: local(4),
-                indices: vec![local(if change == 2 { 0 } else { 1 })],
-            },
-        )
-        .blocks()
-        .to_vec();
+        let mut blocks = ranked_kernel(ProductionRankedValueV1::Argument(0), access())
+            .blocks()
+            .to_vec();
         let mut entry = blocks[0].operations().to_vec();
         let (space, origin, class) = if change == 4 {
             let (origin, class) =
@@ -113,6 +106,14 @@ fn exact_canonical_read_join_checks_origin_index_space_width_and_source_occurren
             noalias_class: class,
         });
         blocks[0] = ProductionRankedBlockV1::new(entry, blocks[0].terminator().clone());
+        blocks[2] = ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::Access {
+                kind: AccessKindAttr::Read,
+                view: local(4),
+                indices: vec![local(if change == 2 { 0 } else { 1 })],
+            }],
+            blocks[2].terminator().clone(),
+        );
         let kernel = ProductionRankedKernelV1::new("read_join", 2, blocks).unwrap();
         let sources = [ProductionRankedAccessSourceV1::new(
             source_site.block,
@@ -122,6 +123,7 @@ fn exact_canonical_read_join_checks_origin_index_space_width_and_source_occurren
             if change == 5 { 1 } else { 0 },
         )];
         let source = ranked_source(&sources, source_site, &mut budget).unwrap();
+        let before = budget.work();
         let result = check_ranked_read_v1(
             candidate(&kernel, &sources),
             source,
@@ -132,6 +134,33 @@ fn exact_canonical_read_join_checks_origin_index_space_width_and_source_occurren
         );
         if change == 0 {
             assert_eq!(result, Ok(local(4)));
+            let exact = budget.work() - before;
+            let mut padded = kernel.blocks().to_vec();
+            padded.extend((0..64).map(|_| {
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return)
+            }));
+            let padded = ProductionRankedKernelV1::new("padded_read_join", 2, padded).unwrap();
+            for limit in [exact, exact + 63, exact + 64] {
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+                let mut bounded = Budget::new(&mut work, usize::MAX);
+                let result = check_ranked_read_v1(
+                    candidate(&padded, &sources),
+                    source,
+                    read,
+                    local(1),
+                    2,
+                    &mut bounded,
+                );
+                if limit == exact + 64 {
+                    assert_eq!(result, Ok(local(4)));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(JoinError::Resource(ResourceError::Work(_)))
+                    ));
+                }
+                assert_eq!(bounded.work(), limit);
+            }
         } else {
             assert!(result.is_err(), "mutation {change}");
         }

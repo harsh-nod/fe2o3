@@ -283,7 +283,8 @@ fn native_rejects_request_substitution_and_v1_without_retry() {
 fn signed_anchor(challenge: &AnchorChallengeV1, key: &SigningKey) -> AnchorTransitionReceiptV1 {
     let unsigned =
         UnsignedAnchorObservationV1::from_challenge(challenge, AnchorPositionV1::Proposed);
-    let signed = unsigned.attach_signature(key.sign(&unsigned.signing_bytes()).to_bytes());
+    let signature = key.sign(&unsigned.signing_bytes()).to_bytes();
+    let signed = unsigned.attach_signature(signature);
     AnchorTransitionReceiptV1::new(
         challenge.clone(),
         &signed,

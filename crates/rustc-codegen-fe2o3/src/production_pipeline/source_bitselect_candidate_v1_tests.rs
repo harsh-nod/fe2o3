@@ -6,7 +6,9 @@ use crate::collector::source_census_v1::bitselect_feasibility::retained::{
     CANDIDATE_CAP, RetainedInput, bind_capture, require_baseline_profile,
 };
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
-use fe2o3_kernel_ir::{BlockId, FunctionBody, Gfx942OrderedProgramRegistersV1};
+#[cfg(test)]
+use fe2o3_kernel_ir::Gfx942OrderedProgramRegistersV1;
+use fe2o3_kernel_ir::{BlockId, FunctionBody};
 use fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1;
 use fe2o3_source_isa_observation::multilevel_authoring_v1::ordered_program_materialization_v1::render_bitselect_expression_v1;
 use sha2::{Digest, Sha256};

@@ -105,6 +105,7 @@ fn check_ranked_read_v1(
     }
     let mut found = false;
     for block in candidate.kernel().blocks() {
+        budget.charge_work(1)?;
         for operation in block.operations() {
             budget.charge_work(12)?;
             match operation {

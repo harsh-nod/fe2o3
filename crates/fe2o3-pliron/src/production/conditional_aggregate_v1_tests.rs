@@ -138,11 +138,7 @@ fn canonical(read: bool) -> kir::Module {
     module
 }
 
-fn pending(
-    read: bool,
-    stage_effect: bool,
-    bad_input_bounds: bool,
-) -> ProductionConditionalRankedAnalysisV1 {
+fn pending(read: bool, bad_input_bounds: bool) -> ProductionConditionalRankedAnalysisV1 {
     use ProductionSemanticExpressionV2 as Expr;
     let scalar = ProductionSemanticScalarTypeV2::Integer {
         signed: false,
@@ -158,19 +154,25 @@ fn pending(
                     shape,
                     dynamic_extents,
                     ..
+                }
+                | O::ViewInSpace {
+                    result,
+                    writable,
+                    shape,
+                    dynamic_extents,
+                    ..
                 } = operation
+                    && *result == ProductionRankedValueIdV1::new(2)
                 {
-                    if *result == ProductionRankedValueIdV1::new(2) {
-                        *writable = false;
-                        if bad_input_bounds {
-                            *shape = vec![1];
-                            dynamic_extents.clear();
-                        }
+                    *writable = false;
+                    if bad_input_bounds {
+                        *shape = vec![1];
+                        dynamic_extents.clear();
                     }
                 }
             }
             entry.push(O::SemanticExpression {
-                result: ProductionRankedValueIdV1::new(5),
+                result: ProductionRankedValueIdV1::new(4),
                 expression: Expr::Symbol { symbol: 0, scalar },
                 numerical_contract: ProductionNumericalContractV2::exact_for(scalar),
             });
@@ -201,13 +203,13 @@ fn pending(
                     indices: vec![local(0)],
                 });
                 body.push(O::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(4),
+                    result: ProductionRankedValueIdV1::new(5),
                     expression,
                     numerical_contract: ProductionNumericalContractV2::exact_for(scalar),
                 });
             } else {
                 entry.push(O::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(4),
+                    result: ProductionRankedValueIdV1::new(5),
                     expression,
                     numerical_contract: ProductionNumericalContractV2::exact_for(scalar),
                 });
@@ -217,7 +219,7 @@ fn pending(
                 kind: AccessKindAttr::Write,
                 view: local(1),
                 indices: vec![local(0)],
-                value: local(4),
+                value: local(5),
             });
             body.push(O::RequestEffectRefinement {
                 contract: ProductionEffectRefinementContractV2::new(
@@ -226,26 +228,20 @@ fn pending(
                     ProductionReferenceOutputSiteV2::new(0, 0, 0),
                     local(1),
                     vec![local(0)],
-                    vec![local(5)],
-                    vec![local(5)],
+                    vec![local(4)],
+                    vec![local(4)],
                     local(3),
                     local(3),
                     local(3),
                     local(3),
-                    local(4),
-                    local(4),
+                    local(5),
+                    local(5),
                 )
                 .unwrap(),
                 subjects: subjects(),
             });
         },
-        |kernel| {
-            if stage_effect {
-                stage(kernel)
-            } else {
-                ProductionConstructionV1::ranked_kernel("source259_execution", kernel).unwrap()
-            }
-        },
+        stage,
     )
 }
 
@@ -289,7 +285,7 @@ fn aggregate<'a>(
     read: bool,
     budget: &mut Budget<'_>,
 ) -> ProductionConditionalAggregateStateV1<'a> {
-    let pending = pending(read, true, false);
+    let pending = pending(read, false);
     budget
         .reserve_storage(pending.retained_analysis_storage_v1())
         .unwrap();
@@ -315,7 +311,7 @@ fn conditional_aggregate_consumes_actual_fill_and_independently_checked_read_exp
         let floor = budget.storage();
         state
             .with_input_v1(&mut budget, |input, budget| {
-                assert_eq!(budget.work_ledger_identity_v1(), account);
+                assert!(budget.work_ledger_identity_v1() == account);
                 assert_eq!(input.reference_subjects(), subjects());
                 assert_eq!(input.outputs().len(), 1);
                 assert_eq!(input.reads().len(), usize::from(read));
@@ -369,7 +365,38 @@ fn conditional_aggregate_rejects_unbound_receipt_and_read_or_cpu_substitution() 
         let module = canonical(true);
         let mut work = Work::new(usize::MAX);
         let mut budget = Budget::new(&mut work, usize::MAX);
-        let pending = pending(true, case != 0, false);
+        let pending = pending(true, false);
+        if case == 0 {
+            let kernel = pending.kernel().unwrap();
+            let mut blocks = kernel.blocks().to_vec();
+            let mut body = blocks[1].operations().to_vec();
+            let O::RequireEffectRefinement { contract, proof } = &body[3] else {
+                panic!("staged effect");
+            };
+            body[3] = O::RequestEffectRefinement {
+                contract: contract.clone(),
+                subjects: proof.binding().subjects(),
+            };
+            blocks[1] = ProductionRankedBlockV1::new(body, blocks[1].terminator().clone());
+            let recipe = ProductionRankedKernelV1::new(
+                kernel.function_name(),
+                kernel.argument_count(),
+                blocks,
+            )
+            .unwrap();
+            let construction = ProductionConstructionV1::ranked_kernel("unbound", recipe).unwrap();
+            let mut session = session();
+            let registered = session.register_construction(construction).unwrap();
+            assert!(matches!(
+                session.construct_registered(registered),
+                Err(ProductionSessionErrorV1::RankedRecipe(
+                    ProductionRankedKernelErrorV1::Materialization(
+                        "unbound functional-refinement request cannot be materialized"
+                    )
+                ))
+            ));
+            continue;
+        }
         budget
             .reserve_storage(pending.retained_analysis_storage_v1())
             .unwrap();
@@ -407,7 +434,7 @@ fn conditional_aggregate_does_not_replace_a_failed_input_bounds_proof_with_a_pre
     let module = canonical(true);
     let mut work = Work::new(usize::MAX);
     let mut budget = Budget::new(&mut work, usize::MAX);
-    let pending = pending(true, true, true);
+    let pending = pending(true, true);
     assert!(pending.mandatory_bounds_failure().is_some());
     budget
         .reserve_storage(pending.retained_analysis_storage_v1())
@@ -485,12 +512,8 @@ fn conditional_aggregate_identical_live_replacement_invalidates_epoch() {
 }
 
 #[test]
-fn conditional_aggregate_refuses_value_less_write_even_with_a_staged_zero_contract() {
-    let mut module = canonical(false);
-    module.functions[0].body.as_mut().unwrap().blocks[0].operations[5].kind =
-        kir::OperationKind::Constant(kir::Constant::U32(1));
-    let original = pending(false, true, false);
-    let selection = original.selections()[0];
+fn conditional_aggregate_refuses_value_less_write_before_staging_a_zero_contract() {
+    let original = pending(false, false);
     let kernel = original.kernel().unwrap();
     let mut blocks = kernel.blocks().to_vec();
     let mut entry = blocks[0].operations().to_vec();
@@ -500,10 +523,9 @@ fn conditional_aggregate_refuses_value_less_write_even_with_a_staged_zero_contra
             expression: ProductionSemanticExpressionV2::Constant { bits, .. },
             ..
         } = operation
+            && *result == ProductionRankedValueIdV1::new(5)
         {
-            if *result == ProductionRankedValueIdV1::new(4) {
-                *bits = 0;
-            }
+            *bits = 0;
         }
     }
     blocks[0] = ProductionRankedBlockV1::new(entry, blocks[0].terminator().clone());
@@ -524,29 +546,12 @@ fn conditional_aggregate_refuses_value_less_write_even_with_a_staged_zero_contra
     let recipe =
         ProductionRankedKernelV1::new(kernel.function_name(), kernel.argument_count(), blocks)
             .unwrap();
-    drop(original);
-    let mut session = session();
-    let registered = session.register_construction(stage(recipe)).unwrap();
-    let (stage, root) = session.construct_registered(registered).unwrap();
-    let pending = session
-        .prepare_conditional_ranked_analysis_v1(stage, root, &[selection])
-        .unwrap();
-    let mut work = Work::new(usize::MAX);
-    let mut budget = Budget::new(&mut work, usize::MAX);
-    budget
-        .reserve_storage(pending.retained_analysis_storage_v1())
-        .unwrap();
-    let canonical = facts(&module, &mut budget);
-    assert!(matches!(
-        pending.verify_conditional_final_graph_v1(
-            canonical,
-            proposal(false),
-            [71; 32],
-            subjects(),
-            &mut budget
-        ),
-        Err(ProductionConditionalAggregateErrorV1::Subject(
-            "missing or mismatched output value"
-        ))
-    ));
+    let O::RequestEffectRefinement { contract, subjects } = &recipe.blocks()[1].operations()[1]
+    else {
+        panic!("unstaged effect");
+    };
+    assert_eq!(
+        normalized_effect_refinement_hash_for_kernel_v2(&recipe, 1, 1, contract, *subjects),
+        Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+    );
 }

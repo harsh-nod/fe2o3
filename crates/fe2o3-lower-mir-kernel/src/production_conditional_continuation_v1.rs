@@ -1,11 +1,18 @@
 /// The existing pending graph plus untrusted correspondence, never a second IR.
 pub struct ProductionConditionalRootInputV1 {
+    /// Consumed pending analysis; it supplies no ordinary clean-graph evidence.
     pub pending: fe2o3_pliron::ProductionConditionalRankedAnalysisV1,
+    /// Proposed semantic kernel root, checked against the original source owner.
     pub semantic_root: u32,
+    /// Proposed launch rank, checked during source correspondence replay.
     pub launch_rank: u8,
+    /// Proposed source occurrences for ranked memory accesses.
     pub access_sources: Vec<ProductionRankedAccessSourceV1>,
+    /// Proposed source occurrences for executable non-memory effects.
     pub executable_effect_sources: Vec<ProductionRankedExecutableEffectSourceV1>,
+    /// Diagnostic ranked text; never a substitute for the retained live graph.
     pub ranked_ir: String,
+    /// Inert CPU subjects requiring authentication by the backend reference join.
     pub reference_subjects: fe2o3_pliron::ProductionConditionalReferenceSubjectsV1,
 }
 
@@ -20,34 +27,49 @@ pub struct ProductionConditionalSourceArgumentV1 {
 }
 
 impl ProductionConditionalSourceArgumentV1 {
+    /// Parameter ordinal in the verified canonical function.
     pub const fn canonical_parameter(self) -> u32 {
         self.canonical_parameter
     }
+    /// Argument ordinal in the original source signature.
     pub const fn source_argument(self) -> u32 {
         self.source_argument
     }
+    /// Argument ordinal after checked source ABI adjustment.
     pub const fn adjusted_argument(self) -> u32 {
         self.adjusted_argument
     }
+    /// Source semantic local carrying the whole argument.
     pub const fn semantic_local(self) -> SemanticLocalIdV1 {
         self.semantic_local
     }
+    /// Source semantic type of that whole argument.
     pub const fn semantic_type(self) -> SemanticTypeIdV1 {
         self.semantic_type
     }
 }
 
+/// A refusal to continue the original source-bound conditional graph.
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum ProductionConditionalContinuationErrorV1 {
+    /// The original work or storage account refused the operation.
     Resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
+    /// Ranked correspondence does not replay against the source owner.
     Source(ProductionConditionalSourceTranslationErrorV1),
+    /// Canonical conditional coverage could not be established.
     Canonical(fe2o3_kernel_ir::ConditionalTotalViewErrorV1),
+    /// The canonical output does not bind to a whole source argument.
     Binding(ProductionConditionalOutputBindingErrorV1),
+    /// The ranked output or read occurrences fail source binding.
     Ranked(ProductionConditionalRankedOutputErrorV1),
+    /// Ranked control flow does not establish the required output coverage.
     Coverage(ProductionConditionalRankedCoverageErrorV1),
+    /// The final graph or conditional aggregate subject was rejected.
     Aggregate(fe2o3_pliron::ProductionConditionalAggregateErrorV1),
+    /// A mandatory final-graph check failed; its retained arena was discarded.
     PipelineRejected,
+    /// A required subject association is absent or unsupported.
     Subject(&'static str),
 }
 impl From<fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1>
@@ -98,10 +120,13 @@ pub struct ProductionConditionalFinalRootV1<'source, 'ledger> {
     reserved: usize,
 }
 
+/// A staged conditional graph retaining the original source and resource account.
 pub struct ProductionConditionalAggregateStageV1<'source, 'ledger> {
     root: ProductionConditionalFinalRootV1<'source, 'ledger>,
 }
 
+/// Callback-scoped source correspondence and explicit conditional formula input.
+/// This request conveys neither an aggregate proof nor GPU launch authority.
 pub struct ProductionSourceBoundConditionalAggregateRequestV1<'a> {
     translation: &'a ProductionConditionalSourceTranslationV1<'a>,
     pliron: &'a fe2o3_pliron::ProductionConditionalAggregateInputV1<'a>,
@@ -109,17 +134,21 @@ pub struct ProductionSourceBoundConditionalAggregateRequestV1<'a> {
 }
 
 impl<'a> ProductionSourceBoundConditionalAggregateRequestV1<'a> {
+    /// The original production source owner, not a reconstructed capsule.
     pub fn source(&self) -> &'a ProductionPreRankedKirOwnerV1 {
         self.translation.source()
     }
+    /// Freshly checked correspondence with the retained conditional graph.
     pub const fn translation(&self) -> &'a ProductionConditionalSourceTranslationV1<'a> {
         self.translation
     }
+    /// The exact live graph and explicit premises for aggregate formula replay.
     pub const fn pliron_input(
         &self,
     ) -> &'a fe2o3_pliron::ProductionConditionalAggregateInputV1<'a> {
         self.pliron
     }
+    /// Checked canonical-to-source argument correspondence for outputs and reads.
     pub const fn arguments(&self) -> &'a [ProductionConditionalSourceArgumentV1] {
         self.arguments
     }
@@ -127,7 +156,8 @@ impl<'a> ProductionSourceBoundConditionalAggregateRequestV1<'a> {
 
 /// All new checks use the original account. Preexisting source replay and arena
 /// allocations retain their documented domains; the pending analysis storage
-/// receipt is adopted once here. Failed work is never refunded.
+/// receipt and moved input buffers' capacities are adopted once here. Failed
+/// work is never refunded.
 #[allow(clippy::result_large_err)]
 pub fn continue_conditional_root_v1<'source, 'ledger>(
     source: &'source ProductionPreRankedKirOwnerV1,
@@ -156,10 +186,22 @@ pub fn continue_conditional_root_v1<'source, 'ledger>(
         if budget.storage() < source.retained_analysis_storage_v1() {
             return Err(Resource::Accounting.into());
         }
+        let input_storage = access_sources
+            .capacity()
+            .checked_mul(std::mem::size_of::<ProductionRankedAccessSourceV1>())
+            .and_then(|bytes| {
+                executable_effect_sources
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<ProductionRankedExecutableEffectSourceV1>())
+                    .and_then(|effects| bytes.checked_add(effects))
+            })
+            .and_then(|bytes| bytes.checked_add(ranked_ir.capacity()))
+            .ok_or(Resource::Arithmetic)?;
         budget.reserve_storage(
             pending
                 .retained_analysis_storage_v1()
                 .checked_add(std::mem::size_of::<ProductionConditionalFinalRootV1<'_, '_>>())
+                .and_then(|bytes| bytes.checked_add(input_storage))
                 .ok_or(Resource::Arithmetic)?,
         )?;
         let candidate = crate::NativeRankedSourceCandidateV1::from_untrusted_parts(
@@ -339,6 +381,9 @@ pub fn continue_conditional_root_v1<'source, 'ledger>(
             })
         }
         Err(error) => {
+            drop(access_sources);
+            drop(executable_effect_sources);
+            drop(ranked_ir);
             ledger.with_budget(|budget| {
                 budget.release_storage(
                     budget
@@ -355,7 +400,7 @@ pub fn continue_conditional_root_v1<'source, 'ledger>(
 fn conditional_continuation_vec_v1<T>(
     count: usize,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<Vec<T>, ProductionConditionalContinuationErrorV1> {
+) -> Result<Vec<T>, fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1> {
     use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as R;
     let bytes = count
         .checked_mul(std::mem::size_of::<T>())
@@ -373,6 +418,7 @@ fn conditional_continuation_vec_v1<T>(
 }
 
 impl<'source, 'ledger> ProductionConditionalFinalRootV1<'source, 'ledger> {
+    /// Consumes the checked root and binds its conditional aggregate identity.
     #[allow(clippy::result_large_err)]
     pub fn into_aggregate_stage_v1(
         mut self,
@@ -405,6 +451,8 @@ impl<'source, 'ledger> ProductionConditionalFinalRootV1<'source, 'ledger> {
 }
 
 impl ProductionConditionalAggregateStageV1<'_, '_> {
+    /// Rechecks source and graph identity, then lends the request and original
+    /// account to the consumer. Work remains charged on success and failure.
     #[allow(clippy::result_large_err)]
     pub fn with_request_v1<R>(
         &mut self,
@@ -464,6 +512,9 @@ impl Drop for ProductionConditionalFinalRootV1<'_, '_> {
     fn drop(&mut self) {
         drop(self.graph.take());
         drop(std::mem::take(&mut self.arguments));
+        drop(std::mem::take(&mut self.access_sources));
+        drop(std::mem::take(&mut self.executable_effect_sources));
+        drop(std::mem::take(&mut self.ranked_ir));
         // Reservations owned by a consumer callback are not part of `reserved`.
         let _ = self
             .ledger

@@ -229,3 +229,40 @@ fn consuming_continuation_denials_preserve_the_original_account_and_source_floor
         assert_eq!(ledger.storage(), floor);
     }
 }
+
+#[test]
+fn consuming_continuation_adopts_spare_input_capacity_before_source_replay() {
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+    };
+    let source = materialize(Fixture::default());
+    let floor = source.retained_analysis_storage_v1() + FLOOR;
+    for buffer in 0..3 {
+        // Empty buffers keep the same correspondence but still occupy storage.
+        let mut input = continuation_input(&source, 0);
+        match buffer {
+            0 => input.access_sources.reserve_exact(64),
+            1 => input.executable_effect_sources.reserve_exact(64),
+            _ => input.ranked_ir.reserve_exact(4096),
+        }
+        let prior_allowance = input.pending.retained_analysis_storage_v1()
+            + std::mem::size_of::<ProductionConditionalFinalRootV1<'_, '_>>();
+        let mut ledger = Owned::new(
+            CanonicalKernelIrWorkBudgetV1::new(WORK),
+            floor + prior_allowance,
+        );
+        ledger
+            .with_budget(|budget| budget.reserve_storage(floor))
+            .unwrap();
+        let error = continue_conditional_root_v1(&source, input, &mut ledger)
+            .err()
+            .expect("spare capacity must be charged before source replay");
+        assert!(matches!(
+            error,
+            ProductionConditionalContinuationErrorV1::Resource(Resource::Storage(_))
+        ));
+        assert_eq!(ledger.storage(), floor);
+        assert_eq!(ledger.work(), 8);
+    }
+}

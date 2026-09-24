@@ -696,7 +696,7 @@ fn literal_scan_preserves_first_refusal_and_exact_work_before_dead_admission() {
     for bad in [
         write(),
         Op::Access {
-            kind: AccessKindAttr::Read,
+            kind: AccessKindAttr::Write,
             view: local(2),
             indices: vec![local(1)],
         },
