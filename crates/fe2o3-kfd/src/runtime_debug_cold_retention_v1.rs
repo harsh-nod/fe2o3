@@ -2,14 +2,14 @@
 
 /// This owner deliberately has no disarm operation after a possible native
 /// effect. A later typed teardown design must not replace this with a bool.
-pub(super) struct RetainNativeOnDropV1<T> {
+pub(in super::super) struct RetainNativeOnDropV1<T> {
     value: Option<T>,
     opener_pid: u32,
     may_have_native_effects: bool,
 }
 
 impl<T> RetainNativeOnDropV1<T> {
-    pub(super) fn new(value: T) -> Self {
+    pub(in super::super) fn new(value: T) -> Self {
         Self {
             value: Some(value),
             opener_pid: std::process::id(),
@@ -17,15 +17,15 @@ impl<T> RetainNativeOnDropV1<T> {
         }
     }
 
-    pub(super) fn get(&self) -> &T {
+    pub(in super::super) fn get(&self) -> &T {
         self.value.as_ref().expect("retained owner remains present")
     }
 
-    pub(super) fn get_mut(&mut self) -> &mut T {
+    pub(in super::super) fn get_mut(&mut self) -> &mut T {
         self.value.as_mut().expect("retained owner remains present")
     }
 
-    pub(super) fn retain_before_native_effect(&mut self) {
+    pub(in super::super) fn retain_before_native_effect(&mut self) {
         self.may_have_native_effects = true;
     }
 }

@@ -45,7 +45,9 @@ pub use engineering_gfx950::{
     target_arch = "x86_64",
     target_endian = "little"
 ))]
-pub use engineering_gfx950::{Gfx950DebugColdOwnerV1, Gfx950DebugColdPreparationFactsV1};
+pub use engineering_gfx950::{
+    Gfx950DebugColdOwnerV1, Gfx950DebugColdPreparationFactsV1, Gfx950DebugMetadataNoQueueOwnerV1,
+};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]

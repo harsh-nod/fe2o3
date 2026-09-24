@@ -1,16 +1,14 @@
-//! Stable owned rendezvous preparation. No runtime registration capability.
-//! Production cannot activate this list yet: activation is test-only until the
-//! trap owner and consuming mapping/Context custody are integrated together.
+//! Stable owned rendezvous storage and private no-queue activation transaction.
+//! Its only production caller retains the actual trap, Context and Kernel.
 
 use core::fmt::{self, Write};
-#[cfg(test)]
 use core::sync::atomic::fence;
 use core::sync::atomic::{AtomicU8, Ordering};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
 #[path = "runtime_debug_abi_v11.rs"]
-mod abi;
+pub(super) mod abi;
 
 const URI_CAPACITY: usize = 128;
 static NOTIFICATION_SIDE_EFFECT: AtomicU8 = AtomicU8::new(0);
@@ -30,9 +28,11 @@ pub(in super::super) enum MetadataErrorV1 {
     Mapping,
     LoadBias,
     UriBound,
-    #[cfg(test)]
+    Currentness,
+    NativeTrap,
+    NativeRuntime,
+    RuntimeOutput,
     ProcessChanged,
-    #[cfg(test)]
     Transition,
     #[cfg(test)]
     Notification,
@@ -41,14 +41,19 @@ pub(in super::super) enum MetadataErrorV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
     Prepared,
-    #[cfg(test)]
     ActiveAbsent,
-    #[cfg(test)]
     ActivePresent,
     #[cfg(test)]
     Detached,
-    #[cfg(test)]
     Poisoned,
+}
+
+/// Private transport selected only by the actual consuming native owner.
+/// Tests inject failures here; no implementation or raw address can escape.
+pub(super) trait DebugActivationTransportV1 {
+    fn check_currentness(&mut self) -> Result<(), MetadataErrorV1>;
+    fn register_trap(&mut self, trap_base: u64, gpu_id: u32) -> Result<(), MetadataErrorV1>;
+    fn enable_runtime(&mut self, root_address: u64) -> Result<(), MetadataErrorV1>;
 }
 
 struct Record {
@@ -136,9 +141,52 @@ impl MetadataStorageV1 {
             && self.record[0].root.state == abi::RT_CONSISTENT_V1
     }
 
-    // Production has NO activation entry, root-address accessor, acknowledgment
-    // setter, or caller-controlled notification hook. These methods are a
-    // private transaction engine for later consuming-owner integration.
+    /// Called only while actual Context, trap and Kernel custody is retained.
+    /// No runtime/queue token is produced here; successful metadata publication
+    /// cannot be converted to execution authority.
+    pub(super) fn activate_no_queue(
+        &mut self,
+        trap_base: u64,
+        gpu_id: u32,
+        transport: &mut impl DebugActivationTransportV1,
+    ) -> Result<(), MetadataErrorV1> {
+        if !self.is_prepared() {
+            return Err(MetadataErrorV1::Transition);
+        }
+        if trap_base == 0 || !trap_base.is_multiple_of(4096) || gpu_id == 0 {
+            return Err(MetadataErrorV1::Mapping);
+        }
+        transport.check_currentness()?;
+        // Retain metadata as well as the outer native custody before the first
+        // attempted syscall. No rollback, reuse or retry follows ambiguity.
+        self.phase = Phase::Poisoned;
+        transport.register_trap(trap_base, gpu_id)?;
+        transport.check_currentness()?;
+        // Advertise the ABI only after trap registration acknowledgment, while
+        // the code-object list is absent and no queue exists in this owner.
+        // SAFETY: this exclusively owned, initialized ABI word remains in its
+        // immovable allocation until process exit after any native attempt.
+        unsafe {
+            core::ptr::write_volatile(
+                &mut self.record[0].root.version,
+                abi::REQUIRED_ROCR_DEBUG_VERSION_V11,
+            );
+        }
+        fence(Ordering::Release);
+        let root = &self.record[0].root as *const _ as usize as u64;
+        transport.enable_runtime(root)?;
+        transport.check_currentness()?;
+        self.phase = Phase::ActiveAbsent;
+        self.transition(true, |snapshot| {
+            // Snapshot is descriptive test instrumentation, never native authority.
+            let _ = (snapshot.state, snapshot.linked);
+            transport.check_currentness()?;
+            fe2o3_runtime_debug_state_v1();
+            transport.check_currentness()
+        })
+    }
+
+    // Synthetic wrappers exercise the same private publication engine.
     #[cfg(test)]
     fn publish_link(&mut self) -> Result<(), MetadataErrorV1> {
         self.transition(true, |_| {
@@ -155,7 +203,6 @@ impl MetadataStorageV1 {
         })
     }
 
-    #[cfg(test)]
     fn transition(
         &mut self,
         add: bool,
@@ -176,7 +223,7 @@ impl MetadataStorageV1 {
 
         // A refusal or unwind after the first publication must retain all
         // metadata/URI/original-ELF storage. Actual GPU mapping retention belongs
-        // to the future consuming live owner, never this borrowed preparation.
+        // to the outer consuming owner and cannot be replaced by this list.
         self.phase = Phase::Poisoned;
         self.store_state(if add {
             abi::RT_ADD_V1
@@ -208,15 +255,13 @@ impl MetadataStorageV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     fn store_state(&mut self, state: i32) {
         // SAFETY: exclusive access to this initialized ABI field. Other Rust
         // threads cannot share this owner; external debugger reads are not Rust
-        // references. No pointer is passed to a kernel by this implementation.
+        // references. Native publication retains this allocation process-wide.
         unsafe { core::ptr::write_volatile(&mut self.record[0].root.state, state) };
     }
 
-    #[cfg(test)]
     fn snapshot(&self) -> TransitionSnapshotV1 {
         TransitionSnapshotV1 {
             state: self.record[0].root.state,
@@ -224,7 +269,6 @@ impl MetadataStorageV1 {
         }
     }
 
-    #[cfg(test)]
     fn take_storage_to_retain(&mut self) -> Option<(Vec<Record>, Vec<u8>)> {
         if matches!(
             self.phase,
@@ -253,21 +297,18 @@ impl MetadataStorageV1 {
     }
 }
 
-#[cfg(test)]
 impl Drop for MetadataStorageV1 {
     fn drop(&mut self) {
         if let Some((record, original_elf)) = self.take_storage_to_retain() {
-            // Until a consuming live owner exists, these states are reachable
-            // only in synthetic transaction tests. Retain every metadata
-            // pointee together; do not leave an allocated URI pointing into a
-            // freed original-ELF buffer on an ambiguous notification.
+            // Independent fallback retention of every metadata pointee. The
+            // consuming outer custody also retains all GPU mappings and FDs.
+            // Neither layer interprets Drop as a native teardown acknowledgment.
             core::mem::forget(record);
             core::mem::forget(original_elf);
         }
     }
 }
 
-#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TransitionSnapshotV1 {
     state: i32,
@@ -333,3 +374,7 @@ pub(super) fn checked_load_bias(
 #[cfg(test)]
 #[path = "runtime_debug_metadata_storage_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_debug_noqueue_transaction_v1_tests.rs"]
+mod noqueue_tests;

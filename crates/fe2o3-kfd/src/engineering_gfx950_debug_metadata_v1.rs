@@ -1,8 +1,7 @@
-//! Actual-Kernel-derived, owned version-zero metadata preparation.
-//! Only the consuming cold owner retains this alongside the real Kernel.
-//! No runtime-enable, trap operation, active metadata or pointer accessor.
+//! Actual-Kernel-derived owned metadata, retained with its exact native custody.
+//! The private activation caller accepts actual Context/Allocation owners only.
 
-use super::{Backend, Kernel};
+use super::{Allocation, Backend, Context, Kernel};
 use crate::memory::MemoryBackend;
 use fe2o3_amdhsa_loader::AdmittedProfile;
 use sha2::{Digest, Sha256};
@@ -11,6 +10,9 @@ use sha2::{Digest, Sha256};
 mod storage;
 pub(super) use storage::MetadataErrorV1;
 use storage::{MetadataStorageV1, checked_load_bias};
+
+#[path = "runtime_debug_native_noqueue_v1.rs"]
+mod native;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct PreparedMetadataFactsV1 {
@@ -21,7 +23,7 @@ pub(super) struct PreparedMetadataFactsV1 {
 }
 
 /// Owned immutable metadata with binding derived solely from an actual Kernel.
-/// This is crate-private and has no activation or native address accessor.
+/// This is crate-private and has no native address accessor.
 pub(super) struct OwnedPreparedDebugMetadataV1 {
     storage: MetadataStorageV1,
     facts: PreparedMetadataFactsV1,
@@ -83,6 +85,21 @@ impl OwnedPreparedDebugMetadataV1 {
             mapping_va: kernel.code.va,
             descriptor_offset: kernel.descriptor_offset,
         })
+    }
+
+    pub(super) fn activate_no_queue(
+        &mut self,
+        trap: &Allocation,
+        context: &mut Context,
+    ) -> Result<(), MetadataErrorV1> {
+        let gpu_id = context
+            .backend
+            .engineering_peer_device()
+            .observation()
+            .kfd_gpu_id();
+        let mut transport = native::NativeNoQueueTransportV1::new(context);
+        self.storage
+            .activate_no_queue(trap.va, gpu_id, &mut transport)
     }
 
     pub(super) fn facts(&self) -> PreparedMetadataFactsV1 {
