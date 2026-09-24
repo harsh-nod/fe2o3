@@ -33,6 +33,11 @@ const RUNTIME_ENABLE_OPCODE: Opcode = AMDKFD_IOC_RUNTIME_ENABLE as Opcode;
 const MAX_QUEUE_EXCEPTION_WAIT_MS: u32 = 1_000;
 static KFD_RUNTIME_GATE: Mutex<ProcessGlobalKfdRuntimeGateV1> =
     Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
+#[path = "runtime_debug_profile_gate_v1.rs"]
+mod runtime_profile_gate;
+#[cfg(feature = "engineering-gfx950")]
+pub(crate) use runtime_profile_gate::ProcessGlobalKfdDebugReservationV1;
+use runtime_profile_gate::check_global_runtime_gate_process_v1;
 #[allow(dead_code)]
 const UPDATE_QUEUE_OPCODE: Opcode = AMDKFD_IOC_UPDATE_QUEUE as Opcode;
 
@@ -60,7 +65,14 @@ impl Drop for RuntimeGateTerminalTeardownArmV1<'_> {
 fn arm_runtime_gate_for_terminal_teardown<'a>(
     gate: &'a Mutex<ProcessGlobalKfdRuntimeGateV1>,
 ) -> RuntimeGateTerminalTeardownArmV1<'a> {
-    let counted = lock_runtime_gate_v1(gate).arm_teardown();
+    let counted = if core::ptr::eq(gate, &KFD_RUNTIME_GATE)
+        && check_global_runtime_gate_process_v1().is_err()
+    {
+        // A fork child must not lock an inherited mutex or release its state.
+        false
+    } else {
+        lock_runtime_gate_v1(gate).arm_teardown()
+    };
     RuntimeGateTerminalTeardownArmV1 {
         gate,
         counted,
@@ -73,6 +85,9 @@ fn finish_runtime_gate_teardown_arm(
     counted: bool,
     confirmed: bool,
 ) {
+    if core::ptr::eq(gate, &KFD_RUNTIME_GATE) && check_global_runtime_gate_process_v1().is_err() {
+        return;
+    }
     lock_runtime_gate_v1(gate).finish_teardown_arm(counted, confirmed);
 }
 
@@ -91,7 +106,11 @@ pub(crate) fn arm_process_global_kfd_runtime_gate_for_teardown_v1()
 }
 
 pub(crate) fn permanently_poison_process_global_kfd_runtime_gate_v1() {
-    lock_runtime_gate_v1(&KFD_RUNTIME_GATE).poison();
+    // A foreign process is already sticky-refused without locking or changing
+    // the inherited gate. This function never releases native resources.
+    if check_global_runtime_gate_process_v1().is_ok() {
+        lock_runtime_gate_v1(&KFD_RUNTIME_GATE).poison();
+    }
 }
 
 fn lock_runtime_gate_v1(
@@ -110,7 +129,16 @@ fn lock_runtime_gate_v1(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProcessKfdRuntimeStateV1 {
     Disabled,
-    Enabled { opener_pid: u32, leases: usize },
+    Enabled {
+        opener_pid: u32,
+        leases: usize,
+    },
+    #[cfg(any(test, feature = "engineering-gfx950"))]
+    DebugReserved {
+        opener_pid: u32,
+        reservation_id: u64,
+        exposed: bool,
+    },
     Poisoned,
 }
 
@@ -119,6 +147,8 @@ struct ProcessGlobalKfdRuntimeGateV1 {
     runtime: ProcessKfdRuntimeStateV1,
     teardown_arms: usize,
     permanently_poisoned: bool,
+    #[cfg(any(test, feature = "engineering-gfx950"))]
+    next_debug_reservation: u64,
 }
 
 impl ProcessGlobalKfdRuntimeGateV1 {
@@ -127,6 +157,8 @@ impl ProcessGlobalKfdRuntimeGateV1 {
             runtime: ProcessKfdRuntimeStateV1::Disabled,
             teardown_arms: 0,
             permanently_poisoned: false,
+            #[cfg(any(test, feature = "engineering-gfx950"))]
+            next_debug_reservation: 1,
         }
     }
 
@@ -191,6 +223,15 @@ impl ProcessKfdRuntimeStateV1 {
                 Ok(false)
             }
             Self::Enabled { .. } => Err(LinuxDoorbellErrorV1::ProcessChanged),
+            #[cfg(any(test, feature = "engineering-gfx950"))]
+            Self::DebugReserved {
+                opener_pid: owner_pid,
+                ..
+            } if owner_pid != opener_pid => Err(LinuxDoorbellErrorV1::ProcessChanged),
+            #[cfg(any(test, feature = "engineering-gfx950"))]
+            Self::DebugReserved { .. } => Err(LinuxDoorbellErrorV1::Runtime(
+                "plain/debug runtime profile conflict",
+            )),
             Self::Poisoned => Err(LinuxDoorbellErrorV1::Runtime(
                 "process runtime context poisoned",
             )),
@@ -223,6 +264,15 @@ impl ProcessKfdRuntimeStateV1 {
             } if owner_pid == opener_pid => Ok(true),
             Self::Enabled { .. } => Err(LinuxDoorbellErrorV1::ProcessChanged),
             Self::Disabled => Err(LinuxDoorbellErrorV1::Runtime("runtime lease underflow")),
+            #[cfg(any(test, feature = "engineering-gfx950"))]
+            Self::DebugReserved {
+                opener_pid: owner_pid,
+                ..
+            } if owner_pid != opener_pid => Err(LinuxDoorbellErrorV1::ProcessChanged),
+            #[cfg(any(test, feature = "engineering-gfx950"))]
+            Self::DebugReserved { .. } => Err(LinuxDoorbellErrorV1::Runtime(
+                "plain/debug runtime profile conflict",
+            )),
             Self::Poisoned => Err(LinuxDoorbellErrorV1::Runtime(
                 "process runtime context poisoned",
             )),
@@ -459,6 +509,7 @@ impl LinuxKfdRuntimeEnabledV1 {
         if opener_pid != std::process::id() || kfd.as_raw_fd() < 0 {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
+        check_global_runtime_gate_process_v1()?;
         let mut gate = lock_runtime_gate_v1(&KFD_RUNTIME_GATE);
         let requires_kernel_enable = gate.admit_runtime(opener_pid)?;
         if !requires_kernel_enable {
@@ -610,6 +661,10 @@ impl LinuxKfdRuntimeEnabledV1 {
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "disable before queue and event destruction",
             ));
+        }
+        if let Err(error) = check_global_runtime_gate_process_v1() {
+            self.poisoned = true;
+            return Err(error);
         }
         let mut gate = lock_runtime_gate_v1(&KFD_RUNTIME_GATE);
         let requires_kernel_disable = match gate.runtime.release_plan(opener_pid) {

@@ -23,6 +23,10 @@ path = "src/bin/gfx950_engineering_worker.rs"
 required-features = ["engineering-gfx950"]
 
 [[example]]
+name = "observe_gfx950_cold_debug_v1"
+required-features = ["engineering-gfx950"]
+
+[[example]]
 name = "kfd-host-visible-memory"
 required-features = ["live-validation"]
 
