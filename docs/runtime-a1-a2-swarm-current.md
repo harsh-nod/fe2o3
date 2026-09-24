@@ -1,5 +1,21 @@
 # Current Runtime Swarm Work Orders
 
+Latest async integration (2026-09-24): the
+[directed async packet](evidence/dev-directed-async-peer-cpu-2026-09-24/README.md)
+adds ordinary and tracked peer-copy methods using the exact Context directed
+progress contract. A private compile-time policy reuses the existing operation
+lifecycle without registering an implicit operation flush. Independent stream
+registrations and ordinary operations retain their own budgets. Sealed producer
+rejections preserve the original diagnostic and uncertain custody. Twenty-one
+new CPU tests cover chains/diamonds, scheduling, ownership, credits and hostile
+outcomes. GNU and musl each pass 1,325 runtime tests with twenty hardware-only
+ignores; 46 doctests, formatting, strict Clippy and 3,818 unchanged inputs pass.
+Two independent source reviews find no remaining blocker. The
+[contract](runtime-directed-async-peer-v1.md) records the next native dependency
+diamond and complete-buffer/cleanup oracles. Native chains and faults, executable
+refinement, aggregate memory and matched performance remain open; Native R125,
+Admission R118B, Resources R116/V3 and A1/A2 acceptance are unchanged.
+
 Latest Context integration (2026-09-24): the
 [directed pending-input packet](evidence/dev-directed-context-peer-cpu-2026-09-24/README.md)
 adds the distinct directed scalar Context API, exact pending-writer/input

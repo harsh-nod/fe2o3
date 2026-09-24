@@ -1993,6 +1993,15 @@ mod tests {
     #[derive(Default)]
     struct MockState {
         peer_devices: bool,
+        directed_routes: HashMap<
+            u64,
+            (
+                crate::BackendDirectedPeerRouteV1,
+                Vec<crate::BackendDirectedPeerDependencyV1>,
+            ),
+        >,
+        directed_calls: Vec<(&'static str, u64)>,
+        directed_panic: bool,
         peer_segment_issues: Vec<(u64, Vec<crate::RuntimePeerCopySegmentV1>, Vec<u64>)>,
         adoption_ready_calls: usize,
         adoption_ready_mode: u8,
@@ -2177,6 +2186,9 @@ mod tests {
             assert!(!state.panic_on_poll, "requested backend poll panic");
             state.poll_threads.insert(thread::current().id());
             state.poll_calls += 1;
+            if state.directed_routes.contains_key(&submission) {
+                state.directed_calls.push(("poll", submission));
+            }
             if let Some(failure) = state.poll_failures.pop_front() {
                 return Err(failure);
             }

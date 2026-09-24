@@ -2,9 +2,11 @@
 
 use super::*;
 use crate::{
-    RuntimeArgumentsV1, RuntimeAsyncCopyBackendV1, RuntimeCopyV1, RuntimeLaunchGeometryV1,
-    RuntimeMemoryRegionV1, RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsBackendV1,
-    RuntimePeerCopySegmentsV1, RuntimePeerCopyV1, RuntimeSubmissionV1, TypedRuntimeKernelV1,
+    RuntimeArgumentsV1, RuntimeAsyncCopyBackendV1, RuntimeCopyV1,
+    RuntimeDirectedScalarPeerCopyBackendV1, RuntimeDirectedScalarPeerCopyV1,
+    RuntimeLaunchGeometryV1, RuntimeMemoryRegionV1, RuntimePeerCopySegmentV1,
+    RuntimePeerCopySegmentsBackendV1, RuntimePeerCopySegmentsV1, RuntimePeerCopyV1,
+    RuntimeSubmissionV1, TypedRuntimeKernelV1,
 };
 use std::collections::{BTreeMap, VecDeque};
 
@@ -12,6 +14,8 @@ use generated_operation::completion_contract::{CompletionClassV1, classify_compl
 
 mod factory;
 pub(super) use factory::{EngineOperationFactoryV1, stop_reply};
+mod progress;
+use progress::{DirectedPeerProgressV1, ObservedProgressV1, OperationProgressV1};
 
 /// An exact submission and its final host observation. An error is not GPU
 /// completion; the context continues to retain possibly reachable resources.
@@ -368,7 +372,7 @@ type Submit<B, A> = Box<
         + Send,
 >;
 
-struct Operation<B: RuntimeBackendV1, A> {
+struct Operation<B: RuntimeBackendV1, A, P> {
     stream: RuntimeStreamIdV1,
     submit: Option<Submit<B, A>>,
     submission: Option<RuntimeSubmissionV1<A>>,
@@ -376,9 +380,10 @@ struct Operation<B: RuntimeBackendV1, A> {
     rejected_observations: u64,
     last_rejected_observation: Option<B::Error>,
     control: Option<RuntimeAsyncOperationControlV1>,
+    progress: core::marker::PhantomData<fn() -> P>,
 }
 
-impl<B: RuntimeBackendV1, A> Operation<B, A> {
+impl<B: RuntimeBackendV1, A, P> Operation<B, A, P> {
     fn finish(&mut self, observation: Result<RuntimeCompletionStatusV1, RuntimeErrorV1<B::Error>>) {
         if let Some(control) = &self.control {
             control.finish_observation();
@@ -394,7 +399,7 @@ impl<B: RuntimeBackendV1, A> Operation<B, A> {
     }
 }
 
-impl<B: RuntimeBackendV1, A> Drop for Operation<B, A> {
+impl<B: RuntimeBackendV1, A, P> Drop for Operation<B, A, P> {
     fn drop(&mut self) {
         factory::stop_reply(
             &mut self.reply,
@@ -404,7 +409,9 @@ impl<B: RuntimeBackendV1, A> Drop for Operation<B, A> {
     }
 }
 
-impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
+impl<B: RuntimeBackendV1, A, P: OperationProgressV1<B, A>> EngineOperationV1<B>
+    for Operation<B, A, P>
+{
     fn advance(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
         if let Some(submit) = self.submit.take() {
             if let Some(control) = &self.control
@@ -437,7 +444,7 @@ impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
             .submission
             .as_mut()
             .expect("accepted operation retains submission");
-        let observation = match context.poll(submission) {
+        let observation = match P::observe(context, submission) {
             Ok(_) => context
                 .query_submission(submission)
                 .map_err(RuntimeErrorV1::from),
@@ -445,6 +452,12 @@ impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
         };
         match classify_completion_v1(&observation) {
             CompletionClassV1::Pending => false,
+            CompletionClassV1::Rejected if context.is_terminal() => {
+                // A producer contradiction can seal custody while preserving
+                // its original rejection. Do not replace it with EngineStopped.
+                self.finish(observation);
+                true
+            }
             CompletionClassV1::Rejected => {
                 let Err(RuntimeErrorV1::BackendRejected(error)) = observation else {
                     unreachable!("classifier preserves rejected observation");
@@ -466,7 +479,7 @@ impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
     }
 
     fn stream(&self) -> Option<RuntimeStreamIdV1> {
-        Some(self.stream)
+        P::flush_stream(self.stream)
     }
 
     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {
@@ -514,7 +527,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         stream: RuntimeStreamIdV1,
         submit: Submit<B, A>,
     ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
-        self.enqueue_controlled_operation(stream, submit, None)
+        self.enqueue_controlled_operation::<A, ObservedProgressV1>(stream, submit, None)
     }
 
     pub(super) fn enqueue_tracked_operation<A: 'static>(
@@ -523,11 +536,15 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         submit: Submit<B, A>,
     ) -> Result<RuntimeAsyncTrackedOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
         let control = RuntimeAsyncOperationControlV1::new();
-        let future = self.enqueue_controlled_operation(stream, submit, Some(control.clone()))?;
+        let future = self.enqueue_controlled_operation::<A, ObservedProgressV1>(
+            stream,
+            submit,
+            Some(control.clone()),
+        )?;
         Ok(RuntimeAsyncTrackedOperationV1 { future, control })
     }
 
-    fn enqueue_controlled_operation<A: 'static>(
+    fn enqueue_controlled_operation<A: 'static, P: OperationProgressV1<B, A>>(
         &self,
         stream: RuntimeStreamIdV1,
         submit: Submit<B, A>,
@@ -537,7 +554,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         let (reply, future) = owned::Reply::budgeted_pair(&self.observer.reply_budget)?;
-        let factory = factory::OperationFactoryV1::new(stream, submit, reply, control);
+        let factory = factory::OperationFactoryV1::<B, A, P>::new(stream, submit, reply, control);
         match self
             .observer
             .try_send_command(RuntimeAsyncEngineCommandV1::Operation(Box::new(factory)))
@@ -688,6 +705,71 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
                 })
             }),
         )
+    }
+
+    /// Enqueues an explicitly directed peer copy with bounded producer progress.
+    ///
+    /// Submission and progress occur in separate owner advances. Each progress
+    /// advance performs at most one backend action through the Context directed
+    /// API, including retained-producer reconciliation. This operation adds no
+    /// automatic stream flush. Other operations, event observers and explicit
+    /// stream registrations retain their independent scheduler budgets, even on
+    /// the same stream; the bound is not global to an engine tick.
+    /// Dependencies are charged until owner submission or disposal. Dropping the
+    /// future does not cancel the copy or release its Context-owned custody.
+    pub fn directed_peer_copy(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncOperationFutureV1<RuntimeDirectedScalarPeerCopyV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimeDirectedScalarPeerCopyBackendV1,
+    {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        self.enqueue_controlled_operation::<_, DirectedPeerProgressV1>(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.directed_peer_copy_v1(stream, source, destination, dependencies)
+                })
+            }),
+            None,
+        )
+    }
+
+    /// Directed peer copy with local pre-submission cancellation and timeout
+    /// observation. After submission, control cancellation cannot retire native
+    /// work. Progress and snapshot credit follow `directed_peer_copy`.
+    pub fn directed_peer_copy_tracked(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncTrackedOperationV1<RuntimeDirectedScalarPeerCopyV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimeDirectedScalarPeerCopyBackendV1,
+    {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        let control = RuntimeAsyncOperationControlV1::new();
+        let future = self.enqueue_controlled_operation::<_, DirectedPeerProgressV1>(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.directed_peer_copy_v1(stream, source, destination, dependencies)
+                })
+            }),
+            Some(control.clone()),
+        )?;
+        Ok(RuntimeAsyncTrackedOperationV1 { future, control })
     }
 
     /// Enqueues one ordered peer-copy list with runtime-owned whole-list progress.

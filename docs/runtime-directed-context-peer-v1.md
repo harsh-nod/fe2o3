@@ -60,9 +60,11 @@ These count bounds do not prove wall-clock latency or fairness.
 
 `progress_directed_peer_copy_v1` selects either one exact directed backend
 progress quantum or one ordinary producer poll. It adds no wait, sleep, thread
-or generic stream flush. Dedicated async-engine observer registration is a
-separate integration: ordinary async observation still follows its existing
-poll/flush scheduling contract and is not advertised as this one-action driver.
+or generic stream flush. The additive
+[directed async adapter](runtime-directed-async-peer-v1.md) now consumes this
+quantum without an implicit operation flush. Ordinary operations and explicit
+observer/progress registrations retain their independent scheduling contracts;
+the action bound is not global to a stream or engine tick.
 
 Consumer Success requires all exact Context predecessors to be Succeeded and
 the exact producer reservation, when present, to report Success. A native
@@ -80,7 +82,7 @@ panics preserve uncertain custody.
 
 ## Remaining Qualification
 
-- Dedicated bounded async-engine registration and caller-owner integration.
+- Native qualification of the CPU-tested directed async adapter and owner integration.
 - Native pending-input chains, diamonds, full output/canary checks, cross-stream
   progress, fault disposition and exact cleanup on admitted GPU pairs.
 - Source-bound executable refinement for the changed Context transitions;

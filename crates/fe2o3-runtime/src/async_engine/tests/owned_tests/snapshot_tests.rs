@@ -2,6 +2,7 @@ use super::*;
 use crate::{RuntimeAsyncLaunchRequestV1, RuntimeBindingV1};
 use std::sync::atomic::AtomicUsize;
 
+mod directed;
 mod peer_segments;
 
 #[derive(Clone)]
@@ -353,7 +354,19 @@ fn r64_all_standalone_operations_preflight_dependencies_before_enqueue() {
         );
         assert_eq!(
             h.handle
-                .peer_copy_tracked(h.stream, region, region, dependencies)
+                .peer_copy_tracked(h.stream, region, region, dependencies.clone())
+                .err(),
+            expected
+        );
+        assert_eq!(
+            h.handle
+                .directed_peer_copy(h.stream, region, region, dependencies.clone())
+                .err(),
+            expected
+        );
+        assert_eq!(
+            h.handle
+                .directed_peer_copy_tracked(h.stream, region, region, dependencies)
                 .err(),
             expected
         );

@@ -20,14 +20,15 @@ pub(in crate::async_engine) trait EngineOperationFactoryV1<B: RuntimeBackendV1>:
     }
 }
 
-pub(super) struct OperationFactoryV1<B: RuntimeBackendV1, A> {
+pub(super) struct OperationFactoryV1<B: RuntimeBackendV1, A, P> {
     stream: RuntimeStreamIdV1,
     submit: Option<Submit<B, A>>,
     reply: Option<owned::Reply<RuntimeAsyncOperationResultV1<A, B::Error>>>,
     control: Option<RuntimeAsyncOperationControlV1>,
+    progress: core::marker::PhantomData<fn() -> P>,
 }
 
-impl<B: RuntimeBackendV1, A> OperationFactoryV1<B, A> {
+impl<B: RuntimeBackendV1, A, P> OperationFactoryV1<B, A, P> {
     pub(super) fn new(
         stream: RuntimeStreamIdV1,
         submit: Submit<B, A>,
@@ -39,15 +40,16 @@ impl<B: RuntimeBackendV1, A> OperationFactoryV1<B, A> {
             submit: Some(submit),
             reply: Some(reply),
             control,
+            progress: core::marker::PhantomData,
         }
     }
 }
 
-impl<B: RuntimeBackendV1 + 'static, A: 'static> EngineOperationFactoryV1<B>
-    for OperationFactoryV1<B, A>
+impl<B: RuntimeBackendV1 + 'static, A: 'static, P: OperationProgressV1<B, A>>
+    EngineOperationFactoryV1<B> for OperationFactoryV1<B, A, P>
 {
     fn materialize(&mut self) -> Box<dyn EngineOperationV1<B>> {
-        Box::new(Operation {
+        Box::new(Operation::<B, A, P> {
             stream: self.stream,
             submit: Some(self.submit.take().expect("factory is materialized once")),
             submission: None,
@@ -55,6 +57,7 @@ impl<B: RuntimeBackendV1 + 'static, A: 'static> EngineOperationFactoryV1<B>
             rejected_observations: 0,
             last_rejected_observation: None,
             control: self.control.take(),
+            progress: core::marker::PhantomData,
         })
     }
 
@@ -67,7 +70,7 @@ impl<B: RuntimeBackendV1 + 'static, A: 'static> EngineOperationFactoryV1<B>
     }
 }
 
-impl<B: RuntimeBackendV1, A> Drop for OperationFactoryV1<B, A> {
+impl<B: RuntimeBackendV1, A, P> Drop for OperationFactoryV1<B, A, P> {
     fn drop(&mut self) {
         stop_reply(
             &mut self.reply,

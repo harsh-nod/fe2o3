@@ -682,6 +682,14 @@ remain required. No complete parity gate is closed by this integration.
 
 ## Required Gates
 
+The [directed async integration](runtime-directed-async-peer-v1.md) adds a
+CPU-qualified owner adapter above the directed Context checkpoint: 1,325 runtime
+tests pass on each GNU/musl target with twenty hardware-only ignores, plus all
+46 doctests and static checks. It contributes per-operation bounded progress,
+not a global per-stream quantum, early-event graph API, native/fault acceptance,
+formal refinement or matched performance. All gates below remain independently
+required; this packet does not establish parity.
+
 ### G1: API and ownership
 
 All public handles are context-generation bound. A live submission or event
