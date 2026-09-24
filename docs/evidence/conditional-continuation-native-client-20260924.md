@@ -71,8 +71,8 @@ through each guarded run. Only this evidence note was completed afterward.
 | Canonical kernel-IR library suite | 759 passed |
 | Full Pliron library suite, `internal-proof-staging` enabled | 1,568 passed |
 | Final merged-tree conditional, consuming-continuation and native-storage tests | 180 passed: 25 kernel-IR, 74 lower-MIR, 78 Pliron, 3 storage |
-| Artifact transaction and broker suites | 695 passed; 6 protected-environment tests ignored |
-| Client, protocol and issuer suites, including their doctests | 247 passed; 5 protected-environment tests ignored |
+| Artifact transaction and broker suites | 695 passed; 6 ignored entries (privileged fixtures and subprocess helpers) |
+| Client, protocol and issuer suites, including their doctests | 247 passed; 5 ignored entries (isolated/static fixtures and subprocess helpers) |
 | Final artifact, broker, kernel-IR, lower-MIR and Pliron doctests | 327 passed |
 | Tutorial-manifest Python suite | 79 passed |
 
