@@ -5,7 +5,11 @@ bool transportAvailable(TransportFact F,TransportDomain Use) {
 }
 bool TransportAttempt::evaluate(ArrayRef<DecodedInstruction> Code,
     const FunctionCfg &Cfg,const TransportMcView &Mc,const SymbolRecord &Function) {
-  const bool Helper=Profile==ct::Profile::ConditionalHelperO0;
+  const bool Helper=Profile!=ct::Profile::InlineRootO3;
+  const bool Caller=Profile==ct::Profile::CallerToHelperO0;
+  if(Caller && (!W.Caller.PrefixReady || W.Caller.Consumed ||
+                W.Caller.ExpandedExec || W.Caller.TargetOffset!=Function.FileOffset))
+    return fail(ct::Refusal::Roster);
   const bool Edit=Program==ct::Program::MoveInput2;
   const size_t Count=(Helper?10U:19U)-(Edit?1U:0U);
   if(Code.size()!=Count || Cfg.InstructionBlocks.size()!=Count)
@@ -66,10 +70,14 @@ bool TransportAttempt::evaluate(ArrayRef<DecodedInstruction> Code,
     return 0;
   };
   if(Helper) {
-    for(unsigned I=0;I<3;++I)
-      if(!set(realWord(TransportBank::Vector,I),
-          {uint16_t(I+1),1,TransportDomain::Entry,TransportReady::Ready,1,0},State))
-        return false;
+    for(unsigned I=0;I<3;++I) {
+      const TransportFact Input=Caller?W.Caller.Arguments[I]:
+          TransportFact{uint16_t(I+1),1,TransportDomain::Entry,TransportReady::Ready,1,0};
+      if(Caller && (Input.Expression!=I+1 || Input.Generation!=2 ||
+          Input.Domain!=TransportDomain::Entry || Input.Ready!=TransportReady::Ready ||
+          Input.Origin!=2 || Input.Reserved!=0))return fail(ct::Refusal::Undefined);
+      if(!set(realWord(TransportBank::Vector,I),Input,State))return false;
+    }
   } else {
     for(unsigned I=0;I<2;++I)
       if(!set(realWord(TransportBank::Scalar,I),
@@ -207,6 +215,7 @@ bool TransportAttempt::evaluate(ArrayRef<DecodedInstruction> Code,
         break;
       }
       case TransportOp::Return: {
+        if(Caller && reg(0)!=W.Caller.ReturnPair)return fail(ct::Refusal::Register);
         const auto Data=fact(realWord(TransportBank::Vector,0),State);
         if(++Returns!=1 || State.Current!=TransportDomain::Entry ||
            !transportAvailable(Data,State.Current) || Data.Expression!=(Edit?3:5))
@@ -225,6 +234,8 @@ bool TransportAttempt::evaluate(ArrayRef<DecodedInstruction> Code,
     }
     W.States[Block+1]=State;
   }
-  return (Helper?(Returns==1 && Stores==0):(Stores==1 && Returns==0)) ||
-         fail(ct::Refusal::Roster);
+  if(!(Helper?(Returns==1 && Stores==0):(Stores==1 && Returns==0)))
+    return fail(ct::Refusal::Roster);
+  if(Caller)W.Caller.Consumed=true;
+  return true;
 }

@@ -213,6 +213,11 @@ struct SiteDocument {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ExecutionDetailDocument {
+    UnsupportedMatrixInputDomain {
+        role: &'static str,
+        lane: u8,
+        component: u8,
+    },
     IncompleteWave {
         width: &'static str,
         wave_in_workgroup: u64,
@@ -3515,6 +3520,9 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         SimulationExecutionErrorKindV1::IncompleteWave(_) => ErrorKind::ExecutionIncompleteWave,
         SimulationExecutionErrorKindV1::DivergentWave(_) => ErrorKind::ExecutionDivergentWave,
         SimulationExecutionErrorKindV1::MismatchedWave(_) => ErrorKind::ExecutionMismatchedWave,
+        SimulationExecutionErrorKindV1::UnsupportedMatrixInputDomain { .. } => {
+            ErrorKind::ExecutionUnsupportedMatrixInputDomain
+        }
         SimulationExecutionErrorKindV1::WaveShuffleSourceOutOfRange { .. } => {
             ErrorKind::ExecutionWaveShuffleSourceOutOfRange
         }
@@ -3537,6 +3545,19 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
 
 fn execution_detail(error: &SimulationExecutionErrorKindV1) -> Option<ExecutionDetailDocument> {
     match error {
+        SimulationExecutionErrorKindV1::UnsupportedMatrixInputDomain {
+            role,
+            lane,
+            component,
+        } => Some(ExecutionDetailDocument::UnsupportedMatrixInputDomain {
+            role: match role {
+                fe2o3_kir_sim::MatrixInputRoleV1::A => "a",
+                fe2o3_kir_sim::MatrixInputRoleV1::B => "b",
+                fe2o3_kir_sim::MatrixInputRoleV1::Accumulator => "accumulator",
+            },
+            lane: *lane,
+            component: *component,
+        }),
         SimulationExecutionErrorKindV1::IncompleteWave(detail) => {
             Some(ExecutionDetailDocument::IncompleteWave {
                 width: wave_width_name(detail.width),
@@ -3579,6 +3600,10 @@ const fn wave_width_name(width: WaveWidth) -> &'static str {
         WaveWidth::Wave64 => "wave64",
     }
 }
+
+#[cfg(test)]
+#[path = "linux_matrix_bf16_exact_v1_tests.rs"]
+mod matrix_bf16_exact_v1_tests;
 
 fn wave_mask(width: WaveWidth, mask: u64) -> String {
     match width {

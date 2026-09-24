@@ -11,8 +11,9 @@ void transportTimely(std::chrono::steady_clock::time_point Started) {
     "transport original-start deadline");
 }
 json::Object transportSummary(const transport::Summary &S) {
-  return json::Object{
-    {"profile",S.Selected==transport::Profile::ConditionalHelperO0?
+  json::Object Out{
+    {"profile",S.Selected==transport::Profile::CallerToHelperO0?
+      "finite-O0-kernarg-to-helper-data":S.Selected==transport::Profile::ConditionalHelperO0?
       "conditional-ordinary-C-helper-data":"inline-root-kernarg-to-store-data"},
     {"program",S.SelectedProgram==transport::Program::XorAnd?"xor-and":"move-input2"},
     {"cached_registers",S.CachedRegisters},{"whole_words",S.WholeWords},{"whole32_classes",S.Whole32Classes},
@@ -22,6 +23,15 @@ json::Object transportSummary(const transport::Summary &S) {
     {"canonical_identity",hex(S.Canonical)},{"llvm_sha256",hex(S.Llvm)},
     {"source_report_sha256",hex(S.SourceReport)},{"source_descriptor_sha256",hex(S.Descriptor)},
     {"native_descriptor_sha256",hex(S.NativeDescriptor)}};
+  if(S.Selected==transport::Profile::CallerToHelperO0) {
+    Out["caller_offset"]=S.CallerOffset;
+    Out["call_offset"]=S.CallOffset;
+    Out["call_target_offset"]=S.CallTargetOffset;
+    Out["caller_to_helper_data_proved"]=true;
+    Out["post_call_caller_data_proved"]=false;
+    Out["caller_address_predicate_or_runtime_proved"]=false;
+  }
+  return Out;
 }
 int transportRun(TransportInputV1 &T,StringRef Level,StringRef Output,
                  std::chrono::steady_clock::time_point Started) {
@@ -70,7 +80,10 @@ int transportRun(TransportInputV1 &T,StringRef Level,StringRef Output,
   // Separate fixed diagnostic output envelope: two encoded bundles <=1 MiB
   // each and JSON <=64 KiB; existing parser/worker resources remain their own
   // bounded domain. This is not added to source-ledger or whole-process RSS.
-  json::Object Report{{"schema","fe2o3-test-composition-transport-native-v1"},
+  const StringRef Schema=T.Projection.Selected==transport::Profile::CallerToHelperO0?
+    "fe2o3-test-composition-caller-transport-native-v1":
+    "fe2o3-test-composition-transport-native-v1";
+  json::Object Report{{"schema",Schema.str()},
     {"variant",R.Input.Label},{"optimization",Level.str()},
     {"source_report_sha256",T.ReportHash},{"baseline_report_sha256",hex(SHA256::hash(BaselineBytes))},
     {"hsaco_sha256",hex(SHA256::hash(B))},{"hsaco_bytes",B.size()},
@@ -114,7 +127,7 @@ int transportRun(TransportInputV1 &T,StringRef Level,StringRef Output,
   require(fsync(FD)==0 && close(FD)==0,"transport output close");
   promotedRecheck(T.Normal);helperRecheck(T.Extra);
   transportTimely(Started);
-  outs()<<"{\"transport_pending\":true,\"schema\":\"fe2o3-test-composition-transport-native-v1\"}\n";
+  outs()<<"{\"transport_pending\":true,\"schema\":\""<<Schema<<"\"}\n";
   outs().flush();require(!outs().has_error(),"transport stdout failure");
   transportTimely(Started);return 0;
 }

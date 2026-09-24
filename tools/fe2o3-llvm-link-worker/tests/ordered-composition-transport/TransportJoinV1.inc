@@ -16,6 +16,20 @@ bool TransportAttempt::bind(const MetadataKernel &K,const SymbolRecord &Entry,
        support::endian::read16le(D.data()+56)!=8)
       return fail(ct::Refusal::Descriptor);
   }
+  if(Profile==ct::Profile::CallerToHelperO0) {
+    // Finite observed O0 descriptor. In particular USER_SGPR=8 and enable
+    // bits 1,2,3,4 select dispatch/queue/kernarg/dispatch-id in ABI order;
+    // wave32 and private-segment-buffer are disabled. Dynamic-stack metadata
+    // remains an observed property, not a claim of no stack/spill execution.
+    if(K.PrivateSize!=0 || support::endian::read32le(D.data())!=0 ||
+       support::endian::read32le(D.data()+4)!=0 ||
+       support::endian::read32le(D.data()+8)!=288 ||
+       support::endian::read32le(D.data()+44)!=7 ||
+       support::endian::read32le(D.data()+48)!=11469061 ||
+       support::endian::read32le(D.data()+52)!=913 ||
+       support::endian::read16le(D.data()+56)!=2078)
+      return fail(ct::Refusal::Descriptor);
+  }
   Summary.NativeDescriptor=SHA256::hash(D);
   Bound=true;return true;
 }
@@ -42,17 +56,18 @@ bool TransportAttempt::observe(const SymbolRecord &F,
   if(F.Name==root()) {
     if(RootSeen)return fail(ct::Refusal::Roster);
     RootSeen=true;
-    if(Profile==ct::Profile::ConditionalHelperO0) {
+    if(Profile!=ct::Profile::InlineRootO3) {
       if(Analyzed.DirectCallSites!=1 || Analyzed.Evidence.DirectCallees.size()!=1 ||
          Analyzed.Evidence.DirectCallees[0]!=helper())
         return fail(ct::Refusal::Roster);
+      if(Profile==ct::Profile::CallerToHelperO0)return caller(Code,Cfg,Mc,F,Analyzed);
       // Deliberately no caller/address/spill interpretation. Its original full
       // analyzer checks and aggregate budgets still run before any commit.
       return true;
     }
     if(Analyzed.DirectCallSites!=0 || !Analyzed.Evidence.DirectCallees.empty())
       return fail(ct::Refusal::Roster);
-  } else if(F.Name==helper() && Profile==ct::Profile::ConditionalHelperO0) {
+  } else if(F.Name==helper() && Profile!=ct::Profile::InlineRootO3) {
     if(HelperSeen || Analyzed.DirectCallSites!=0 ||
        !Analyzed.Evidence.DirectCallees.empty())return fail(ct::Refusal::Roster);
     HelperSeen=true;
@@ -68,11 +83,15 @@ bool TransportAttempt::finish(const PhysicalMachineEffectEvidence &E) {
      E.Entries[0].DescriptorIdentity!=Summary.NativeDescriptor ||
      E.Functions.size()!=FunctionCount || E.Blocks.size()!=BlockCount ||
      E.Instructions.size()!=InstructionCount ||
-     (Profile==ct::Profile::ConditionalHelperO0
+     (Profile!=ct::Profile::InlineRootO3
         ?(!HelperSeen || FunctionCount!=2):(HelperSeen || FunctionCount!=1)))
     return fail(ct::Refusal::Aggregate);
   unsigned Selected=0;
-  const StringRef Wanted=Profile==ct::Profile::ConditionalHelperO0?helper():root();
+  const StringRef Wanted=Profile!=ct::Profile::InlineRootO3?helper():root();
+  if(Profile==ct::Profile::CallerToHelperO0 &&
+     (!W.Caller.PrefixReady || !W.Caller.Consumed || W.Caller.ExpandedExec ||
+      W.Caller.TargetOffset!=Summary.SelectedOffset))
+    return fail(ct::Refusal::Aggregate);
   for(const auto &F:E.Functions) {
     if(F.Symbol!=root() && F.Symbol!=helper())return fail(ct::Refusal::Roster);
     if(F.Symbol==Wanted) {

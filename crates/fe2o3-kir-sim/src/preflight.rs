@@ -688,6 +688,40 @@ pub(crate) fn preflight(
             actual: u64::MAX,
             limit: limits.max_resident_bytes as u64,
         })?;
+    // The fixed numerical scratch is prepaid only for the exact reachable profile.
+    // Other profiles retain their previous resident accounting and refusals.
+    let has_exact_matrix = reachable_function_indices.iter().any(|index| {
+        module
+            .functions
+            .get(*index)
+            .and_then(|f| f.body.as_ref())
+            .is_some_and(|body| {
+                body.blocks.iter().any(|block| {
+                    block.operations.iter().any(|operation| {
+                        matches!(&operation.kind, OperationKind::Matrix(matrix)
+                    if crate::matrix_bf16_exact_v1::supported(matrix))
+                    })
+                })
+            })
+    });
+    let execution_peak = execution_peak
+        .checked_add(
+            if has_exact_matrix {
+                crate::execute::matrix_bf16_exact_resident_bytes()
+            } else {
+                Some(0)
+            }
+            .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+                resource: "matrix scratch bytes",
+                actual: u64::MAX,
+                limit: limits.max_resident_bytes as u64,
+            })?,
+        )
+        .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+            resource: "resident bytes",
+            actual: u64::MAX,
+            limit: limits.max_resident_bytes as u64,
+        })?;
     let resident_bytes = preflight_peak.max(execution_peak);
     check_limit(
         "resident bytes",
@@ -1943,6 +1977,9 @@ fn scan_operation(
         OperationKind::Matrix(matrix) => match matrix.kind {
             fe2o3_kernel_ir::MatrixOperationKind::LdsLoad { .. }
             | fe2o3_kernel_ir::MatrixOperationKind::LdsStore { .. } => {}
+            fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
+                if target.index_width() == crate::IndexWidthV1::Bits64
+                    && crate::matrix_bf16_exact_v1::supported(matrix) => {}
             fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
             | fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
                 reject!(UnsupportedFeatureV1::UnsupportedNumericalContract)

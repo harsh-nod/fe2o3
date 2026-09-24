@@ -10,6 +10,44 @@ struct TransportControls {
                        const FunctionCfg &C,const McState &M,const SymbolRecord &F) {
     return A.evaluate(I,C,{*M.Registers,*M.Instructions,*M.Analysis},F);
   }
+  static bool caller(TransportAttempt &A,ArrayRef<DecodedInstruction> I,
+                     const FunctionCfg &C,const McState &M,const SymbolRecord &F,
+                     const AnalyzedFunction &E) {
+    return A.caller(I,C,{*M.Registers,*M.Instructions,*M.Analysis},F,E);
+  }
+  static bool callerStep(TransportAttempt &A,const DecodedInstruction &I,
+                         const McState &M,size_t At) {
+    return A.callerStep(I,{*M.Registers,*M.Instructions,*M.Analysis},At);
+  }
+  static void callerFault(TransportAttempt &A,unsigned Fault) {
+    if(Fault==0)++A.W.Caller.Arguments[0].Generation;
+    if(Fault==1)A.W.Caller.Arguments[1].Origin=1;
+    if(Fault==2)A.W.Caller.ExpandedExec=true;
+    if(Fault==3)A.W.Caller.Arguments[2].Ready=TransportReady::Pending;
+    if(Fault==4)A.W.Caller.ReturnPair=7675; // actual measured s0:s1
+    if(Fault==5)A.W.Caller.TargetOffset+=4;
+    if(Fault==6)A.W.Caller.Consumed=true;
+  }
+  static bool callerLaneKill(TransportAttempt &A,const MCRegisterInfo &MRI) {
+    const unsigned Id=A.W.Caller.LaneRegister;
+    for(MCRegister Half:MRI.subregs(Id)) {
+      if(!A.cache(Half.id(),MRI))return false;
+      if(A.find(Half.id())->WordCount!=0)continue;
+      if(!A.callerWrite(Half.id(),A.W.States[0],false))return false;
+      return llvm::all_of(A.W.Caller.Lanes,[](auto F){
+        return F.Ready==TransportReady::Unknown;});
+    }
+    return false;
+  }
+  static void callerPending(TransportAttempt &A) {
+    const auto *R=A.find(A.callerWord(TransportBank::Scalar,16));
+    A.W.States[0].Facts[R->Slot].Ready=TransportReady::Pending;
+  }
+  static void callerSavedExecStale(TransportAttempt &A) {
+    A.W.Caller.ExpandedExec=true;
+    const auto *R=A.find(A.callerWord(TransportBank::Scalar,20));
+    ++A.W.States[0].Facts[R->Slot].Generation;
+  }
   static bool pendingKill(TransportAttempt &A) {
     for(size_t I=0;I<A.WordCount;++I) if(A.W.Words[I].Bank==TransportBank::Scalar &&
         A.W.Words[I].Index==8) {
@@ -280,11 +318,13 @@ void descriptorAndCursorControls() {
   require(!transportAvailable(Pending,TransportDomain::Entry),
           "opaque load result is unavailable before wait");
 }
+#include "TransportCallerTestsV1.inc"
 }
 int main(int Argc,char **) {
   if(Argc!=1){errs()<<"transport controls accept no arguments\n";return 2;}
   sourceControls();accountingControls();
   auto Mc=unwrap(createMcState());machineControls(Mc);descriptorAndCursorControls();
+  callerControls(Mc);
   outs()<<"transport controls "<<Checks<<" passed; no source/native authority\n";
   return 0;
 }

@@ -1861,6 +1861,10 @@ makeInstructionTrace(StringRef FunctionName,
 #include "../tests/ordered-composition-transport/TransportShapeV1.inc"
 #include "../tests/ordered-composition-transport/TransportRosterV1.inc"
 #include "../tests/ordered-composition-transport/TransportEvaluateV1.inc"
+#include "../tests/ordered-composition-transport/TransportCallerShapeV1.inc"
+#include "../tests/ordered-composition-transport/TransportCallerRosterV1.inc"
+#include "../tests/ordered-composition-transport/TransportCallerEvaluateV1.inc"
+#include "../tests/ordered-composition-transport/TransportCallerJoinV1.inc"
 #include "../tests/ordered-composition-transport/TransportJoinV1.inc"
 #endif
 Expected<AnalyzedFunction>

@@ -11,7 +11,7 @@
 namespace fe2o3::worker::transport_test_v1 {
 inline constexpr uint64_t StorageBytes = 65536;
 inline constexpr uint64_t WorkUnits = 280576;
-enum class Profile : uint8_t { ConditionalHelperO0 = 1, InlineRootO3 = 2 };
+enum class Profile : uint8_t { ConditionalHelperO0 = 1, InlineRootO3 = 2, CallerToHelperO0 = 3 };
 enum class Program : uint8_t { XorAnd = 1, MoveInput2 = 2 };
 // These are inert observations emitted by the distinct real-source role mode.
 // The caller must retain/recheck the exact fresh publication, normal LLVM,
@@ -70,9 +70,13 @@ struct Summary {
   uint16_t Functions = 0, Blocks = 0, Instructions = 0;
   uint64_t SelectedOffset = 0, SelectedBytes = 0, DataUseOffset = 0;
   uint64_t ProgramOffset = 0;
+  // Only CallerToHelperO0 fills these exact decoded static-call coordinates.
+  uint64_t CallerOffset = 0, CallOffset = 0, CallTargetOffset = 0;
   std::array<uint8_t,32> Canonical{}, Llvm{}, SourceReport{}, Descriptor{}, NativeDescriptor{};
   // Scope is encoded by Selected, not by a "full proof" flag. O0 is conditional
-  // on ordinary C ABI inputs on entry EXEC. O3 covers DATA, never its address.
+  // on ordinary C ABI inputs on entry EXEC. Profile 3 derives those inputs from
+  // the fixed caller prefix; it does not cover the post-call caller or store.
+  // O3 covers DATA, never its address.
 };
 // Cannot be default-constructed or copied; no summary survives a failed
 // aggregate analysis. The reservation remains live through output consumption.

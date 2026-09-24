@@ -42,6 +42,17 @@ struct TransportWord {
   std::array<uint8_t,11> Reserved{};
 };
 static_assert(sizeof(TransportWord) <= 16);
+// Closed selected-lane provenance, not a per-wave runtime register file.
+// Fits within the existing pending-summary scratch; no envelope increase.
+struct TransportCallerState {
+  std::array<TransportFact,7> Lanes{};
+  std::array<TransportFact,3> Arguments{};
+  uint64_t RootOffset=0, RootBytes=0, CallOffset=0, TargetOffset=0;
+  uint16_t LaneRegister=0, ReturnPair=0;
+  uint8_t PendingWords=0;
+  bool PrefixReady=false, Consumed=false, ExpandedExec=false, ExecSaved=false;
+};
+static_assert(sizeof(TransportCallerState)<=256);
 struct TransportWorkspace {
   std::array<uint16_t,16384> UnitSlots;
   std::array<TransportRegister,128> Registers{};
@@ -54,7 +65,8 @@ struct TransportWorkspace {
   std::array<uint8_t,128> Domains{};
   std::array<uint8_t,512> CfgScratch{};
   std::array<uint8_t,128> Pending{};
-  std::array<uint8_t,1024> SummaryScratch{};
+  TransportCallerState Caller{};
+  std::array<uint8_t,768> SummaryScratch{};
   std::array<uint8_t,4096> InstructionScratch{};
   std::array<uint8_t,8192> DiagnosticScratch{};
 };
@@ -78,7 +90,8 @@ bool transportProjection(const ct::SourceProjection &S,
       !transportNonzero(S.Canonical) || !transportNonzero(S.Llvm) ||
       !transportNonzero(S.SourceReport) || !transportNonzero(S.Descriptor) ||
       (S.Selected!=ct::Profile::ConditionalHelperO0 &&
-       S.Selected!=ct::Profile::InlineRootO3) ||
+       S.Selected!=ct::Profile::InlineRootO3 &&
+       S.Selected!=ct::Profile::CallerToHelperO0) ||
       (S.SelectedProgram!=ct::Program::XorAnd &&
        S.SelectedProgram!=ct::Program::MoveInput2))
     return false;
@@ -176,6 +189,13 @@ class TransportAttempt {
   TransportFact fact(unsigned Id,const TransportState &State) const;
   bool set(unsigned Id,TransportFact,TransportState &State);
   bool role(unsigned Id,TransportBank B,unsigned Index,unsigned Width=32) const;
+  bool callerShape(const DecodedInstruction &,const TransportMcView &);
+  bool callerWrite(unsigned,TransportState &,bool PreserveLane);
+  bool callerStep(const DecodedInstruction &,const TransportMcView &,size_t);
+  bool caller(ArrayRef<DecodedInstruction>,const FunctionCfg &,const TransportMcView &,
+              const SymbolRecord &,const AnalyzedFunction &);
+  bool callerOverlap(unsigned,unsigned) const;
+  unsigned callerWord(TransportBank,unsigned) const;
   bool evaluate(ArrayRef<DecodedInstruction>,const FunctionCfg &,const TransportMcView &,
                 const SymbolRecord &);
 public:

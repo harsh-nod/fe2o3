@@ -731,8 +731,8 @@
     "block": 4
   },
   "crates/fe2o3-kfd/src/engineering_gfx950.rs": {
-    "block": 8,
-    "function": 5
+    "block": 11,
+    "function": 8
   },
   "crates/fe2o3-kfd/src/engineering_gfx950_debug_execution_v1.rs": {
     "function": 2

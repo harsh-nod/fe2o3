@@ -180,6 +180,7 @@ pub(crate) enum ErrorKind {
     ExecutionIncompleteWave,
     ExecutionDivergentWave,
     ExecutionMismatchedWave,
+    ExecutionUnsupportedMatrixInputDomain,
     ExecutionWaveShuffleSourceOutOfRange,
     ExecutionScheduleDecisionLimit,
     ExecutionScheduleResidentLimit,

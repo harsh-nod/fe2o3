@@ -1,5 +1,9 @@
 # Source roles, typed transport and debugger packaging — 2026-09-24
 
+This record retains its earlier source snapshots. The later
+[caller DATA, exact BF16 CPU and startup checkpoint](caller-data-bf16-cpu-qualification-20260924.md)
+records subsequent progress without relabeling these historical gates.
+
 This record separates genuine frontend runs, static native observations and
 CPU-only debugger infrastructure. It does not close another broad milestone:
 **M1/V1/V2/U1/U2/U3 (6/18)** remain accepted.

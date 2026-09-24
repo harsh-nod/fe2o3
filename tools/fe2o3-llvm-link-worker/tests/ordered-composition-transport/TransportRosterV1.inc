@@ -64,7 +64,7 @@ constexpr std::array<TransportExpected,19> TransportRoot{{
 }};
 TransportExpected transportExpected(ct::Profile P,ct::Program Program,size_t I) {
   const bool Edit=Program==ct::Program::MoveInput2;
-  if(P==ct::Profile::ConditionalHelperO0) {
+  if(P!=ct::Profile::InlineRootO3) {
     if(Edit && I==4)return TEdit;
     return TransportHelper[I+(Edit && I>=5?1:0)];
   }

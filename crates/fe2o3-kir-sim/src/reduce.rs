@@ -882,6 +882,7 @@ fn failure_class(kind: &SimulationExecutionErrorKindV1) -> &'static str {
         K::IncompleteWave(_) => "incomplete_wave",
         K::DivergentWave(_) => "divergent_wave",
         K::MismatchedWave(_) => "mismatched_wave",
+        K::UnsupportedMatrixInputDomain { .. } => "unsupported_matrix_input_domain",
         K::WaveShuffleSourceOutOfRange { .. } => "wave_shuffle_source_out_of_range",
         K::WorkgroupSchedulerNoProgress { .. } => "workgroup_scheduler_no_progress",
         K::ScheduleDecisionLimit { .. } => "schedule_decision_limit",
@@ -1002,6 +1003,13 @@ fn hash_execution_detail(hash: &mut Sha256, kind: &SimulationExecutionErrorKindV
         } => {
             hash.update(source_lane.to_le_bytes());
             hash.update(tile_width.to_le_bytes());
+        }
+        K::UnsupportedMatrixInputDomain {
+            role,
+            lane,
+            component,
+        } => {
+            hash.update([*role as u8, *lane, *component]);
         }
         K::WorkgroupSchedulerNoProgress { phase } => hash.update(phase.to_le_bytes()),
         K::EventSinkFailure(error) => hash_bytes(hash, error.detail.as_bytes()),

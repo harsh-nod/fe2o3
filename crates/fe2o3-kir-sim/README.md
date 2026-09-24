@@ -331,13 +331,26 @@ floating-point arithmetic. It preserves signed zero and positive infinity;
 NaNs retain sign/payload with the quiet bit set, while negative nonzero inputs
 produce the model's canonical quiet NaN. No GPU NaN-payload parity is implied.
 
+A declared gfx942 Wave64 BF16/F32 m16n16k16 matrix operation additionally supports
+an exact-integer subdomain: A/B values in [-16,16] and C values with magnitude
+at most 2^20, all integral, with positive zero only. The existing cooperative
+engine validates all 64 lanes and 768 operands, then calculates all 256 results
+using its software F32 FMA before binding any result. Domain refusals carry only
+operand role, lane and component. Missing/divergent lanes are not zero padded.
+General BF16, scaled MFMA, nonfinite/subnormal/fractional inputs and negative zero
+remain unsupported. This is logical CPU execution, not physical register or GPU
+parity evidence. The additive `admit_v12_with_verification_budget` API borrows
+an already verified owner and returns a metered independent CPU view, never a
+source-authority token; its storage receipt must remain reserved while the view
+lives. Existing wire identities and admission methods are unchanged.
+
 The exact canonical terminating AMDGPU `Trap` call is admitted as a dynamic
 failure equivalent to reaching its required `Unreachable` terminator. It is
 never ignored when executed; this only permits compiler-generated failure
 blocks to remain in otherwise executable KIR. Float atomics,
 generic-address-space atomics, all other external calls, generic barriers,
 legacy-request dynamic LDS, multiple dynamic bases, `DynamicAtLeast`,
-non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
+non-scalar workgroup memory, unsupported matrix numerical profiles, gfx950 LDS transpose
 operations, V7 memory intrinsics,
 V10/V11/V12 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
 volatile access, target-layout mismatches, and inline assembly outside the closed

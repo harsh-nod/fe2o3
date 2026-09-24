@@ -1,5 +1,19 @@
 # Assembly authoring implementation status
 
+## Finite caller DATA, exact BF16 CPU execution and fresh debugger startup — 2026-09-24
+
+The [new checkpoint](caller-data-bf16-cpu-qualification-20260924.md) records three
+fresh static O0 caller-to-helper DATA cases, 175 C++ and 120 driver controls,
+and byte-identical six/fourteen-case compatibility artifacts. Post-call output,
+address/predicate validity and complete ABI/functional equivalence remain open.
+
+The CPU engine now executes a closed exact-integer BF16/F32 matrix profile;
+726 simulator/CLI/debugger/runtime regression executions passed. Genuine-source
+numerical execution and general BF16/hardware equivalence are not yet qualified.
+A fresh no-inferior MI2 debugger startup also passed with complete owned-family
+cleanup. It captured no physical GPU state and grants no target-run authority.
+Broad accepted exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## BF16 source inspection through normal compiler continuation — 2026-09-24
 
 The separate genuine two-session ladder now carries the original inspected

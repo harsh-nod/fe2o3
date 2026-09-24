@@ -351,6 +351,35 @@ engineering library, doctest and strict Clippy gates before any separately
 reviewed native qualification. No native invocation was performed for this
 inventory reconciliation.
 
+### Opt-In Engineering Wait and Token-Program Entries
+
+The entries added in `807f0bef7` preserve the expert disposable-process,
+selected-device consent, trusted machine-code and terminal-error obligations.
+The legacy entry now forwards through one private unsafe policy selector; two
+separate public unsafe entries select bounded active polling or token programs.
+These are the three additional unsafe functions and three forwarding blocks
+in `engineering_gfx950.rs`, taking its inventory from eight/five to eleven/eight.
+Safe argument validation still cannot establish the supplied machine code's
+actual memory accesses, ABI compliance or termination, so the unsafe boundary
+must remain explicit. No pointer, mapping, ioctl or kernel-trust obligation is
+removed or discharged by these wrappers.
+
+Root reviewed the three exact forwarding blocks, the shared worker lifecycle,
+the retained token-program owner and the ordered wait/publication delegation.
+Policy is selected before Ready and cannot change during the worker lifetime.
+The default remains 50us sleep with token programs disabled. Active polling
+keeps the original completion/currentness checks and aggregate deadline, uses
+a bounded 10ms window, and rejects timestamp profiling. Token registration
+retains descriptions rather than queue packets; each execution validates all
+arguments before any group publishes and shares one aggregate deadline.
+Resource mutation requires releasing the registered program. Partial execution
+is terminal, poisons the ordered path and retains uncertain native owners until
+disposable-process teardown; it is never a retry or safe-launch guarantee.
+
+This reconciliation changes only this one inventory entry and review records.
+Run the source-inventory gate, engineering host tests and compile-fail doctests;
+CPU evidence does not qualify native GPU execution or protected authority.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

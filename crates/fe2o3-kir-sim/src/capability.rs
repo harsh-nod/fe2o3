@@ -734,6 +734,8 @@ fn top_level_capability(
                 Reason::NonScalarMemory,
             ],
         ),
+        // LDS plus the declared gfx942 exact-integer BF16/F32 subdomain.
+        // Other numerical profiles still refuse; this row is not general MFMA support.
         Surface::Matrix => owned(
             Owner::WaveCooperative,
             &[Reason::UnsupportedNumericalContract],

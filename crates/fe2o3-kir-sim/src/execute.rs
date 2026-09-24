@@ -62,6 +62,11 @@ pub use observed_storage::ObservationExecutionOptionsV1;
 
 #[path = "execute_alloca_v1.rs"]
 mod alloca_v1;
+#[path = "execute_matrix_bf16_exact_v1.rs"]
+mod matrix_bf16_exact_v1;
+pub(crate) fn matrix_bf16_exact_resident_bytes() -> Option<usize> {
+    matrix_bf16_exact_v1::resident_bytes()
+}
 #[path = "execute_complete_body_v19.rs"]
 mod complete_body_v19;
 #[path = "execute_debug_physical_symbolic_v1.rs"]
@@ -692,6 +697,11 @@ pub enum SimulationExecutionErrorKindV1 {
     IncompleteWave(IncompleteWaveV1),
     DivergentWave(DivergentWaveV1),
     MismatchedWave(MismatchedWaveV1),
+    UnsupportedMatrixInputDomain {
+        role: crate::MatrixInputRoleV1,
+        lane: u8,
+        component: u8,
+    },
     WaveShuffleSourceOutOfRange {
         source_lane: u32,
         tile_width: u32,
@@ -757,6 +767,7 @@ impl SimulationExecutionErrorKindV1 {
             | Self::IncompleteWave(_)
             | Self::DivergentWave(_)
             | Self::MismatchedWave(_)
+            | Self::UnsupportedMatrixInputDomain { .. }
             | Self::WaveShuffleSourceOutOfRange { .. }
             | Self::WorkgroupSchedulerNoProgress { .. }
             | Self::ScheduleDecisionLimit { .. }
@@ -4264,6 +4275,18 @@ fn resolve_ready_collectives<'a>(
         let Some(MachineWait::Collective(arrival)) = machines[representative].waiting else {
             continue;
         };
+        let matrix_exact = matrix_bf16_exact_v1::is_operation(arrival.operation);
+        if matrix_exact {
+            let work = matrix_bf16_exact_v1::resolution_work(machines.len()).ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::StepLimit {
+                        limit: engine.limits.max_steps,
+                    },
+                )
+            })?;
+            engine.charge_steps(&arrival.site, work)?;
+        }
         let width = u64::from(arrival.width.lanes());
         let linear = local_linear(machines[representative].invocation);
         let wave_in_workgroup = linear / width;
@@ -4319,6 +4342,11 @@ fn resolve_ready_collectives<'a>(
             }
         }
 
+        if matrix_exact {
+            matrix_bf16_exact_v1::resolve(engine, machines, arrival, start)?;
+            resolved += 1;
+            continue;
+        }
         if physical_entry_collective_v20::resolve(engine, machines, arrival, start)? {
             resolved += 1;
             continue;
@@ -5077,6 +5105,7 @@ struct WaveArrival<'a> {
 
 #[derive(Clone)]
 enum CollectiveInput {
+    MatrixBf16Exact(matrix_bf16_exact_v1::Input),
     PhysicalEntryPredicate(bool),
     MatrixLdsLoad {
         base: PointerValue,
@@ -6136,8 +6165,10 @@ fn prepare_collective_wait(
                         values: resolved,
                     }
                 }
-                MatrixOperationKind::MultiplyAccumulate { .. }
-                | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
+                MatrixOperationKind::MultiplyAccumulate { .. } => CollectiveInput::MatrixBf16Exact(
+                    matrix_bf16_exact_v1::prepare(engine, frame, matrix, site)?,
+                ),
+                MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
                     return Err(engine.at(
                         site,
                         SimulationExecutionErrorKindV1::InternalInvariant(

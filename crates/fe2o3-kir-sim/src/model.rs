@@ -47,7 +47,8 @@ pub struct SimulationLimitsV1 {
     pub max_workgroups: u64,
     /// Maximum workitems visited, including padded tail slots.
     pub max_scheduled_slots: u64,
-    /// Maximum operations and terminators executed across the launch.
+    /// Maximum logical steps across the launch, including operations, terminators,
+    /// and prepaid internal work for supported collective numerical operations.
     pub max_steps: u64,
     /// Maximum nested internal calls.
     pub max_call_depth: usize,

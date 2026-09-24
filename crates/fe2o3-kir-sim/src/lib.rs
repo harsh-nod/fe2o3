@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod budgeted_v12;
+pub use budgeted_v12::{SimulationViewAdmissionErrorV12, SimulationViewStorageV12};
+mod matrix_bf16_exact_v1;
+pub use matrix_bf16_exact_v1::MatrixInputRoleV1;
 mod capability;
 mod complete_body_v19;
 mod debug;
