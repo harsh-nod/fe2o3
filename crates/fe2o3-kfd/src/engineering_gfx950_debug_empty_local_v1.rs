@@ -11,6 +11,8 @@ use fe2o3_kfd_uapi::KfdIoctlCreateQueueArgs;
 mod cursor;
 #[path = "engineering_gfx950_debug_empty_native_v1.rs"]
 mod native;
+#[path = "engineering_gfx950_debug_one_stop_owner_v1.rs"]
+pub(super) mod one_stop;
 #[path = "engineering_gfx950_debug_empty_retirement_v1.rs"]
 mod retirement;
 use cursor::Cursor;

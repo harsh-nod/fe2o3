@@ -1733,3 +1733,6 @@ fn machine_analysis_bundle_rejects_component_omission_and_trace_mutation() {
         ))
     );
 }
+
+#[path = "physical_machine_effect/repeated_calls_v1.rs"]
+mod repeated_calls;

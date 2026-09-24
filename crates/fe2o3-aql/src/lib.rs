@@ -92,6 +92,9 @@ pub enum AqlDispatchOrderingV1 {
     WaitForPrior = AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1,
 }
 
+#[cfg(test)]
+#[path = "borrowed_prepared_packet_v1_tests.rs"]
+mod borrowed_prepared_packet_v1_tests;
 impl AqlDispatchOrderingV1 {
     /// Returns the exact system-scoped kernel-dispatch header.
     pub const fn header(self) -> u16 {
@@ -893,6 +896,13 @@ pub struct AqlPreparedKernelDispatchV1 {
 }
 
 impl AqlPreparedKernelDispatchV1 {
+    /// Borrows the exact retained INVALID packet. This adds no mutation,
+    /// publication, address validation or execution authority; the same prepared
+    /// owner must still be consumed by publish_with.
+    pub const fn unpublished_packet(&self) -> &AqlKernelDispatchPacketV1 {
+        &self.packet
+    }
+
     /// Returns the explicit execution-order policy retained for publication.
     pub const fn ordering(&self) -> AqlDispatchOrderingV1 {
         self.ordering

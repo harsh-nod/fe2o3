@@ -341,7 +341,7 @@ fn check_resources(
     Ok(())
 }
 
-fn check_owned_cwsr_headers(cold: &Gfx950DebugColdOwnerV1) -> Result<(), E> {
+pub(super) fn check_owned_cwsr_headers(cold: &Gfx950DebugColdOwnerV1) -> Result<(), E> {
     let c = &cold.resources.get().context;
     let payload = c.internal[CONTROL]
         .va

@@ -1073,6 +1073,8 @@ struct LocalEffect {
 struct AnalyzedFunction {
   PhysicalMachineFunctionEvidence Evidence;
   std::vector<LocalEffect> Effects;
+  // Static decoded instruction sites, not unique graph edges or dynamic calls.
+  size_t DirectCallSites = 0;
   std::vector<PhysicalMachineBasicBlockTrace> Blocks;
   std::vector<PhysicalMachineInstructionTrace> Instructions;
 };
@@ -1963,6 +1965,9 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
         Stream.flush();
         return analysisError(Detail);
       }
+      if (Result.DirectCallSites == MaxEdges)
+        return analysisError("direct call-site count exceeds bound");
+      ++Result.DirectCallSites;
       Result.Evidence.DirectCallees.push_back(Match->Name);
       InstructionTrace->BranchKind = PhysicalMachineBranchKind::DirectCall;
       InstructionTrace->BranchTarget = Match->FileOffset;
@@ -2079,12 +2084,13 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
                            Name + " in " + Function.Name);
     Result.Instructions.push_back(std::move(*InstructionTrace));
   }
+  // This wire field is unique adjacency. The full trace retains every
+  // instruction offset/target, and DirectCallSites retains multiplicity.
   llvm::sort(Result.Evidence.DirectCallees);
-  if (std::adjacent_find(Result.Evidence.DirectCallees.begin(),
-                         Result.Evidence.DirectCallees.end()) !=
-      Result.Evidence.DirectCallees.end())
-    return analysisError(Twine("duplicate direct call edge in ") +
-                         Function.Name);
+  Result.Evidence.DirectCallees.erase(
+      std::unique(Result.Evidence.DirectCallees.begin(),
+                  Result.Evidence.DirectCallees.end()),
+      Result.Evidence.DirectCallees.end());
   if (llvm::none_of(Result.Effects, [](const LocalEffect &Effect) {
         return Effect.Kind == PhysicalMachineEffectKind::Return;
       }))
@@ -2148,7 +2154,9 @@ Error validateBudget(const PhysicalMachineEffectEntryRequest &Entry,
   uint64_t Calls = 0;
   for (const std::string &Name : Closure) {
     const AnalyzedFunction &Function = Functions.at(Name);
-    Calls += Function.Evidence.DirectCallees.size();
+    // Count each static site once in the unique reachable function closure.
+    // Repeated calls never multiply the callee effects into dynamic counts.
+    Calls += Function.DirectCallSites;
     for (const LocalEffect &Effect : Function.Effects)
       switch (Effect.Kind) {
       case PhysicalMachineEffectKind::GlobalAddress:
@@ -2443,6 +2451,7 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
   if (!Mc)
     return Mc.takeError();
   std::map<std::string, AnalyzedFunction> Functions;
+  size_t DirectCallSites = 0;
   std::vector<std::string> Pending;
   std::set<std::string> KernelEntries;
   for (const auto &Entry : Request.Entries)
@@ -2464,6 +2473,11 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
         *Function, *Symbols, !KernelEntries.contains(Name), *Mc);
     if (!Analyzed)
       return Analyzed.takeError();
+    // Enforce the old pre-deduplication edge cap on actual call sites, even
+    // when several entries share a helper. The subtraction cannot wrap.
+    if (Analyzed->DirectCallSites > MaxEdges - DirectCallSites)
+      return analysisError("direct call-site count exceeds bound");
+    DirectCallSites += Analyzed->DirectCallSites;
     for (const std::string &Callee : Analyzed->Evidence.DirectCallees)
       Pending.push_back(Callee);
     Functions.emplace(Name, std::move(*Analyzed));

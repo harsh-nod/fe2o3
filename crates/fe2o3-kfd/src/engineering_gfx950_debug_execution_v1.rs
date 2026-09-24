@@ -1,4 +1,4 @@
-//! Static retained preparation; the separate unsafe successor creates only an empty queue.
+//! Static retained preparation; distinct consuming successors keep separate contracts.
 use super::{
     Allocation, Backend, Gfx950DebugColdOwnerV1, Gfx950DebugColdPreparationFactsV1,
     require_cold_context, trap,
@@ -109,6 +109,33 @@ impl Gfx950DebugExecutionPreparationV1 {
         super::empty_queue::Gfx950DebugLocalFailureV1,
     > {
         super::empty_queue::begin(self.retained, self.geometry, self.closure_sha256)
+    }
+
+    /// Prepare the fixed one-stop fixture in a new packet-capable sibling.
+    /// No packet is published here; the result is not debugger acceptance.
+    ///
+    /// # Safety
+    ///
+    /// Same isolated disposable-process/no-foreign-runtime, injection or
+    /// concurrent actor contract as begin_empty_queue_runtime, through process
+    /// termination after any failure. An owned-family supervisor must bound
+    /// blocked native calls. The separate unsafe publisher additionally requires
+    /// the exact same-client native pre-resume checkpoint gate. Neither this
+    /// preparation nor a successful runtime-enable return proves that gate.
+    ///
+    /// ~~~compile_fail,E0133
+    /// use fe2o3_kfd::Gfx950DebugExecutionPreparationV1;
+    /// fn unsafe_required(v: Gfx950DebugExecutionPreparationV1) {
+    ///     let _ = v.prepare_fixed_one_stop();
+    /// }
+    /// ~~~
+    pub unsafe fn prepare_fixed_one_stop(
+        self,
+    ) -> Result<
+        super::empty_queue::one_stop::Gfx950DebugOneStopPreparedV1,
+        super::empty_queue::one_stop::Gfx950DebugOneStopFailureV1,
+    > {
+        super::empty_queue::one_stop::begin(self.retained, self.geometry, self.closure_sha256)
     }
 
     pub fn preparation_facts(&self) -> Gfx950DebugColdPreparationFactsV1 {

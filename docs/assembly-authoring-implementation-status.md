@@ -1,5 +1,30 @@
 # Assembly authoring implementation status
 
+## Fresh repeated-call and one-stop CPU qualification — 2026-09-24
+
+The ordinary static composition matrix now passes **14/14** cases at O0/O3,
+including two retained calls to one helper at O0. Call-site multiplicity is
+counted separately from sorted unique graph adjacency; combined effect/trace
+admission checks both. The matrix passed 252 metadata and 154 decoded-observation
+mutation refusals. The historical 13/14 failed gate is retained unchanged.
+See the [updated qualification](ordered-composition-qualification-20260924.md).
+
+The consuming gfx950 one-stop target is implemented and CPU-qualified, including
+its fixed-artifact contract, original deadline and failure-retained ownership.
+Its separate real target executable passed 21 Rust controls, 12 Node controls,
+strict Clippy and both actual checkpoint-symbol checks; **it has not been run**.
+The same-client debugger producer still needs native adapter integration and
+qualification before this target may publish its one packet. See the
+[one-stop CPU record](gfx950-debug-one-stop-cpu-qualification-20260924.md).
+
+The combined CPU gate passed 2,057 test executions across 18 result groups
+(overlapping configurations, not unique tests), selected all-target strict lint,
+and unsafe-source inventory. Earlier lint failures remain retained; the fixes
+only enumerate two pure test loops and end two test borrows with lexical scopes.
+Fresh edited-source normal/native continuation, physical helper ABI transport,
+GPU behavior and protected finalization remain separate work. Original accepted
+milestone exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Ordered assembly composition and source promotion — 2026-09-24
 
 The [composition qualification report](ordered-composition-qualification-20260924.md)
@@ -18,10 +43,10 @@ its 33,679-byte receipt has SHA-256
 `7f51184d963e3880179d7bc063c28aaf084bb59447f7a7fadae22fee6dbc57d6`.
 This is not a whole-workspace strict-lint or hardware qualification.
 
-The static native composition matrix remains incomplete: 13 of 14 cases joined
+At the earlier publication, the static native matrix was incomplete: 13 of 14 cases joined
 exact authored instruction intervals; two calls to one helper at O0 exposed a
-duplicate-edge rejection. The failed gate is retained, and the call-site versus
-graph-edge correction still needs qualification. This progress does not close
+duplicate-edge rejection. That failed gate is retained; the fresh qualification
+above supersedes this specific incomplete result. This progress does not close
 the original broad milestone exits: **M1/V1/V2/U1/U2/U3 (6/18)** remain accepted.
 
 ## Actual packet-incapable gfx950 queue lifecycle — 2026-09-24

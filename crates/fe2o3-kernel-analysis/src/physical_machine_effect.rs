@@ -26,7 +26,8 @@ pub const MAX_PHYSICAL_MACHINE_EFFECT_EVIDENCE_BYTES_V1: usize = 8 * 1024 * 1024
 pub const MAX_PHYSICAL_MACHINE_EFFECT_FUNCTIONS_V1: usize = 64;
 pub const MAX_PHYSICAL_MACHINE_EFFECT_EFFECTS_V1: usize = 16_384;
 const MAX_ENTRIES: usize = 2;
-const MAX_EDGES: usize = 256;
+pub(crate) const MAX_DIRECT_CALL_SITES_V1: usize = 256;
+const MAX_EDGES: usize = MAX_DIRECT_CALL_SITES_V1;
 const MAX_SYMBOL_BYTES: usize = 256;
 
 macro_rules! digest_identity {
@@ -124,6 +125,8 @@ impl PhysicalMachineEffectBudgetV1 {
         self.max_returns
     }
 
+    /// Maximum static call instruction sites across unique reachable functions.
+    /// This is not unique adjacency cardinality or a dynamic execution bound.
     pub const fn max_direct_calls(self) -> u32 {
         self.max_direct_calls
     }
@@ -334,6 +337,8 @@ impl PhysicalMachineFunctionEvidenceV1 {
         self.code_size
     }
 
+    /// Sorted unique graph adjacency, never the call-site multiplicity.
+    /// Use the validated combined trace for exact call instruction sites.
     pub fn direct_callees(&self) -> &[String] {
         &self.direct_callees
     }
@@ -418,7 +423,29 @@ pub struct PhysicalMachineEffectEvidenceV1 {
 }
 
 impl PhysicalMachineEffectEvidenceV1 {
+    /// Decode standalone evidence only when its graph has no calls.
+    ///
+    /// V1 effect bytes contain unique adjacency, not call-site multiplicity.
+    /// Call-bearing records therefore require `PhysicalMachineAnalysisEvidenceV1`
+    /// and its exact trace to enforce the unchanged request call-site budget.
     pub fn decode_canonical_for(
+        request: &PhysicalMachineEffectRequestV1,
+        bytes: &[u8],
+    ) -> Result<Self, PhysicalMachineEffectEvidenceErrorV1> {
+        let effects = decode_evidence_for(request, bytes)?;
+        if effects
+            .functions
+            .iter()
+            .any(|function| !function.direct_callees.is_empty())
+        {
+            return Err(PhysicalMachineEffectEvidenceErrorV1::TraceRequiredForDirectCalls);
+        }
+        Ok(effects)
+    }
+
+    // Sole production caller: the combined bundle decoder, which must validate
+    // the bound trace before exposing this record. No public effect-only bypass.
+    pub(crate) fn decode_for_analysis_bundle(
         request: &PhysicalMachineEffectRequestV1,
         bytes: &[u8],
     ) -> Result<Self, PhysicalMachineEffectEvidenceErrorV1> {
@@ -780,6 +807,8 @@ fn validate_graph(
         }
     }
 
+    validate_acyclic_graph(&by_name)?;
+
     let mut all_reachable = BTreeSet::new();
     let mut closures = BTreeMap::new();
     for entry in &request.entries {
@@ -788,6 +817,8 @@ fn validate_graph(
         let mut calls = 0usize;
         while let Some(symbol) = pending.pop() {
             if reachable.insert(symbol.to_string()) {
+                // Necessary lower bound only; the combined trace enforces
+                // actual site multiplicity before call-bearing evidence escapes.
                 calls += by_name[symbol].direct_callees.len();
                 pending.extend(by_name[symbol].direct_callees.iter().map(String::as_str));
             }
@@ -802,6 +833,33 @@ fn validate_graph(
         return Err(PhysicalMachineEffectEvidenceErrorV1::UnreachableFunction);
     }
     Ok(closures)
+}
+
+fn validate_acyclic_graph(
+    functions: &BTreeMap<&str, &PhysicalMachineFunctionEvidenceV1>,
+) -> Result<(), PhysicalMachineEffectEvidenceErrorV1> {
+    // The decoder caps the graph at 64 functions before this bounded traversal.
+    // Count unique dependencies, not call multiplicity; remove leaves upward.
+    let mut complete = BTreeSet::new();
+    for _ in 0..functions.len() {
+        let previous = complete.len();
+        for (symbol, function) in functions {
+            if function
+                .direct_callees
+                .iter()
+                .all(|callee| complete.contains(callee.as_str()))
+            {
+                complete.insert(*symbol);
+            }
+        }
+        if complete.len() == functions.len() {
+            return Ok(());
+        }
+        if complete.len() == previous {
+            break;
+        }
+    }
+    Err(PhysicalMachineEffectEvidenceErrorV1::CyclicCallGraph)
 }
 
 fn validate_effects(
@@ -1131,6 +1189,10 @@ pub enum PhysicalMachineEffectEvidenceErrorV1 {
     NonCanonicalOrder,
     EntryFunctionMissing,
     OpenCallGraph,
+    /// Call-bearing V1 effect evidence requires the bound complete trace.
+    TraceRequiredForDirectCalls,
+    /// A direct-call cycle cannot be admitted by the bounded analyzer profile.
+    CyclicCallGraph,
     UnreachableFunction,
     UnknownEffectKind,
     InvalidEffectWidth,

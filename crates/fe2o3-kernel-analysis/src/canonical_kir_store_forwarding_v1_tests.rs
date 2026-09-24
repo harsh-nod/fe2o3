@@ -154,11 +154,12 @@ fn actual_store_and_both_loads_have_an_exact_independently_replayed_value_relati
         let (output, os) =
             Owner::from_module_ref_with_verification_budget_v12(&candidate, budget).unwrap();
         budget.reserve_storage(os.retained_storage()).unwrap();
-        let (checked, _) = applied.check_output(&output, budget).unwrap();
-        assert!(std::ptr::eq(checked.input(), inventory.owner()));
-        assert!(std::ptr::eq(checked.output(), &output));
-        assert!(!checked.grants_authority());
-        drop(checked);
+        {
+            let (checked, _) = applied.check_output(&output, budget).unwrap();
+            assert!(std::ptr::eq(checked.input(), inventory.owner()));
+            assert!(std::ptr::eq(checked.output(), &output));
+            assert!(!checked.grants_authority());
+        }
         drop(output);
         budget.release_storage(os.retained_storage()).unwrap();
         drop(candidate);

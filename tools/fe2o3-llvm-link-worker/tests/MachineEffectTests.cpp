@@ -153,7 +153,8 @@ void configureKernel(Function &Kernel, LLVMContext &Context) {
 
 std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
                                        uint32_t CodeObjectFlag = 600,
-                                       bool WithNestedHelper = false) {
+                                       bool WithNestedHelper = false,
+                                       uint32_t DirectHelperCalls = 1) {
   LLVMContext Context;
   Module ModuleValue("physical-machine-effect-fixture", Context);
   auto Machine = createMachine();
@@ -192,7 +193,11 @@ std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
     IRBuilder<> Builder(Block);
     if (NestedHelper)
       Builder.CreateCall(HelperType, NestedHelper, {Helper->getArg(0)});
-    Builder.CreateStore(ConstantFP::get(F32, 9.0), Helper->getArg(0));
+    auto *Store = Builder.CreateStore(ConstantFP::get(F32, 9.0), Helper->getArg(0));
+    // Test-only repeated calls must remain observable through the O1 worker.
+    // The default one-call fixture retains its original nonvolatile bytes.
+    if (DirectHelperCalls > 1)
+      Store->setVolatile(true);
     Builder.CreateRetVoid();
   }
 
@@ -210,7 +215,8 @@ std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
     BasicBlock *Block = BasicBlock::Create(Context, "entry", Kernel);
     IRBuilder<> Builder(Block);
     if (WithHelper && Name == "alpha") {
-      Builder.CreateCall(HelperType, Helper, {Kernel->getArg(0)});
+      for (uint32_t Call = 0; Call < DirectHelperCalls; ++Call)
+        Builder.CreateCall(HelperType, Helper, {Kernel->getArg(0)});
     }
     Value *Value = Builder.CreateLoad(F32, Kernel->getArg(0));
     if (TwoInputs)
@@ -1742,6 +1748,8 @@ void scalarLoadWidthsUseExactMcEncodings() {
   }
 }
 
+#include "MachineEffectRepeatedCallsTests.inc"
+
 } // namespace
 
 int main(int ArgumentCount, char **ArgumentValues) {
@@ -1760,6 +1768,7 @@ int main(int ArgumentCount, char **ArgumentValues) {
   loaderViewMutationsFailClosed();
   cfgReviewerReproductionsFailClosed();
   directCallEdgesAreResolvedExactly();
+  repeatedDirectCallSitesKeepExactBudgetsAndGraph();
   everyCallEncodingUsesTheAbiReturnPair();
   scalarLoadWidthsUseExactMcEncodings();
   if (ArgumentCount == 2) {
