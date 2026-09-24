@@ -1,0 +1,3 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [optimized] target(s) in 2m 38s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-peer-custody-20260923-wKbQLlhb/target/debug/deps/fe2o3_runtime-ea143d3d1f258dd4)

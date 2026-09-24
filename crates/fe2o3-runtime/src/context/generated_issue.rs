@@ -220,6 +220,8 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         self.submissions.insert(
             id,
             SubmissionRecordV1 {
+                scalar_peer_copy: false,
+                dependency_retains: 0,
                 backend_submission,
                 stream: hold.stream(),
                 device,

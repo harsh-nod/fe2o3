@@ -1,5 +1,20 @@
 # Current Runtime Swarm Work Orders
 
+Latest Context checkpoint (2026-09-23): the
+[scalar dependency-custody packet](evidence/dev-context-peer-custody-cpu-2026-09-23/README.md)
+retains exact scalar operation provenance and complete event-to-producer rosters
+before backend entry, independently of public events. Release and cleanup guard
+producer retains; consumer quiescence discharges them once, while uncertain
+attempts remain rooted even without the optional journal. Context now owns the
+existing producer-aware journal, but pending-source reads still reject. GNU and
+musl each pass 1,265 runtime tests with twenty hardware-only ignores; 46 doctests,
+formatting, strict all-target Clippy and 3,807 unchanged inputs pass. Two independent
+source reviews find no remaining implementation blocker. Next are explicit scalar
+success-gated route admission, producer reservations, producer-first reconciliation
+and bounded async integration, then native chain qualification. Historical proofs
+retain their captured source; no new native, formal-refinement, performance or
+A1/A2 acceptance is added, and the broader lane checkpoints remain unchanged.
+
 Latest scalar progress checkpoint (2026-09-23): the
 [bounded XGMI progress packet](evidence/dev-xgmi-scalar-progress-cpu-2026-09-23/README.md)
 adds one-action consumer/dependency progress with root-only completion,

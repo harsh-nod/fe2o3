@@ -44,7 +44,7 @@ impl ContextVersionsV1 {
     #[cfg(test)]
     pub(in crate::context) fn read_leases_for_test_v1(
         &mut self,
-    ) -> &mut ContextReadLeasedJournalV1 {
+    ) -> &mut ContextProducerReadJournalV1 {
         &mut self.journal
     }
 

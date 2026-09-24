@@ -20,6 +20,8 @@ mod generated_preparation;
 mod generated_shells;
 mod peer_batch;
 pub use peer_batch::*;
+mod peer_custody;
+use peer_custody::{PreparedPeerSubmissionV1, ScalarPeerCopyRootV1};
 mod peer_segments;
 pub use peer_segments::*;
 mod unpublished;
@@ -766,6 +768,7 @@ pub enum RuntimeValidationErrorV1 {
     UnknownSubmission,
     SubmissionPending,
     SubmissionRetainedByEvent,
+    SubmissionRetainedByDependency,
     WrongDevice,
     InvalidAlignment,
     InvalidRange,
@@ -925,6 +928,7 @@ pub struct RuntimeCleanupReportV1<E> {
     allocation_journal_records: usize,
     writer_journal_records: usize,
     reader_journal_records: usize,
+    scalar_peer_copy_records: usize,
 }
 
 impl<E> RuntimeCleanupReportV1<E> {
@@ -948,6 +952,7 @@ impl<E> RuntimeCleanupReportV1<E> {
             && self.allocation_journal_records == 0
             && self.writer_journal_records == 0
             && self.reader_journal_records == 0
+            && self.scalar_peer_copy_records == 0
     }
 
     pub const fn is_graph_reserved(&self) -> bool {
@@ -973,6 +978,12 @@ impl<E> RuntimeCleanupReportV1<E> {
     /// Retained input custody, including provisional roots without a returned handle.
     pub const fn reader_journal_records_v1(&self) -> usize {
         self.reader_journal_records
+    }
+
+    /// Scalar provenance roots, including backend-entered attempts without a handle.
+    /// Completed roots are metadata only; they are removed with their submission.
+    pub const fn scalar_peer_copy_records_v1(&self) -> usize {
+        self.scalar_peer_copy_records
     }
 }
 
@@ -1029,6 +1040,8 @@ struct SubmissionRecordV1 {
     status: RuntimeCompletionStatusV1,
     journal_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
     journal_read: Option<SubmissionReaderMarkerV1>,
+    scalar_peer_copy: bool,
+    dependency_retains: usize,
 }
 
 type RuntimeCompletionCallbackV1 =
@@ -1075,6 +1088,7 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     backend_events: HashSet<u64>,
     submissions: HashMap<RuntimeSubmissionIdV1, SubmissionRecordV1>,
     backend_submissions: HashSet<u64>,
+    scalar_peer_copies: HashMap<RuntimeSubmissionIdV1, ScalarPeerCopyRootV1>,
     generated_issues: HashMap<RuntimeStreamIdV1, generated_issue::GeneratedIssueV1>,
     completion_callbacks: HashMap<RuntimeSubmissionIdV1, Vec<RuntimeCompletionCallbackV1>>,
     completion_callback_count: usize,
@@ -1254,6 +1268,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             submissions: HashMap::new(),
             generated_issues: HashMap::new(),
             backend_submissions: HashSet::new(),
+            scalar_peer_copies: HashMap::new(),
             completion_callbacks: HashMap::new(),
             completion_callback_count: 0,
             completion_callback_panic_count: 0,
@@ -1402,11 +1417,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 submissions_released = false;
                 continue;
             }
+            if record.dependency_retains != 0 {
+                submissions_released = false;
+                continue;
+            }
+            if self.check_scalar_peer_custody_v1(id).is_err() {
+                return self.cleanup_report(failures);
+            }
             match self.invoke_journal_backend_v1(|backend| {
                 backend.release_submission_v1(record.backend_submission)
             }) {
                 Ok(()) => {
                     self.submissions.remove(&id);
+                    self.scalar_peer_copies.remove(&id);
                     self.backend_submissions.remove(&record.backend_submission);
                     debug_assert!(!self.completion_callbacks.contains_key(&id));
                 }
@@ -1532,6 +1555,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .versions
                 .as_ref()
                 .map_or(0, ContextVersionsV1::retained_readers),
+            scalar_peer_copy_records: self.scalar_peer_copies.len(),
         }
     }
 
@@ -1573,6 +1597,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.status.is_terminal() || !status.is_terminal() {
             return Ok(record.status);
         }
+        self.check_scalar_peer_custody_v1(submission)?;
         let outcome = if status == RuntimeCompletionStatusV1::Succeeded {
             SubmissionWriterOutcomeV1::Success
         } else {
@@ -1580,6 +1605,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         self.release_submission_readers_v1(submission)?;
         self.settle_submission_writer_v1(submission, outcome)?;
+        self.release_scalar_peer_dependencies_v1(submission)?;
         self.publish_submission_status_v1(submission, status)
     }
 
@@ -2856,6 +2882,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if !record.quiescent {
             return Err(RuntimeValidationErrorV1::SubmissionPending.into());
         }
+        if record.dependency_retains != 0 {
+            return Err(RuntimeValidationErrorV1::SubmissionRetainedByDependency.into());
+        }
+        self.check_scalar_peer_custody_v1(submission.id)?;
         if self
             .events
             .values()
@@ -2874,6 +2904,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         });
         self.backend_result(result)?;
         self.submissions.remove(&submission.id);
+        self.scalar_peer_copies.remove(&submission.id);
         self.backend_submissions.remove(&record.backend_submission);
         debug_assert!(!self.completion_callbacks.contains_key(&submission.id));
         Ok(())
@@ -3022,12 +3053,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<RuntimeSubmissionV1<RuntimePeerCopyV1>, RuntimeErrorV1<B::Error>> {
         let prepared =
             self.prepare_context_peer_copy_v1(stream, source, destination, dependencies, true)?;
+        let custody =
+            self.prepare_scalar_peer_custody_v1(stream, source, destination, dependencies)?;
         self.submit_context_operation_v1(
             stream,
             prepared.stream_record,
             &[destination.allocation],
-            Some(PeerTransferMechanismV1::DeclaredPeerCopy {
-                contract_identity: peer_copy_contract_identity(stream, source, destination),
+            Some(PreparedPeerSubmissionV1 {
+                mechanism: PeerTransferMechanismV1::DeclaredPeerCopy {
+                    contract_identity: peer_copy_contract_identity(stream, source, destination),
+                },
+                scalar: Some(custody),
             }),
             &[prepared.journal_source],
             |backend| {
@@ -3056,10 +3092,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
             return Err(RuntimeValidationErrorV1::TooManyDependencies.into());
         }
-        for (index, dependency) in dependencies.iter().enumerate() {
-            if dependencies[..index].contains(dependency) {
-                return Err(RuntimeValidationErrorV1::DuplicateDependency.into());
-            }
+        let mut ordered = [RuntimeEventIdV1::new(0, 0); MAX_RUNTIME_DEPENDENCIES_V1];
+        let ordered = &mut ordered[..dependencies.len()];
+        ordered.copy_from_slice(dependencies);
+        ordered.sort_unstable();
+        if ordered.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(RuntimeValidationErrorV1::DuplicateDependency.into());
         }
         let stream_record = *self.unheld_stream_v1(stream)?;
         let journal_source = ContextReadSourceV1 {
@@ -3337,6 +3375,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         match cancellation {
             BackendCancellationV1::Cancelled => {
+                self.check_scalar_peer_custody_v1(submission.id)?;
                 self.release_submission_readers_v1(submission.id)?;
                 self.settle_submission_writer_v1(
                     submission.id,
@@ -3585,6 +3624,7 @@ mod tests {
     mod copy_source_lease_tests;
     mod kernel_read_lease_tests;
     mod peer_batch_tests;
+    mod peer_custody_tests;
     mod peer_segments_tests;
     mod submission_identity_tests;
     mod version_journal_tests;

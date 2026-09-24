@@ -5,7 +5,7 @@ use super::*;
 use fe2o3_runtime_model::ContextVersionJournalV1;
 use fe2o3_runtime_model::{
     ContextAllocationEnrollmentV1, ContextAllocationKeyV1, ContextAllocationReferenceV1,
-    ContextJournalDeviceKeyV1, ContextReadLeasedJournalV1, ContextVersionJournalErrorV1,
+    ContextJournalDeviceKeyV1, ContextProducerReadJournalV1, ContextVersionJournalErrorV1,
 };
 
 mod generated;
@@ -60,7 +60,7 @@ enum AllocationPhaseV1 {
 }
 
 pub(super) struct ContextVersionsV1 {
-    journal: ContextReadLeasedJournalV1,
+    journal: ContextProducerReadJournalV1,
     phases: Vec<Option<AllocationPhaseV1>>,
     submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
     submission_readers: HashMap<RuntimeSubmissionIdV1, readers::RetainedSubmissionReadersV1>,
@@ -116,7 +116,7 @@ impl ContextVersionsV1 {
         allocations: usize,
         writers: usize,
     ) -> Result<Self, ContextVersionJournalErrorV1> {
-        let journal = ContextReadLeasedJournalV1::new(generation, allocations, writers, writers)?;
+        let journal = ContextProducerReadJournalV1::new(generation, allocations, writers, writers)?;
         let mut phases = Vec::new();
         phases
             .try_reserve_exact(allocations)
@@ -237,7 +237,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         operation: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        if self.versions.is_none() {
+        if self.versions.is_none() && self.scalar_peer_copies.is_empty() {
             return operation(self);
         }
         match catch_unwind(AssertUnwindSafe(|| operation(self))) {

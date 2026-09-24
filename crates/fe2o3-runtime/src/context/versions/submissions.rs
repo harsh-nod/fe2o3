@@ -97,6 +97,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         use ContextVersionJournalErrorV1 as E;
         use fe2o3_runtime_model::ContextWriterStateV1;
         let record = self.submissions.get(&id).ok_or(E::InvalidReference)?;
+        self.validate_scalar_peer_custody_v1(id)
+            .map_err(|_| E::InvalidReference)?;
+        if !record.scalar_peer_copy {
+            return Err(E::InvalidReference);
+        }
         if record.quiescent || record.status != RuntimeCompletionStatusV1::Pending {
             return Err(E::InvalidState);
         }
@@ -426,7 +431,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         call: impl FnOnce(&mut B) -> Result<T, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<T, RuntimeBackendFailureV1<B::Error>> {
-        if self.versions.is_none() {
+        if self.versions.is_none() && self.scalar_peer_copies.is_empty() {
             return call(&mut self.backend);
         }
         match catch_unwind(AssertUnwindSafe(|| call(&mut self.backend))) {
@@ -443,7 +448,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         stream: RuntimeStreamIdV1,
         stream_record: StreamRecordV1,
         destinations: &[RuntimeAllocationIdV1],
-        peer_transfer: Option<PeerTransferMechanismV1>,
+        peer: Option<PreparedPeerSubmissionV1>,
         sources: &[ContextReadSourceV1],
         submit: impl FnOnce(&mut B) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>> {
@@ -460,6 +465,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             self.begin_submission_writer_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)?;
         let journal_read =
             self.begin_submission_readers_v1(id, reads, SubmissionWriterDomainV1::Ordinary)?;
+        let peer_transfer = peer.as_ref().map(|peer| peer.mechanism);
+        let scalar_peer_copy = peer.as_ref().is_some_and(|peer| peer.scalar.is_some());
+        if let Some(root) = peer.and_then(|peer| peer.scalar) {
+            self.begin_scalar_peer_custody_v1(id, root);
+        }
         let result = self.invoke_journal_backend_v1(submit);
         let backend_submission = match result {
             Ok(handle) => handle,
@@ -467,13 +477,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 if matches!(&failure, RuntimeBackendFailureV1::Terminal(_)) {
                     return self.backend_result(Err(failure));
                 }
-                let _ = self.release_submission_readers_v1(id);
                 let outcome = if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
                     SubmissionWriterOutcomeV1::NoEffect
                 } else {
                     SubmissionWriterOutcomeV1::Unknown
                 };
-                let _ = self.settle_submission_writer_v1(id, outcome);
+                if self.check_scalar_peer_custody_v1(id).is_ok()
+                    && self.release_submission_readers_v1(id).is_ok()
+                    && self.settle_submission_writer_v1(id, outcome).is_ok()
+                    && self.release_scalar_peer_dependencies_v1(id).is_ok()
+                {
+                    self.scalar_peer_copies.remove(&id);
+                }
                 return self.backend_result(Err(failure));
             }
         };
@@ -483,6 +498,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         );
         // Both indexes have headroom before backend entry. Root the returned
         // handle even if the backend violated zero/duplicate-handle rules.
+        if let Some(root) = self.scalar_peer_copies.get_mut(&id) {
+            root.backend_submission = Some(backend_submission);
+        }
         self.submissions.insert(
             id,
             SubmissionRecordV1 {
@@ -493,6 +511,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 status: RuntimeCompletionStatusV1::Pending,
                 journal_writer,
                 journal_read,
+                scalar_peer_copy,
+                dependency_retains: 0,
             },
         );
         if protocol_error.is_none() {
