@@ -1,0 +1,8 @@
+{
+  "changed": [
+    "crates/fe2o3-kfd/src/topology.rs",
+    "crates/fe2o3-kfd/src/topology/tests/prechecked_reads.rs",
+    "crates/fe2o3-kfd/src/topology/tests/prechecked_reads/link_directories.rs"
+  ],
+  "prior_sha256": "f1254dd5ada2bc39e30f557aaf130bd3df6618a5e5af5653714c1abdbdc20b57"
+}

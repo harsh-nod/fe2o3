@@ -1,0 +1,8 @@
+
+running 3 tests
+test topology::tests::prechecked_reads::link_directories::every_discovery_checks_each_link_directory_once_and_reads_all_properties ... ok
+test topology::tests::prechecked_reads::link_directories::listing_and_property_validation_remain_fail_closed ... ok
+test topology::tests::prechecked_reads::link_directories::single_directory_check_preserves_stable_contents_and_type_refusals ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1558 filtered out; finished in 0.10s
+

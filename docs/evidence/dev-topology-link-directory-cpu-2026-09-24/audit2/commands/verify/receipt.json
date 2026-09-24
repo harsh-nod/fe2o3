@@ -1,0 +1,24 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-topology-link-directory-cpu-2026-09-24/verify.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790272842924702347,
+  "group_absent": true,
+  "pid": 1712037,
+  "started_ns": 1790272842354552366,
+  "stderr_sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22",
+  "stdin_sha256": null,
+  "stdout_sha256": "07c3d7229bf4ef662cf0843bb354cdf5c7300e428b0efed488ee583cf505ecd2",
+  "timeout_seconds": 900
+}

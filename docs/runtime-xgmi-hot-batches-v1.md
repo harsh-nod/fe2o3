@@ -1,8 +1,9 @@
 # Matched XGMI Hot Batches
 
 This extends the persistent-hot benchmark producers, not production runtime
-authority or the A1/A2 acceptance boundary. Native depth-16/32 qualification
-and matched performance measurements remain required.
+authority or the A1/A2 acceptance boundary. The strict depth-1/16/32 native
+campaign below qualifies the benchmark source, not subsequent optimizations
+or A7 performance thresholds.
 
 ## Lifecycle
 
@@ -89,6 +90,13 @@ whole-batch p50 is 15.427-15.540 ms, HSA 1.065-1.087 ms and HIP 1.015-1.041 ms.
 The retained per-process/direction summaries show amortization, not parity;
 host boundaries and engine selection still differ. This does not qualify the
 later link-directory source candidate or supply an A7 threshold pass.
+
+The [link-directory CPU packet](evidence/dev-topology-link-directory-cpu-2026-09-24/README.md)
+now qualifies removal of one redundant directory inspection per I/O/P2P link.
+All listings, property reads, identity checks and currentness brackets remain.
+GNU/musl library tests and exact named-roster replay pass, but the candidate has
+no native baseline/candidate measurement yet. The instrumentation tests count
+Rust I/O boundaries, not measured kernel syscalls or a demonstrated speedup.
 
 A separately named retained-session profile could instead aim to preserve
 execution-relevant authority with cheaper guards. It cannot claim to reproduce

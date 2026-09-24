@@ -1,5 +1,17 @@
 # Current Runtime Swarm Work Orders
 
+Latest topology CPU qualification (2026-09-24): the
+[link-directory packet](evidence/dev-topology-link-directory-cpu-2026-09-24/README.md)
+removes one duplicate directory check per I/O/P2P link without caching topology
+or changing the full-host currentness contract. GNU/musl each pass all 1,561 KFD
+tests and 1,365 runtime tests, with twenty hardware tests still ignored; all 73
+doctests, strict Clippy, formatting and thirteen command stages pass. Replay
+checks 3,956 unchanged source inputs, exact named test rosters and 61 raw
+artifacts; all eighteen verifier tests pass. The interrupted first attempt is
+retained, and both owned Cargo caches are removed. A matched native comparison
+of this candidate remains required: no speedup, formal refinement, A1/A2 closure
+or broader accepted lane advance is claimed.
+
 Latest strict native characterization (2026-09-24): the
 [fresh hot-batch campaign](evidence/dev-xgmi-hot-batch-strict-mi300x-2026-09-24/README.md)
 passes all eighteen depth-1/16/32 processes, 134 remote commands, 108 strict

@@ -1998,7 +1998,6 @@ fn parse_topology_links(
         if usize::try_from(index) != Ok(position) {
             return Err(TopologyError::NonCanonicalLinkIndex { path, index });
         }
-        ensure_directory(&path)?;
         let contents = read_directory(&path, 2)?;
         if contents.len() != 1 || contents[0].name() != "properties" {
             return Err(TopologyError::UnexpectedLinkEntry(path));
