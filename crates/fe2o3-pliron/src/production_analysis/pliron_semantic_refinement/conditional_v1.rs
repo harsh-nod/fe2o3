@@ -47,6 +47,9 @@ pub(crate) struct ErrorV1 {
 }
 
 impl ReportV1 {
+    pub(crate) fn typed_root_commitments(&self) -> &[[u64; 4]] {
+        &self.body.typed_root_commitments
+    }
     pub(crate) fn is_clean(&self) -> bool {
         !self.input_mismatch
             && self.body.findings.is_empty()

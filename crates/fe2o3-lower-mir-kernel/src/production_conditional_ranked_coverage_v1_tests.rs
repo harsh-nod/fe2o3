@@ -355,12 +355,8 @@ fn false_case_trap_and_true_case_trap_after_write_are_abnormal() {
 }
 
 #[test]
-fn second_write_read_and_dead_effects_are_refused() {
-    for (block, kind) in [
-        (2, AccessKindAttr::Write),
-        (2, AccessKindAttr::Read),
-        (4, AccessKindAttr::Write),
-    ] {
+fn second_write_and_dead_write_effects_are_refused() {
+    for (block, kind) in [(2, AccessKindAttr::Write), (4, AccessKindAttr::Write)] {
         let mut blocks = blocks();
         if block == 4 {
             blocks.push(Block::new(vec![], Term::Return));
@@ -381,6 +377,19 @@ fn second_write_read_and_dead_effects_are_refused() {
             })
         );
     }
+}
+
+#[test]
+fn input_read_does_not_count_as_an_output_write_or_prove_its_bounds() {
+    let mut blocks = blocks();
+    let mut operations = blocks[2].operations().to_vec();
+    operations.push(Op::Access {
+        kind: AccessKindAttr::Read,
+        view: local(2),
+        indices: vec![local(1)],
+    });
+    set_operations(&mut blocks, 2, operations);
+    assert_eq!(query(&construct(blocks)), Ok([1, 1]));
 }
 
 #[test]
@@ -411,7 +420,7 @@ fn index_arithmetic_including_overflow_and_division_is_not_whitelisted() {
 }
 
 #[test]
-fn ieee_expression_is_refused_even_in_a_dead_block() {
+fn total_ieee_expression_does_not_change_write_coverage() {
     let scalar = ProductionSemanticScalarTypeV2::Float { bits: 32 };
     let expression = Expression::Binary {
         operation: ProductionSemanticBinaryOpV2::Add,
@@ -429,13 +438,7 @@ fn ieee_expression_is_refused_even_in_a_dead_block() {
         }],
         Term::Return,
     ));
-    assert_eq!(
-        query(&construct(blocks)),
-        Err(Error::UnsupportedOperation {
-            block: 4,
-            operation: 0,
-        })
-    );
+    assert_eq!(query(&construct(blocks)), Ok([1, 1]));
 }
 
 #[test]

@@ -477,6 +477,7 @@ struct Selection<V> {
 
 enum OperationView {
     Inert,
+    Read,
     Write,
 }
 
@@ -545,7 +546,7 @@ fn check_paths<R: Reader, M: Meter>(
                 OperationView::Write if selected.write == (Site { block, operation }) => {
                     write_seen = true;
                 }
-                OperationView::Inert => {}
+                OperationView::Inert | OperationView::Read => {}
                 OperationView::Write => {
                     return Err(Fault::UnsupportedOperation { block, operation }.into());
                 }
@@ -691,7 +692,7 @@ impl Reader for RecipeReader<'_> {
         &self,
         b: usize,
         o: usize,
-        _meter: &mut M,
+        meter: &mut M,
     ) -> CheckResult<OperationView, M::Error> {
         Ok(match &self.0.blocks()[b].operations()[o] {
             Op::IndexConstant { .. }
@@ -704,11 +705,16 @@ impl Reader for RecipeReader<'_> {
             | Op::SemanticSymbol { .. }
             | Op::OwnershipContract { .. }
             | Op::RequestEffectRefinement { .. }
-            | Op::RequireEffectRefinement { .. }
-            | Op::SemanticExpression {
-                expression: Expression::Constant { .. } | Expression::Symbol { .. },
+            | Op::RequireEffectRefinement { .. } => OperationView::Inert,
+            Op::SemanticExpression { expression, .. }
+                if total_expression_v1(expression, meter, 0)? =>
+            {
+                OperationView::Inert
+            }
+            Op::Access {
+                kind: AccessKindAttr::Read,
                 ..
-            } => OperationView::Inert,
+            } => OperationView::Read,
             Op::Access {
                 kind: AccessKindAttr::Write,
                 ..
@@ -761,6 +767,70 @@ impl Reader for RecipeReader<'_> {
     fn target<M: Meter>(&self, target: u32, _meter: &mut M) -> CheckResult<u32, M::Error> {
         Ok(target)
     }
+}
+
+// Coverage only admits completion of this closed expression family. Typed
+// value equality and each Load's exact read binding remain mandatory semantic
+// and source-replay obligations, not assumptions of this path rule.
+fn total_expression_v1<M: Meter>(
+    expression: &Expression,
+    meter: &mut M,
+    depth: usize,
+) -> CheckResult<bool, M::Error> {
+    use crate::{
+        ProductionOverflowContractV2 as Overflow, ProductionSemanticBinaryOpV2 as Binary,
+        ProductionSemanticUnaryOpV2 as Unary,
+    };
+    meter.charge(4)?;
+    if depth > crate::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+        return Err(Fault::Arithmetic.into());
+    }
+    Ok(match expression {
+        Expression::Constant { .. } | Expression::Symbol { .. } | Expression::Load(_) => true,
+        Expression::Binary {
+            operation,
+            overflow,
+            lhs,
+            rhs,
+            ..
+        } => {
+            *overflow == Overflow::Wrapping
+                && matches!(
+                    operation,
+                    Binary::Add
+                        | Binary::Subtract
+                        | Binary::Multiply
+                        | Binary::BitAnd
+                        | Binary::BitOr
+                        | Binary::BitXor
+                )
+                && total_expression_v1(lhs, meter, depth + 1)?
+                && total_expression_v1(rhs, meter, depth + 1)?
+        }
+        Expression::Unary {
+            operation,
+            scalar,
+            operand,
+        } => {
+            (*operation == Unary::Not || scalar.is_float())
+                && total_expression_v1(operand, meter, depth + 1)?
+        }
+        Expression::Compare { lhs, rhs, .. } => {
+            total_expression_v1(lhs, meter, depth + 1)?
+                && total_expression_v1(rhs, meter, depth + 1)?
+        }
+        Expression::Select {
+            condition,
+            when_true,
+            when_false,
+            ..
+        } => {
+            total_expression_v1(condition, meter, depth + 1)?
+                && total_expression_v1(when_true, meter, depth + 1)?
+                && total_expression_v1(when_false, meter, depth + 1)?
+        }
+        Expression::Cast { operand, .. } => total_expression_v1(operand, meter, depth + 1)?,
+    })
 }
 
 fn recipe_error(error: Failure<ResourceError>) -> ProductionRankedRecipeCoverageErrorV1 {

@@ -1,5 +1,25 @@
 # fe2o3 compiler-execution client
 
+## Diagnostic Native Client
+
+`CompilerExecutionClientV2` consumes a connected unnamed `SOCK_SEQPACKET` peer
+and exclusively borrows the original canonical resource budget. It supports
+native receipt acquisition, journal-stage recovery, and fresh-challenge
+currentness authentication without converting native owners or retrying V1.
+Transport, randomness attempts, protocol work and retained storage use that
+same ledger. Inputs must be prepaid; successful admission transfers the peer's
+charge, which is released when the terminal session closes. On admission
+failure the closed peer's original reservation remains caller-owned. Returned
+values include their full, unreserved logical output charge.
+
+This API is diagnostic: it does **not** activate a protected native issuer.
+Signed fixture transcripts do not prove protected signing-key custody, live
+compiler observation, durable commit-before-publication, independently
+administered anchors, or safe GPU launch. The shipping production route remains
+V1 until those native service integrations are validated.
+
+## Production V1 Client
+
 This crate owns the bounded Linux `SOCK_SEQPACKET` client state machine for the
 protected compiler-execution service. One acquisition first requests exact
 subject recovery and, only after a canonical `ReceiptAbsent` response, resumes

@@ -73,6 +73,60 @@ impl HashMeterV1 for MeteredV1<'_> {
 
 pub(super) struct UnmeteredV1;
 
+pub(super) struct CanonicalMeterV1<'a, 'work> {
+    pub(super) budget:
+        &'a mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'work>,
+    pub(super) resources: &'a mut Resources,
+    pub(super) cleanup_error: Option<Limit>,
+}
+
+impl HashMeterV1 for CanonicalMeterV1<'_, '_> {
+    type Error = Limit;
+    fn work(&mut self, units: usize) -> Result<(), Limit> {
+        self.budget.charge_work(units).map_err(|_| Limit {
+            phase: PHASE,
+            resource: "canonical recipe work",
+        })?;
+        self.resources
+            .admit_retained(PHASE, Bound::checked_phase(PHASE, units, 0, 0)?)
+    }
+    fn reserve(&mut self, bytes: usize) -> Result<(), Limit> {
+        self.budget.reserve_storage(bytes).map_err(|_| Limit {
+            phase: PHASE,
+            resource: "canonical recipe storage",
+        })?;
+        self.resources
+            .admit_retained(PHASE, Bound::checked_phase(PHASE, 0, bytes, 0)?)
+    }
+    fn release(&mut self, bytes: usize) {
+        let result = self
+            .budget
+            .release_storage(bytes)
+            .map_err(|_| Limit {
+                phase: PHASE,
+                resource: "canonical recipe storage release",
+            })
+            .and_then(|()| {
+                self.resources
+                    .admit_replacement(PHASE, bytes, Bound::default())
+            });
+        if self.cleanup_error.is_none() {
+            self.cleanup_error = result.err();
+        }
+    }
+    fn expression_node(&mut self, nodes: &mut usize, depth: usize) -> Result<(), Limit> {
+        self.work(1)?;
+        if *nodes >= MAX_NODES || depth > MAX_DEPTH {
+            return Err(Limit {
+                phase: PHASE,
+                resource: "recipe expression nodes or depth",
+            });
+        }
+        *nodes += 1;
+        Ok(())
+    }
+}
+
 impl HashMeterV1 for UnmeteredV1 {
     type Error = Infallible;
 

@@ -173,6 +173,9 @@ pub(crate) struct ConditionalPipelineOutcomeV1 {
 }
 
 impl ConditionalPipelineReportV1 {
+    pub(crate) fn typed_root_commitments_v1(&self) -> Option<&[[u64; 4]]> {
+        self.validation.typed_root_commitments_v1()
+    }
     #[cfg(test)]
     pub(crate) fn ownership(&self) -> &conditional_ownership::ReportV1 {
         self.validation.ownership()

@@ -133,6 +133,18 @@ pub(crate) struct ReportV1 {
     stages: Vec<Option<StageV1>>,
 }
 
+impl ReportV1 {
+    pub(crate) fn typed_root_commitments_v1(&self) -> Option<&[[u64; 4]]> {
+        match self.stages.get(8)?.as_ref()? {
+            StageV1::Conditional(LeafV1 {
+                payload: PayloadV1::Semantic(report),
+                ..
+            }) if report.is_clean() => Some(report.typed_root_commitments()),
+            _ => None,
+        }
+    }
+}
+
 impl<'a> SessionV1<'a> {
     // Initial exact-byte comparison is performed by the shared pipeline before
     // this constructor; the retained input is never replaced with a fresh epoch.

@@ -241,8 +241,9 @@ pub use publication_object_inventory_v1::{
     import_compiler_module_handoff_publication_objects_v1,
 };
 pub use retained_durable_directory::{
-    NoRetainedDurableDirectoryHooksV1, RetainedDurableArtifactBoundaryV1,
-    RetainedDurableDirectoryErrorV1, RetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
+    MeteredRetainedDurableDirectoryV2, NoRetainedDurableDirectoryHooksV1,
+    RetainedDurableArtifactBoundaryV1, RetainedDurableDirectoryErrorV1,
+    RetainedDurableDirectoryErrorV2, RetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
     RetainedDurableFaultTimingV1, RetainedDurableRecordBoundaryV1,
     RetainedDurableRecoveryBoundaryV1, RetainedDurableRecoveryMutationBoundaryV1,
 };

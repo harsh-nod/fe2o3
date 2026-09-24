@@ -9,9 +9,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as ResourceError,
     ConditionalTotalViewAddressDomainV1,
 };
-use fe2o3_pliron::{
-    ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2, ProductionRankedKernelV1,
-};
+use fe2o3_pliron::{ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2};
 
 /// A descriptive ranked extent interpretation, never production authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -179,10 +177,9 @@ impl<'a> ProductionConditionalRankedOutputV1<'a> {
     /// Each bounds case takes at most the recipe's block count. Literal branch
     /// operands are found by prepaid bounded scans of that same recipe.
     ///
-    /// This query has no heap scratch or retained allocation: live and peak
-    /// storage are unchanged on success, refusal, resource error and unwind.
-    /// Unknown conditions, block arguments, arithmetic/load expressions and
-    /// extra effects refuse, including in unreachable blocks. Traps and cycles
+    /// Read joins reuse metered canonical/argument scratch and retain no map.
+    /// Unsupported conditions, block arguments, non-total expressions and
+    /// unmatched effects refuse, including in unreachable blocks. Traps and cycles
     /// refuse when feasible; only exact supported edges establish infeasibility.
     /// Source translation, value, ownership, reference and runtime obligations
     /// remain external, including the unchanged address-domain premise and N <= G.
@@ -196,7 +193,8 @@ impl<'a> ProductionConditionalRankedOutputV1<'a> {
 
     /// Rederives the retained rank-one extent proposal from exact canonical facts.
     ///
-    /// This consumes no graph, creates no map, and allocates no heap storage.
+    /// This consumes no graph and retains no new map. Input reads reuse the
+    /// canonical/checked-argument scratch scopes on the caller's ledger.
     /// Work is prepaid on the SAME caller ledger; the canonical retained-storage
     /// floor must still be live. Missing provenance is a refusal, including for
     /// `Argument(0)`. Only an argument extent, one dynamic global-X index and the
@@ -226,6 +224,7 @@ impl<'a> ProductionConditionalRankedOutputV1<'a> {
             &write,
             operand,
             self.binding.source_argument(),
+            Some(self.binding),
             budget,
         )?;
         // Coverage is sealed to this exact verified owner: its length is the
@@ -244,6 +243,7 @@ fn rederive_extent_source(
     write: &RankedWrite,
     extent: ProductionRankedValueV1,
     source_argument: u32,
+    binding: Option<&ProductionConditionalOutputBindingV1<'_>>,
     budget: &mut Budget<'_>,
 ) -> JoinResult<()> {
     budget.charge_work(8)?;
@@ -268,20 +268,21 @@ fn rederive_extent_source(
             return Err(JoinError::ConflictingExtentSource);
         }
     }
-    check_extent_uses(candidate.kernel(), write, extent, budget)
+    check_extent_uses(candidate, write, extent, binding, budget)
 }
 
 fn check_extent_uses(
-    kernel: &ProductionRankedKernelV1,
+    candidate: NativeRankedSourceCandidateV1<'_>,
     write: &RankedWrite,
     extent: ProductionRankedValueV1,
+    binding: Option<&ProductionConditionalOutputBindingV1<'_>>,
     budget: &mut Budget<'_>,
 ) -> JoinResult<()> {
     use ProductionRankedOperationV1 as Op;
     use fe2o3_pliron::ProductionRankedTerminatorV1 as Term;
     let mut index_seen = false;
     let mut write_guard = false;
-    for (block_index, block) in kernel.blocks().iter().enumerate() {
+    for (block_index, block) in candidate.kernel().blocks().iter().enumerate() {
         budget.charge_work(4)?;
         if block.index_argument_count() != 0 {
             return Err(JoinError::ExtentUse);
@@ -314,19 +315,39 @@ fn check_extent_uses(
                     dynamic_extents,
                     ..
                 } => {
-                    if ProductionRankedValueV1::Local(*result) != write.view
-                        || dynamic_extents.as_slice() != [extent]
-                    {
+                    if ProductionRankedValueV1::Local(*result) == write.view {
+                        if dynamic_extents.as_slice() != [extent] {
+                            return Err(JoinError::ExtentUse);
+                        }
+                    } else if !matched_read_role_v1(
+                        binding,
+                        candidate,
+                        write,
+                        Some(ProductionRankedValueV1::Local(*result)),
+                        None,
+                        budget,
+                    )? {
                         return Err(JoinError::ExtentUse);
                     }
                     continue;
                 }
                 Op::Access {
-                    kind: AccessKindAttr::Write,
-                    view,
-                    indices,
+                    kind: AccessKindAttr::Read,
+                    ..
+                } => {
+                    if !matched_read_role_v1(
+                        binding,
+                        candidate,
+                        write,
+                        None,
+                        Some((block_index as u32, operation_index as u32)),
+                        budget,
+                    )? {
+                        return Err(JoinError::ExtentUse);
+                    }
+                    None
                 }
-                | Op::ValueAccess {
+                Op::ValueAccess {
                     kind: AccessKindAttr::Write,
                     view,
                     indices,
@@ -431,6 +452,8 @@ fn check_extent_uses(
     Ok(())
 }
 
+include!("production_conditional_ranked_reads_v1.rs");
+
 impl ProductionConditionalOutputBindingV1<'_> {
     /// Joins the canonical store through exact source spans to one ranked contract.
     ///
@@ -441,7 +464,8 @@ impl ProductionConditionalOutputBindingV1<'_> {
     /// and operations, and leaves live/peak storage unchanged on every outcome.
     /// No WorkMeter, executable graph, copied argument map or proof is created.
     ///
-    /// Only one scalar global write and one rank-one dynamic view are supported.
+    /// Only one value-carrying scalar global write is supported. Input views
+    /// must separately join exact canonical reads during extent rederivation.
     /// No allocation-level correspondence fallback is accepted. The ranked
     /// dynamic extent remains Unbound even when it is Argument(0). Canonical
     /// predicate/length facts are available through binding(), not inferred from
@@ -465,6 +489,7 @@ impl ProductionConditionalOutputBindingV1<'_> {
             &self.owner().correspondence,
             self.association(),
             self.coverage().store_location(),
+            AccessKindAttr::Write,
             budget,
         )?;
         let source = ranked_source(candidate.access_sources(), site, budget)?;
@@ -526,11 +551,12 @@ fn source_spans(correspondence: &SemanticKirCorrespondenceV1) -> impl Iterator<I
         )
 }
 
-fn canonical_store_source(
+pub(super) fn canonical_store_source(
     function: &Function,
     correspondence: &SemanticKirCorrespondenceV1,
     association: &SemanticKirFunctionCorrespondenceV1,
     location: FunctionOperationLocation,
+    expected_kind: AccessKindAttr,
     budget: &mut Budget<'_>,
 ) -> JoinResult<SemanticAccessSiteV1> {
     let body = function.body.as_ref().ok_or(JoinError::CanonicalStore)?;
@@ -595,12 +621,18 @@ fn canonical_store_source(
             }
             if operation_index == location.operation_index {
                 if operation_access_ordinal != 0
-                    || kind != AccessKindAttr::Write
+                    || kind != expected_kind
                     || space != MemorySpaceAttr::Global
                     || atomic.is_some()
                     || !matches!(
-                        operation.kind,
-                        OperationKind::Store { .. } | OperationKind::GuardedStore { .. }
+                        (expected_kind, &operation.kind),
+                        (
+                            AccessKindAttr::Write,
+                            OperationKind::Store { .. } | OperationKind::GuardedStore { .. }
+                        ) | (
+                            AccessKindAttr::Read,
+                            OperationKind::Load { .. } | OperationKind::GuardedLoad { .. }
+                        )
                     )
                 {
                     return Err(JoinError::CanonicalStore);
@@ -623,7 +655,7 @@ fn canonical_store_source(
     })
 }
 
-fn ranked_source<'a>(
+pub(super) fn ranked_source<'a>(
     sources: &'a [ProductionRankedAccessSourceV1],
     site: SemanticAccessSiteV1,
     budget: &mut Budget<'_>,
@@ -661,7 +693,7 @@ struct RankedWrite {
     site: ProductionGpuWriteSiteV2,
     view: ProductionRankedValueV1,
     index: ProductionRankedValueV1,
-    value: Option<ProductionRankedValueV1>,
+    value: ProductionRankedValueV1,
 }
 
 fn ranked_write(
@@ -677,17 +709,12 @@ fn ranked_write(
         .and_then(|block| block.operations().get(source.ranked_operation() as usize))
         .ok_or(JoinError::RankedWrite)?;
     let (view, indices, value) = match operation {
-        ProductionRankedOperationV1::Access {
-            kind: AccessKindAttr::Write,
-            view,
-            indices,
-        } => (view, indices, None),
         ProductionRankedOperationV1::ValueAccess {
             kind: AccessKindAttr::Write,
             view,
             indices,
             value,
-        } => (view, indices, Some(*value)),
+        } => (view, indices, *value),
         _ => return Err(JoinError::RankedWrite),
     };
     let [index] = indices.as_slice() else {
@@ -713,9 +740,7 @@ fn retain_contract<'a>(
     }
     if contract.view() != write.view
         || contract.indices() != [write.index]
-        || write
-            .value
-            .is_some_and(|value| value != contract.gpu_value())
+        || write.value != contract.gpu_value()
     {
         return Err(JoinError::Contract);
     }

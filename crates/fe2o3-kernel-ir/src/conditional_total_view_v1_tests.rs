@@ -666,7 +666,7 @@ fn calls_reads_volatile_stores_and_unproved_arithmetic_are_not_completion_facts(
             access: MemoryAccess::new(AddressSpace::Global, 4),
         },
     ));
-    assert!(matches!(refused(&reads), Unsupported::Operation { .. }));
+    assert!(matches!(refused(&reads), Unsupported::Index { .. }));
     let mut volatile = fixture();
     let OperationKind::Store { access, .. } = &mut body(&mut volatile).blocks[1].operations[0].kind
     else {
@@ -727,6 +727,170 @@ fn floating_arithmetic_and_structurally_unreachable_blocks_fail_closed() {
         refused(&unreachable),
         Unsupported::UnreachableBlock { block: BlockId(40) }
     );
+}
+
+fn input_expression_fixture(address_in_entry: bool, read_in_entry: bool) -> Module {
+    let mut module = fixture();
+    let input_pointer = Type::pointer(scalar(), AddressSpace::Global, AccessMode::ReadOnly);
+    module.functions[0].signature.parameters[3] =
+        Type::slice(scalar(), AddressSpace::Global, AccessMode::ReadOnly);
+    let address_block = usize::from(!address_in_entry);
+    body(&mut module).blocks[address_block].operations.splice(
+        0..0,
+        [op(
+            40,
+            input_pointer.clone(),
+            OperationKind::SliceData { slice: ValueId(3) },
+        )],
+    );
+    // The global index must dominate the GEP even when it is formed in entry.
+    let address = op(
+        41,
+        input_pointer,
+        OperationKind::GetElementPointer {
+            base: ValueId(40),
+            offset: ValueId(10),
+        },
+    );
+    if address_in_entry {
+        body(&mut module).blocks[0].operations.push(address);
+    } else {
+        body(&mut module).blocks[1].operations.insert(1, address);
+    }
+    let read = op(
+        42,
+        scalar(),
+        OperationKind::Load {
+            pointer: ValueId(41),
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    );
+    if read_in_entry {
+        body(&mut module).blocks[0].operations.push(read);
+    } else {
+        let position = if address_in_entry { 0 } else { 2 };
+        body(&mut module).blocks[1]
+            .operations
+            .insert(position, read);
+    }
+    let write_block = &mut body(&mut module).blocks[1];
+    let store = write_block.operations.last_mut().unwrap();
+    let OperationKind::Store { value, .. } = &mut store.kind else {
+        panic!("store");
+    };
+    *value = ValueId(43);
+    let position = write_block.operations.len() - 1;
+    write_block.operations.insert(
+        position,
+        op(
+            43,
+            scalar(),
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: ValueId(42),
+                rhs: ValueId(1),
+            },
+        ),
+    );
+    module
+}
+
+#[test]
+fn readonly_input_value_expression_retains_exact_access_and_address_domains() {
+    use ConditionalTotalViewAddressDomainV1::{GlobalLaunch, GuardedOutput};
+    for (address_in_entry, read_in_entry, access, address) in [
+        (false, false, GuardedOutput, GuardedOutput),
+        (true, false, GuardedOutput, GlobalLaunch),
+        (true, true, GlobalLaunch, GlobalLaunch),
+    ] {
+        let module = input_expression_fixture(address_in_entry, read_in_entry);
+        let ConditionalTotalViewAnalysisV1::Established(facts) = analyze(&module) else {
+            panic!("read/value coverage");
+        };
+        assert_eq!(facts.read_count(), 1);
+        assert_eq!(facts.store_value(), ValueId(43));
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.reserve_storage(37).unwrap();
+        let mut observed = None;
+        facts
+            .visit_reads_v1(&mut budget, |read| {
+                observed = Some(read);
+                Ok(())
+            })
+            .unwrap();
+        let read = observed.unwrap();
+        assert_eq!(read.parameter(), 3);
+        assert_eq!(read.value(), ValueId(42));
+        assert_eq!(read.index(), ValueId(10));
+        assert_eq!(read.access_domain(), access);
+        assert_eq!(read.address_domain(), address);
+        assert_eq!(budget.storage(), 37);
+        // No N > 0 assumption: a zero-length output does not erase entry GEPs.
+        assert_eq!(facts.length(), ValueId(11));
+    }
+}
+
+#[test]
+fn input_read_and_expression_refusals_do_not_relax_memory_or_totality() {
+    for change in 0..3 {
+        let mut module = input_expression_fixture(true, false);
+        match change {
+            0 => {
+                let OperationKind::Load { access, .. } =
+                    &mut body(&mut module).blocks[1].operations[0].kind
+                else {
+                    panic!("read");
+                };
+                access.volatile = true;
+            }
+            1 => {
+                let OperationKind::GetElementPointer { offset, .. } = &mut body(&mut module).blocks
+                    [0]
+                .operations
+                .last_mut()
+                .unwrap()
+                .kind
+                else {
+                    panic!("address");
+                };
+                *offset = ValueId(13);
+            }
+            _ => {
+                let OperationKind::Binary { op, .. } =
+                    &mut body(&mut module).blocks[1].operations[1].kind
+                else {
+                    panic!("expression");
+                };
+                *op = BinaryOp::Divide;
+            }
+        }
+        assert!(matches!(
+            refused(&module),
+            Unsupported::Operation { .. } | Unsupported::Index { .. }
+        ));
+    }
+}
+
+#[test]
+fn read_replay_uses_original_work_and_restores_scratch_on_denial() {
+    let module = input_expression_fixture(true, false);
+    let ConditionalTotalViewAnalysisV1::Established(facts) = analyze(&module) else {
+        panic!("facts");
+    };
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(7);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    budget.reserve_storage(37).unwrap();
+    budget.charge_work(7).unwrap();
+    let result = facts.visit_reads_v1(&mut budget, |_| panic!("unpaid read visitor"));
+    assert!(matches!(
+        result,
+        Err(ConditionalTotalViewErrorV1::Resource(ResourceError::Work(
+            _
+        )))
+    ));
+    assert_eq!(budget.work(), 7);
+    assert_eq!(budget.storage(), 37);
 }
 
 #[test]

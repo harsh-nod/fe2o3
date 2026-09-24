@@ -8,6 +8,8 @@ use fe2o3_pliron::{
     ProductionReferenceOutputSiteV2,
 };
 
+include!("production_conditional_ranked_reads_v1_tests.rs");
+
 // These tests exercise occurrence checks on inert correspondence/candidates.
 // They neither forge a production binding nor authenticate a ranked relation.
 fn canonical_fixture() -> (Module, SemanticKirCorrespondenceV1) {
@@ -133,10 +135,11 @@ fn local(id: u32) -> ProductionRankedValueV1 {
     ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(id))
 }
 fn access() -> ProductionRankedOperationV1 {
-    ProductionRankedOperationV1::Access {
+    ProductionRankedOperationV1::ValueAccess {
         kind: AccessKindAttr::Write,
         view: local(2),
         indices: vec![local(1)],
+        value: local(3),
     }
 }
 fn ranked_kernel(
@@ -240,6 +243,7 @@ fn source_query(
         correspondence,
         &correspondence.lowered_functions[0],
         location,
+        AccessKindAttr::Write,
         &mut budget,
     )
 }
@@ -585,6 +589,57 @@ fn value_access_keeps_site_and_checks_only_ranked_contract_value_identity() {
 }
 
 #[test]
+fn canonical_fill_one_cannot_join_a_value_less_ranked_write_and_fill_zero_contract() {
+    let (mut module, correspondence) = canonical_fixture();
+    module.functions[0].signature.parameters.pop();
+    let body = module.functions[0].body.as_mut().unwrap();
+    body.parameters.pop();
+    body.blocks[0].operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U32)),
+        OperationKind::Constant(Constant::U32(1)),
+    ));
+    verify_module_ref(&module).unwrap();
+    let canonical_site = source_query(
+        &module,
+        &correspondence,
+        FunctionOperationLocation::new(BlockId(42), 0),
+    )
+    .unwrap();
+    let mut blocks = ranked_kernel(
+        ProductionRankedValueV1::Argument(0),
+        ProductionRankedOperationV1::Access {
+            kind: AccessKindAttr::Write,
+            view: local(2),
+            indices: vec![local(1)],
+        },
+    )
+    .blocks()
+    .to_vec();
+    let mut entry = blocks[0].operations().to_vec();
+    entry[3] = ProductionRankedOperationV1::SemanticConstant {
+        result: ProductionRankedValueIdV1::new(3),
+        value: 0,
+    };
+    blocks[0] = ProductionRankedBlockV1::new(entry, blocks[0].terminator().clone());
+    let kernel = ProductionRankedKernelV1::new("different_ranked_symbol", 2, blocks).unwrap();
+    let rows = [source()];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, 0);
+    let source = ranked_source(&rows, canonical_site, &mut budget).unwrap();
+    let zero_contract = contract(
+        ProductionGpuWriteSiteV2::new(2, 0),
+        local(2),
+        local(1),
+        local(3),
+    );
+    assert_eq!(zero_contract.gpu_value(), local(3));
+    assert!(matches!(
+        ranked_write(candidate(&kernel, &rows), source, &mut budget),
+        Err(JoinError::RankedWrite)
+    ));
+}
+
+#[test]
 fn same_work_ledger_exact_boundary_and_storage_floor_are_preserved() {
     let (module, correspondence) = canonical_fixture();
     let kernel = ranked_kernel(ProductionRankedValueV1::Argument(0), access());
@@ -602,6 +657,7 @@ fn same_work_ledger_exact_boundary_and_storage_floor_are_preserved() {
             &correspondence,
             &correspondence.lowered_functions[0],
             FunctionOperationLocation::new(BlockId(42), 0),
+            AccessKindAttr::Write,
             budget,
         )?;
         let source = ranked_source(&rows, site, budget)?;
@@ -660,7 +716,7 @@ fn extent_query(
     let selected = ranked_source(rows, site(), budget)?;
     let write = ranked_write(candidate, selected, budget)?;
     ranked_view_and_contract(candidate, &write, 0, 4, budget)?;
-    rederive_extent_source(candidate, selected, &write, extent, 0, budget)
+    rederive_extent_source(candidate, selected, &write, extent, 0, None, budget)
 }
 
 fn change_ranked_block(

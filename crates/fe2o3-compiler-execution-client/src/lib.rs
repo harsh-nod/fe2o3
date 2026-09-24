@@ -22,6 +22,7 @@ use fe2o3_compiler_execution_protocol::{
 };
 
 mod child_channel;
+mod native;
 mod supervisor_handoff;
 
 pub use child_channel::{
@@ -29,6 +30,9 @@ pub use child_channel::{
     PendingCompilerExecutionChildChannelV1,
 };
 pub use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
+pub use native::{
+    CompilerExecutionClientErrorV2, CompilerExecutionClientStorageV2, CompilerExecutionClientV2,
+};
 pub use supervisor_handoff::{
     CompilerExecutionHandoffErrorV1, CompilerExecutionSupervisorCredentialsV1,
     MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1, PendingCompilerExecutionSupervisorV1,
@@ -617,8 +621,18 @@ fn send_packet(
     bytes: &[u8],
     deadline: Instant,
 ) -> Result<(), CompilerExecutionClientErrorV1> {
+    send_packet_with_io(peer, bytes, deadline, &mut || Ok(()))
+}
+
+fn send_packet_with_io<E: From<CompilerExecutionClientErrorV1>>(
+    peer: &OwnedFd,
+    bytes: &[u8],
+    deadline: Instant,
+    before_io: &mut impl FnMut() -> Result<(), E>,
+) -> Result<(), E> {
     loop {
-        wait_for_peer(peer, libc::POLLOUT, deadline)?;
+        wait_for_peer_with_io(peer, libc::POLLOUT, deadline, before_io)?;
+        before_io()?;
         // SAFETY: `bytes` is readable for its complete length and `peer` remains owned throughout.
         let sent = unsafe {
             libc::send(
@@ -636,10 +650,10 @@ fn send_packet(
             ) {
                 continue;
             }
-            return Err(CompilerExecutionClientErrorV1::Send(error));
+            return Err(CompilerExecutionClientErrorV1::Send(error).into());
         }
         if usize::try_from(sent).ok() != Some(bytes.len()) {
-            return Err(CompilerExecutionClientErrorV1::PartialSend);
+            return Err(CompilerExecutionClientErrorV1::PartialSend.into());
         }
         return Ok(());
     }
@@ -649,9 +663,18 @@ fn receive_packet(
     peer: &OwnedFd,
     deadline: Instant,
 ) -> Result<ReceivedPacketV1, CompilerExecutionClientErrorV1> {
-    let mut bytes = [0_u8; MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1];
+    receive_packet_with_io(peer, deadline, &mut || Ok(()))
+}
+
+fn receive_packet_with_io<const N: usize, E: From<CompilerExecutionClientErrorV1>>(
+    peer: &OwnedFd,
+    deadline: Instant,
+    before_io: &mut impl FnMut() -> Result<(), E>,
+) -> Result<ReceivedPacket<N>, E> {
+    let mut bytes = [0_u8; N];
     loop {
-        wait_for_peer(peer, libc::POLLIN, deadline)?;
+        wait_for_peer_with_io(peer, libc::POLLIN, deadline, before_io)?;
+        before_io()?;
         let mut vector = libc::iovec {
             iov_base: bytes.as_mut_ptr().cast(),
             iov_len: bytes.len(),
@@ -677,46 +700,49 @@ fn receive_packet(
             ) {
                 continue;
             }
-            return Err(CompilerExecutionClientErrorV1::Receive(error));
+            return Err(CompilerExecutionClientErrorV1::Receive(error).into());
         }
         if header.msg_flags & libc::MSG_CTRUNC != 0 {
-            return Err(CompilerExecutionClientErrorV1::AncillaryData);
+            return Err(CompilerExecutionClientErrorV1::AncillaryData.into());
         }
         if header.msg_flags & libc::MSG_TRUNC != 0 {
-            return Err(CompilerExecutionClientErrorV1::PacketTruncated);
+            return Err(CompilerExecutionClientErrorV1::PacketTruncated.into());
         }
         let received = usize::try_from(received)
             .map_err(|_| CompilerExecutionClientErrorV1::PacketTruncated)?;
         if received == 0 {
-            return Err(CompilerExecutionClientErrorV1::PeerClosed);
+            return Err(CompilerExecutionClientErrorV1::PeerClosed.into());
         }
-        return Ok(ReceivedPacketV1 {
+        return Ok(ReceivedPacket {
             bytes,
             len: received,
         });
     }
 }
 
-struct ReceivedPacketV1 {
-    bytes: [u8; MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1],
+type ReceivedPacketV1 = ReceivedPacket<MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1>;
+struct ReceivedPacket<const N: usize> {
+    bytes: [u8; N],
     len: usize,
 }
 
-impl ReceivedPacketV1 {
+impl<const N: usize> ReceivedPacket<N> {
     fn as_slice(&self) -> &[u8] {
         &self.bytes[..self.len]
     }
 }
 
-fn wait_for_peer(
+fn wait_for_peer_with_io<E: From<CompilerExecutionClientErrorV1>>(
     peer: &OwnedFd,
     wanted: i16,
     deadline: Instant,
-) -> Result<(), CompilerExecutionClientErrorV1> {
+    before_io: &mut impl FnMut() -> Result<(), E>,
+) -> Result<(), E> {
     loop {
+        before_io()?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(CompilerExecutionClientErrorV1::Timeout);
+            return Err(CompilerExecutionClientErrorV1::Timeout.into());
         }
         let mut descriptor = libc::pollfd {
             fd: peer.as_raw_fd(),
@@ -730,22 +756,22 @@ fn wait_for_peer(
             if error.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            return Err(CompilerExecutionClientErrorV1::Poll(error));
+            return Err(CompilerExecutionClientErrorV1::Poll(error).into());
         }
         if result == 0 || deadline.saturating_duration_since(Instant::now()).is_zero() {
-            return Err(CompilerExecutionClientErrorV1::Timeout);
+            return Err(CompilerExecutionClientErrorV1::Timeout.into());
         }
         if descriptor.revents & libc::POLLNVAL != 0 {
-            return Err(CompilerExecutionClientErrorV1::InvalidPeer);
+            return Err(CompilerExecutionClientErrorV1::InvalidPeer.into());
         }
         if descriptor.revents & wanted != 0 {
             return Ok(());
         }
         if descriptor.revents & libc::POLLERR != 0 {
-            return Err(CompilerExecutionClientErrorV1::PeerFailed);
+            return Err(CompilerExecutionClientErrorV1::PeerFailed.into());
         }
         if descriptor.revents & libc::POLLHUP != 0 {
-            return Err(CompilerExecutionClientErrorV1::PeerClosed);
+            return Err(CompilerExecutionClientErrorV1::PeerClosed.into());
         }
     }
 }
@@ -762,9 +788,16 @@ fn duration_to_poll_millis(duration: Duration) -> i32 {
 
 fn fresh_verification_challenge()
 -> Result<CompilerExecutionCurrentRecordChallengeV1, CompilerExecutionClientErrorV1> {
+    fresh_verification_challenge_with_io(&mut || Ok(()))
+}
+
+fn fresh_verification_challenge_with_io<E: From<CompilerExecutionClientErrorV1>>(
+    before_io: &mut impl FnMut() -> Result<(), E>,
+) -> Result<CompilerExecutionCurrentRecordChallengeV1, E> {
     let mut challenge = [0_u8; 32];
     let mut offset = 0;
     while offset < challenge.len() {
+        before_io()?;
         // SAFETY: the suffix is writable for its complete reported length and remains live for the
         // syscall. Linux getrandom writes at most that length and carries no pointer ownership.
         let received = unsafe {
@@ -779,13 +812,14 @@ fn fresh_verification_challenge()
             if error.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            return Err(CompilerExecutionClientErrorV1::Randomness(error));
+            return Err(CompilerExecutionClientErrorV1::Randomness(error).into());
         }
         if received == 0 {
             return Err(CompilerExecutionClientErrorV1::Randomness(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "getrandom returned no challenge bytes",
-            )));
+            ))
+            .into());
         }
         offset += usize::try_from(received).map_err(|_| {
             CompilerExecutionClientErrorV1::Randomness(io::Error::other(
@@ -794,9 +828,10 @@ fn fresh_verification_challenge()
         })?;
     }
     if challenge == [0; 32] {
-        return Err(CompilerExecutionClientErrorV1::Randomness(
-            io::Error::other("getrandom returned an all-zero challenge"),
-        ));
+        return Err(CompilerExecutionClientErrorV1::Randomness(io::Error::other(
+            "getrandom returned an all-zero challenge",
+        ))
+        .into());
     }
     Ok(CompilerExecutionCurrentRecordChallengeV1(challenge))
 }

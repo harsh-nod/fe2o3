@@ -170,6 +170,13 @@ impl ProductionConditionalRankedAnalysisV1 {
         &self.analysis.selections
     }
 
+    pub fn retained_analysis_storage_v1(&self) -> usize {
+        self.analysis
+            ._analyses
+            .resource_upper_bound()
+            .retained_storage_upper_bound()
+    }
+
     /// These obligations have no complete-pipeline receipt in this owner.
     pub fn pending_pipeline_checks(&self) -> &'static [crate::KernelCheckPassKindV1] {
         &crate::PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
@@ -510,6 +517,10 @@ impl ProductionPlironSessionV1 {
 }
 
 include!("conditional_pipeline_v1.rs");
+
+#[path = "conditional_aggregate_v1.rs"]
+mod conditional_aggregate_v1;
+pub use conditional_aggregate_v1::*;
 
 #[cfg(test)]
 #[path = "conditional_ranked_v1_tests.rs"]

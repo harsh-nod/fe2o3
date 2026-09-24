@@ -6,8 +6,9 @@
 //! them on the caller's ledger. There are no hidden clones or signing APIs.
 //!
 //! Current-record V3 is an identity-only wire family and is carried unchanged.
-//! Its existing constructor/authenticator accepts V1 carriages only. Carrying
-//! it here DOES NOT implement native protected current-record authentication.
+//! Native current-record joins use the explicitly metered native-carriage
+//! constructor/authenticator. Packet decoding alone does not establish protected
+//! journal custody or independently administered anchor deployment.
 
 use crate::{
     CompilerExecutionAttestationChallengeV2 as Challenge,

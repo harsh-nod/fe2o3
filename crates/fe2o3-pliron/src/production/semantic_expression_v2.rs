@@ -710,12 +710,42 @@ impl ProductionSemanticExpressionV2 {
         numerical_contract: ProductionNumericalContractV2,
     ) -> [u8; 32] {
         hash_work::unmetered(|digest| {
-            digest.update(b"fe2o3/production-semantic-expression-transcript/v2\0")?;
-            digest.append_nested(|nested| {
-                self.emit_canonical_v1(nested, LoadCommitmentModeV2::MaterializedProofSymbol)
-            })?;
-            hash_numerical_contract(digest, numerical_contract)
+            self.emit_materialized_transcript_v1(digest, numerical_contract)
         })
+    }
+
+    fn emit_materialized_transcript_v1<M: HashMeterV1>(
+        &self,
+        digest: &mut TranscriptV1<'_, M>,
+        numerical_contract: ProductionNumericalContractV2,
+    ) -> Result<(), M::Error> {
+        digest.update(b"fe2o3/production-semantic-expression-transcript/v2\0")?;
+        digest.append_nested(|nested| {
+            self.emit_canonical_v1(nested, LoadCommitmentModeV2::MaterializedProofSymbol)
+        })?;
+        hash_numerical_contract(digest, numerical_contract)
+    }
+
+    pub(super) fn materialized_transcript_with_budget_v1(
+        &self,
+        numerical_contract: ProductionNumericalContractV2,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<[u8; 32], crate::production_analysis::ProductionAnalysisResourceLimitV1> {
+        let mut resources = crate::production_analysis::ProductionAnalysisResourceContractV1::new(
+            crate::ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+        );
+        let mut meter = hash_work::CanonicalMeterV1 {
+            budget,
+            resources: &mut resources,
+            cleanup_error: None,
+        };
+        let result = hash_work::hash(&mut meter, |digest| {
+            self.emit_materialized_transcript_v1(digest, numerical_contract)
+        });
+        match meter.cleanup_error {
+            Some(error) => Err(error),
+            None => result,
+        }
     }
 }
 

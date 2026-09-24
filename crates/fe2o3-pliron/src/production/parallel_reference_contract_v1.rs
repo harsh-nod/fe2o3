@@ -1201,11 +1201,17 @@ fn is_canonical_typed_true_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
     value: ProductionRankedValueV1,
 ) -> bool {
+    is_kernel_typed_true_v1(ranked.kernel(), value)
+}
+
+fn is_kernel_typed_true_v1(
+    kernel: &super::ProductionRankedKernelV1,
+    value: ProductionRankedValueV1,
+) -> bool {
     let ProductionRankedValueV1::Local(value) = value else {
         return false;
     };
-    let mut definitions = ranked
-        .kernel()
+    let mut definitions = kernel
         .blocks()
         .iter()
         .flat_map(|block| block.operations())
@@ -1223,6 +1229,79 @@ fn is_canonical_typed_true_v1(
             _ => false,
         });
     definitions.next().is_some() && definitions.next().is_none()
+}
+
+/// Symbolic pointwise output relation under explicit launch/memory premises.
+/// No sampled hierarchy regions, nonempty-domain assumptions or ordinary
+/// coverage credits are synthesized for this statement.
+pub(super) fn require_conditional_parallel_reference_v1(
+    graph: &super::ProductionConditionalFinalGraphV1<'_>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<(), super::ProductionConditionalAggregateErrorV1> {
+    use super::{
+        ProductionConditionalAggregateErrorV1 as E, ProductionConditionalRuntimePremiseV1 as P,
+    };
+    let kernel = graph.kernel();
+    for output in graph.outputs() {
+        budget.charge_work(16)?;
+        let (block, operation) = output.effect_site();
+        let Some(ProductionRankedOperationV1::RequireEffectRefinement { contract, .. }) = kernel
+            .blocks()
+            .get(block as usize)
+            .and_then(|block| block.operations().get(operation as usize))
+        else {
+            return Err(E::Subject("conditional parallel effect"));
+        };
+        if contract.view() != output.view()
+            || contract.indices() != [output.index()]
+            || contract.gpu_write_site() != output.write()
+        {
+            return Err(E::Subject("conditional parallel coordinates"));
+        }
+        for value in [
+            contract.gpu_domain(),
+            contract.reference_domain(),
+            contract.gpu_precondition(),
+            contract.reference_precondition(),
+        ] {
+            for block in kernel.blocks() {
+                budget.charge_work(block.operations().len().checked_mul(4).ok_or(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+                )?)?;
+            }
+            if !is_kernel_typed_true_v1(kernel, value) {
+                return Err(E::Subject(
+                    "non-total pointwise reference domain/precondition",
+                ));
+            }
+        }
+        for expected in [
+            P::D1Launch,
+            P::OutputWithinGlobalX {
+                parameter: output.canonical_parameter(),
+            },
+            P::WritableOutput {
+                parameter: output.canonical_parameter(),
+            },
+        ] {
+            budget.charge_work(graph.premises().len())?;
+            if !graph.premises().contains(&expected) {
+                return Err(E::Subject("missing conditional parallel premise"));
+            }
+        }
+        for read in graph.reads() {
+            budget.charge_work(graph.premises().len().checked_add(2).ok_or(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+            )?)?;
+            if !graph.premises().contains(&P::SeparateInputOutput {
+                input: read.canonical().parameter(),
+                output: output.canonical_parameter(),
+            }) {
+                return Err(E::Subject("conditional input/output frame"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn output_roots<'a>(

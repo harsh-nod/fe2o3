@@ -64,7 +64,10 @@ mod type_rendering_v2_tests {
         InvocationReceiptFailureV1, InvocationReceiptV1,
     };
 
-    fn rendering_receipt() -> (InvocationReceiptV1, ProductionAnalysisResourceUpperBoundV1) {
+    fn rendering_receipt() -> (
+        InvocationReceiptV1<'static>,
+        ProductionAnalysisResourceUpperBoundV1,
+    ) {
         let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
         let floor =
             ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 17, 64, 32).unwrap();

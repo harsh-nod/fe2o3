@@ -777,6 +777,23 @@ pub(super) fn derive_exact_ranked_graph_identity_with_resources_v1(
     hash_work::metered(resources, |digest| emit_graph(digest, kernel, false))
 }
 
+pub(super) fn derive_exact_ranked_graph_identity_with_canonical_budget_v1(
+    kernel: &super::ProductionRankedKernelV1,
+    resources: &mut crate::production_analysis::ProductionAnalysisResourceContractV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<[u8; 32], crate::production_analysis::ProductionAnalysisResourceLimitV1> {
+    let mut meter = hash_work::CanonicalMeterV1 {
+        budget,
+        resources,
+        cleanup_error: None,
+    };
+    let result = hash_work::hash(&mut meter, |digest| emit_graph(digest, kernel, false));
+    match meter.cleanup_error {
+        Some(error) => Err(error),
+        None => result,
+    }
+}
+
 fn emit_graph<M: HashMeterV1>(
     digest: &mut TranscriptV1<'_, M>,
     kernel: &super::ProductionRankedKernelV1,
