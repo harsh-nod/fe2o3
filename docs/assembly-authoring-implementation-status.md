@@ -1,5 +1,22 @@
 # Assembly authoring implementation status
 
+## Actual inactive gfx950 debug preparation — 2026-09-23
+
+The [cold preparation qualification](evidence/gfx950-cold-debug-preparation-20260923.md)
+records one actual supervised VM/mapping preparation and seven phase-exact
+refusals. KFD library gates pass 444/570 tests in the two feature configurations
+(one ignored each), the ordinary example passes six, and strict KFD all-target
+Clippy passes in both configurations. Initial test-lint and helper-filename
+failures remain retained separately.
+
+The real preparation owns kernel/trap mappings and version-zero metadata,
+but does not register a trap, enable a debug runtime, publish metadata, create a
+queue or dispatch. Resources are retained until process exit; no explicit native cleanup
+acknowledgment or physical register capture is claimed. The
+[walkthrough](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/gfx950-cold-debug-preparation-v1.md)
+keeps that opt-in boundary explicit. V4 advances but remains open; original
+accepted exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Concurrent-main integration — 2026-09-24
 
 The [merged-tree checks](evidence/complete-body-native-abi-20260923.md#integration-with-concurrent-main--2026-09-24)

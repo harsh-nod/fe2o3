@@ -39,6 +39,14 @@ pub use engineering_gfx950::{
     run_gfx950_engineering_worker_unchecked_v1,
 };
 
+#[cfg(all(
+    feature = "engineering-gfx950",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_endian = "little"
+))]
+pub use engineering_gfx950::{Gfx950DebugColdOwnerV1, Gfx950DebugColdPreparationFactsV1};
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod linux;
