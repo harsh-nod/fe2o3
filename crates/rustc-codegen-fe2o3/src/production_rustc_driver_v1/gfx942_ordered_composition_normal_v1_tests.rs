@@ -17,7 +17,7 @@ use std::{
 #[path = "gfx942_ordered_composition_normal_inputs_v1_tests.rs"]
 mod invocation;
 #[path = "gfx942_ordered_composition_normal_observation_v1_tests.rs"]
-mod observation;
+pub(super) mod observation;
 const OUTPUT: &str = "FE2O3_TEST_ORDERED_COMPOSITION_NORMAL_OUTPUT_V1";
 const INPUT: &str = "FE2O3_TEST_ORDERED_COMPOSITION_NORMAL_INPUT_V1";
 const FEATURE: &str = "FE2O3_TEST_ORDERED_COMPOSITION_NORMAL_FEATURE_V1";

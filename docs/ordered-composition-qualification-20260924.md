@@ -55,9 +55,10 @@ Root joined all fourteen child exit/stream records, unchanged observation files
 and HSACO hashes. Completed outer source/tools/input snapshots matched. Neither
 this static matrix nor its mutation controls prove native helper argument/result
 transport, root functional equivalence, dynamic execution order, host buffer
-validity, GPU behavior or protected authority. Newly published edited candidates
-still require their own normal/native ladder; these are the seven original
-finite source profiles, not that later ladder.
+validity, GPU behavior or protected authority. These are the seven original finite source profiles. The separately completed
+[fresh promoted-candidate ladder](ordered-composition-promoted-qualification-20260924.md)
+retains its own source, normal and static native evidence; no qualification
+transfers automatically to another generated candidate.
 
 | Fresh gate | Receipt SHA-256 | Report SHA-256 |
 | --- | --- | --- |

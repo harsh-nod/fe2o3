@@ -7,6 +7,14 @@ pub(super) fn observe(
     feature: &str,
     output: &Path,
 ) -> Result<Value, String> {
+    observe_with_roster(target, expected_roster(feature), output)
+}
+/// Test-only alternative source fixture; actual target custody remains mandatory.
+pub(in super::super) fn observe_with_roster(
+    target: crate::production_pipeline::ordered_composition_target_v1::AuthenticatedOrderedCompositionTargetModuleV1<'_>,
+    expected: (usize, usize, usize, usize),
+    output: &Path,
+) -> Result<Value, String> {
     let checked = target.checked();
     assert!(!checked.grants_artifact_or_launch_authority());
     let source = checked.source_launch();
@@ -19,7 +27,7 @@ pub(super) fn observe(
         owner.calls().len(),
         owner.occurrences().len(),
     );
-    assert_eq!(roster, expected_roster(feature));
+    assert_eq!(roster, expected);
     let module = checked.executable().module();
     assert_eq!(module.kernels.len(), 1);
     let root = &module.functions[owner.root_function_ordinal() as usize];

@@ -450,6 +450,7 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-protocol",
+ "fe2o3-kernel-ir",
  "libc",
  "rustix",
  "sha2 0.11.0",

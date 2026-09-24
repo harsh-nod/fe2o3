@@ -434,6 +434,10 @@ fn public_case_roster_separates_parse_driver_and_recompile_domains() {
 
 /// Same fixed standalone preparation used by the separate binary qualifier.
 fn prepare_public_staging(root: &Path, started: std::time::Instant) {
+    prepare_public_staging_with_seed(root, started, &staging::fixture_source());
+}
+/// Additive qualifier supplies an explicitly authored seed before publication.
+fn prepare_public_staging_with_seed(root: &Path, started: std::time::Instant, seed: &[u8]) {
     let compiler = PathBuf::from(std::env::var_os("RUSTC").expect("absolute pinned compiler"));
     assert!(compiler.is_absolute());
     let mut command = Command::new(compiler);
@@ -458,7 +462,11 @@ fn prepare_public_staging(root: &Path, started: std::time::Instant) {
         "package-promoted-preserve",
         "package-promoted-edit",
     ] {
-        staging::package(&root, package, package == "package-original");
+        staging::package_with_source(
+            &root,
+            package,
+            (package == "package-original").then_some(seed),
+        );
         staging::prepare(&root, package, &sysroot, started);
         fs::create_dir(preparation(&root, package).join("analysis-output")).unwrap();
     }
