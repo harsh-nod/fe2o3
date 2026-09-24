@@ -1,0 +1,46 @@
+   Compiling typenum v1.20.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling hybrid-array v0.4.14
+   Compiling rustix v1.1.4
+   Compiling spin v0.12.3
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.189
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling cpufeatures v0.3.1
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+   Compiling bitflags v2.13.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+   Compiling zeroize v1.9.0
+   Compiling arrayvec v0.7.8
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+  --> crates/fe2o3-kfd/src/topology/tests/link_properties.rs:90:22
+   |
+90 |         let actual = fixed::read(inspect_regular(&self.path).unwrap())
+   |                      ^^^^^^^^^^^-------------------------------------- argument #2 of type `&mut Vec<u8>` is missing
+   |
+note: function defined here
+  --> crates/fe2o3-kfd/src/topology/link_properties.rs:42:15
+   |
+42 | pub(super) fn read(
+   |               ^^^^
+43 |     before: RegularFileObservation<'_>,
+44 |     bytes: &mut Vec<u8>,
+   |     -------------------
+help: provide the argument
+   |
+90 |         let actual = fixed::read(inspect_regular(&self.path).unwrap(), /* &mut Vec<u8> */)
+   |                                                                      ++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0061`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

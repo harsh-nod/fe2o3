@@ -1,0 +1,25 @@
+
+running 20 tests
+test topology::tests::prechecked_reads::disappeared_regular_file_preserves_open_error ... ok
+test topology::tests::prechecked_reads::final_symlink_to_same_original_inode_is_not_followed ... ok
+test topology::tests::prechecked_reads::initial_symlink_directory_and_fifo_are_rejected_before_open ... ok
+test topology::tests::prechecked_reads::intermediate_symlink_loop_is_classified_as_symlink ... ok
+test topology::tests::prechecked_reads::each_discovery_inspects_each_link_property_once_and_stays_fresh ... ok
+test topology::tests::prechecked_reads::link_scratch::healthy_link_set_saves_one_text_allocation_per_subsequent_link ... ok
+test topology::tests::prechecked_reads::link_scratch::failed_reads_and_empty_text_cannot_contaminate_the_next_link ... ok
+test topology::tests::prechecked_reads::link_scratch::long_then_short_links_reuse_storage_without_a_stale_suffix ... ok
+test topology::tests::prechecked_reads::link_scratch::identity_and_open_refusals_clear_scratch_without_allocating_read_storage ... ok
+test topology::tests::prechecked_reads::link_scratch::reused_link_read_keeps_oversize_then_identity_then_utf8_error_precedence ... ok
+test topology::tests::prechecked_reads::link_scratch::reused_link_reads_preserve_bounded_io_observation_order ... ok
+test topology::tests::prechecked_reads::oversized_read_still_precedes_post_read_identity_check ... ok
+test topology::tests::prechecked_reads::named_property_parser_results_and_error_order_stay_identical ... ok
+test topology::tests::prechecked_reads::post_read_identity_mismatch_still_precedes_utf8_validation ... ok
+test topology::tests::prechecked_reads::prechecked_text_keeps_byte_limits_and_utf8_errors ... ok
+test topology::tests::prechecked_reads::replaced_regular_file_is_rejected_before_read ... ok
+test topology::tests::prechecked_reads::replacement_fifo_cannot_block_the_open ... ok
+test topology::tests::prechecked_reads::stable_regular_reads_consume_one_path_inspection ... ok
+test topology::tests::prechecked_reads::same_inode_changes_before_open_precede_read_and_size_errors ... ok
+test topology::tests::prechecked_reads::link_discovery_preserves_type_size_and_utf8_rejection ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 1538 filtered out; finished in 0.09s
+

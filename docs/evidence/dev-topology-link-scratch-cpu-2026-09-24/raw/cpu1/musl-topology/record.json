@@ -1,0 +1,21 @@
+{
+  "command": [
+    "cargo",
+    "--locked",
+    "test",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "--target",
+    "x86_64-unknown-linux-musl",
+    "topology::",
+    "--",
+    "--test-threads=4"
+  ],
+  "started_ns": 1790254768445849571,
+  "process_group": 3302738,
+  "group_absent": true,
+  "finished_ns": 1790254979853603710,
+  "status": 0
+}

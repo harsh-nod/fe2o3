@@ -1,0 +1,19 @@
+{
+  "command": [
+    "cargo",
+    "--locked",
+    "test",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "prechecked_reads::",
+    "--",
+    "--test-threads=4"
+  ],
+  "started_ns": 1790254211009281476,
+  "process_group": 3209929,
+  "group_absent": true,
+  "finished_ns": 1790254373011238634,
+  "status": 0
+}

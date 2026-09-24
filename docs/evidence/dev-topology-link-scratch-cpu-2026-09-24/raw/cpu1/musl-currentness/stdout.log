@@ -1,0 +1,35 @@
+
+running 30 tests
+test currentness::full::tests::both_exact_retained_snapshots_are_required_even_with_unchanged_route ... ok
+test currentness::full::tests::diagnostic::both_modes_preserve_success_and_latch_order_and_disabled_has_no_clock_reads ... ok
+test currentness::full::tests::diagnostic::both_modes_preserve_identity_snapshot_route_and_prior_poison_rejections ... ok
+test currentness::full::tests::diagnostic::both_modes_preserve_every_pair_callback_error_panic_and_terminal_reentry ... ok
+test currentness::full::tests::diagnostic::final_diagnostic_panic_cannot_reactivate_devices_or_sessions ... ok
+test currentness::full::tests::endpoint_identity_changes_fail_at_the_exact_pre_or_post_stage ... ok
+test currentness::full::tests::full_pair_wiring_keeps_pure_binding_and_batch_scoped_validation_separate ... ok
+test currentness::full::tests::every_ordinary_full_callback_error_and_panic_short_circuits ... ok
+test currentness::full::tests::full_pair_encloses_one_fresh_discovery_for_both_directions ... ok
+test currentness::full::tests::opener_rejection_precedes_access_to_that_endpoints_reset_fifo ... ok
+test currentness::full::tests::every_pair_callback_error_and_panic_retains_devices_sessions_and_original_cause ... ok
+test currentness::tests::clear_observations_do_not_poison ... ok
+test currentness::tests::clock_correlation_requires_exact_gpu_zero_pad_and_frequency ... ok
+test currentness::tests::first_event_is_permanently_poisoning ... ok
+test currentness::tests::linux_readiness_probe_and_latch_fail_closed_on_hangup_and_stay_poisoned ... ok
+test currentness::tests::linux_readiness_probe_does_not_drain_a_readable_descriptor ... ok
+test currentness::tests::non_draining_poll_classifier_accepts_only_clear_or_readable ... ok
+test currentness::tests::non_draining_poll_classifier_rejects_errors_and_protocol_anomalies ... ok
+test currentness::tests::non_draining_poll_syscall_errors_fail_closed_without_retry ... ok
+test currentness::tests::operational_observations_fail_closed_at_each_live_boundary ... ok
+test currentness::tests::operational_observations_preserve_pid_reset_counter_reset_order ... ok
+test currentness::tests::operational_observations_reject_counter_change_before_closing_probe ... ok
+test currentness::tests::operational_observations_stop_before_fifo_after_process_change ... ok
+test currentness::tests::protocol_failure_is_permanently_poisoning ... ok
+test currentness::full::tests::ordinary_full_sequence_and_returned_counter_are_unchanged ... ok
+test shared_memory::pair_currentness::tests::pair_session_unwind_preserves_original_payload_and_both_phases ... ok
+test shared_memory::pair_currentness::tests::pair_sessions_reactivate_only_after_complete_success ... ok
+test shared_memory::pair_currentness::tests::inactive_pair_is_not_reactivated_and_has_no_observation_effects ... ok
+test currentness::full::tests::missing_reversed_or_changed_fresh_route_precedes_base_snapshot_mismatch ... ok
+test currentness::full::tests::prior_poison_never_reobserves_or_revives_either_endpoint ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 1528 filtered out; finished in 0.07s
+
