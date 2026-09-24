@@ -729,6 +729,18 @@ impl Operation {
                 ))?;
                 visitor(TargetCapabilityRefV1::WaveWidth(WaveWidth::Wave64))?;
             }
+            OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
+            | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => {
+                visitor(TargetCapabilityRefV1::extension(
+                    crate::AMDGPU_GFX942_PHYSICAL_GLOBAL_COPY_CAPABILITY_NAMESPACE_V21,
+                    crate::AMDGPU_GFX942_PHYSICAL_GLOBAL_COPY_CAPABILITY_NAME_V21,
+                ))?;
+                visitor(TargetCapabilityRefV1::extension(
+                    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE,
+                    crate::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+                ))?;
+                visitor(TargetCapabilityRefV1::WaveWidth(WaveWidth::Wave64))?;
+            }
             OperationKind::Gfx942OrderedProgram(_) => {
                 visitor(TargetCapabilityRefV1::extension(
                     crate::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAMESPACE,

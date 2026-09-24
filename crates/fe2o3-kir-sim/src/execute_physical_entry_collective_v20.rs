@@ -7,7 +7,9 @@ pub(super) fn resolve<'a>(
     arrival: CollectiveArrival<'a>,
     start: u64,
 ) -> Result<bool, SimulationExecutionErrorV1> {
-    if !physical_entry_v20::is_collective(arrival.operation) {
+    if !physical_entry_v20::is_collective(arrival.operation)
+        && !physical_global_copy_v21::is_collective(arrival.operation)
+    {
         return Ok(false);
     }
     if arrival.width != WaveWidth::Wave64 {

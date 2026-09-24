@@ -131,7 +131,7 @@ pub(crate) fn valid_root_signature<'tcx>(tcx: TyCtxt<'tcx>, signature: &FnSig<'t
             .all(|ty| matches!(ty.kind(), TyKind::Uint(UintTy::U32)))
 }
 
-fn exact_output_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+pub(crate) fn exact_output_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
         return false;
     };

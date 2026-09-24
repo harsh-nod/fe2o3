@@ -8,6 +8,15 @@ rust-version.workspace = true
 publish = false
 
 [features]
+physical-global-copy-one-v21 = []
+physical-global-copy-registers-v21 = []
+physical-global-copy-wrong-launch-v21 = []
+physical-global-copy-missing-lgkm-v21 = []
+physical-global-copy-missing-vm-v21 = []
+physical-global-copy-wrong-carry-v21 = []
+physical-global-copy-wrong-store-v21 = []
+physical-global-copy-wrong-offset-v21 = []
+physical-global-copy-reserved-register-v21 = []
 physical-entry-one-v20 = []
 physical-entry-diamond-v20 = []
 physical-entry-registers-v20 = []

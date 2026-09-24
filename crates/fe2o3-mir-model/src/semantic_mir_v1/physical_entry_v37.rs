@@ -89,7 +89,7 @@ pub(super) fn uses_v37(request: &InertSemanticMirRequestV1) -> bool {
     }) || request.functions.iter().any(|function| {
         function.blocks.iter().any(|block| {
             matches!(&block.terminator.kind, SemanticTerminatorKindV1::Call(call)
-                if call.physical_entry_source_v37.is_some())
+                if call.physical_entry_source_v37().is_some() || call.has_mixed_physical_sources())
         })
     })
 }
@@ -166,7 +166,7 @@ pub(super) fn validate_call_source(
     let callee = request.callables.get(call.callee.0 as usize);
     let physical = matches!(callee,Some(SemanticCallableDeclV1::CompilerIntrinsic{operation,..})
         if is_physical(*operation));
-    if !physical && call.physical_entry_source_v37.is_none() {
+    if !physical && call.physical_entry_source_v37().is_none() {
         return Ok(());
     }
     let refuse = || SemanticMirErrorV1::InvalidPhysicalEntryV37;
@@ -176,7 +176,7 @@ pub(super) fn validate_call_source(
     else {
         return Err(refuse());
     };
-    let source = call.physical_entry_source_v37.ok_or_else(refuse)?;
+    let source = call.physical_entry_source_v37().ok_or_else(refuse)?;
     let count = if matches!(
         operation,
         SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryBegin

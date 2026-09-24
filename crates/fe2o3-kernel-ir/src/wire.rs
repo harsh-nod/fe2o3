@@ -68,6 +68,11 @@ pub const KERNEL_IR_VERSION_V17: u16 = 17;
 pub const KERNEL_IR_VERSION_V19: u16 = 19;
 /// Physical-entry declaration and steps, separate from all older profiles.
 pub const KERNEL_IR_VERSION_V20: u16 = 20;
+/// Closed two-slice physical global copy; no older physical-profile fallback.
+pub const KERNEL_IR_VERSION_V21: u16 = 21;
+
+#[path = "wire/physical_global_copy_v21.rs"]
+mod physical_global_copy_v21;
 
 #[path = "wire/physical_entry_v20.rs"]
 mod physical_entry_v20;
@@ -377,6 +382,11 @@ pub fn encode_module_v20(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V20)
 }
 
+/// Exact inert V21 encoding; no source, launch or artifact authority.
+pub fn encode_module_v21(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V21)
+}
+
 /// Authority-free storage extents observed through the V12 encoding schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelIrV12WireExtentV1 {
@@ -625,6 +635,23 @@ pub(crate) fn decode_module_v20_with_allocation_budget_v1(
     )
 }
 
+/// Exact inert V21 decoding with no profile fallback.
+pub fn decode_module_v21(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V21, false)
+}
+
+pub(crate) fn decode_module_v21_with_allocation_budget_v1(
+    bytes: &[u8],
+    budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Module, KernelIrDecodeError> {
+    decode_module_impl_v1(
+        bytes,
+        KERNEL_IR_VERSION_V21,
+        false,
+        Some(DecodeBudgetV12::Resources(budget)),
+    )
+}
+
 pub(crate) fn decode_module_v17_with_allocation_budget_v1(
     bytes: &[u8],
     budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
@@ -708,6 +735,7 @@ fn decode_module_impl_v1(
                 | KERNEL_IR_VERSION_V17
                 | KERNEL_IR_VERSION_V19
                 | KERNEL_IR_VERSION_V20
+                | KERNEL_IR_VERSION_V21
         )
     {
         return Err(KernelIrDecodeError::UnknownVersion(version));
@@ -1363,6 +1391,26 @@ fn encode_operation_kind(
             writer.u8(43)?;
             physical_entry_v20::encode_step(writer, step)?;
         }
+        OperationKind::Gfx942PhysicalGlobalCopyDeclaration(declaration) => {
+            if writer.version != KERNEL_IR_VERSION_V21 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "gfx942 physical global copy declaration",
+                });
+            }
+            writer.u8(44)?;
+            physical_global_copy_v21::encode_declaration(writer, declaration)?;
+        }
+        OperationKind::Gfx942PhysicalGlobalCopyStep(step) => {
+            if writer.version != KERNEL_IR_VERSION_V21 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "gfx942 physical global copy step",
+                });
+            }
+            writer.u8(45)?;
+            physical_global_copy_v21::encode_step(writer, step)?;
+        }
         OperationKind::Gfx942OrderedProgram(program) => {
             if writer.version != KERNEL_IR_VERSION_V17 {
                 return Err(KernelIrEncodeError::UnsupportedInVersion {
@@ -1411,6 +1459,16 @@ fn decode_operation_kind(
         }
         43 if reader.version == KERNEL_IR_VERSION_V20 => {
             OperationKind::Gfx942PhysicalEntryStep(physical_entry_v20::decode_step(reader)?)
+        }
+        44 if reader.version == KERNEL_IR_VERSION_V21 => {
+            OperationKind::Gfx942PhysicalGlobalCopyDeclaration(
+                physical_global_copy_v21::decode_declaration(reader)?,
+            )
+        }
+        45 if reader.version == KERNEL_IR_VERSION_V21 => {
+            OperationKind::Gfx942PhysicalGlobalCopyStep(physical_global_copy_v21::decode_step(
+                reader,
+            )?)
         }
         39 if reader.version == KERNEL_IR_VERSION_V17 => {
             OperationKind::Gfx942OrderedProgram(ordered_program_v17::decode(reader)?)

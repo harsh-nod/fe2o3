@@ -41,6 +41,8 @@ const EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V17: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_
 const EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V19: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V19";
 const EXTRACT_PHYSICAL_ENTRY_DIRECTORY_ENV_V20: &str =
     "FE2O3_EXTRACT_DIAGNOSTIC_PHYSICAL_ENTRY_DIRECTORY_V20";
+const EXTRACT_PHYSICAL_GLOBAL_COPY_DIRECTORY_ENV_V21: &str =
+    "FE2O3_EXTRACT_DIAGNOSTIC_PHYSICAL_GLOBAL_COPY_DIRECTORY_V21";
 const EXTRACT_CRATE_BINDING_PATH_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
 
 fn main() {
@@ -54,6 +56,19 @@ fn main() {
     let diagnostic_kir_v17 = env::var_os(EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V17);
     let diagnostic_kir_v19 = env::var_os(EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V19);
     let physical_entry_v20 = env::var_os(EXTRACT_PHYSICAL_ENTRY_DIRECTORY_ENV_V20);
+    let physical_global_copy_v21 = env::var_os(EXTRACT_PHYSICAL_GLOBAL_COPY_DIRECTORY_ENV_V21);
+    if let Err(error) = require_disjoint_physical_global_copy_diagnostic_v21(
+        physical_global_copy_v21.is_some(),
+        [
+            diagnostic_kir_v16.is_some(),
+            diagnostic_kir_v17.is_some(),
+            diagnostic_kir_v19.is_some(),
+            physical_entry_v20.is_some(),
+        ],
+    ) {
+        eprintln!("fe2o3 rustc extraction: {error}");
+        std::process::exit(1);
+    }
     if let Err(error) = require_disjoint_physical_entry_diagnostic_v20(
         physical_entry_v20.is_some(),
         [
@@ -113,7 +128,10 @@ fn main() {
     .and_then(|prepared| select_diagnostic_kir_v16_mode(prepared, diagnostic_kir_v16))
     .and_then(|prepared| select_diagnostic_kir_v17_mode(prepared, diagnostic_kir_v17))
     .and_then(|prepared| select_diagnostic_kir_v19_mode(prepared, diagnostic_kir_v19))
-    .and_then(|prepared| select_physical_entry_diagnostic_v20_mode(prepared, physical_entry_v20));
+    .and_then(|prepared| select_physical_entry_diagnostic_v20_mode(prepared, physical_entry_v20))
+    .and_then(|prepared| {
+        select_physical_global_copy_diagnostic_v21_mode(prepared, physical_global_copy_v21)
+    });
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
         Err(error) => {
@@ -173,6 +191,7 @@ enum ExtractionModeV1 {
     DiagnosticKirV17(OsString),
     DiagnosticKirV19(OsString),
     PhysicalEntryDiagnosticV20(OsString),
+    PhysicalGlobalCopyDiagnosticV21(OsString),
 }
 
 fn require_disjoint_physical_entry_diagnostic_v20(
@@ -210,6 +229,45 @@ fn select_physical_entry_diagnostic_v20_mode(
             ));
         }
         selected.mode = ExtractionModeV1::PhysicalEntryDiagnosticV20(output);
+    }
+    Ok(prepared)
+}
+
+fn require_disjoint_physical_global_copy_diagnostic_v21(
+    v21: bool,
+    older: [bool; 4],
+) -> Result<(), String> {
+    if v21 && older.into_iter().any(|selected| selected) {
+        Err(
+            "pre-ranked physical-global-copy V21 diagnostics are mutually exclusive with V16/V17/V19/V20"
+                .into(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
+fn select_physical_global_copy_diagnostic_v21_mode(
+    mut prepared: PreparedExtractionV1,
+    output: Option<OsString>,
+) -> Result<PreparedExtractionV1, String> {
+    let Some(output) = output else {
+        return Ok(prepared);
+    };
+    if output.is_empty() {
+        return Err(format!(
+            "{EXTRACT_PHYSICAL_GLOBAL_COPY_DIRECTORY_ENV_V21} must not be empty"
+        ));
+    }
+    if let PreparedExtractionV1::Selected(selected) = &mut prepared {
+        if !matches!(selected.mode, ExtractionModeV1::KernelIr)
+            || selected.crate_binding_output.is_some()
+        {
+            return Err(format!(
+                "{EXTRACT_PHYSICAL_GLOBAL_COPY_DIRECTORY_ENV_V21} is mutually exclusive with all other diagnostic, ranked, LLVM, compiler-handoff, simulation-bundle and crate-binding outputs"
+            ));
+        }
+        selected.mode = ExtractionModeV1::PhysicalGlobalCopyDiagnosticV21(output);
     }
     Ok(prepared)
 }
@@ -765,6 +823,12 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
                 std::path::Path::new(&output),
             )?;
         }
+        ExtractionModeV1::PhysicalGlobalCopyDiagnosticV21(output) => {
+            rustc_codegen_fe2o3::run_diagnostic_physical_global_copy_extraction_driver_v21(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+        }
         ExtractionModeV1::DiagnosticKirV19(output) => {
             rustc_codegen_fe2o3::run_diagnostic_complete_body_kir_extraction_driver_v19(
                 &selected.args,
@@ -864,6 +928,7 @@ mod tests {
     include!("fe2o3-rustc-extract/ordered_program_v17_tests.rs");
     include!("fe2o3-rustc-extract/complete_body_v19_tests.rs");
     include!("fe2o3-rustc-extract/physical_entry_v20_tests.rs");
+    include!("fe2o3-rustc-extract/physical_global_copy_v21_tests.rs");
 
     #[test]
     fn simulation_bundle_environment_is_versioned_and_mutually_exclusive() {

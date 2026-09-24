@@ -506,6 +506,8 @@ fn operation_name(kind: &OperationKind) -> &'static str {
         OperationKind::Gfx942CompleteBodyStep(_) => "complete-body-step",
         OperationKind::Gfx942PhysicalEntryDeclaration(_) => "physical-entry-declaration",
         OperationKind::Gfx942PhysicalEntryStep(_) => "physical-entry-step",
+        OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_) => "physical-global-copy-declaration",
+        OperationKind::Gfx942PhysicalGlobalCopyStep(_) => "physical-global-copy-step",
     }
 }
 

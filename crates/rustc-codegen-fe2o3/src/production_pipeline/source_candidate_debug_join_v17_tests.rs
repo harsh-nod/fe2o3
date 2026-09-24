@@ -27,7 +27,10 @@ use serde_json::{Value, json};
 mod inspection;
 
 const MAX_RECORDS: usize = 8192;
-const MAX_VALUES: usize = 131_072;
+// Private two-session fixture cap. Exact inline symbolic observations increase
+// the shared binding size; retain the 128 MiB envelope, not the old value count.
+// Complete actual-source captures must still fit, or qualification refuses.
+const MAX_VALUES: usize = 32_768;
 const MAX_MEMORY: usize = 1024 * 1024;
 const MAX_FILES: usize = 16;
 const MAX_SITES: usize = 4096;
@@ -40,14 +43,21 @@ const TARGET: SimulationTargetV1 = SimulationTargetV1::amdgpu_64();
 // roster: 2 captures + 2 positive sessions + 3 negatives = 7 transcripts;
 // 2 catalogs + 2 positive bindings + 3 negatives + 1 recovery = 8 catalogs.
 fn prepay_fixed_envelope() -> Result<usize, String> {
+    prepay_fixed_envelope_for_values(MAX_VALUES)
+}
+
+fn prepay_fixed_envelope_for_values(max_values: usize) -> Result<usize, String> {
     use std::mem::size_of;
+    let values = max_values
+        .checked_mul(size_of::<SimulationDebugBindingV1>())
+        .ok_or("source-candidate debug logical envelope overflow")?;
     let transcript = MAX_RECORDS
         .checked_mul(
             size_of::<SimulationDebugRecordV1>()
                 + size_of::<SimulationDebugFrameV1>()
                 + size_of::<SimulationDebugAllocationV1>(),
         )
-        .and_then(|n| n.checked_add(MAX_VALUES * size_of::<SimulationDebugBindingV1>()))
+        .and_then(|n| n.checked_add(values))
         .and_then(|n| n.checked_add(MAX_MEMORY))
         .ok_or("source-candidate debug logical envelope overflow")?;
     let catalog = MAX_FILES * (4096 + size_of::<DebugSourceFileV1>())
@@ -500,6 +510,33 @@ fn observe(
         return Err("source-candidate debug unexpected simulation authority".into());
     }
     let (transcript, steps) = actual_capture(&module)?;
+    let capture_values = transcript
+        .records()
+        .iter()
+        .try_fold(0usize, |count, record| {
+            // Match the collector: each memory record retains one value too.
+            if matches!(&record.kind, SimulationDebugRecordKindV1::Memory { .. }) {
+                return count.checked_add(1);
+            }
+            let SimulationDebugRecordKindV1::Checkpoint {
+                stack: fe2o3_kir_sim::SimulationDebugCollectionV1::Captured(frames),
+                ..
+            } = &record.kind
+            else {
+                return Some(count);
+            };
+            frames.iter().try_fold(count, |count, frame| {
+                let fe2o3_kir_sim::SimulationDebugCollectionV1::Captured(values) = &frame.values
+                else {
+                    return Some(count);
+                };
+                count.checked_add(values.len())
+            })
+        })
+        .ok_or("source-candidate debug captured value count overflow")?;
+    if capture_values > MAX_VALUES {
+        return Err("source-candidate debug actual captured value count exceeds fixed cap".into());
+    }
     let selected = ordered_site(owner)?;
     let (inspection, inspection_report) = inspection::observe(
         owner,
@@ -520,6 +557,8 @@ fn observe(
         "eliminated_spans":catalog.eliminated().len(),
         "actual_captures":1,"capture_records":transcript.records().len(),
         "capture_steps":steps,"capture_step_limit":250_000,
+        "capture_values":capture_values,"capture_value_limit":MAX_VALUES,
+        "capture_binding_bytes":std::mem::size_of::<SimulationDebugBindingV1>(),
         "actual_lane_zero_before_after":true,"complete_transcript":true,
         "capture_output_init_and_canaries_checked":true,"capture_input_immutable":true,
         "same_live_v17_owner":true,"in_memory_compiler_catalog_available":true,
@@ -583,4 +622,26 @@ fn private_debug_join_payload_profile_is_bounded() {
     assert_eq!(MAX_FILES, 16);
     assert_eq!(MAX_SITES, 4096);
     assert_eq!(MAX_SPANS, 8192);
+}
+
+#[test]
+fn private_debug_join_payload_envelope_exact_boundary_and_overflow() {
+    let fixed = prepay_fixed_envelope_for_values(0).unwrap();
+    let per_value = 7 * std::mem::size_of::<SimulationDebugBindingV1>();
+    let exact = (LOGICAL_ENVELOPE - fixed) / per_value;
+    assert!(MAX_VALUES <= exact);
+    assert!(prepay_fixed_envelope_for_values(exact).unwrap() <= LOGICAL_ENVELOPE);
+    assert_eq!(
+        prepay_fixed_envelope_for_values(exact + 1).unwrap_err(),
+        "source-candidate debug logical envelope exceeds fixed cap"
+    );
+    assert_eq!(
+        prepay_fixed_envelope_for_values(usize::MAX).unwrap_err(),
+        "source-candidate debug logical envelope overflow"
+    );
+    println!(
+        "DEBUG_JOIN_ENVELOPE binding_bytes={} fixed_bytes={fixed} max_values={MAX_VALUES} exact_value_boundary={exact} prepaid_bytes={} cap_bytes={LOGICAL_ENVELOPE}",
+        std::mem::size_of::<SimulationDebugBindingV1>(),
+        prepay_fixed_envelope().unwrap()
+    );
 }

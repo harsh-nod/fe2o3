@@ -79,7 +79,11 @@ fn physical_entry_v37_exact_allocations_and_nineteen_descriptor_frames() {
         SemanticMirWireVersionV1::from_u16(37),
         Some(SemanticMirWireVersionV1::V37)
     );
-    assert_eq!(SemanticMirWireVersionV1::from_u16(38), None);
+    assert_eq!(SemanticMirWireVersionV1::from_u16(39), None);
+    assert_eq!(
+        SemanticMirWireVersionV1::from_u16(38),
+        Some(SemanticMirWireVersionV1::V38)
+    );
     assert_eq!(
         encode(SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryBegin),
         [93, 0]

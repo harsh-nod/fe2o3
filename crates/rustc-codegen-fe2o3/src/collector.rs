@@ -314,6 +314,26 @@ impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
         })
     }
 
+    pub(crate) fn contains_physical_global_copy_terminal_v21(&self, tcx: TyCtxt<'tcx>) -> bool {
+        self.collection.functions.iter().any(|function| {
+            let body = tcx.instance_mir(function.instance.def);
+            body.basic_blocks.iter().any(|block| {
+                let TerminatorKind::Call { func, .. } = &block.terminator().kind else {
+                    return false;
+                };
+                let TyKind::FnDef(def_id, _) = *func.ty(body, tcx).kind() else {
+                    return false;
+                };
+                matches!(
+                    crate::production_semantic_terminal_v1::classify(tcx, def_id),
+                    Some(crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1::Expand(
+                        crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyBegin
+                    ))
+                )
+            })
+        })
+    }
+
     pub(crate) fn function_count(&self) -> usize {
         self.collection.functions.len()
     }

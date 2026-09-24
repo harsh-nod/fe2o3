@@ -64,6 +64,12 @@ pub use observed_storage::ObservationExecutionOptionsV1;
 mod alloca_v1;
 #[path = "execute_complete_body_v19.rs"]
 mod complete_body_v19;
+#[path = "execute_debug_physical_value_v20.rs"]
+mod debug_physical_value_v20;
+pub use debug_physical_value_v20::*;
+#[path = "execute_debug_physical_capture_v20.rs"]
+mod debug_physical_capture_v20;
+pub use debug_physical_capture_v20::*;
 #[path = "execute_debug_frames.rs"]
 mod debug_frames;
 #[path = "execute_debug_identity.rs"]
@@ -83,6 +89,10 @@ mod physical_entry_v20;
 #[cfg(test)]
 #[path = "execute_physical_entry_v20_tests.rs"]
 mod physical_entry_v20_tests;
+#[path = "execute_physical_global_copy_pending_v21.rs"]
+mod physical_global_copy_pending_v21;
+#[path = "execute_physical_global_copy_v21.rs"]
+mod physical_global_copy_v21;
 #[path = "execute_pointer_view_operation_v1.rs"]
 mod pointer_view_operation_v1;
 #[path = "execute_scalar_memory_operation_v1.rs"]
@@ -1794,6 +1804,7 @@ struct Engine<'a, S> {
     sink: &'a mut S,
     debug_capture: SimulationDebugCaptureLimitsV1,
     debug_sink: &'a mut dyn SimulationDebugSinkV1,
+    physical_debug: Option<&'a mut debug_physical_capture_v20::State>,
     debug_origin_requested: bool,
     debug_observation_requested: bool,
     debug_frames_requested: bool,
@@ -2289,6 +2300,21 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         if self.debug_delivery_stopped {
             return;
         }
+        if let Some(capture) = self.physical_debug.as_mut() {
+            let kind = capture.checkpoint(
+                frames,
+                &self.function_module_indices,
+                &self.memory,
+                self.debug_capture,
+                phase,
+            );
+            if let Some(kind) = kind {
+                self.deliver_debug_with_frames(site, Some(frames), kind);
+            } else {
+                self.debug_delivery_stopped = true;
+            }
+            return;
+        }
         let stack = capture_debug_stack(frames, &self.function_module_indices, self.debug_capture);
         let memory = capture_debug_memory(&self.memory, self.debug_capture);
         self.deliver_debug_with_frames(
@@ -2382,7 +2408,9 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             },
             kind,
         };
-        let control = if self.debug_observation_requested {
+        let control = if let Some(capture) = self.physical_debug.as_mut() {
+            capture.record(record)
+        } else if self.debug_observation_requested {
             let origin = self.operation_origin_context(&record);
             let watermark = self.allocation_lifecycle_watermark_v1();
             let source = debug_frames::RuntimeFrameOrigins {
@@ -3372,7 +3400,21 @@ fn execute(
     sink: &mut impl SimulationEventSinkV1,
     debug_sink: &mut impl SimulationDebugSinkV1,
 ) -> Result<SimulationExecutionV1, SimulationExecutionErrorV1> {
-    if configuration.debug_capture.is_enabled() && admitted.uses_physical_entry_v20() {
+    execute_with_physical_debug_v20(admitted, request, configuration, sink, debug_sink, None)
+}
+
+fn execute_with_physical_debug_v20(
+    admitted: &AdmittedSimulationModuleV1,
+    request: &SimulationRequestV1,
+    configuration: ExecutionConfiguration<'_>,
+    sink: &mut impl SimulationEventSinkV1,
+    debug_sink: &mut impl SimulationDebugSinkV1,
+    physical_debug: Option<&mut debug_physical_capture_v20::State>,
+) -> Result<SimulationExecutionV1, SimulationExecutionErrorV1> {
+    if configuration.debug_capture.is_enabled()
+        && (admitted.uses_physical_global_copy_v21()
+            || (admitted.uses_physical_entry_v20() && physical_debug.is_none()))
+    {
         return Err(top_level_error(
             SimulationExecutionErrorKindV1::InternalInvariant(
                 "physical symbolic capture must be refused before execution",
@@ -3482,6 +3524,7 @@ fn execute(
         sink,
         debug_capture,
         debug_sink,
+        physical_debug,
         debug_origin_requested,
         debug_observation_requested,
         debug_frames_requested,
@@ -5260,6 +5303,7 @@ impl<'a> InvocationMachine<'a> {
                             operation.kind,
                             OperationKind::Matrix(_) | OperationKind::Gfx950LdsTranspose(_)
                         ) || physical_entry_v20::is_collective(&operation.kind)
+                            || physical_global_copy_v21::is_collective(&operation.kind)
                     })
             {
                 let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
@@ -6123,6 +6167,21 @@ fn prepare_collective_wait(
             };
             (transpose.width, input)
         }
+        OperationKind::Gfx942PhysicalGlobalCopyStep(_)
+            if physical_global_copy_v21::is_collective(operation) =>
+        {
+            (
+                WaveWidth::Wave64,
+                CollectiveInput::PhysicalEntryPredicate(
+                    physical_global_copy_v21::comparison_input(
+                        engine,
+                        &frame.values,
+                        operation,
+                        &site,
+                    )?,
+                ),
+            )
+        }
         OperationKind::Gfx942PhysicalEntryStep(_)
             if physical_entry_v20::is_collective(operation) =>
         {
@@ -6290,7 +6349,9 @@ fn advance_non_control_operation<'a>(
     operation: &Operation,
     site: CompactSite,
 ) -> Result<FrameAction<'a>, SimulationExecutionErrorV1> {
-    if physical_entry_v20::is_operation(&operation.kind) {
+    if physical_global_copy_v21::is_operation(&operation.kind) {
+        physical_global_copy_v21::execute_and_bind(engine, &mut frame.values, operation, &site)?;
+    } else if physical_entry_v20::is_operation(&operation.kind) {
         physical_entry_v20::execute_and_bind(engine, &mut frame.values, operation, &site)?;
     } else {
         let results = execute_operation(
@@ -6632,6 +6693,8 @@ fn execute_non_assembly_operation(
         | OperationKind::Gfx942CompleteBodyStep(_)
         | OperationKind::Gfx942PhysicalEntryDeclaration(_)
         | OperationKind::Gfx942PhysicalEntryStep(_)
+        | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
+        | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)
@@ -8489,6 +8552,7 @@ mod tests {
             sink: &mut sink,
             debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
             debug_sink: &mut debug_sink,
+            physical_debug: None,
             debug_origin_requested: false,
             debug_observation_requested: false,
             debug_frames_requested: false,
@@ -8666,3 +8730,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "execute_physical_global_copy_v21_tests.rs"]
+mod physical_global_copy_v21_tests;

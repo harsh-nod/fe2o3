@@ -130,6 +130,7 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
 
         let mut has_complete_body = false;
         let mut has_physical_entry = false;
+        let mut has_physical_global_copy = false;
         self.budget.charge_work(body.blocks.len())?;
         for block in &body.blocks {
             self.budget.charge_work(block.operations.len())?;
@@ -143,6 +144,11 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                     operation.kind,
                     OperationKind::Gfx942PhysicalEntryDeclaration(_)
                         | OperationKind::Gfx942PhysicalEntryStep(_)
+                );
+                has_physical_global_copy |= matches!(
+                    operation.kind,
+                    OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
+                        | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
                 );
                 let location = clone_diagnostic_location_v1(&base_location, self.budget)?
                     .at_block(block.id)
@@ -184,6 +190,9 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
         }
         if has_physical_entry {
             self.verify_physical_entry_function_v20(&base_location)?;
+        }
+        if has_physical_global_copy {
+            self.verify_physical_global_copy_function_v21(&base_location)?;
         }
         if has_execution_roles {
             crate::verification_execution_lifecycle_v15::verify_execution_lifecycle_v15(

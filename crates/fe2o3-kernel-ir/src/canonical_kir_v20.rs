@@ -6,6 +6,9 @@ pub type VerifiedCanonicalPhysicalEntryKernelIrModuleVNext = VerifiedCanonicalKe
 #[cfg(test)]
 #[path = "canonical_kir_v20_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "canonical_kir_v20_view_tests.rs"]
+mod view_tests;
 
 use crate::canonical_kir_bounded_inverse_v1::{InverseError, Profile, verified_inverse};
 use crate::{
@@ -162,6 +165,36 @@ impl VerifiedCanonicalKernelIrModuleV20 {
                 },
                 CanonicalKernelIrReplayStorageV20 { retained },
             ))
+        })
+    }
+
+    /// Decodes an independent, explicitly inert view of these exact immutable
+    /// owner bytes with the shared allocation-metered Reader and streaming
+    /// canonical comparison. This returns a plain Module, not verified custody,
+    /// source authentication, deployment authority, or a mutable owner view.
+    ///
+    /// No caller-supplied bytes, clone, second encoding, or semantic replay is
+    /// accepted here. The original owner remains borrowed and unchanged. All
+    /// exits restore the incoming storage floor while retaining work, peak and
+    /// denial history. Reserve the returned receipt while the view is live.
+    pub fn decoded_inert_view_with_verification_budget_v20(
+        &self,
+        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(Module, CanonicalKernelIrReplayStorageV20), CanonicalKernelIrReplayAdmissionErrorV20>
+    {
+        let floor = budget.storage_checkpoint();
+        budget.with_prepaid_scope(floor, 0, 0, 0, |budget| {
+            budget.reserve_storage(std::mem::size_of::<Module>())?;
+            let module = crate::wire::decode_module_v20_with_allocation_budget_v1(
+                self.canonical_bytes(),
+                budget,
+            )
+            .map_err(CanonicalKernelIrReplayAdmissionErrorV20::Decode)?;
+            let retained = budget
+                .storage()
+                .checked_sub(floor)
+                .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Accounting)?;
+            Ok((module, CanonicalKernelIrReplayStorageV20 { retained }))
         })
     }
 

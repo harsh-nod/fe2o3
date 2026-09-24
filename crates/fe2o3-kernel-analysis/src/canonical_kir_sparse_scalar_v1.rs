@@ -322,6 +322,8 @@ pub(super) fn transfer(
         | OperationKind::Gfx942CompleteBodyDeclaration(_)
         | OperationKind::Gfx942CompleteBodyStep(_)
         | OperationKind::Gfx942PhysicalEntryDeclaration(_)
-        | OperationKind::Gfx942PhysicalEntryStep(_) => Transfer::one(Value::Dynamic),
+        | OperationKind::Gfx942PhysicalEntryStep(_)
+        | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
+        | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => Transfer::one(Value::Dynamic),
     }
 }

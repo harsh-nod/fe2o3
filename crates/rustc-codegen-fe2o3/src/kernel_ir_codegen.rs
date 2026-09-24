@@ -27,6 +27,11 @@ pub(crate) mod nominal_v3;
 #[path = "kernel_ir_codegen_physical_entry_v20.rs"]
 mod physical_entry_v20;
 pub(crate) use physical_entry_v20::retain_verified_physical_entry_compiler_module_text_v20;
+#[path = "kernel_ir_codegen_physical_global_copy_v21.rs"]
+mod physical_global_copy_v21;
+#[cfg(test)]
+pub(crate) use physical_global_copy_v21::exact_inert_descriptor_extension_v21;
+pub(crate) use physical_global_copy_v21::retain_verified_physical_global_copy_compiler_module_text_v21;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DescriptorSourceIdentity {
@@ -122,6 +127,7 @@ pub(crate) enum CompilerModuleConstructionError {
     DescriptorSourceAlreadyBound,
     CompleteBodyIdentityMismatch,
     PhysicalEntryIdentityMismatchV20,
+    PhysicalGlobalCopyIdentityMismatchV21,
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
     UnsupportedExecutionType,
@@ -140,6 +146,9 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::LimitExceeded { field, actual, max } => {
                 write!(formatter, "{field} count/size {actual} exceeds limit {max}")
             }
+            Self::PhysicalGlobalCopyIdentityMismatchV21 => formatter.write_str(
+                "physical global-copy compiler module does not match the retained canonical owner",
+            ),
             Self::PhysicalEntryIdentityMismatchV20 => formatter
                 .write_str("physical-entry canonical emission identity/sole-root closure mismatch"),
             Self::CompleteBodyIdentityMismatch => formatter

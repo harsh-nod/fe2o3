@@ -231,6 +231,18 @@ impl OperationKind {
                     .flatten()
                     .try_for_each(&mut visitor)?;
             }
+            Self::Gfx942PhysicalGlobalCopyDeclaration(declaration) => {
+                declaration
+                    .parameters
+                    .into_iter()
+                    .try_for_each(&mut visitor)?;
+            }
+            Self::Gfx942PhysicalGlobalCopyStep(step) => {
+                step.operands
+                    .into_iter()
+                    .flatten()
+                    .try_for_each(&mut visitor)?;
+            }
             Self::Gfx942OrderedProgram(program) => {
                 program
                     .inputs()

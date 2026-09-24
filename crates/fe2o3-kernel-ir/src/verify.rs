@@ -69,6 +69,7 @@ pub enum DiagnosticCode {
     InvalidOrderedProgram,
     InvalidCompleteBodyV19,
     InvalidPhysicalEntryV20,
+    InvalidPhysicalGlobalCopyV21,
     InvalidTerminator,
 }
 

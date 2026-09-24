@@ -81,6 +81,12 @@ include!("production_ordered_region_inspection_v1.rs");
 include!("production_ordered_program_pre_ranked_v17.rs");
 include!("production_complete_body_source_vnext.rs");
 include!("production_physical_entry_source_v20.rs");
+include!("production_physical_global_copy_source_v21.rs");
+#[path = "production_physical_global_copy_checks_v21.rs"]
+mod physical_global_copy_checks_v21;
+pub use physical_global_copy_checks_v21::{
+    ProductionPhysicalGlobalCopyCheckErrorV21, ProductionPhysicalGlobalCopyCheckedKirOwnerV21,
+};
 #[path = "production_physical_entry_checks_v20.rs"]
 mod physical_entry_checks_v20;
 pub use physical_entry_checks_v20::{
@@ -16351,6 +16357,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "physical-entry source requires exact MIR37/KIR20 materialization",
                 ));
             }
+            SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyBegin
+            | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyLabel(_)
+            | SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyStep(_) => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "physical-global-copy source requires exact MIR38/KIR21 materialization",
+                ));
+            }
             SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_) => {
                 return Err(unsupported(
                     0,
@@ -24737,6 +24753,11 @@ fn authenticated_disjoint_slice_parameter(
         })
         .or_else(|| {
             physical_entry_parameter_v20::physical_entry_slice_parameter_v20(
+                types, callables, function, argument, ty,
+            )
+        })
+        .or_else(|| {
+            physical_global_copy_parameter_v21::physical_global_copy_slice_parameter_v21(
                 types, callables, function, argument, ty,
             )
         })?;

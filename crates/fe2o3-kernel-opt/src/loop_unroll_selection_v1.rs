@@ -135,7 +135,9 @@ fn allowed(k: &OperationKind) -> bool {
         | OperationKind::Gfx942CompleteBodyDeclaration(_)
         | OperationKind::Gfx942CompleteBodyStep(_)
         | OperationKind::Gfx942PhysicalEntryDeclaration(_)
-        | OperationKind::Gfx942PhysicalEntryStep(_) => false,
+        | OperationKind::Gfx942PhysicalEntryStep(_)
+        | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
+        | OperationKind::Gfx942PhysicalGlobalCopyStep(_) => false,
     }
 }
 

@@ -653,3 +653,41 @@ Thus the direct-KFD launch still reaches the V4 stopped-state boundary.
 This release validates V5 parsing, same-stop collection, redaction, and hostile
 substitution with deterministic MI fixtures; it does not claim a physical
 register or local capture on MI300X.
+
+## Physical-entry V20 CPU observations
+
+`fe2o3-debug sim --diagnostic-kir-v20 kernel.kir --request request.json --protocol jsonl --wave-width 64`
+loads an exact verified V20 physical-entry canonical module and the existing
+`fe2o3-simulation-request-v1` JSON request. Linux regular-file safeguards apply.
+This explicit selector is not a source-authentication path. A canonical digest
+identifies bytes, not their author, frontend lineage, deployment eligibility or
+runtime artifact. V21 remains refused by this debugger route.
+
+The adapter executes the ordinary CPU engine once and retains budget-owned
+observations. JSONL V1 supports capability discovery, state, unfocused
+event-granularity forward/reverse stepping, seek, paginated SSA values for the
+selected checkpoint's lane, allocation-relative memory reads up to 256 bytes,
+and termination. It does not resume execution when moving the cursor. Source
+maps, hardware registers, hardware waves, breakpoint/watchpoint control,
+persisted replay, continuation and other step granularities are unavailable.
+
+Symbolic pointer halves and carries remain present as SSA bindings with
+`Unavailable/NotRepresented`. The library retains their exact symbolic state;
+the unchanged JSON grammar does not manufacture numeric addresses or encode that
+private state. The displayed Wave64 active mask describes resident lanes, not
+physical EXEC; physical EXEC is a separate scalar SSA observation.
+
+Tooling limits are 128 KiB canonical input, 16 KiB request, 128 invocations in
+Wave64 workgroups, 8,192 capture records, 8 KiB command frames, 64 KiB replies and
+64 SSA rows per page. Input decode, immutable owner, independent admitted CPU view,
+capture, retained snapshots and protocol workspace all continue one owned
+cumulative verification ledger. Logical payload allowances are not allocator/RSS
+caps. Existing legacy simulator/debugger APIs retain their separate accounting
+contract; they cannot be used to admit this typed capture.
+
+State-changing observation responses are checked against output bounds before
+the cursor/revision commits. A transport failure ends the session, not a
+reversible publication transaction. A terminal library forward-step is a no-op
+without navigation cost; CLI command parsing/query/serialization is prepaid even
+for terminal no-ops. A truncated capture does not claim a completed cursor.
+No new canonical, source or debugger wire IDs are allocated by this adapter.

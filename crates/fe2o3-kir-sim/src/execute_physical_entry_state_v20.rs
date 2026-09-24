@@ -20,6 +20,26 @@ pub(super) struct AddressChain {
 /// Symbolic carries are deliberately not ScalarBits, even though canonical VCC is U64.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Value {
+    GlobalCopyKernarg {
+        half: Half,
+        declaration: CompactSite,
+        parameters: [ValueId; 2],
+    },
+    GlobalCopyPendingPointer {
+        half: Half,
+        generation: CompactSite,
+        pointer: PointerValue,
+    },
+    GlobalCopyPendingLength {
+        half: Half,
+        generation: CompactSite,
+        bits: ScalarBitsV1,
+    },
+    GlobalCopyPendingRead {
+        generation: CompactSite,
+        result: ValueId,
+        bits: ScalarBitsV1,
+    },
     Kernarg {
         half: Half,
         declaration: CompactSite,
@@ -50,7 +70,11 @@ impl Value {
     pub(super) const fn scalar_type(&self) -> ScalarType {
         match self {
             Self::CarryLow(_) | Self::CarryHigh { .. } => ScalarType::U64,
-            Self::Kernarg { .. }
+            Self::GlobalCopyKernarg { .. }
+            | Self::GlobalCopyPendingPointer { .. }
+            | Self::GlobalCopyPendingLength { .. }
+            | Self::GlobalCopyPendingRead { .. }
+            | Self::Kernarg { .. }
             | Self::Output { .. }
             | Self::ScaledOffset { .. }
             | Self::AddressLow(_)

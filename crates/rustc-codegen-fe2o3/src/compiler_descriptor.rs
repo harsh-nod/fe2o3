@@ -7,6 +7,8 @@ mod inline_helpers_v30;
 pub(crate) mod complete_body_v19;
 #[path = "compiler_descriptor_physical_entry_v20.rs"]
 pub(crate) mod physical_entry_v20;
+#[path = "compiler_descriptor_physical_global_copy_v21.rs"]
+pub(crate) mod physical_global_copy_v21;
 
 #[path = "compiler_descriptor_checked_output_policy3_v1.rs"]
 pub(crate) mod checked_output_policy3_v1;
@@ -699,6 +701,16 @@ fn validate_production_descriptor_root_with_physical_matcher_v1(
                     SemanticCallableDeclV1::CompilerIntrinsic {
                         operation, binding, ..
                     } => match operation {
+                        SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyBegin
+                            if binding.abi().source_input_types().get(1)
+                                == Some(&semantic_type_id) =>
+                        {
+                            // The exact checked global-copy owner independently joins
+                            // actual marker/source ABI, all conditional memory records
+                            // and the output Index1D identity. This is not runtime alias
+                            // fulfillment; generic capability admission remains closed.
+                            Some(SemanticDisjointIndexSpaceV1::Index1d)
+                        }
                         SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalEntryBegin
                             if binding.abi().source_input_types().first()
                                 == Some(&semantic_type_id) =>
@@ -1186,6 +1198,9 @@ enum DescriptorCapabilityAdmissionV1<'a> {
     CompleteBodyV19,
     InlineHelpersV30(&'a inline_helpers_v30::InlineHelperDescriptorAdmissionV30<'a>),
     PhysicalEntryV20(&'a physical_entry_v20::PhysicalEntryDescriptorAdmissionV20<'a>),
+    PhysicalGlobalCopyV21(
+        &'a physical_global_copy_v21::PhysicalGlobalCopyDescriptorAdmissionV21<'a>,
+    ),
 }
 
 // Only the child V19 constructor passes true, after the genuine source/ranked/
@@ -1552,6 +1567,11 @@ fn descriptor_capabilities_with_admission_v1(
             // Only execution requirements enter the runtime descriptor.
             continue;
         }
+        if let DescriptorCapabilityAdmissionV1::PhysicalGlobalCopyV21(checked) = admission
+            && checked.admits(module, &capability)
+        {
+            continue;
+        }
         if let DescriptorCapabilityAdmissionV1::PhysicalEntryV20(checked) = admission
             && checked.admits(module, &capability)
         {
@@ -1709,6 +1729,8 @@ pub(crate) enum CompilerDescriptorError {
     },
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     CompleteBodyV19(Box<fe2o3_lower_mir_kernel::ProductionCompleteBodyCheckErrorV19>),
+    PhysicalGlobalCopyV21(Box<fe2o3_lower_mir_kernel::ProductionPhysicalGlobalCopyCheckErrorV21>),
+    PhysicalGlobalCopyResourceV21(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     PhysicalEntryV20(Box<fe2o3_lower_mir_kernel::ProductionPhysicalEntryCheckErrorV20>),
     PhysicalEntryResourceV20(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     CheckedOutputPolicy3(fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy3V1),
@@ -1805,6 +1827,14 @@ impl fmt::Display for CompilerDescriptorError {
             Self::UnexpectedWorkgroupSize { kernel, expected } => write!(
                 formatter,
                 "typed descriptor kernel `{kernel}` does not have the exact {expected:?} workgroup"
+            ),
+            Self::PhysicalGlobalCopyV21(error) => write!(
+                formatter,
+                "physical global-copy checked source/ABI descriptor relation failed: {error}"
+            ),
+            Self::PhysicalGlobalCopyResourceV21(error) => write!(
+                formatter,
+                "physical global-copy descriptor resource accounting failed: {error}"
             ),
             Self::PhysicalEntryV20(error) => write!(
                 formatter,

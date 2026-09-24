@@ -833,6 +833,16 @@ impl From<VerifiedCanonicalKernelIrIdentityV20> for SimulationKernelIrIdentityV1
     }
 }
 
+impl From<fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV21> for SimulationKernelIrIdentityV1 {
+    fn from(identity: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV21) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V21,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}
+
 /// Exact canonical KIR owner admitted for simulation. This owner is intentionally not `Clone`.
 #[derive(Debug)]
 pub struct AdmittedSimulationModuleV1 {

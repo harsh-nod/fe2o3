@@ -34,6 +34,9 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     Gfx942PhysicalEntryBegin,
     Gfx942PhysicalEntryLabel,
     Gfx942PhysicalEntryStep,
+    Gfx942PhysicalGlobalCopyBegin,
+    Gfx942PhysicalGlobalCopyLabel,
+    Gfx942PhysicalGlobalCopyStep,
     ContextIssue,
     WorkgroupDerive,
     MaskedTileLoadU32,
@@ -186,11 +189,20 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::AmdGpuPhysicalEntryBeginGfx942 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryBegin)
             }
+            TrustedDeviceItem::AmdGpuPhysicalGlobalCopyBeginGfx942 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyBegin)
+            }
             TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryLabel)
             }
+            TrustedDeviceItem::AmdGpuPhysicalGlobalCopyLabelGfx942 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyLabel)
+            }
             TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryStep)
+            }
+            TrustedDeviceItem::AmdGpuPhysicalGlobalCopyStepGfx942 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyStep)
             }
             TrustedDeviceItem::AmdGpuCompleteBodyE32 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942CompleteBodyE32)
@@ -886,11 +898,20 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryBegin) => {
                 TrustedDeviceItem::AmdGpuPhysicalEntryBeginGfx942
             }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyBegin) => {
+                TrustedDeviceItem::AmdGpuPhysicalGlobalCopyBeginGfx942
+            }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryLabel) => {
                 TrustedDeviceItem::AmdGpuPhysicalEntryLabelGfx942
             }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyLabel) => {
+                TrustedDeviceItem::AmdGpuPhysicalGlobalCopyLabelGfx942
+            }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalEntryStep) => {
                 TrustedDeviceItem::AmdGpuPhysicalEntryStepGfx942
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942PhysicalGlobalCopyStep) => {
+                TrustedDeviceItem::AmdGpuPhysicalGlobalCopyStepGfx942
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942CompleteBodyE32) => {
                 TrustedDeviceItem::AmdGpuCompleteBodyE32
