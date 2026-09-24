@@ -10,6 +10,7 @@
 
 mod amd_isa_spec_catalog_v1;
 mod device_math;
+mod gfx942_complete_body_emission_v1;
 mod gfx942_complete_body_v1;
 mod gfx950;
 mod lowering;
@@ -22,6 +23,7 @@ mod scalar_v2;
 
 pub use amd_isa_spec_catalog_v1::*;
 pub use device_math::*;
+pub use gfx942_complete_body_emission_v1::*;
 pub use gfx942_complete_body_v1::*;
 pub use gfx950::*;
 pub use lowering::*;
