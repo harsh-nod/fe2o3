@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/benchmarks/runtime_gfx942/test_xgmi_backing_budget_campaign.py"
+  ],
+  "started_ns": 1790252792092223702,
+  "process_group": 2953623,
+  "group_absent": true,
+  "finished_ns": 1790252792370069437,
+  "status": 0
+}

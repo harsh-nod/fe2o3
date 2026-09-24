@@ -1,9 +1,12 @@
 # Native XGMI Backing-Budget Witness
 
-Status: [CPU qualification passes](evidence/dev-xgmi-backing-budget-witness-cpu-2026-09-24/README.md).
-Five example tests pass per GNU/musl target, twenty Python tests run without
-skips, and formatting, strict Clippy and unchanged-input checks pass. Native
-execution remains a separate required campaign.
+Status: [native qualification passes on MI300X GPUs 5/6](evidence/dev-xgmi-backing-budget-native-mi300x-2026-09-24/README.md).
+Both pressure/retry paths, both copies, all 36,875 checked bytes, final zero
+accounts and separate owned cleanup pass. The preceding
+[CPU qualification](evidence/dev-xgmi-backing-budget-witness-cpu-2026-09-24/README.md)
+passes five example tests per GNU/musl target, twenty Python tests without skips,
+formatting, strict Clippy and unchanged-input checks. Native faults, aggregate
+memory, refinement and performance remain outside this result.
 
 The example `gfx942-runtime-xgmi-backing-budget-smoke` exercises the
 [endpoint backing budgets](runtime-xgmi-backing-budgets-v1.md) through the public

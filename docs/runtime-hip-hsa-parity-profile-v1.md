@@ -702,8 +702,12 @@ two MI300X GPUs, not faults, performance or unified multi-device compute.
 Early events separate dependency admission from final observation; an event
 receipt is not completion or retry authority. Backing budgets are CPU-qualified
 with 1,552 KFD and 1,365 runtime tests per GNU/musl target, twenty hardware-only
-runtime ignores, 73 doctests and static checks. Their native pressure/retry and
-teardown campaign remains required. Aggregate memory, generated execution,
+runtime ignores, 73 doctests and static checks. The subsequent
+[native budget witness](evidence/dev-xgmi-backing-budget-native-mi300x-2026-09-24/README.md)
+passes exact asymmetric pressure/retry, bidirectional copies, retained mapping
+charges and ordinary shutdown on GPUs 5/6, with six strict endpoint observations
+and separate owned cleanup. It adds no native fault or performance evidence.
+Aggregate memory, generated execution,
 production-code proof correspondence and complete parity gates remain open.
 
 ### G1: API and ownership

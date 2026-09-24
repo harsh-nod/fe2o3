@@ -1,0 +1,10 @@
+
+running 5 tests
+test tests::cleanup_cannot_replace_primary_failure ... ok
+test tests::identities_reject_before_native_open ... ok
+test tests::pressure_separates_padded_byte_and_record_limits ... ok
+test tests::usage_oracle_requires_exact_order_budgets_and_custody ... ok
+test tests::oracle_checks_every_payload_and_guard_byte ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+

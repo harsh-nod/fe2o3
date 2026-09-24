@@ -1,5 +1,19 @@
 # Current Runtime Swarm Work Orders
 
+Latest native resource qualification (2026-09-24): the
+[backing-budget MI300X packet](evidence/dev-xgmi-backing-budget-native-mi300x-2026-09-24/README.md)
+passes on GPUs 5/6 from signed `419fe4818`. Both isolated capacity rejections
+leave healthy unchanged accounts; both original one-byte requests succeed after
+release with fresh Context identities. Forward/reverse copies, two retained
+publication snapshots, all 36,875 checked bytes and final zero backing accounts
+pass. All six strict endpoint observations, byte-exact collection, owned remote
+cleanup and independent absence checks pass. Offline replay and six mutation-test
+groups pass. This qualifies the exact ordinary pressure/retry/copy/shutdown
+workload, not native faults, aggregate memory, general multi-GPU compute, formal
+correspondence or matched performance. A1/A2 and accepted lane checkpoints remain
+unchanged. The next performance work must retain whole-host freshness rather
+than infer a bandwidth gain from this correctness witness.
+
 Latest native-witness preparation (2026-09-24): the
 [backing-budget witness CPU packet](evidence/dev-xgmi-backing-budget-witness-cpu-2026-09-24/README.md)
 qualifies asymmetric native capacity/retry and bidirectional-copy oracles without

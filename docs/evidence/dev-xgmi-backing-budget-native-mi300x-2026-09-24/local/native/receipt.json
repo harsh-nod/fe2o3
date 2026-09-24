@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I -B -c 'import hashlib, json, sys\nfrom pathlib import Path\ndef unique(pairs):\n    result = {}\n    for key, value in pairs:\n        if key in result:\n            raise RuntimeError(\"duplicate key\")\n        result[key] = value\n    return result\nmarker = json.loads(sys.argv[1], object_pairs_hook=unique)\nowned = Path(marker[\"path\"])\ndef ordinary(name):\n    path = owned / name\n    if path.is_symlink() or not path.is_file():\n        raise RuntimeError(\"ordinary bootstrap input required\")\n    return path.read_bytes()\nbinding_bytes = ordinary(\"binding.json\")\nif hashlib.sha256(binding_bytes).hexdigest() != marker[\"binding_sha256\"]:\n    raise RuntimeError(\"bootstrap binding digest\")\nbinding = json.loads(binding_bytes, object_pairs_hook=unique)\nraw = ordinary(\"native.py\")\nif hashlib.sha256(raw).hexdigest() != binding[\"payload\"][\"native.py\"]:\n    raise RuntimeError(\"bootstrap native digest\")\nsys.argv = [str(owned / \"native.py\"), \"run\", sys.argv[1]]\nexec(compile(raw, sys.argv[0], \"exec\"), {\"__name__\": \"__main__\", \"__file__\": sys.argv[0]})\n' '{\"binding_sha256\":\"062dd4cd7d5df120df6f34df7f4b656cf1ee0521e39dd24d05a2762f9d4e970e\",\"commit\":\"419fe481803bbaf7a681330024abe39121e67580\",\"path\":\"/home/harsh/fe2o3-xgmi-backing-budget-20260924.e0196987e85029c1\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-xgmi-budget-native-20260924-n30eWjaS/source",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790253403402758744,
+  "group_absent": true,
+  "pid": 3055074,
+  "started_ns": 1790253365389619665,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "5780c230e43ff4fe898989944104e136abff9851e5341918169a994ff944d7e4",
+  "timeout_seconds": 1200
+}

@@ -1,0 +1,11 @@
+{"phase": "rocm", "exit": 0, "error": null, "group_absent": true}
+{"phase": "kernel", "exit": 0, "error": null, "group_absent": true}
+{"phase": "backing-budget-before-gpu5", "exit": 0, "error": null, "group_absent": true}
+{"phase": "backing-budget-before-gpu6", "exit": 0, "error": null, "group_absent": true}
+{"phase": "backing-budget", "exit": 0, "error": null, "group_absent": true}
+{"phase": "backing-budget-settled-gpu5", "exit": 0, "error": null, "group_absent": true}
+{"phase": "backing-budget-settled-gpu6", "exit": 0, "error": null, "group_absent": true}
+{"phase": "backing-budget-delayed-gpu5", "exit": 0, "error": null, "group_absent": true}
+{"phase": "backing-budget-delayed-gpu6", "exit": 0, "error": null, "group_absent": true}
+{"phase": "after-rocm", "exit": 0, "error": null, "group_absent": true}
+{"phase": "after-kernel", "exit": 0, "error": null, "group_absent": true}

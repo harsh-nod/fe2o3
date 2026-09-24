@@ -77,16 +77,19 @@ it does not qualify default test-harness concurrency or measure runtime speed.
 CPU tests use the original allocation/accounting/mapping driver with scripted
 native leaves and the production-shared runtime acquisition/settlement helpers.
 They do not construct fake checked devices or native sessions. Source-wiring
-checks are distinct from native constructor execution. Native asymmetric-budget
-pressure, release/retry, queue-control accounting and teardown require a fresh
-signed MI300X campaign; historical native diamond results do not cover this code.
+checks are distinct from native constructor execution. The fresh signed
+[MI300X budget campaign](evidence/dev-xgmi-backing-budget-native-mi300x-2026-09-24/README.md)
+passes asymmetric pressure, release/retry, retained-mapping accounting, both copy
+directions and ordinary teardown. Historical diamond results are not reused to
+qualify this change, and native fault injection remains unqualified.
 Formal correspondence, aggregate memory, full A1/A2 acceptance and matched
 HIP/HSA performance remain open.
 
-## Next Native Witness
+## Native Witness
 
 The [witness and sibling campaign](runtime-xgmi-backing-budget-witness-v1.md)
-are now CPU-qualified. Fresh signed native execution remains required.
+are CPU- and native-qualified for the exact workload below, not broader faults
+or memory/performance claims.
 
 Use a new signed-source copy-only smoke example and campaign, without editing
 the historical diamond witness. A direct journaled Context permits inspecting

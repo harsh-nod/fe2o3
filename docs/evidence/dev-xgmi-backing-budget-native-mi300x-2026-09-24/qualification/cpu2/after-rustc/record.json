@@ -1,0 +1,11 @@
+{
+  "command": [
+    "rustc",
+    "-vV"
+  ],
+  "started_ns": 1790252884924682096,
+  "process_group": 2971901,
+  "group_absent": true,
+  "finished_ns": 1790252884984534583,
+  "status": 0
+}

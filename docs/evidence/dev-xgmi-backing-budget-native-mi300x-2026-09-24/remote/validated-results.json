@@ -1,0 +1,24 @@
+[
+  {
+    "result": {
+      "aggregate_bound": false,
+      "capacity_rejections": 2,
+      "checked_bytes": 36875,
+      "directed_copies": 2,
+      "exclusive_reservation": false,
+      "formal_refinement": false,
+      "fresh_identity": "context",
+      "native_execution": true,
+      "performance_acceptance": false,
+      "pressure_dimensions": "inferred-byte-record",
+      "retries": 2,
+      "runtime_cleanup": true,
+      "schema": "fe2o3.runtime.xgmi-backing-budget.v1",
+      "unique_ids": [
+        13239087366709656974,
+        1198613695807612694
+      ]
+    },
+    "trial": "backing-budget"
+  }
+]
