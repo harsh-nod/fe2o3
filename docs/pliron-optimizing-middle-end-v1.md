@@ -290,8 +290,11 @@ to retain the structured per-case report, including all refusals. The harness
 cleans its temporary dependency and subprocess directories. This gate checks
 the nondefault source-to-LLVM route; it does not execute Verus or kernels,
 publish compiler artifacts, or establish simulator, numerical or GPU results.
-The separate `ordinary_rust_fill_and_vecadd_reach_checked_native_output` parent
-also exercises the missing signed-proof refusal without releasing output.
+The separate `unannotated_fill_fixture_and_vecadd_reach_checked_native_output`
+parent exercises the missing signed-proof refusal without releasing output.
+Its explicitly unannotated fixture is not the migrated tutorial fill. The actual
+manifest fill's [protected-effect test](evidence/manifest-fill-source-proof-20260924.md)
+requires its independent CPU reference and a fresh real proof.
 Current observations count runtime-read domains from the fresh actual-O reports
 and check their inert V4/policy-3 encoding. Historical reports without this
 optional observation stay unobserved, not retroactively counted as zero.

@@ -93,7 +93,7 @@ fn check(path: &Path, roots: &[&str]) {
 #[ignore = "requires pinned nightly rust-src and actual unannotated source compilation; no GPU or Verus"]
 fn unannotated_source_cannot_escape_the_pre_proof_observation() {
     ordinary_rust_source_cases(
-        &[OrdinarySourceCase::Fill],
+        &[OrdinarySourceCase::UnannotatedFill],
         fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
         false,
         Some(SourceObserver {
@@ -115,7 +115,10 @@ fn actual_reference_fill_joins_canonical_source_and_prepared_ranked_output() {
         fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
     ] {
         ordinary_rust_source_cases(
-            &[OrdinarySourceCase::ReferenceFill],
+            &[
+                OrdinarySourceCase::ReferenceFill,
+                OrdinarySourceCase::ProofFill,
+            ],
             profile,
             false,
             Some(SourceObserver {

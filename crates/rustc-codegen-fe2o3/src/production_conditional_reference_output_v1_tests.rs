@@ -17,10 +17,11 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 
 fn fixture(bits: u128) -> AuthenticatedReferenceEffectBindingV1 {
-    let value = Rvalue::Use(Operand::Constant(Const::Scalar {
-        scalar: Scalar::U32,
-        bits,
-    }));
+    typed_fixture(Scalar::U32, bits)
+}
+
+fn typed_fixture(scalar: Scalar, bits: u128) -> AuthenticatedReferenceEffectBindingV1 {
+    let value = Rvalue::Use(Operand::Constant(Const::Scalar { scalar, bits }));
     let write = ReferenceOutputWriteV1 {
         argument: 0,
         block: 0,
@@ -29,10 +30,7 @@ fn fixture(bits: u128) -> AuthenticatedReferenceEffectBindingV1 {
             vec![CpuExpr::PointCoordinate { axis: 0 }].into_boxed_slice(),
         ),
         guard: ReferencePathPredicateV1::unconditional_v1(),
-        rhs: CpuExpr::Constant(Const::Scalar {
-            scalar: Scalar::U32,
-            bits,
-        }),
+        rhs: CpuExpr::Constant(Const::Scalar { scalar, bits }),
         value: value.clone(),
     };
     let effect_ir = ReferenceEffectIrV1 {
@@ -45,7 +43,7 @@ fn fixture(bits: u128) -> AuthenticatedReferenceEffectBindingV1 {
             },
             Rel::DisjointOutputCoordinate {
                 argument: 0,
-                element: Scalar::U32,
+                element: scalar,
             },
         ]
         .into_boxed_slice(),
@@ -90,7 +88,7 @@ fn fixture(bits: u128) -> AuthenticatedReferenceEffectBindingV1 {
         logical_kernel_name: "inert".into(),
         kernel: identity,
         reference: identity,
-        signature_preimage: signature(Scalar::Usize),
+        signature_preimage: typed_signature(Scalar::Usize, scalar),
         effect_ir_sha256: effect_ir.canonical_sha256_v1(),
         effect_ir,
         observable_output_writes: vec![write].into_boxed_slice(),
@@ -98,10 +96,14 @@ fn fixture(bits: u128) -> AuthenticatedReferenceEffectBindingV1 {
 }
 
 fn signature(point: Scalar) -> ReferenceLogicalSignaturePreimageV1 {
+    typed_signature(point, Scalar::U32)
+}
+
+fn typed_signature(point: Scalar, scalar: Scalar) -> ReferenceLogicalSignaturePreimageV1 {
     ReferenceLogicalSignaturePreimageV1::new(
         vec![Input::NominalOutput {
             carrier: Carrier::DisjointSlice,
-            element: Scalar::U32,
+            element: scalar,
         }]
         .into_boxed_slice(),
         vec![
@@ -109,7 +111,7 @@ fn signature(point: Scalar) -> ReferenceLogicalSignaturePreimageV1 {
             Input::Reference {
                 region: ReferenceRegionV1::Erased,
                 mutability: SemanticMutabilityV1::Mutable,
-                pointee: ReferencePointeeV1::Scalar(Scalar::U32),
+                pointee: ReferencePointeeV1::Scalar(scalar),
             },
         ]
         .into_boxed_slice(),
@@ -140,9 +142,85 @@ fn constant_point_effect_borrows_the_exact_output_and_supports_u32_limits() {
                 &input.observable_output_writes[0]
             ));
             assert_eq!(checked.raw_argument, 1);
-            assert_eq!(actual, bits);
+            assert_eq!(actual.scalar, ConstantScalarV1::U32);
+            assert_eq!(u128::from(actual.bits), bits);
             assert_eq!(budget.storage(), 0);
         }
+    }
+}
+
+#[test]
+fn f32_point_constants_retain_type_and_every_representation_bit() {
+    for bits in [
+        0,
+        0x8000_0000,
+        0x422a_0000,
+        0x7f80_0000,
+        0xff80_0000,
+        0x7fc0_0123,
+        0xffc0_0456,
+    ] {
+        let input = typed_fixture(Scalar::F32, bits);
+        let mut work = Work::new(100_000);
+        let mut budget = Budget::new(&mut work, 0);
+        let (checked, constant) = check_constant_point_effect(&input, &mut budget).unwrap();
+        assert!(std::ptr::eq(checked.binding, &input));
+        assert_eq!(constant.scalar, ConstantScalarV1::F32);
+        assert_eq!(u128::from(constant.bits), bits);
+        assert_eq!(constant.scalar.canonical(), ScalarType::F32);
+        assert_eq!(constant.scalar.ranked(), Ty::Float { bits: 32 });
+        assert_eq!(budget.storage(), 0);
+    }
+}
+
+#[test]
+fn f32_constants_reject_integer_substitution_width_and_payload_changes() {
+    for change in 0..6 {
+        let mut input = typed_fixture(Scalar::F32, 0x422a_0000);
+        let expected = match change {
+            0 => {
+                input.signature_preimage = typed_signature(Scalar::Usize, Scalar::U32);
+                "IR relation"
+            }
+            1 => {
+                input.effect_ir.blocks[0].assignments[0].value =
+                    Rvalue::Use(Operand::Constant(Const::Scalar {
+                        scalar: Scalar::U32,
+                        bits: 0x422a_0000,
+                    }));
+                "CPU value"
+            }
+            2 => {
+                input.observable_output_writes[0].rhs = CpuExpr::Constant(Const::Scalar {
+                    scalar: Scalar::U32,
+                    bits: 0x422a_0000,
+                });
+                "CPU RHS"
+            }
+            3 => {
+                input.effect_ir.observable_output_effects[0].value =
+                    Rvalue::Use(Operand::Constant(Const::Scalar {
+                        scalar: Scalar::F32,
+                        bits: 0x422a_0001,
+                    }));
+                "CPU write identity/value"
+            }
+            4 => {
+                input = typed_fixture(Scalar::F32, 1_u128 << 32);
+                "CPU constant width"
+            }
+            5 => {
+                input = typed_fixture(Scalar::F64, 0x422a_0000);
+                "signature fragment"
+            }
+            _ => unreachable!(),
+        };
+        let mut work = Work::new(100_000);
+        let result = check_constant_point_effect(&input, &mut Budget::new(&mut work, 0));
+        assert!(
+            matches!(result, Err(Error::Reference(reason)) if reason == expected),
+            "change={change}"
+        );
     }
 }
 

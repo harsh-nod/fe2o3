@@ -258,12 +258,28 @@ transcripts. Shared Rust staging/replay is conservatively prepaid on the origina
 ledger; process/LLVM accounting remains separate. Public-key fixtures and a
 synthetic Worker test this connection, not protected or GPU execution.
 
+The native finalization adapter retains that owner through the shared raw-HSACO
+inspection and canonical descriptor finalizers. Native compact replay uses the
+existing metadata tail and request/response reconstruction engine, while binding
+the complete V4 outer and original occurrence under separate domains. Recovery
+requires independently recovered source/F, producer-specific transaction
+rederivation, exact Worker replay and repeated structural finalization. A
+recovered transcript is explicitly distinguished from a freshly consumed
+publication. Neither representation provides current protected execution or
+semantic-to-machine authority.
+
+The [2026-09-24 integration checkpoint](evidence/native-worker-finalization-replay-20260924.md)
+records the native replay matrix, legacy regressions, source-path checks and
+isolated service test, together with the remaining protected-proof boundary.
+
 Inventory/preflight receipts remain inert until the compiler custody boundary
-authenticates them. Native protected service admission, Cargo intake, finalizer
-publication/restart, runtime and generated-host consumers are still not connected
-end to end. The native Worker adapter has no executable-artifact publication
-conversion; default production remains unchanged. No tutorial kernel gains
-production or hardware coverage from this library integration alone.
+authenticates them. Native root/socket/pidfd service custody and service packet
+codecs are separate supporting components, not a deployed native issuer. Issuer
+admission, durable signing/ACK/currentness, Cargo intake, authorized finalizer
+publication, runtime and generated-host consumers are still not connected end to
+end. The native Worker continuation has no executable-artifact publication
+authority conversion; default production remains unchanged. No tutorial kernel
+gains production or hardware coverage from this library integration alone.
 The signed ordinary-Rust producer fixture exercises base construction with an
 explicitly synthetic invocation, but requires the protected proof runtime.
 CPU content/resource tests do not replace that fixture, a positive protected
@@ -290,8 +306,9 @@ Carrier framing, hashing and getters allocate no heap payloads; nested semantic
 admission still runs through the existing complete source-to-F checker.
 
 The producer's original paired-only recovered owner is dropped after its check;
-the new V4 admission retains its recovered owner beside the outer transport. Worker
-evidence retention/publication is not wired. Its output identity binds the
+the new V4 admission retains its recovered owner beside the outer transport.
+Worker evidence and structural finalization retain that native owner; protected
+artifact publication is not wired. Its output identity binds the
 embedded fields, not an external Worker request: later admission must bind that
 exact frame, NativeV2 and descriptor to the actual request and finalizer. Dropped
 history is not available for self-contained replay, and this owner supplies no

@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "unannotated-fill")]
+mod unannotated_fill;
+
 #[cfg(any(
     feature = "guarded-loop-read",
     feature = "guarded-loop-read-control",

@@ -8,6 +8,7 @@ rust-version.workspace = true
 publish = false
 
 [features]
+unannotated-fill = []
 complete-body-one-v19 = []
 complete-body-diamond-v19 = []
 complete-body-wrong-launch-v19 = []

@@ -138,12 +138,12 @@ diagnostic source report is bound; binding that report does not qualify a pair.
 Existing historical successes do not
 acquire new source/variant/target bindings from this report.
 
-The first-fill kernel display now retains the exact 308-byte library file at
+The first-fill kernel display retains the historical 308-byte library file at
 `7a536e0a001202ac0bb9d8647c5395661f8fa1ec`, including its whole-file digest.
-Its registered fixture association is checked by the same physical-source
-mapper as other whole-file displays. The tutorial's recorded no-GPU execution
-keeps its historical source pin; this display refresh supplies no new execution
-or tile-pair qualification.
+The current library adds an independent CPU point reference. Its old display
+therefore has a pending current-source binding, not a fixture-source contract.
+The tutorial's recorded no-GPU execution keeps its historical source pin; the
+source migration supplies no new execution or tile-pair qualification.
 
 The report is bounded to 4096 charged projection/inventory records, including
 input tabs, references and scanned items, and 16 MiB of encoded JSON. Each Rust
@@ -222,8 +222,10 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
 
 The fill fixture's SIMT variant is associated with the exact current
 `examples/fill/src/lib.rs` function and its registered compiler-input identity.
-Its tile variant and execution evidence remain
-pending. This association does not complete a pair or the curriculum census.
+The source closure and selection pins include its explicit CPU reference and
+focused reference tests. Its tile variant and execution evidence remain pending.
+This association does not complete a pair or the curriculum census, or rebind
+the historical first-fill display to the changed file.
 
 Eight GPT-OSS occurrences in tabs 1-6 retain these expected fixture/source
 contracts: serial-router, held-fragments, interleaved-stores, and the three
@@ -234,8 +236,8 @@ also bind to their exact selected physical source. Eight FP4/FP8 GEMM and
 attention displays, including their performance-lab excerpts, also bind to the
 registered feature-selected source. The declared runners use non-test
 `cargo check --lib`; test-only declarations are excluded from this selection.
-Together with first-fill, fourteen systems occurrences and the four whole-file
-displays described below, these thirty-seven associations leave 27 pending
+Together with fourteen systems occurrences and the four whole-file
+displays described below, these thirty-six associations leave 28 pending
 display bindings and the historical
 GEMM lesson's source gap unresolved. The two attention variants are required
 positive compile obligations with separate pending-design simulation requests;

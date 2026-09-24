@@ -224,7 +224,13 @@ node scripts/assembly-source-llvm-inspection-smoke.mjs \
   "$assembly_run/capture" "$roundtrip_run/capture" "$llvm_run/capture"
 ```
 
-### Reproduce the supported ordinary-source path
+### Ordinary-Source Path
+
+This smoke selects the default fill source, without the optional `reference-proof`
+feature. It does not require protected proof execution. The separate proof-enabled
+selection still needs the
+[source-proof and conditional-ownership continuation](evidence/manifest-fill-source-proof-20260924.md).
+Retained bundles are historical observations, not qualification of changed source.
 
 Build `fe2o3-rustc-extract` and `fe2o3-export-sim` from `rustc-codegen-fe2o3`,
 `fe2o3-author` from `fe2o3-source-isa-observation`, `fe2o3-kir-sim` from

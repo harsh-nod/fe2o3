@@ -414,14 +414,15 @@ fn ordinary_fixed_dispatcher_preserves_source_routes_and_unsigned_proof_refusals
         fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
         fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
     ] {
-        ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
+        ordinary_rust_source_cases(
             &[
-                OrdinarySourceCase::Fill,
+                OrdinarySourceCase::UnannotatedFill,
                 OrdinarySourceCase::PrivateUnitHelper,
                 OrdinarySourceCase::RetainedPrivateUnitHelper,
             ],
             profile,
             true,
+            None,
         );
     }
 }
