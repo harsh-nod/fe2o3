@@ -53,6 +53,9 @@ fn stable_release_live_fixture_v1() -> (result: (ContextReadLeasedJournalV1, log
 fn stable_release_live_witness_v1() -> (result: bool)
     ensures result,
 {
+    hide(logical::reader_invariant_v1);
+    hide(logical::acquire_execution_relation_v1);
+    hide(logical::release_execution_relation_v1);
     let (mut actual, mut model, request, model_request) = stable_release_live_fixture_v1();
     let consumer = WriterKeyV1 { context_generation: 7, local: 20, kind: WriterKindV1::Synchronous };
     let model_consumer = logical::WriterKeyV1 { context_generation: 7, local: 20, kind: logical::WriterKindV1::Synchronous };
@@ -91,7 +94,9 @@ fn stable_release_live_witness_v1() -> (result: bool)
     let short = stable_release_historical_exec_v1(&mut actual, &mut model, consumer, model_consumer,
         &refs, &model_refs, &evidence, model_consumer, 1);
     assert(short.0 == Err(ReadErrorV1::InvalidState) && short.1 == Err(logical::ReadErrorV1::InvalidState));
-    assert(actual == before && logical::reader_contents_frame_v1(model_before, model));
+    assert(actual == before && logical::reader_contents_frame_v1(model_before, model)) by {
+        reveal(logical::release_execution_relation_v1);
+    }
     let duplicate = vec![first, first];
     let model_duplicate = vec![model_first, model_first];
     proof { assert(stable_references_view(duplicate@) =~= model_duplicate@); }

@@ -188,41 +188,81 @@ pub proof fn begin_retained_storage_v1(before: JournalContentsV1, after: Journal
 }
 
 #[verifier::spinoff_prover]
-pub proof fn begin_new_chain_v1(before: JournalContentsV1, after: JournalContentsV1, writer: WriterReferenceV1, roster: Seq<AllocationWriteV1>)
-    requires pending_custody_v1(before), begin_shape_v1(before, writer, roster), begin_final_views_v1(before, after, writer, roster),
-        begin_success_relation_v1(before, after, writer, roster),
-    ensures retained_chain_v1(after, writer, begin_chain_v1(before, roster)),
+pub proof fn begin_new_chain_link_details_v1(before: JournalContentsV1, after: JournalContentsV1, writer: WriterReferenceV1, roster: Seq<AllocationWriteV1>)
+    requires forall|i: int| 0 <= i < roster.len() ==> {
+            &&& (#[trigger] begin_plan_v1(before, roster, i)).member_slot < after.members@.len()
+            &&& after.members@[begin_plan_v1(before, roster, i).member_slot as int] == Some(begin_member_v1(before, writer, roster, i))
+        },
+        forall|i: int| 0 < i < roster.len() ==>
+            roster[i - 1].allocation.key.local < (#[trigger] roster[i]).allocation.key.local,
+    ensures forall|i: int| 0 <= i < roster.len()
+        ==> #[trigger] chain_link_v1(after, writer, begin_chain_v1(before, roster), i),
 {
-    hide(begin_members_prefix_v1);
-    hide(begin_allocations_prefix_v1);
     let chain = begin_chain_v1(before, roster);
     assert forall|i: int| 0 <= i < chain.len() implies #[trigger] chain_link_v1(after, writer, chain, i) by {
         reveal(chain_link_v1);
         assert(after.members@[chain[i] as int] == Some(begin_member_v1(before, writer, roster, i)));
         if i > 0 { assert(after.members@[chain[i - 1] as int] == Some(begin_member_v1(before, writer, roster, i - 1))); }
     }
+}
+
+#[verifier::spinoff_prover]
+pub proof fn begin_new_chain_members_v1(before: JournalContentsV1, after: JournalContentsV1, writer: WriterReferenceV1, roster: Seq<AllocationWriteV1>)
+    requires pending_custody_v1(before), begin_shape_v1(before, writer, roster), begin_final_views_v1(before, after, writer, roster),
+    ensures forall|m: int| 0 <= m < after.members@.len() && (#[trigger] after.members@[m]).is_some()
+        && same_producer_v1(after.members@[m].unwrap().writer, writer) ==> begin_chain_v1(before, roster).contains(m as usize),
+{
+    hide(pending_custody_v1);
+    let chain = begin_chain_v1(before, roster);
     assert forall|m: int| 0 <= m < after.members@.len() && (#[trigger] after.members@[m]).is_some()
         && same_producer_v1(after.members@[m].unwrap().writer, writer) implies chain.contains(m as usize) by {
         if !chain.contains(m as usize) {
             assert(before.members@[m].is_some());
-            assert(member_custody_v1(before, m));
+            assert(member_custody_v1(before, m)) by { reveal(pending_custody_v1); }
             reveal(member_custody_v1);
         }
     }
 }
 
 #[verifier::spinoff_prover]
-pub proof fn begin_surviving_chain_v1(before: JournalContentsV1, after: JournalContentsV1, writer: WriterReferenceV1, roster: Seq<AllocationWriteV1>,
-    other: WriterReferenceV1, chain: Seq<usize>)
+pub proof fn begin_new_chain_v1(before: JournalContentsV1, after: JournalContentsV1, writer: WriterReferenceV1, roster: Seq<AllocationWriteV1>)
     requires pending_custody_v1(before), begin_shape_v1(before, writer, roster), begin_final_views_v1(before, after, writer, roster),
-        begin_success_relation_v1(before, after, writer, roster), retained_chain_v1(before, other, chain),
-    ensures retained_chain_v1(after, other, chain),
+        begin_success_relation_v1(before, after, writer, roster),
+    ensures retained_chain_v1(after, writer, begin_chain_v1(before, roster)),
 {
+    hide(pending_custody_v1);
     hide(begin_members_prefix_v1);
     hide(begin_allocations_prefix_v1);
-    begin_retained_storage_v1(before, after, writer, roster);
-    assert(other.slot != writer.slot);
-    assert(after.writers@[other.slot as int] == before.writers@[other.slot as int]);
+    begin_new_chain_links_v1(before, after, writer, roster);
+    begin_new_chain_members_v1(before, after, writer, roster);
+}
+
+#[verifier::spinoff_prover]
+pub proof fn begin_new_chain_links_v1(before: JournalContentsV1, after: JournalContentsV1, writer: WriterReferenceV1, roster: Seq<AllocationWriteV1>)
+    requires begin_shape_v1(before, writer, roster), begin_final_views_v1(before, after, writer, roster),
+    ensures forall|i: int| 0 <= i < roster.len()
+        ==> #[trigger] chain_link_v1(after, writer, begin_chain_v1(before, roster), i),
+{
+    assert forall|i: int| 0 <= i < roster.len() implies {
+        &&& (#[trigger] begin_plan_v1(before, roster, i)).member_slot < after.members@.len()
+        &&& after.members@[begin_plan_v1(before, roster, i).member_slot as int] == Some(begin_member_v1(before, writer, roster, i))
+    } by {
+        assert(before.scratch@[i].is_none());
+    }
+    assert forall|i: int| 0 < i < roster.len() implies
+        roster[i - 1].allocation.key.local < (#[trigger] roster[i]).allocation.key.local by {
+        assert(roster[i - 1].allocation.slot != roster[i].allocation.slot);
+    }
+    begin_new_chain_link_details_v1(before, after, writer, roster);
+}
+
+#[verifier::spinoff_prover]
+pub proof fn begin_surviving_chain_links_v1(before: JournalContentsV1, after: JournalContentsV1, other: WriterReferenceV1, chain: Seq<usize>)
+    requires retained_chain_v1(before, other, chain), after.members@.len() == before.members@.len(),
+        forall|m: int| 0 <= m < before.members@.len() && (#[trigger] before.members@[m]).is_some()
+            ==> after.members@[m] == before.members@[m],
+    ensures forall|i: int| 0 <= i < chain.len() ==> #[trigger] chain_link_v1(after, other, chain, i),
+{
     assert forall|i: int| 0 <= i < chain.len() implies
         after.members@[chain[i] as int] == before.members@[chain[i] as int] by {
         assert(chain_link_v1(before, other, chain, i));
@@ -233,16 +273,81 @@ pub proof fn begin_surviving_chain_v1(before: JournalContentsV1, after: JournalC
         reveal(chain_link_v1);
         if i > 0 { assert(chain_link_v1(before, other, chain, i - 1)); }
     }
+}
+
+#[verifier::spinoff_prover]
+pub proof fn begin_surviving_chain_member_details_v1(before: JournalContentsV1, after: JournalContentsV1,
+    writer: WriterReferenceV1, other: WriterReferenceV1, selected: Seq<usize>, chain: Seq<usize>)
+    requires before.members@.len() == after.members@.len(), writer.slot != other.slot,
+        forall|m: int| 0 <= m < after.members@.len() && selected.contains(m as usize)
+            && (#[trigger] after.members@[m]).is_some() ==> same_producer_v1(after.members@[m].unwrap().writer, writer),
+        forall|m: int| 0 <= m < after.members@.len() && !selected.contains(m as usize)
+            ==> (#[trigger] after.members@[m]) == before.members@[m],
+        forall|m: int| 0 <= m < before.members@.len() && (#[trigger] before.members@[m]).is_some()
+            && same_producer_v1(before.members@[m].unwrap().writer, other) ==> chain.contains(m as usize),
+    ensures forall|m: int| 0 <= m < after.members@.len() && (#[trigger] after.members@[m]).is_some()
+        && same_producer_v1(after.members@[m].unwrap().writer, other) ==> chain.contains(m as usize),
+{
     assert forall|m: int| 0 <= m < after.members@.len() && (#[trigger] after.members@[m]).is_some()
         && same_producer_v1(after.members@[m].unwrap().writer, other) implies chain.contains(m as usize) by {
-        if begin_chain_v1(before, roster).contains(m as usize) {
-            let i = choose|i: int| 0 <= i < roster.len() && begin_chain_v1(before, roster)[i] == m;
-            assert(after.members@[m] == Some(begin_member_v1(before, writer, roster, i)));
+        if selected.contains(m as usize) {
+            assert(same_producer_v1(after.members@[m].unwrap().writer, writer));
         } else {
             assert(before.members@[m] == after.members@[m]);
             assert(same_producer_v1(before.members@[m].unwrap().writer, other));
         }
     }
+}
+
+#[verifier::spinoff_prover]
+pub proof fn begin_surviving_chain_selected_v1(before: JournalContentsV1, after: JournalContentsV1, writer: WriterReferenceV1, roster: Seq<AllocationWriteV1>)
+    requires begin_final_views_v1(before, after, writer, roster), after.members@.len() <= usize::MAX,
+    ensures forall|m: int| 0 <= m < after.members@.len() && begin_chain_v1(before, roster).contains(m as usize)
+        && (#[trigger] after.members@[m]).is_some() ==> same_producer_v1(after.members@[m].unwrap().writer, writer),
+{
+    hide(begin_final_views_v1);
+    let selected = begin_chain_v1(before, roster);
+    assert forall|m: int| 0 <= m < after.members@.len() && selected.contains(m as usize)
+        && (#[trigger] after.members@[m]).is_some() implies same_producer_v1(after.members@[m].unwrap().writer, writer) by {
+        let i = choose|i: int| 0 <= i < roster.len() && selected[i] == m;
+        assert(m == m as usize);
+        assert(begin_plan_v1(before, roster, i).member_slot == m);
+        assert(after.members@[m] == Some(begin_member_v1(before, writer, roster, i))) by {
+            reveal(begin_final_views_v1);
+        }
+    }
+}
+
+#[verifier::spinoff_prover]
+pub proof fn begin_surviving_chain_members_v1(before: JournalContentsV1, after: JournalContentsV1, writer: WriterReferenceV1, roster: Seq<AllocationWriteV1>,
+    other: WriterReferenceV1, chain: Seq<usize>)
+    requires begin_shape_v1(before, writer, roster), begin_final_views_v1(before, after, writer, roster),
+        retained_chain_v1(before, other, chain), after.members@.len() <= usize::MAX,
+    ensures forall|m: int| 0 <= m < after.members@.len() && (#[trigger] after.members@[m]).is_some()
+        && same_producer_v1(after.members@[m].unwrap().writer, other) ==> chain.contains(m as usize),
+{
+    assert(other.slot != writer.slot);
+    let selected = begin_chain_v1(before, roster);
+    begin_surviving_chain_selected_v1(before, after, writer, roster);
+    begin_surviving_chain_member_details_v1(before, after, writer, other, selected, chain);
+}
+
+#[verifier::spinoff_prover]
+pub proof fn begin_surviving_chain_v1(before: JournalContentsV1, after: JournalContentsV1, writer: WriterReferenceV1, roster: Seq<AllocationWriteV1>,
+    other: WriterReferenceV1, chain: Seq<usize>)
+    requires pending_custody_v1(before), begin_shape_v1(before, writer, roster), begin_final_views_v1(before, after, writer, roster),
+        begin_success_relation_v1(before, after, writer, roster), retained_chain_v1(before, other, chain),
+    ensures retained_chain_v1(after, other, chain),
+{
+    hide(pending_custody_v1);
+    hide(begin_members_prefix_v1);
+    hide(begin_allocations_prefix_v1);
+    begin_retained_storage_v1(before, after, writer, roster);
+    assert(other.slot != writer.slot);
+    assert(after.writers@[other.slot as int] == before.writers@[other.slot as int]);
+    begin_surviving_chain_links_v1(before, after, other, chain);
+    assert(after.members@.len() <= usize::MAX) by { reveal(pending_custody_v1); }
+    begin_surviving_chain_members_v1(before, after, writer, roster, other, chain);
 }
 
 #[verifier::spinoff_prover]
