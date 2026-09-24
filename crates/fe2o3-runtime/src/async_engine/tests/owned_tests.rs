@@ -257,7 +257,7 @@ fn start_with_config(
 }
 
 fn join_command<R>(
-    future: RuntimeAsyncCommandFutureV1<R>,
+    future: impl Future<Output = Result<R, RuntimeAsyncEngineCallErrorV1>>,
 ) -> Result<R, RuntimeAsyncEngineCallErrorV1> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut future = Box::pin(future);

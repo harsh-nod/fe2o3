@@ -186,6 +186,15 @@ progress on the owner thread, not native queue-side scheduling or a hardware
 liveness proof. Only Send-capable backends such as Worker V4/V5 can cross the
 engine thread boundary; direct KFD owners remain deliberately thread-affine.
 
+The owner-operation engine also supports [early dependency-event receipts](runtime-async-operation-events-v1.md)
+for frozen typed launches, same-device copies and directed peer copies. One
+shared operation driver performs submission, event recording and observation on
+separate advances; two bounded reply cells separate event identity from final
+completion. Event recording does not grant completion or permit replay after an
+error. Pending directed chains can be composed through receipts without adding
+a second graph scheduler or weakening single-device graph identities. Input
+events must remain live through every consumer's admission, not just enqueue.
+
 `query_stream` aggregates every retained submission by typed status and reports
 the first failure deterministically by submission identity. `synchronize_stream`
 waits once for each pending submission using one shared monotonic deadline and

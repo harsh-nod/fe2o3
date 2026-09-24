@@ -240,6 +240,25 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             Box::new(move |context| request.with(|r| r.submit(context))),
         )
     }
+
+    /// Frozen, payload-budgeted typed launch with an early dependency event and
+    /// independent tracked completion. Recording has its own owner advance;
+    /// event success does not grant completion or change launch authority.
+    pub fn enqueue_launch_with_event<A: RuntimeArgumentsV1>(
+        &self,
+        request: RuntimeAsyncLaunchRequestV1<A>,
+    ) -> Result<RuntimeAsyncEventOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        if self.observer.rejects_async_enqueue() {
+            return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+        }
+        let stream = request.stream;
+        let bytes = request.snapshot_bytes();
+        let request = self.observer.snapshot_budget.charge(request, bytes)?;
+        self.enqueue_observed_event_operation(
+            stream,
+            Box::new(move |context| request.with(|r| r.submit(context))),
+        )
+    }
 }
 
 #[cfg(test)]

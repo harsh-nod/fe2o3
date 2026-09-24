@@ -358,3 +358,230 @@ fn directed_async_background_non_send_owner_progresses_and_cleans_up() {
     );
     assert!(state.lock().unwrap().flush_calls.is_empty());
 }
+
+#[test]
+fn early_event_current_thread_non_send_owner_records_before_completion() {
+    let state = Arc::new(Mutex::new(MockState {
+        peer_devices: true,
+        ..MockState::default()
+    }));
+    let trace = Arc::new(Mutex::new(OwnerTrace::default()));
+    let (mut engine, handle) = RuntimeAsyncCurrentThreadOwnedEngineV1::new_with_progress(
+        || {
+            RuntimeContextV1::open_with_version_journal_v1(
+                ThreadBoundBackend {
+                    inner: MockBackend {
+                        state: state.clone(),
+                    },
+                    owner: thread::current().id(),
+                    local: Rc::new(Cell::new(0)),
+                    trace: trace.clone(),
+                },
+                16,
+                8,
+            )
+        },
+        RuntimeAsyncEngineConfigV1::default(),
+        RuntimeAsyncProgressConfigV1::default(),
+    )
+    .unwrap();
+    let command = handle.observer().enqueue_with_context(seed).unwrap();
+    let (stream, source, destination, parent) =
+        current_thread_tests::drive(&mut engine, command).unwrap();
+    let early = handle
+        .directed_peer_copy_with_event(stream, source, destination, vec![parent])
+        .unwrap();
+    let event = current_thread_tests::drive(&mut engine, early.event)
+        .unwrap()
+        .unwrap();
+    let command = handle
+        .observer()
+        .enqueue_with_context(move |context| {
+            assert_eq!(
+                context.query_event(event).unwrap(),
+                RuntimeCompletionStatusV1::Pending
+            );
+            context.release_event(parent).unwrap();
+        })
+        .unwrap();
+    current_thread_tests::drive(&mut engine, command).unwrap();
+    for status in state.lock().unwrap().statuses.values_mut() {
+        *status = BackendPollV1::Succeeded;
+    }
+    assert_eq!(
+        current_thread_tests::drive(&mut engine, early.operation)
+            .unwrap()
+            .observation
+            .unwrap(),
+        RuntimeCompletionStatusV1::Succeeded
+    );
+    assert_eq!(
+        engine.shutdown().disposition,
+        RuntimeAsyncOwnedDispositionV1::Released
+    );
+    let trace = trace.lock().unwrap();
+    assert!(
+        trace
+            .calls
+            .iter()
+            .all(|(_, owner)| *owner == thread::current().id())
+    );
+    assert_eq!(
+        trace
+            .calls
+            .iter()
+            .filter(|(name, _)| *name == "record_event_v1")
+            .count(),
+        2
+    );
+    assert!(state.lock().unwrap().flush_calls.is_empty());
+    assert_eq!(handle.observer().reply_cells_in_use(), 0);
+}
+
+#[test]
+fn early_event_background_non_send_owner_records_before_completion() {
+    let state = Arc::new(Mutex::new(MockState {
+        peer_devices: true,
+        ..MockState::default()
+    }));
+    let trace = Arc::new(Mutex::new(OwnerTrace::default()));
+    let (engine, handle) = start(state.clone(), trace.clone());
+    let (stream, source, destination, parent) =
+        join_command(handle.observer().enqueue_with_context(seed).unwrap()).unwrap();
+    let early = handle
+        .directed_peer_copy_with_event(stream, source, destination, vec![parent])
+        .unwrap();
+    let event = join_command(early.event).unwrap().unwrap();
+    join_command(
+        handle
+            .observer()
+            .enqueue_with_context(move |context| {
+                assert_eq!(
+                    context.query_event(event).unwrap(),
+                    RuntimeCompletionStatusV1::Pending
+                );
+                context.release_event(parent).unwrap();
+            })
+            .unwrap(),
+    )
+    .unwrap();
+    for status in state.lock().unwrap().statuses.values_mut() {
+        *status = BackendPollV1::Succeeded;
+    }
+    assert_eq!(
+        join_command(early.operation).unwrap().observation.unwrap(),
+        RuntimeCompletionStatusV1::Succeeded
+    );
+    assert_eq!(
+        engine.shutdown().unwrap().disposition,
+        RuntimeAsyncOwnedDispositionV1::Released
+    );
+    let trace = trace.lock().unwrap();
+    assert!(
+        trace
+            .calls
+            .iter()
+            .all(|(_, owner)| *owner != thread::current().id())
+    );
+    assert_eq!(
+        trace
+            .calls
+            .iter()
+            .filter(|(name, _)| *name == "record_event_v1")
+            .count(),
+        2
+    );
+    assert!(state.lock().unwrap().flush_calls.is_empty());
+    assert_eq!(handle.observer().reply_cells_in_use(), 0);
+}
+
+#[test]
+fn early_event_drain_keeps_events_and_never_invents_unsubmitted_descendants() {
+    for completed in [false, true] {
+        let state = Arc::new(Mutex::new(MockState {
+            peer_devices: true,
+            ..MockState::default()
+        }));
+        let trace = Arc::new(Mutex::new(OwnerTrace::default()));
+        let (mut engine, handle) = RuntimeAsyncCurrentThreadOwnedEngineV1::new_with_progress(
+            || {
+                RuntimeContextV1::open_with_version_journal_v1(
+                    ThreadBoundBackend {
+                        inner: MockBackend {
+                            state: state.clone(),
+                        },
+                        owner: thread::current().id(),
+                        local: Rc::new(Cell::new(0)),
+                        trace: trace.clone(),
+                    },
+                    16,
+                    8,
+                )
+            },
+            RuntimeAsyncEngineConfigV1::new(8, 8, 1, 1, Duration::from_millis(1)).unwrap(),
+            RuntimeAsyncProgressConfigV1::new(8, 1).unwrap(),
+        )
+        .unwrap();
+        let command = handle.observer().enqueue_with_context(seed).unwrap();
+        let (stream, source, destination, parent) =
+            current_thread_tests::drive(&mut engine, command).unwrap();
+        let early = handle
+            .directed_peer_copy_with_event(stream, source, destination, vec![parent])
+            .unwrap();
+        let event = current_thread_tests::drive(&mut engine, early.event)
+            .unwrap()
+            .unwrap();
+        if completed {
+            for status in state.lock().unwrap().statuses.values_mut() {
+                *status = BackendPollV1::Succeeded;
+            }
+        }
+        let drain = handle.begin_drain(if completed { 32 } else { 1 }).unwrap();
+        assert!(matches!(
+            handle.directed_peer_copy_with_event(stream, source, destination, vec![event]),
+            Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
+        ));
+        assert_eq!(handle.observer().reply_cells_in_use(), 1);
+        assert_eq!(handle.observer().snapshot_bytes_in_use(), 0);
+        let report = current_thread_tests::drive(&mut engine, drain).unwrap();
+        assert_eq!(
+            report.outcome,
+            if completed {
+                RuntimeAsyncDrainOutcomeV1::Quiescent
+            } else {
+                RuntimeAsyncDrainOutcomeV1::BudgetExhausted
+            }
+        );
+        assert_eq!(report.retained_submissions.total_submissions, 2);
+        assert_eq!(
+            report.retained_submissions.succeeded,
+            if completed { 2 } else { 0 }
+        );
+        assert_eq!(state.lock().unwrap().event_release_calls, 0);
+        assert_eq!(state.lock().unwrap().release_calls, 0);
+        let shutdown = engine.shutdown();
+        assert_eq!(
+            shutdown.disposition,
+            if completed {
+                RuntimeAsyncOwnedDispositionV1::Released
+            } else {
+                RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit
+            }
+        );
+        if completed {
+            assert_eq!(
+                join_command(early.operation).unwrap().observation.unwrap(),
+                RuntimeCompletionStatusV1::Succeeded
+            );
+            assert_eq!(state.lock().unwrap().event_release_calls, 2);
+        } else {
+            assert!(matches!(
+                join_command(early.operation),
+                Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
+            ));
+            assert_eq!(shutdown.cleanup.unwrap().retained().events, 2);
+            assert_eq!(state.lock().unwrap().event_release_calls, 0);
+        }
+        assert_eq!(handle.observer().reply_cells_in_use(), 0);
+    }
+}

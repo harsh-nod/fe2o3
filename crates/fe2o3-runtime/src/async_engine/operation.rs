@@ -14,6 +14,8 @@ use generated_operation::completion_contract::{CompletionClassV1, classify_compl
 
 mod factory;
 pub(super) use factory::{EngineOperationFactoryV1, stop_reply};
+mod event;
+pub use event::*;
 mod progress;
 use progress::{DirectedPeerProgressV1, ObservedProgressV1, OperationProgressV1};
 
@@ -377,6 +379,7 @@ struct Operation<B: RuntimeBackendV1, A, P> {
     submit: Option<Submit<B, A>>,
     submission: Option<RuntimeSubmissionV1<A>>,
     reply: Option<owned::Reply<RuntimeAsyncOperationResultV1<A, B::Error>>>,
+    event_reply: Option<event::EventReplyV1<B::Error>>,
     rejected_observations: u64,
     last_rejected_observation: Option<B::Error>,
     control: Option<RuntimeAsyncOperationControlV1>,
@@ -402,6 +405,11 @@ impl<B: RuntimeBackendV1, A, P> Operation<B, A, P> {
 impl<B: RuntimeBackendV1, A, P> Drop for Operation<B, A, P> {
     fn drop(&mut self) {
         factory::stop_reply(
+            &mut self.event_reply,
+            self.control.as_ref(),
+            RuntimeAsyncEngineCallErrorV1::EngineStopped,
+        );
+        factory::stop_reply(
             &mut self.reply,
             self.control.as_ref(),
             RuntimeAsyncEngineCallErrorV1::EngineStopped,
@@ -423,7 +431,7 @@ impl<B: RuntimeBackendV1, A, P: OperationProgressV1<B, A>> EngineOperationV1<B>
                     } else {
                         RuntimeAsyncEngineCallErrorV1::EngineStopped
                     };
-                factory::stop_reply(&mut self.reply, self.control.as_ref(), error);
+                self.reject(error);
                 return true;
             }
             match submit(context) {
@@ -434,6 +442,11 @@ impl<B: RuntimeBackendV1, A, P: OperationProgressV1<B, A>> EngineOperationV1<B>
                     }
                 }
                 Err(error) => {
+                    if let Some(mut reply) = self.event_reply.take() {
+                        reply.complete(Ok(Err(
+                            RuntimeAsyncOperationEventErrorV1::SubmissionUnavailable,
+                        )));
+                    }
                     self.finish(Err(error));
                     return true;
                 }
@@ -444,6 +457,15 @@ impl<B: RuntimeBackendV1, A, P: OperationProgressV1<B, A>> EngineOperationV1<B>
             .submission
             .as_mut()
             .expect("accepted operation retains submission");
+        if self.event_reply.is_some() {
+            // Keep both replies and the submission rooted across a backend panic.
+            // Recording has its own advance; it never also polls or flushes.
+            let result = context
+                .record_event(submission)
+                .map_err(RuntimeAsyncOperationEventErrorV1::RecordingFailed);
+            self.event_reply.take().unwrap().complete(Ok(result));
+            return false;
+        }
         let observation = match P::observe(context, submission) {
             Ok(_) => context
                 .query_submission(submission)
@@ -488,6 +510,7 @@ impl<B: RuntimeBackendV1, A, P: OperationProgressV1<B, A>> EngineOperationV1<B>
             RuntimeAsyncEngineCallErrorV1::EngineStopped
                 | RuntimeAsyncEngineCallErrorV1::CommandPanicked
         );
+        factory::stop_reply(&mut self.event_reply, self.control.as_ref(), error);
         factory::stop_reply(&mut self.reply, self.control.as_ref(), error);
         if discard_unissued {
             // This ordinary driver retains only an unissued host callback here;
@@ -555,11 +578,19 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         }
         let (reply, future) = owned::Reply::budgeted_pair(&self.observer.reply_budget)?;
         let factory = factory::OperationFactoryV1::<B, A, P>::new(stream, submit, reply, control);
+        self.send_operation_factory(Box::new(factory))?;
+        Ok(future)
+    }
+
+    fn send_operation_factory(
+        &self,
+        factory: Box<dyn EngineOperationFactoryV1<B>>,
+    ) -> Result<(), RuntimeAsyncEngineCallErrorV1> {
         match self
             .observer
-            .try_send_command(RuntimeAsyncEngineCommandV1::Operation(Box::new(factory)))
+            .try_send_command(RuntimeAsyncEngineCommandV1::Operation(factory))
         {
-            Ok(()) => Ok(future),
+            Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull),
             Err(TrySendError::Disconnected(_)) => Err(RuntimeAsyncEngineCallErrorV1::EngineStopped),
         }

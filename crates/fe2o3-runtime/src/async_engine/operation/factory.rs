@@ -24,6 +24,7 @@ pub(super) struct OperationFactoryV1<B: RuntimeBackendV1, A, P> {
     stream: RuntimeStreamIdV1,
     submit: Option<Submit<B, A>>,
     reply: Option<owned::Reply<RuntimeAsyncOperationResultV1<A, B::Error>>>,
+    event_reply: Option<event::EventReplyV1<B::Error>>,
     control: Option<RuntimeAsyncOperationControlV1>,
     progress: core::marker::PhantomData<fn() -> P>,
 }
@@ -39,9 +40,15 @@ impl<B: RuntimeBackendV1, A, P> OperationFactoryV1<B, A, P> {
             stream,
             submit: Some(submit),
             reply: Some(reply),
+            event_reply: None,
             control,
             progress: core::marker::PhantomData,
         }
+    }
+
+    pub(super) fn with_event(mut self, reply: event::EventReplyV1<B::Error>) -> Self {
+        self.event_reply = Some(reply);
+        self
     }
 }
 
@@ -54,6 +61,7 @@ impl<B: RuntimeBackendV1 + 'static, A: 'static, P: OperationProgressV1<B, A>>
             submit: Some(self.submit.take().expect("factory is materialized once")),
             submission: None,
             reply: self.reply.take(),
+            event_reply: self.event_reply.take(),
             rejected_observations: 0,
             last_rejected_observation: None,
             control: self.control.take(),
@@ -62,6 +70,7 @@ impl<B: RuntimeBackendV1 + 'static, A: 'static, P: OperationProgressV1<B, A>>
     }
 
     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {
+        stop_reply(&mut self.event_reply, self.control.as_ref(), error);
         stop_reply(&mut self.reply, self.control.as_ref(), error);
     }
 
@@ -72,6 +81,11 @@ impl<B: RuntimeBackendV1 + 'static, A: 'static, P: OperationProgressV1<B, A>>
 
 impl<B: RuntimeBackendV1, A, P> Drop for OperationFactoryV1<B, A, P> {
     fn drop(&mut self) {
+        stop_reply(
+            &mut self.event_reply,
+            self.control.as_ref(),
+            RuntimeAsyncEngineCallErrorV1::EngineStopped,
+        );
         stop_reply(
             &mut self.reply,
             self.control.as_ref(),

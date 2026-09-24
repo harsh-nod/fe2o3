@@ -2029,6 +2029,11 @@ mod tests {
         issues: Vec<(u64, u64, Vec<u8>, Vec<crate::BackendBindingV1>)>,
         submission_dependencies: HashMap<u64, Vec<u64>>,
         event_sources: HashMap<u64, u64>,
+        event_record_calls: usize,
+        event_release_calls: usize,
+        event_record_failures: VecDeque<RuntimeBackendFailureV1<MockError>>,
+        panic_on_event_record: bool,
+        event_record_override: Option<u64>,
         complete_on_flush: bool,
         copy_issues: Vec<(u64, BackendMemoryRegionV1, BackendMemoryRegionV1, Vec<u64>)>,
         submit_failures: VecDeque<RuntimeBackendFailureV1<MockError>>,
@@ -2240,7 +2245,22 @@ mod tests {
             _stream: u64,
             submission: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-            let event = self.next();
+            let panic = {
+                let mut state = self.state.lock().unwrap();
+                state.event_record_calls += 1;
+                if let Some(error) = state.event_record_failures.pop_front() {
+                    return Err(error);
+                }
+                state.panic_on_event_record
+            };
+            assert!(!panic, "event record panic");
+            let next = self.next();
+            let event = self
+                .state
+                .lock()
+                .unwrap()
+                .event_record_override
+                .unwrap_or(next);
             self.state
                 .lock()
                 .unwrap()
@@ -2253,6 +2273,7 @@ mod tests {
             &mut self,
             _event: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.state.lock().unwrap().event_release_calls += 1;
             Ok(())
         }
 

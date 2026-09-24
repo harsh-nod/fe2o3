@@ -7,6 +7,7 @@ use crate::{
 type Submission = crate::RuntimeSubmissionV1<RuntimeDirectedScalarPeerCopyV1>;
 type CopyFuture = RuntimeAsyncOperationFutureV1<RuntimeDirectedScalarPeerCopyV1, MockError>;
 
+mod early_event;
 mod lifecycle;
 mod scheduling;
 

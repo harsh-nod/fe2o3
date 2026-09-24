@@ -1,5 +1,21 @@
 # Current Runtime Swarm Work Orders
 
+Latest async API qualification (2026-09-24): the
+[early-event CPU packet](evidence/dev-async-operation-events-cpu-2026-09-24/README.md)
+adds separate dependency-event and final-observation futures for frozen typed
+launches, ordinary async copies and directed peer copies. The shared rooted
+driver records events on a separate advance; directed operations gain no
+implicit flush. Both reply credits precede command admission. Enqueue alone
+does not admit a consumer, and event success is not completion or retry
+authority. Seventeen new regressions cover pending diamonds, bounds, Stop,
+errors/panics, non-Send owner modes and drain. GNU and musl each pass 1,358 tests
+with twenty hardware-only ignores; 46 doctests, formatting, strict Clippy and
+3,906 unchanged inputs pass. The owned 661-MiB cache is removed, retaining raw
+logs. No native or performance campaign is added. Next are native XGMI backing
+budget integration and broader async/native qualification; generated execution,
+aggregate accounting and production-code proof correspondence remain open.
+Native R125, Admission R118B, Resources R116/V3 and A1/A2 acceptance are unchanged.
+
 Latest native qualification (2026-09-24): the
 [directed owner diamond](evidence/dev-xgmi-directed-owner-native-mi300x-2026-09-24/README.md)
 passes on GPUs 5/6 from signed `87a9a4c90`, using the unchanged failed witness.

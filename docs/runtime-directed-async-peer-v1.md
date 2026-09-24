@@ -24,10 +24,13 @@ reply/command/operation admission. Live Context identities, ranges, producer
 events and journal reservations are checked on the owner, not at enqueue time.
 Distinct events naming the same producer therefore reject at Context admission.
 
-The result exposes the submission only with its final observation. This does
-not add an early-submission or early-event API. A pending producer graph may be
-constructed through owner Context commands and its consumer then driven by the
-async adapter. General queued graph composition remains a separate A2 boundary.
+The original methods expose the submission only with its final observation.
+The additive [early-event API](runtime-async-operation-events-v1.md),
+`directed_peer_copy_with_event`, returns an independently budgeted exact event
+receipt before final observation. Callers can compose pending directed chains
+and diamonds through those receipts. It reuses this operation driver and adds
+a separate event-recording advance, not a second scheduler. General admitted
+multi-device graph composition remains a separate A2/A3 boundary.
 
 ## Progress
 

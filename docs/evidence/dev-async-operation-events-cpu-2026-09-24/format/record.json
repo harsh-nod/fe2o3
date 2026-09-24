@@ -1,0 +1,15 @@
+{
+  "command": [
+    "cargo",
+    "fmt",
+    "-p",
+    "fe2o3-runtime",
+    "--",
+    "--check"
+  ],
+  "started_ns": 1790242559565355798,
+  "process_group": 1185164,
+  "group_absent": true,
+  "finished_ns": 1790242565474090634,
+  "status": 0
+}
