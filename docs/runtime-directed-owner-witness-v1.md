@@ -1,9 +1,11 @@
 # Native Directed Owner Witness
 
-Status: [CPU-qualified development candidate](evidence/dev-directed-owner-witness-cpu-2026-09-24/README.md);
-native execution is not yet qualified. GNU and musl each pass six example
-tests; fourteen Python tests, compiled CLI checks, formatting and strict Clippy
-pass on unchanged inputs. No production runtime implementation changes here.
+Status: [the exact native diamond passes](evidence/dev-xgmi-directed-owner-native-mi300x-2026-09-24/README.md)
+after the [shared-source backend correction](runtime-xgmi-shared-source-v1.md).
+The earlier refusal remains recorded and the witness itself is unchanged.
+GNU and musl each pass six example tests; fourteen Python tests, compiled CLI
+checks, formatting and strict Clippy pass. This is not general native or A1/A2
+qualification.
 
 The example `gfx942-runtime-xgmi-directed-owner-smoke` exercises the
 [directed async adapter](runtime-directed-async-peer-v1.md) against the native
@@ -75,7 +77,7 @@ before marker-owned cleanup, followed by independent process/path absence.
 An admission refusal is retained, not replaced by a later idle sample.
 
 Run only on a freshly admitted pair on `mi300x`; idle observation does not confer
-exclusive reservation. A passing witness would qualify only this exact native
+exclusive reservation. The captured passing witness qualifies only this exact native
 graph and ordinary cleanup, not fault recovery, physical compute/copy overlap,
-executable refinement, matched bandwidth or A1/A2 completion. A separate sealed
-native packet and offline verifier are required before claiming that result.
+executable refinement, matched bandwidth or A1/A2 completion. Its separate sealed
+native packet and offline verifier preserve that scope.

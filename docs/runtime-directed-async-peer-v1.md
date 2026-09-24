@@ -66,21 +66,23 @@ permits disposal or retains the owner for process teardown.
 
 ## Remaining Gates
 
-Native pending-input chains, physical copy publication/progress, fault cleanup,
-executable Rust/model refinement, aggregate memory accounting and matched
-HIP/HSA measurements remain separate. CPU fixtures are not native execution or
-proof evidence. This adapter alone does not close A1/A2 or issue #182.
+The [exact native owner diamond](evidence/dev-xgmi-directed-owner-native-mi300x-2026-09-24/README.md)
+now validates pending inputs, physical copies, complete buffers and ordinary
+cleanup. Broader native graph shapes, fault cleanup, executable Rust/model
+refinement, aggregate memory accounting and matched HIP/HSA measurements remain
+separate. CPU fixtures are not native execution or proof evidence. This adapter
+alone does not close A1/A2 or issue #182.
 
-### Next Native Witness
+### Native Witness
 
-The [new witness candidate](runtime-directed-owner-witness-v1.md) is a sibling
+The [native witness](runtime-directed-owner-witness-v1.md) is a sibling
 of `gfx942-runtime-xgmi-segments-owner-smoke.rs`. Preserve
 that historical example and parser: they deliberately qualify refusal of
-pending dataflow, not this newly admitted profile. Reuse the existing
-`xgmi_segments_owner_campaign.py` / `xgmi_segments_owner_native.py` controller
-and its strict, separately recorded two-endpoint observations and owned cleanup.
+pending dataflow, not this newly admitted profile. The separate
+`xgmi_directed_owner_campaign.py` / `xgmi_directed_owner_native.py` controller
+reuses strict, separately recorded two-endpoint observations and owned cleanup.
 
-The new witness should use five 64-KiB device-local allocations on two admitted
+The witness uses five 64-KiB device-local allocations on two admitted
 GPUs and four directed copies, each with a distinct destination-owned stream.
 A root copy feeds two reverse-direction branches; the final forward copy reads
 one branch and depends on both. This is a dependency diamond, not a two-source

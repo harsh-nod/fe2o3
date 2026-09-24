@@ -1,0 +1,11 @@
+{
+  "command": [
+    "cargo",
+    "-V"
+  ],
+  "started_ns": 1790240769724864313,
+  "process_group": 878528,
+  "group_absent": true,
+  "finished_ns": 1790240769743271347,
+  "status": 0
+}

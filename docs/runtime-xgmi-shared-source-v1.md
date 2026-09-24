@@ -64,5 +64,8 @@ The [CPU packet](evidence/dev-xgmi-shared-source-cpu-2026-09-24/README.md) passe
 1,341 runtime tests on each GNU/musl target with twenty hardware-only ignores,
 46 doctests, six example tests per target, fourteen Python tests and strict
 static checks. All sixteen added regressions pass on each runtime target.
-A fresh signed native diamond remains required. No formal refinement, native
-fault, aggregate-memory or matched HIP/HSA performance claim follows.
+The [fresh signed native diamond](evidence/dev-xgmi-directed-owner-native-mi300x-2026-09-24/README.md)
+also passes its four-copy, complete-buffer and Released-cleanup oracles, plus all
+six host endpoints and external owned cleanup. The unchanged workload is scoped
+to that exact graph. No formal refinement, native fault, aggregate-memory or
+matched HIP/HSA performance claim follows.

@@ -1,0 +1,23 @@
+[
+  {
+    "result": {
+      "checked_bytes": 327680,
+      "dependency_edges": 4,
+      "directed_copies": 4,
+      "events": "released-before-progress",
+      "exclusive_reservation": false,
+      "formal_refinement": false,
+      "native_execution": true,
+      "owned_cleanup": true,
+      "pending_dataflow": "supported",
+      "performance_acceptance": false,
+      "schema": "fe2o3.runtime.xgmi-directed-owner.v1",
+      "unique_ids": [
+        13239087366709656974,
+        1198613695807612694
+      ],
+      "version_journal": true
+    },
+    "trial": "directed-owner"
+  }
+]

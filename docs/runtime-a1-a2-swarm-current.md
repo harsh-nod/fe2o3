@@ -1,5 +1,19 @@
 # Current Runtime Swarm Work Orders
 
+Latest native qualification (2026-09-24): the
+[directed owner diamond](evidence/dev-xgmi-directed-owner-native-mi300x-2026-09-24/README.md)
+passes on GPUs 5/6 from signed `87a9a4c90`, using the unchanged failed witness.
+All four copies succeed with pending inputs, one owner thread and producer events
+released before progress. All 327,680 buffer bytes pass independent payload,
+guard and unchanged-source checks. Runtime shutdown reports Released and complete
+cleanup; all six strict host endpoints, collection, owned remote cleanup and
+separate absence checks pass. Sealed replay and six mutation-test groups pass.
+The original refusal below remains failed. The private checkout and 1.4-GiB
+build cache are removed, with logs/payload retained. This validates the exact
+native diamond and ordinary cleanup, not faults, formal refinement, aggregate
+memory or performance. Native R125, Admission R118B, Resources R116/V3 and A1/A2
+acceptance remain unchanged; broader native graphs and the remaining gates stay open.
+
 Latest native-gap correction (2026-09-24): the
 [shared-source CPU packet](evidence/dev-xgmi-shared-source-cpu-2026-09-24/README.md)
 jointly admits exact directed read/read sharing and selects allocation-disjoint
