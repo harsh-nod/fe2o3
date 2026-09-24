@@ -29,14 +29,41 @@ sizes. This change introduces no new unsafe code or formal-proof claim.
 
 ## Performance Boundary
 
-Allocation reduction is not a measured copy-latency gain. Matched native testing
-must bind signed baseline and candidate sources, identical release settings,
-exact endpoint identities and fresh admission before every process. The planned
-1-MiB, depth-one campaign uses one prime, ten warmups and thirty samples per
-direction. Diagnostic baseline/candidate/candidate/baseline trials are separate
-from reversed-order diagnostics-off trials containing current HIP/HSA controls.
+Allocation reduction is not a demonstrated copy-latency gain. The
+[matched MI300X comparison](evidence/dev-topology-link-scratch-mi300x-2026-09-24/README.md)
+binds signed baseline/candidate sources, separate cold builds, matching release
+settings, exact endpoint identities and fresh admission before every process.
+It uses one MiB at depth one, one prime, ten warmups and thirty samples per
+direction. Diagnostic baseline/candidate/candidate/baseline trials remain
+separate from reversed-order diagnostics-off trials with HIP/HSA controls.
+
+Candidate process/direction p50 summaries span 14.319-14.348 ms, overlapping the
+baseline's 14.305-14.388 ms. HSA spans 30.155-30.806 us and HIP 38.347-38.678 us
+on the declared native API surfaces. No scratch-reuse latency gain is established.
+The independent diagnostic population still attributes approximately 94.6-94.7
+percent of backend time to fresh topology discovery. The initial shared-target
+campaign is retained as rejected history and contributes no timings.
 
 Every process requires complete canaries, explicit teardown and settled/delayed
 endpoint checks. Shared-host observations are not an exclusive reservation.
 Aggregate accounting, broad fault qualification, production executable
 refinement, A1/A2 and HIP/HSA parity remain open.
+
+## Next Performance Work
+
+Qualify matched persistent-hot batches at depths sixteen and thirty-two. The
+KFD aggregate path already batches the full submission roster, but HIP/HSA's
+current hot callbacks access slot zero only. Before relaxing any benchmark depth
+guard, their preparation, enqueue/completion and full source/destination guard
+validation must cover every slot. Enqueue the whole batch before waiting; retain
+distinct streams/signals, slot-qualified patterns and the existing no-host-access
+timed lifecycle. Keep diagnostic modes depth-one scoped until separately extended.
+
+Fresh pair-only topology reads are not a drop-in optimization of the current
+API. `currentness/full.rs` compares a fresh complete `HostTopologySnapshot`
+against both retained snapshots, intentionally detecting unrelated-node drift.
+Generation equality cannot replace property observations under that contract.
+A narrower pair-projection API would need an explicitly versioned predicate,
+new route/currentness model identities, R9/R28 proof coverage, custody auditing
+and hostile mutation tests. Preserve full admission and full batch checks while
+developing that separate contract; do not report projected reads as full audits.

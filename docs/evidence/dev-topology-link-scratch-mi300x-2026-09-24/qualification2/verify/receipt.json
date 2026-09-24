@@ -1,0 +1,24 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-topology-link-scratch-mi300x-2026-09-24/verify.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790257522239905961,
+  "group_absent": true,
+  "pid": 3776256,
+  "started_ns": 1790257516901394920,
+  "stderr_sha256": "5bdeea9aff46b0132a4643ad2c89b26889720ab5afe57a658d1f4343f4844dda",
+  "stdin_sha256": null,
+  "stdout_sha256": "188525bfad26a557ad928919ea54146fc6d1584a4bb2992f0a1b8f32895cd14c",
+  "timeout_seconds": 180
+}

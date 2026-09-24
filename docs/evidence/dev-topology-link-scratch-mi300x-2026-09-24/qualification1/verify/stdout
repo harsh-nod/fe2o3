@@ -1,0 +1,70 @@
+{
+  "native_execution": true,
+  "performance_acceptance": false,
+  "off_process_summaries_ns": [
+    {
+      "trial": "05-candidate-off",
+      "backend": "candidate",
+      "forward_p50_ns": "14336531",
+      "forward_p95_ns": "14449890",
+      "reverse_p50_ns": "14347637",
+      "reverse_p95_ns": "14436010"
+    },
+    {
+      "trial": "06-hsa-off",
+      "backend": "hsa",
+      "forward_p50_ns": "30746",
+      "forward_p95_ns": "31066",
+      "reverse_p50_ns": "30155",
+      "reverse_p95_ns": "30365"
+    },
+    {
+      "trial": "07-hip-off",
+      "backend": "hip",
+      "forward_p50_ns": "38628",
+      "forward_p95_ns": "39789",
+      "reverse_p50_ns": "38678",
+      "reverse_p95_ns": "39319"
+    },
+    {
+      "trial": "08-baseline-off",
+      "backend": "baseline",
+      "forward_p50_ns": "14381406",
+      "forward_p95_ns": "14877988",
+      "reverse_p50_ns": "14387585",
+      "reverse_p95_ns": "14794504"
+    },
+    {
+      "trial": "09-baseline-off",
+      "backend": "baseline",
+      "forward_p50_ns": "14304621",
+      "forward_p95_ns": "14445791",
+      "reverse_p50_ns": "14333043",
+      "reverse_p95_ns": "14465672"
+    },
+    {
+      "trial": "10-hip-off",
+      "backend": "hip",
+      "forward_p50_ns": "38628",
+      "forward_p95_ns": "39229",
+      "reverse_p50_ns": "38347",
+      "reverse_p95_ns": "38908"
+    },
+    {
+      "trial": "11-hsa-off",
+      "backend": "hsa",
+      "forward_p50_ns": "30806",
+      "forward_p95_ns": "31137",
+      "reverse_p50_ns": "30285",
+      "reverse_p95_ns": "30466"
+    },
+    {
+      "trial": "12-candidate-off",
+      "backend": "candidate",
+      "forward_p50_ns": "14331730",
+      "forward_p95_ns": "14471969",
+      "reverse_p50_ns": "14319261",
+      "reverse_p95_ns": "14428534"
+    }
+  ]
+}

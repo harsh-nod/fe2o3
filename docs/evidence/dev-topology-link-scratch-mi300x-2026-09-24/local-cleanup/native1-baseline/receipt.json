@@ -1,0 +1,26 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "-c",
+    "from pathlib import Path; import shutil,sys; p=Path(sys.argv[1]); assert p.is_dir() and not p.is_symlink() and p.resolve()==p; shutil.rmtree(p); assert not p.exists()",
+    "/home/harsh/.codex-tmp/fe2o3-link-scratch-20260924-Ck6Ay3lN/native1/source-baseline"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790257437054810398,
+  "group_absent": true,
+  "pid": 3755640,
+  "started_ns": 1790257436633313474,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}

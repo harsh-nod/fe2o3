@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/home/harsh/.cargo/bin/cargo",
+    "clean",
+    "--manifest-path",
+    "/home/harsh/.codex-tmp/fe2o3-link-scratch-20260924-Ck6Ay3lN/native2/source-baseline/Cargo.toml",
+    "--target-dir",
+    "/home/harsh/.codex-tmp/fe2o3-link-scratch-20260924-Ck6Ay3lN/native2/target-baseline"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790257435129746650,
+  "group_absent": true,
+  "pid": 3755571,
+  "started_ns": 1790257434861870902,
+  "stderr_sha256": "8d3453d9660f0b554332fdd25fa460b37641e91f5877e0b55c472dbcae6b5227",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}
