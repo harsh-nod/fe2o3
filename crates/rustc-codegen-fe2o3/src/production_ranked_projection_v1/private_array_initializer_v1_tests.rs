@@ -39,8 +39,12 @@ fn assert_private_initializer_rows_v1(
     for (component, row) in rows.into_iter().enumerate() {
         assert_eq!(row.semantic_access_ordinal() as usize, component);
         assert!(matches!(
-            root.lowering.kernel().blocks()[row.ranked_block() as usize].operations()
-                [row.ranked_operation() as usize],
+            root.verification
+                .ordinary()
+                .expect("ordinary test root")
+                .kernel()
+                .blocks()[row.ranked_block() as usize]
+                .operations()[row.ranked_operation() as usize],
             ProductionRankedOperationV1::Access {
                 kind: AccessKindAttr::Write,
                 ..
@@ -214,7 +218,11 @@ fn private_array_initializer_missing_row_and_wrong_index_reach_final_relation() 
                         }
                         return;
                     }
-                    let kernel = root.lowering.kernel();
+                    let kernel = root
+                        .verification
+                        .ordinary()
+                        .expect("ordinary test root")
+                        .kernel();
                     let mut changed = 0;
                     let blocks = kernel
                         .blocks()
@@ -246,12 +254,18 @@ fn private_array_initializer_missing_row_and_wrong_index_reach_final_relation() 
                     .unwrap();
                     root.ranked_ir =
                         format_ranked_cfg(changed.function_name(), changed.blocks()).unwrap();
-                    root.lowering = fe2o3_pliron::compile_ranked_kernel_for_lowering_v1(
-                        ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, changed).unwrap(),
-                        ProductionSessionLimitsV1::default(),
-                    )
-                    .unwrap();
-                    assert!(root.lowering.all_mandatory_reports_are_clean());
+                    *ordinary_test_lowering_mut(root) =
+                        fe2o3_pliron::compile_ranked_kernel_for_lowering_v1(
+                            ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, changed).unwrap(),
+                            ProductionSessionLimitsV1::default(),
+                        )
+                        .unwrap();
+                    assert!(
+                        root.verification
+                            .ordinary()
+                            .expect("ordinary test root")
+                            .all_mandatory_reports_are_clean()
+                    );
                 },
             );
             if missing {

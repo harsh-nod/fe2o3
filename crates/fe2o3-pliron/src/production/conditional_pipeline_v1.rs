@@ -289,6 +289,21 @@ struct ConditionalInvocationHistoryV1 {
 }
 
 impl ProductionConditionalPipelineAnalysisV1 {
+    pub(in crate::production) fn into_pending_analysis_v1(
+        self,
+    ) -> ProductionConditionalRankedAnalysisV1 {
+        let Self {
+            first,
+            replay,
+            input,
+            observations,
+            pending,
+            ..
+        } = self;
+        drop((first, replay, input, observations));
+        pending
+    }
+
     pub fn kernel(&self) -> Result<&ProductionRankedKernelV1, ProductionSessionErrorV1> {
         self.pending.kernel()
     }

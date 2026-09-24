@@ -19,7 +19,9 @@ fn source_launch_memory_free_raw_empty_helper_uses_the_normal_projector() {
     assert!(root.access_sources.is_empty());
     assert!(root.executable_effect_sources.is_empty());
     assert!(
-        root.lowering
+        root.verification
+            .ordinary()
+            .expect("ordinary test root")
             .kernel()
             .blocks()
             .iter()
@@ -31,7 +33,9 @@ fn source_launch_memory_free_raw_empty_helper_uses_the_normal_projector() {
     );
     assert!(
         !root
-            .lowering
+            .verification
+            .ordinary()
+            .expect("ordinary test root")
             .kernel()
             .blocks()
             .iter()

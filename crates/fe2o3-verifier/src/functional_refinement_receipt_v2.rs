@@ -479,8 +479,8 @@ fn generate_ranked_functional_refinement_proof_v2(
 
 /// Compiler-derived exact effect formula replayed inside the aggregate proof.
 pub(crate) struct RankedEffectFormulaReplayV2 {
-    lemma: String,
-    symbols: Vec<u32>,
+    lemma: Box<str>,
+    symbols: Box<[u32]>,
 }
 
 impl RankedEffectFormulaReplayV2 {
@@ -501,6 +501,27 @@ pub(crate) fn generate_ranked_effect_formula_replay_v2(
     block_index: usize,
     operation_index: usize,
     lemma_name: &str,
+) -> Result<RankedEffectFormulaReplayV2, FunctionalRefinementVerusExecutionErrorV2> {
+    generate_effect_formula_replay(kernel, block_index, operation_index, lemma_name, false)
+}
+
+/// Conditional composition needs usable equality postconditions, not just a
+/// successful call to a proof whose body contains local assertions.
+pub(crate) fn generate_conditional_effect_formula_replay_v1(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    lemma_name: &str,
+) -> Result<RankedEffectFormulaReplayV2, FunctionalRefinementVerusExecutionErrorV2> {
+    generate_effect_formula_replay(kernel, block_index, operation_index, lemma_name, true)
+}
+
+fn generate_effect_formula_replay(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    lemma_name: &str,
+    export_equalities: bool,
 ) -> Result<RankedEffectFormulaReplayV2, FunctionalRefinementVerusExecutionErrorV2> {
     let operation = kernel
         .blocks()
@@ -537,8 +558,15 @@ pub(crate) fn generate_ranked_effect_formula_replay_v2(
     ]);
     let program = SemanticFormulaProgramV2::build(kernel, &pairs)?;
     Ok(RankedEffectFormulaReplayV2 {
-        lemma: program.render_lemma(&pairs, lemma_name)?,
-        symbols: program.symbols.iter().copied().collect(),
+        lemma: program
+            .render_lemma(&pairs, lemma_name, export_equalities)?
+            .into_boxed_str(),
+        symbols: program
+            .symbols
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
     })
 }
 
@@ -762,7 +790,7 @@ impl SemanticFormulaProgramV2 {
             "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n"
         )
         .map_err(|_| generated_source_limit())?;
-        self.write_lemma(&mut source, pairs, "fe2o3_functional_refinement_v2")?;
+        self.write_lemma(&mut source, pairs, "fe2o3_functional_refinement_v2", false)?;
         source
             .write_str("}\n")
             .map_err(|_| generated_source_limit())?;
@@ -773,9 +801,10 @@ impl SemanticFormulaProgramV2 {
         &self,
         pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
         lemma_name: &str,
+        export_equalities: bool,
     ) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
         let mut source = BoundedVerusSourceV2::default();
-        self.write_lemma(&mut source, pairs, lemma_name)?;
+        self.write_lemma(&mut source, pairs, lemma_name, export_equalities)?;
         Ok(source.into_string())
     }
 
@@ -784,6 +813,7 @@ impl SemanticFormulaProgramV2 {
         source: &mut BoundedVerusSourceV2,
         pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
         lemma_name: &str,
+        export_equalities: bool,
     ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
         write!(
             source,
@@ -793,9 +823,58 @@ impl SemanticFormulaProgramV2 {
         for symbol in &self.symbols {
             write!(source, ", s{symbol}: int").map_err(|_| generated_source_limit())?;
         }
-        source
-            .write_str(") {\n")
+        if export_equalities {
+            source
+                .write_str(")\n        ensures {\n")
+                .map_err(|_| generated_source_limit())?;
+            self.write_definitions(source)?;
+            source
+                .write_str("            true")
+                .map_err(|_| generated_source_limit())?;
+            for (actual, expected) in pairs {
+                let (
+                    ProductionRankedValueV1::Local(actual),
+                    ProductionRankedValueV1::Local(expected),
+                ) = (*actual, *expected)
+                else {
+                    return Err(invalid_ranked_recipe());
+                };
+                write!(source, " && v{} == v{}", actual.get(), expected.get())
+                    .map_err(|_| generated_source_limit())?;
+            }
+            source
+                .write_str("\n        },\n    {\n")
+                .map_err(|_| generated_source_limit())?;
+        } else {
+            source
+                .write_str(") {\n")
+                .map_err(|_| generated_source_limit())?;
+        }
+        self.write_definitions(source)?;
+        for (actual, expected) in pairs {
+            let (ProductionRankedValueV1::Local(actual), ProductionRankedValueV1::Local(expected)) =
+                (*actual, *expected)
+            else {
+                return Err(invalid_ranked_recipe());
+            };
+            writeln!(
+                source,
+                "        assert(v{} == v{});",
+                actual.get(),
+                expected.get()
+            )
             .map_err(|_| generated_source_limit())?;
+        }
+        source
+            .write_str("    }\n\n")
+            .map_err(|_| generated_source_limit())?;
+        Ok(())
+    }
+
+    fn write_definitions(
+        &self,
+        source: &mut BoundedVerusSourceV2,
+    ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
         for identity in &self.order {
             let definition = self
                 .definitions
@@ -849,23 +928,6 @@ impl SemanticFormulaProgramV2 {
             }
             .map_err(|_| generated_source_limit())?;
         }
-        for (actual, expected) in pairs {
-            let (ProductionRankedValueV1::Local(actual), ProductionRankedValueV1::Local(expected)) =
-                (*actual, *expected)
-            else {
-                return Err(invalid_ranked_recipe());
-            };
-            writeln!(
-                source,
-                "        assert(v{} == v{});",
-                actual.get(),
-                expected.get()
-            )
-            .map_err(|_| generated_source_limit())?;
-        }
-        source
-            .write_str("    }\n\n")
-            .map_err(|_| generated_source_limit())?;
         Ok(())
     }
 }
@@ -1478,6 +1540,22 @@ impl Error for FunctionalRefinementVerusExecutionErrorV2 {}
 mod reviewed_host_tests;
 
 #[cfg(test)]
+pub(crate) fn conditional_formula_development_source_v1(wrong_value: bool) -> String {
+    let kind = if wrong_value {
+        dialect_kernel::SemanticBinaryKindAttr::Multiply
+    } else {
+        dialect_kernel::SemanticBinaryKindAttr::Add
+    };
+    let kernel = tests::formula_kernel(kind);
+    let local = |index| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(index));
+    let pairs = [(local(2), local(3))];
+    SemanticFormulaProgramV2::build(&kernel, &pairs)
+        .unwrap()
+        .render_lemma(&pairs, "fe2o3_conditional_development_effect", true)
+        .unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use dialect_kernel::SemanticBinaryKindAttr;
@@ -1594,7 +1672,9 @@ mod tests {
         );
     }
 
-    fn formula_kernel(expected_kind: SemanticBinaryKindAttr) -> ProductionRankedKernelV1 {
+    pub(super) fn formula_kernel(
+        expected_kind: SemanticBinaryKindAttr,
+    ) -> ProductionRankedKernelV1 {
         let lhs = ProductionRankedValueIdV1::new(0);
         let rhs = ProductionRankedValueIdV1::new(1);
         let actual = ProductionRankedValueIdV1::new(2);
@@ -1806,6 +1886,23 @@ mod tests {
         assert!(message.ends_with(" (truncated)"));
         assert!(!message.contains(['\n', '\u{1b}']));
         assert!(message.len() < 2400);
+    }
+
+    #[test]
+    fn conditional_formula_exports_equalities_without_assuming_them() {
+        let kernel = formula_kernel(SemanticBinaryKindAttr::Add);
+        let local = |index| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(index));
+        let pairs = [(local(2), local(3))];
+        let program = SemanticFormulaProgramV2::build(&kernel, &pairs).unwrap();
+        let conditional = program.render_lemma(&pairs, "conditional", true).unwrap();
+        assert!(conditional.contains("ensures {"));
+        assert!(conditional.contains("true && v2 == v3"));
+        assert!(!conditional.contains("requires"));
+        assert_eq!(conditional.matches("let v2: int = v0 + v1;").count(), 2);
+        assert!(conditional.contains("assert(v2 == v3);"));
+        let ordinary = program.render_lemma(&pairs, "ordinary", false).unwrap();
+        assert!(!ordinary.contains("ensures"));
+        assert_eq!(ordinary.matches("let v2: int = v0 + v1;").count(), 1);
     }
 
     #[test]

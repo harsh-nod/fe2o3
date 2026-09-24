@@ -779,8 +779,7 @@ pub(crate) struct ProductionRankedRootProgramV1 {
     kernel_binding: [u8; 32],
     source_rank: u8,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
-    lowering: ProductionRankedKernelLoweringInputV1,
-    effect_receipts: Vec<fe2o3_verifier::InertFunctionalRefinementReceiptSignatureV2>,
+    verification: crate::production_reference_effect_join_v2::conditional::ReferenceRootV1,
     ranked_ir: String,
     access_sources: Vec<ProductionRankedAccessSourceV1>,
     executable_effect_sources: Vec<ProductionRankedExecutableEffectSourceV1>,
@@ -819,24 +818,42 @@ impl ProductionRankedRootProgramV1 {
     }
 
     pub(crate) fn ranked_ir(&self) -> &str {
-        &self.ranked_ir
+        match &self.verification {
+            crate::production_reference_effect_join_v2::conditional::ReferenceRootV1::Conditional(root) => &root.input().ranked_ir,
+            _ => &self.ranked_ir,
+        }
     }
 
     pub(crate) fn function_name(&self) -> &str {
-        self.lowering.kernel().function_name()
+        self.verification.kernel().function_name()
     }
 
     pub(crate) fn bounds_are_clean(&self) -> bool {
-        self.lowering.bounds_report().is_clean()
+        self.verification
+            .ordinary()
+            .is_some_and(|lowering| lowering.bounds_report().is_clean())
     }
 
     pub(crate) fn all_kernel_checks_are_clean(&self) -> bool {
-        self.lowering.all_mandatory_reports_are_clean()
+        self.verification
+            .ordinary()
+            .is_some_and(|lowering| lowering.all_mandatory_reports_are_clean())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn conditional_formula_report_v1(
+        &self,
+    ) -> Option<fe2o3_verifier::ProductionConditionalFormulaReportV1> {
+        match &self.verification {
+            crate::production_reference_effect_join_v2::conditional::ReferenceRootV1::Conditional(root) => Some(root.report()),
+            _ => None,
+        }
     }
 }
 
 /// Move-only ordered roster retaining one exact admitted Rust semantic owner
-/// and every root-specific PLIRON graph that passed mandatory generic checks.
+/// and every root-specific PLIRON graph. Conditional roots remain distinct
+/// from ordinary clean evidence and cannot pass the ordinary finalizer.
 pub(crate) struct ProductionRankedSemanticProgramV1 {
     materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     roots: Box<[ProductionRankedRootProgramV1]>,
@@ -1076,6 +1093,7 @@ impl AuthenticatedRankedVerificationV5 {
 
 #[derive(Debug)]
 pub(crate) enum ProductionRankedVerificationErrorV1 {
+    ConditionalFinalizerRequired { root: u32 },
     RosterMetadata(&'static str),
     RosterIdentity,
     SemanticOwner(ProductionSemanticMirErrorV1),
@@ -1092,6 +1110,10 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
 impl fmt::Display for ProductionRankedVerificationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConditionalFinalizerRequired { root } => write!(
+                formatter,
+                "FE2O3-COND-FINALIZER-001: root {root} retains explicit runtime premises; conditional finalizer required, ordinary V5 attachment forbidden"
+            ),
             Self::RosterMetadata(detail) => {
                 write!(formatter, "ranked roster custody rejected {detail}")
             }
@@ -1133,6 +1155,7 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
 impl std::error::Error for ProductionRankedVerificationErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::ConditionalFinalizerRequired { .. } => None,
             Self::RosterMetadata(_) | Self::RosterIdentity => None,
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
@@ -1674,10 +1697,15 @@ impl ProductionRankedSemanticProgramV1 {
 
         let mut verified_roots = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
+            let lowering = root.verification.ordinary().ok_or(
+                ProductionRankedVerificationErrorV1::ConditionalFinalizerRequired {
+                    root: root.semantic_root.index(),
+                },
+            )?;
             fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
                 semantic_owner,
                 root.semantic_root,
-                &root.lowering,
+                lowering,
                 &root.ranked_ir,
                 &root.access_sources,
                 &root.executable_effect_sources,
@@ -1691,14 +1719,14 @@ impl ProductionRankedSemanticProgramV1 {
                 kernel_binding,
                 source_rank,
                 semantic_u32_induction,
-                lowering,
-                effect_receipts,
+                verification,
                 ranked_ir,
                 access_sources,
                 executable_effect_sources,
                 #[cfg(test)]
                     observed_reference_writes: _,
             } = root;
+            let (lowering, effect_receipts) = verification.into_ordinary()?;
             let verification = authenticate_ranked_root_v5(
                 semantic_owner,
                 &lowering,
@@ -3116,13 +3144,18 @@ pub(crate) mod scalar_emission_capture_v1;
 #[path = "production_ranked_projection_v1/scalar_emission_fixture_v1_tests.rs"]
 mod scalar_emission_fixture_v1_tests;
 
+#[path = "production_ranked_projection_v1/reference_continuation_v1.rs"]
+mod reference_continuation_v1;
+use reference_continuation_v1::ProjectedReferenceRootsV1;
+
 fn project_ranked_roots_v1(
     source: &RankedProjectionSourceV1<'_>,
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
-    project_ranked_roots_with_progress_v1(source, root_inputs, reference_bindings, budget, None)
+    project_ranked_roots_with_progress_v1(source, root_inputs, reference_bindings, budget, None)?
+        .finish(source, budget)
 }
 
 fn project_ranked_roots_with_progress_v1(
@@ -3131,13 +3164,12 @@ fn project_ranked_roots_with_progress_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     mut progress: Option<&mut guarded_source_progress_v1::GuardedSourceProgressV1<'_, '_>>,
-) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
+) -> Result<ProjectedReferenceRootsV1, ProductionRankedProjectionErrorV1> {
     source.require_floor(budget)?;
     source
         .semantic_ssa()
         .verify_replay()
         .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
-    let semantic_owner = source.semantic_ssa().source_owner();
     let semantic = source.semantic_ssa().source_semantic();
     let source_launch_roster = source.source_launch();
     if root_inputs.is_empty()
@@ -3178,7 +3210,7 @@ fn project_ranked_roots_with_progress_v1(
         })
         .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()?;
 
-    with_canonical_assertions_source_budget_v1(source, budget, |session| {
+    let roots = with_canonical_assertions_source_budget_v1(source, budget, |session| {
         let callable_effects = session.callable_effect_summaries(source)?;
         let mut roots = Vec::with_capacity(root_inputs.len());
         for (root_ordinal, ((input, source_root), root_references)) in root_inputs
@@ -3236,15 +3268,6 @@ fn project_ranked_roots_with_progress_v1(
                     "a projected ranked root with a substituted kernel binding",
                 ));
             }
-            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                semantic_owner,
-                semantic_root,
-                &root.lowering,
-                &root.ranked_ir,
-                &root.access_sources,
-                &root.executable_effect_sources,
-            )
-            .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
             roots.push(root);
         }
         source
@@ -3252,6 +3275,10 @@ fn project_ranked_roots_with_progress_v1(
             .verify_replay()
             .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
         Ok(roots.into_boxed_slice())
+    })?;
+    Ok(ProjectedReferenceRootsV1 {
+        roots,
+        references: root_reference_bindings,
     })
 }
 
@@ -3804,7 +3831,7 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
     if let Some(error) = incomplete {
         return Err(error);
     }
-    let (lowering, effect_receipts) = if reference_bindings.as_slice().is_empty() {
+    let verification = if reference_bindings.as_slice().is_empty() {
         #[cfg(test)]
         conditional_output_observation_v1_tests::reject_unannotated()?;
         #[cfg(test)]
@@ -3822,7 +3849,10 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
             ranked_ir,
             access_sources: sources,
         })?;
-        (lowering, Vec::new())
+        crate::production_reference_effect_join_v2::conditional::ReferenceRootV1::Ordinary {
+            lowering,
+            receipts: Vec::new(),
+        }
     } else {
         let reserved_reference_values =
             reserved_reference_values.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -3873,11 +3903,12 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
                 conditional_bound_observation_v1_tests::STOP,
             ));
         }
-        request
-            .prove_and_compile()
-            .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
+        crate::production_reference_effect_join_v2::conditional::ReferenceRootV1::Pending(request)
     };
-    let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
+    let ranked_ir = format_ranked_cfg(
+        function_name(root_function)?,
+        verification.kernel().blocks(),
+    )?;
     // The test-only source qualifier retains this observation. Shipping builds
     // release the temporary expression forest before returning the owner.
     #[cfg(not(test))]
@@ -3902,8 +3933,7 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         kernel_binding,
         source_rank: source_launch.rank(),
         semantic_u32_induction,
-        lowering,
-        effect_receipts,
+        verification,
         ranked_ir,
         access_sources,
         executable_effect_sources,
@@ -40235,7 +40265,7 @@ mod tests {
         assert_eq!(projected.roots.len(), 1);
         assert_eq!(projected.roots[0].kernel_binding, bytes(0xd5));
         let expected_origin = PRIVATE_ALLOCATION_ORIGIN_TAG_V1 + u64::from(array_local) + 1;
-        let blocks = projected.roots[0].lowering.kernel().blocks();
+        let blocks = projected.roots[0].verification.kernel().blocks();
         let private_views = blocks
             .iter()
             .flat_map(|block| block.operations())

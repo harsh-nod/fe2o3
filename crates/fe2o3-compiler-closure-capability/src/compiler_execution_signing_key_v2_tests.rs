@@ -7,6 +7,48 @@ use std::{os::fd::AsRawFd, panic::AssertUnwindSafe};
 type Cap = CompilerExecutionSigningKeyCapabilityV2;
 const UNRELATED: usize = 19;
 
+#[test]
+fn journal_signing_revalidates_custody_and_charges_original_work() {
+    let p = policy(7);
+    let cap = key(&p);
+    let floor = cap.retained_storage() + p.retained_storage() + 32;
+    let work = 2 * Cap::IO_WORK + Cap::SIGN_WORK;
+    let (result, accepted, live, _) = run(floor, work, floor + Cap::IO_STORAGE, |b| {
+        cap.sign_journal_digest(&p, &[0x42; 32], b)
+    });
+    let (signature, storage) = result.unwrap();
+    cap.key
+        .verifying_key()
+        .verify_strict(
+            &[0x42; 32],
+            &ed25519_dalek::Signature::from_bytes(&signature),
+        )
+        .unwrap();
+    assert_eq!(
+        storage.additional_storage(),
+        size_of::<([u8; 64], Storage)>()
+    );
+    assert_eq!((accepted, live), (work, floor));
+    for limit in [ENTRY_WORK - 1, 2 * Cap::IO_WORK - 1, work - 1] {
+        let (result, _, live, _) = run(floor, limit, floor + Cap::IO_STORAGE, |b| {
+            cap.sign_journal_digest(&p, &[0x42; 32], b)
+        });
+        assert!(matches!(
+            failure(result),
+            Error::Resource(Resource::Work(_))
+        ));
+        assert_eq!(live, floor);
+    }
+    let other = policy(8);
+    assert!(
+        run(floor, work, floor + Cap::IO_STORAGE, |b| {
+            cap.sign_journal_digest(&other, &[0x42; 32], b)
+        })
+        .0
+        .is_err()
+    );
+}
+
 fn key(policy: &Policy) -> Cap {
     let mut seed = [7; KEY_BYTES];
     run(

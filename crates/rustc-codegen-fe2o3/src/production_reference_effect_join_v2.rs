@@ -40,6 +40,10 @@ use crate::reference_effect_v1::{
 };
 
 const ROOT_NAME_V2: &str = "semantic_safety_module";
+#[path = "production_reference_effect_join_v2_conditional.rs"]
+pub(crate) mod conditional;
+#[path = "production_conditional_reference_output_source_v1.rs"]
+pub(crate) mod conditional_source_v1;
 #[cfg(test)]
 #[path = "production_reference_prepared_observation_v1_tests.rs"]
 pub(crate) mod prepared_observation_v1;
@@ -156,6 +160,10 @@ struct PreparedReferenceOutputV2 {
 }
 
 impl CompilerOwnedReferenceEffectRequestV2 {
+    pub(crate) fn kernel(&self) -> &ProductionRankedKernelV1 {
+        &self.kernel
+    }
+
     #[cfg(test)]
     pub(crate) fn kernel_for_test_v1(&self) -> &ProductionRankedKernelV1 {
         &self.kernel
@@ -781,15 +789,54 @@ fn reference_expression_with_gpu_loads_v2(
         effect_ir,
         expression,
         expected,
-        Some((kernel, gpu_expression)),
+        Some(ReferenceGpuLoadsV2 {
+            kernel,
+            expression: gpu_expression,
+            arguments: None,
+        }),
     )
+}
+
+#[derive(Clone, Copy)]
+struct ReferenceGpuLoadsV2<'a> {
+    kernel: &'a ProductionRankedKernelV1,
+    expression: &'a ProductionSemanticExpressionV2,
+    arguments: Option<&'a [fe2o3_lower_mir_kernel::ProductionConditionalSourceArgumentV1]>,
+}
+
+impl ReferenceGpuLoadsV2<'_> {
+    fn allocation_origin(
+        self,
+        source_argument: u32,
+    ) -> Result<u64, ProductionReferenceEffectJoinErrorV2> {
+        let adjusted = if let Some(arguments) = self.arguments {
+            let mut selected = None;
+            for row in arguments
+                .iter()
+                .filter(|row| row.source_argument() == source_argument)
+            {
+                if selected.is_some_and(|previous| previous != row.adjusted_argument()) {
+                    return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                        "CPU source argument has conflicting checked adjusted arguments",
+                    ));
+                }
+                selected = Some(row.adjusted_argument());
+            }
+            selected.ok_or(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                "CPU read has no checked source-to-adjusted argument correspondence",
+            ))?
+        } else {
+            source_argument
+        };
+        Ok(u64::from(adjusted) + 1)
+    }
 }
 
 fn reference_expression_inner_checked_v2(
     effect_ir: &ReferenceEffectIrV1,
     expression: &ReferenceEffectExpressionV1,
     expected: ReferenceScalarTypeV1,
-    gpu_loads: Option<(&ProductionRankedKernelV1, &ProductionSemanticExpressionV2)>,
+    gpu_loads: Option<ReferenceGpuLoadsV2<'_>>,
 ) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
     let expression = reference_expression_inner_v2(effect_ir, expression, gpu_loads, 0)?;
     let expected = reference_scalar_v2(expected).ok_or(
@@ -811,7 +858,7 @@ fn reference_expression_inner_checked_v2(
 fn reference_expression_inner_v2(
     effect_ir: &ReferenceEffectIrV1,
     expression: &ReferenceEffectExpressionV1,
-    gpu_loads: Option<(&ProductionRankedKernelV1, &ProductionSemanticExpressionV2)>,
+    gpu_loads: Option<ReferenceGpuLoadsV2<'_>>,
     depth: usize,
 ) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
     if depth >= fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
@@ -877,7 +924,7 @@ fn reference_expression_inner_v2(
             reference_argument,
             index,
         } => {
-            let (kernel, gpu_expression) =
+            let loads_context =
                 gpu_loads.ok_or(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
                     "safe reference load requires an independently projected GPU expression",
                 ))?;
@@ -902,18 +949,14 @@ fn reference_expression_inner_v2(
                     "safe reference load element type is unsupported",
                 ),
             )?;
-            let allocation_origin = u64::from(argument).checked_add(1).ok_or(
-                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-                    "safe reference load argument origin overflowed",
-                ),
-            )?;
+            let allocation_origin = loads_context.allocation_origin(argument)?;
             let mut loads = Vec::new();
-            collect_semantic_loads_v2(gpu_expression, &mut loads);
+            collect_semantic_loads_v2(loads_context.expression, &mut loads);
             let mut matches = loads.into_iter().filter(|load| {
                 load.scalar == scalar
                     && load.allocation_origin == allocation_origin
                     && load.indices.len() == 1
-                    && gpu_index_expression_v2(kernel, load.indices[0], 0)
+                    && gpu_index_expression_v2(loads_context.kernel, load.indices[0], 0)
                         .is_ok_and(|gpu_index| gpu_index == **index)
             });
             let Some(load) = matches.next() else {

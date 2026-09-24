@@ -249,7 +249,12 @@ fn actual_backend_two_private_initializer_roots_v1() -> ProductionRankedSemantic
         );
         let operation =
             |root: usize, source: fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1| {
-                &program.roots[root].lowering.kernel().blocks()[source.ranked_block() as usize]
+                &program.roots[root]
+                    .verification
+                    .ordinary()
+                    .expect("ordinary test root")
+                    .kernel()
+                    .blocks()[source.ranked_block() as usize]
                     .operations()[source.ranked_operation() as usize]
             };
         let ProductionRankedOperationV1::Access {

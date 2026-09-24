@@ -36,6 +36,8 @@ mod reference_loop_work_v1;
 mod reference_raw_source_work_v1;
 use crate::rustc_semantic_plan_v1::SourceClosureWorkV1;
 use reference_extraction_work_v1::ReferenceExtractionWorkV1;
+#[path = "production_reference_effect_join_v2_replay.rs"]
+mod production_reference_effect_join_v2_replay;
 use reference_raw_source_work_v1::{
     authenticate_safe_local_reference_v1, charge_reference_source_v1,
 };

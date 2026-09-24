@@ -35,6 +35,10 @@ const ARTIFACT_DIRECTORY_FD: i32 =
     fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1;
 const CODEGEN_BACKEND_FD: i32 = fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_CHILD_FD_V1;
 
+#[path = "compiler_execution_supervision_native.rs"]
+mod native;
+pub(crate) use native::{NativeObservation, NativeObservationError};
+
 /// One independently observed, authority-free snapshot of an admitted live rustc process.
 ///
 /// The value retains the exact invocation capability, rustc executable, codegen backend,

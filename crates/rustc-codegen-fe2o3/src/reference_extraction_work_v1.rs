@@ -11,11 +11,20 @@ use crate::rustc_semantic_plan_v1::SourceClosureWorkV1;
 
 pub(super) enum ReferenceExtractionWorkV1<'a> {
     Shared(RefCell<&'a mut SourceClosureWorkV1>),
+    /// Replay-only charging into the caller's original canonical account.
+    /// This does not satisfy the live-rustc `is_shared` authentication gate.
+    Canonical(RefCell<&'a mut dyn FnMut(usize) -> Result<(), ReferenceBindingErrorV1>>),
     /// Existing descriptive queries outside authenticated extraction.
     Inspection,
 }
 
 impl<'a> ReferenceExtractionWorkV1<'a> {
+    pub(super) fn canonical(
+        charge: &'a mut dyn FnMut(usize) -> Result<(), ReferenceBindingErrorV1>,
+    ) -> Self {
+        Self::Canonical(RefCell::new(charge))
+    }
+
     pub(super) fn borrowed(source: &'a mut SourceClosureWorkV1) -> Self {
         Self::Shared(RefCell::new(source))
     }
@@ -31,6 +40,7 @@ impl<'a> ReferenceExtractionWorkV1<'a> {
                 .charge(amount)
                 .map_err(|error| ReferenceBindingErrorV1::new(error.to_string())),
             Self::Inspection => Ok(()),
+            Self::Canonical(charge) => (*charge.borrow_mut())(amount),
         }
     }
 

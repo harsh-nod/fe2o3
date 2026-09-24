@@ -4,6 +4,10 @@ This is a prerequisite checkpoint for #272, not completion of a roadmap
 milestone or the 47-kernel end-to-end qualification target. The new conditional
 continuation and diagnostic native client do not activate safe GPU launch.
 
+The subsequent [conditional-formula and native-preparation checkpoint](conditional-formula-native-preparation-20260924.md)
+records later implementation and its separate validation scope; it does not
+retroactively extend the results below.
+
 ## Conditional Compiler State
 
 The consuming lower-MIR continuation retains the original canonical source,

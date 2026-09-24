@@ -5,10 +5,17 @@ use crate::{
     },
     sealed_image::{CapabilityRole, SealedCapabilityImage},
 };
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use fe2o3_compiler_execution_protocol::{
+    CompilerExecutionAttestationReceiptV2 as Receipt,
+    CompilerExecutionAttestationRequestV2 as Request,
+    CompilerExecutionAttestationStorageV2 as ProtocolStorage,
+    CompilerExecutionCurrentRecordAttestationV3 as CurrentAttestation,
+    CompilerExecutionCurrentRecordVerificationV3 as CurrentVerification,
     CompilerExecutionIssuerPolicyIdentityV2 as PolicyIdentity,
     CompilerExecutionIssuerPolicyV2 as Policy,
+    CompilerExecutionNativeJournalErrorV2 as JournalError,
+    CompilerExecutionReceiptCarriageV2 as Carriage,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -28,8 +35,10 @@ const ROLE: CapabilityRole = CapabilityRole {
 /// Move-only secret custody pinned to a complete native policy identity.
 ///
 /// Fresh admission derives the public key once. Revalidation compares the seed
-/// without deriving another key. No signing operation, direct seed getter, V1 owner conversion,
-/// process launch, or execution authority is exposed.
+/// without deriving another key. Signing operations retain and revalidate this
+/// capability; no direct seed/key getter, V1 owner conversion, process launch,
+/// or execution authority is exposed. The consuming protected issuer must
+/// independently establish occurrence, currentness and durable ordering.
 /// A transferred File contains the readable seed: its recipient must be trusted.
 ///
 /// Inputs stay prepaid on the same ledger. Calls restore entry storage; reserve
@@ -69,6 +78,8 @@ impl CompilerExecutionSigningKeyCapabilityV2 {
     /// Named fixed crypto allowance for one pinned Dalek Ed25519 key derivation.
     /// It is an admission unit, not a measured instruction or wall-time bound.
     pub const DERIVATION_WORK: usize = 65_536;
+    /// Fixed Dalek signing allowance for one journal digest.
+    pub const SIGN_WORK: usize = 65_536;
     /// Entry, at most 64 descriptor/credential/cleanup calls at weight 1024,
     /// and fixed byte staging/comparison. No native I/O operation retries.
     /// Borrowed transfer validation uses 38 calls: two 19-call secret checks,
@@ -174,6 +185,87 @@ impl CompilerExecutionSigningKeyCapabilityV2 {
             Self::IO_WORK,
             |_| self.check_policy_image(policy),
         )
+    }
+
+    /// Signs one native request without exporting a key or seed. This authenticates
+    /// bytes only; live occurrence custody must be established by the issuer.
+    /// All inputs stay prepaid and the returned protocol storage is unreserved.
+    pub fn issue_receipt(
+        &self,
+        policy: &Policy,
+        request: &Request,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Receipt, ProtocolStorage)> {
+        self.signing_scope(policy, request.retained_storage(), budget, |budget| {
+            Ok(Receipt::issue(policy, request, &self.key, budget)?)
+        })
+    }
+
+    /// Consumes a prepaid currentness verification and returns its protocol growth.
+    /// The native authenticator checks both anchor receipts and the fresh challenge;
+    /// protected journal/currentness custody is still the consuming issuer's duty.
+    pub fn attest_current(
+        &self,
+        policy: &Policy,
+        carriage: &Carriage,
+        verification: CurrentVerification,
+        challenge: [u8; 32],
+        budget: &mut Budget<'_>,
+    ) -> Result<(CurrentAttestation, ProtocolStorage)> {
+        let inputs = carriage
+            .retained_storage()
+            .checked_add(size_of::<(CurrentVerification, ProtocolStorage)>())
+            .ok_or(Resource::Arithmetic)?;
+        self.signing_scope(policy, inputs, budget, |budget| {
+            CurrentAttestation::issue_native(
+                policy,
+                carriage,
+                verification,
+                challenge,
+                &self.key,
+                budget,
+            )
+            .map_err(|error| match error {
+                JournalError::Resource(resource) => Error::Resource(resource),
+                _ => Error::Rejected("native currentness authentication failed"),
+            })
+        })
+    }
+
+    /// Signs a fixed, caller-domain-separated journal digest. This is a key-use
+    /// primitive, not proof that the journal is durable or its claims are true.
+    pub fn sign_journal_digest(
+        &self,
+        policy: &Policy,
+        digest: &[u8; 32],
+        budget: &mut Budget<'_>,
+    ) -> Result<([u8; 64], Storage)> {
+        self.signing_scope(policy, 32, budget, |budget| {
+            budget.charge_work(Self::SIGN_WORK)?;
+            Ok((
+                self.key.sign(digest).to_bytes(),
+                Storage(size_of::<([u8; 64], Storage)>()),
+            ))
+        })
+    }
+
+    fn signing_scope<T>(
+        &self,
+        policy: &Policy,
+        inputs: usize,
+        budget: &mut Budget<'_>,
+        operation: impl FnOnce(&mut Budget<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let floor = Self::RETAINED
+            .checked_add(policy.retained_storage())
+            .and_then(|n| n.checked_add(inputs))
+            .ok_or(Resource::Arithmetic)?;
+        Self::scope(budget, floor, 2 * Self::IO_WORK, |budget| {
+            self.check_policy_image(policy)?;
+            let output = operation(budget)?;
+            self.check_policy_image(policy)?;
+            Ok(output)
+        })
     }
 
     fn check_policy_image(&self, policy: &Policy) -> Result<()> {
