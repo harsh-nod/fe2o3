@@ -87,7 +87,7 @@ impl Cases {
             parse_named_properties_prechecked(inspect_regular(&self.path).unwrap(), &SCHEMA)
                 .map(|properties| SCHEMA.map(|(key, _, _)| properties[key]))
                 .map_err(Failure::from);
-        let actual = fixed::read(inspect_regular(&self.path).unwrap())
+        let actual = fixed::read(inspect_regular(&self.path).unwrap(), &mut Vec::new())
             .map(fields)
             .map_err(Failure::from);
         assert_eq!(actual, reference, "input: {text:?}");

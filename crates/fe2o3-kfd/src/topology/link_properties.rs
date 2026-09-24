@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 
 use super::{
-    MAX_PROPERTY_BYTES, Path, RegularFileObservation, TopologyError, read_text_prechecked,
+    MAX_PROPERTY_BYTES, Path, RegularFileObservation, TopologyError, read_bounded_regular_into,
 };
 
 const KEYS: [&str; 13] = [
@@ -39,10 +39,15 @@ pub(super) struct LinkProperties {
     pub(super) flags: u32,
 }
 
-pub(super) fn read(before: RegularFileObservation<'_>) -> Result<LinkProperties, TopologyError> {
+pub(super) fn read(
+    before: RegularFileObservation<'_>,
+    bytes: &mut Vec<u8>,
+) -> Result<LinkProperties, TopologyError> {
     let path = before.path;
-    let text = read_text_prechecked(before, MAX_PROPERTY_BYTES)?;
-    parse(path, &text)
+    read_bounded_regular_into(before, MAX_PROPERTY_BYTES, bytes)?;
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| TopologyError::InvalidUtf8(path.to_path_buf()))?;
+    parse(path, text)
 }
 
 fn parse(path: &Path, text: &str) -> Result<LinkProperties, TopologyError> {

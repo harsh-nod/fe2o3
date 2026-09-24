@@ -46,7 +46,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-pub(super) fn counted<R>(operation: impl FnOnce() -> R) -> (R, usize) {
+pub(in crate::topology::tests) fn counted<R>(operation: impl FnOnce() -> R) -> (R, usize) {
     struct Stop;
     impl Drop for Stop {
         fn drop(&mut self) {

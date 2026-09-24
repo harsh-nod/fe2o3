@@ -3,6 +3,8 @@ use rustix::fs::{CWD, Mode, OFlags, fcntl_getfl, mkfifoat};
 use std::cell::RefCell;
 use std::os::unix::fs::symlink;
 
+mod link_scratch;
+
 type ReadHook = Box<dyn FnOnce(&Path)>;
 
 thread_local! {

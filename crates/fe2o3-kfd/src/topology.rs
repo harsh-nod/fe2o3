@@ -1374,6 +1374,17 @@ fn read_bounded_regular(
     before: RegularFileObservation<'_>,
     maximum: usize,
 ) -> Result<Vec<u8>, TopologyError> {
+    let mut bytes = Vec::new();
+    read_bounded_regular_into(before, maximum, &mut bytes)?;
+    Ok(bytes)
+}
+
+fn read_bounded_regular_into(
+    before: RegularFileObservation<'_>,
+    maximum: usize,
+    bytes: &mut Vec<u8>,
+) -> Result<(), TopologyError> {
+    bytes.clear();
     let RegularFileObservation { path, identity } = before;
     let mut file = open_observed_regular(path)?;
     #[cfg(test)]
@@ -1384,12 +1395,12 @@ fn read_bounded_regular(
     if FileIdentity::from_metadata(&opened) != identity {
         return Err(TopologyError::ChangedDuringRead(path.to_path_buf()));
     }
-    let mut bytes = Vec::with_capacity(maximum.min(1024));
+    bytes.reserve_exact(maximum.min(1024));
     #[cfg(test)]
     tests::host_diagnostics::io("bounded read", path, maximum + 1);
     (&mut file)
         .take((maximum + 1) as u64)
-        .read_to_end(&mut bytes)
+        .read_to_end(bytes)
         .map_err(|source| io_error("read", path, source))?;
     #[cfg(test)]
     tests::prechecked_reads::after_regular_read(path);
@@ -1407,7 +1418,7 @@ fn read_bounded_regular(
     if FileIdentity::from_metadata(&after) != identity {
         return Err(TopologyError::ChangedDuringRead(path.to_path_buf()));
     }
-    Ok(bytes)
+    Ok(())
 }
 
 fn read_text(path: &Path, maximum: usize) -> Result<String, TopologyError> {
@@ -1980,6 +1991,7 @@ fn parse_topology_links(
         });
     }
     let mut links = Vec::with_capacity(entries.len());
+    let mut property_bytes = Vec::new();
     for (position, entry) in entries.into_iter().enumerate() {
         let index = parse_node_id(entry.name())?;
         let path = entry.path;
@@ -1992,7 +2004,7 @@ fn parse_topology_links(
             return Err(TopologyError::UnexpectedLinkEntry(path));
         }
         let properties_observation = inspect_regular(&contents[0].path)?;
-        let properties = link_properties::read(properties_observation)?;
+        let properties = link_properties::read(properties_observation, &mut property_bytes)?;
         let node_from = properties.node_from;
         let node_to = properties.node_to;
         let min_latency = properties.min_latency;

@@ -272,7 +272,7 @@ fn fresh_discovery_still_observes_membership_and_link_changes() {
     assert_ne!(first, fixture.discover().unwrap());
 }
 
-mod allocation_counter;
+pub(super) mod allocation_counter;
 
 #[test]
 fn directory_reader_removes_per_entry_filename_allocations() {
