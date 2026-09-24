@@ -99,30 +99,32 @@ impl PreparedProductionWorkerHandoff {
 pub(crate) fn prepare_production_worker_handoff(
     authenticated: crate::production_pipeline::AuthenticatedProductionTargetModule,
 ) -> Result<PreparedProductionWorkerHandoff, ProductionWorkerHandoffError> {
-    let (formal, target, module, llvm_ir, typed_roots, compiler_ffi_envelope) =
+    let (formal, target, optimized, llvm_ir, typed_roots, compiler_ffi_envelope) =
         authenticated.into_parts();
-    validate_exact_target_binding(target, &module)?;
+    let module = optimized.module();
+    validate_exact_target_binding(target, module)?;
     let canonical_kernel_ir_identity = *formal
         .semantic_kir()
         .canonical_kernel_ir_identity()
         .digest();
-    let compiler_module = retain_production_compiler_module_text_v1(&module, llvm_ir)
+    let compiler_module = retain_production_compiler_module_text_v1(module, llvm_ir)
         .map_err(ProductionWorkerHandoffError::CompilerModule)?;
     let envelope = derive_production_compiler_ffi_envelope(
         target,
-        &module,
+        module,
         &compiler_module,
         compiler_ffi_envelope,
         canonical_kernel_ir_identity,
     )?;
-    validate_exact_target_binding(envelope.target(), &module)?;
+    validate_exact_target_binding(envelope.target(), module)?;
     validate_envelope_module_roles(&envelope, &compiler_module)?;
     let descriptor_source = construct_production_v1_compiler_descriptor_source_v1(
         &envelope,
-        &module,
+        module,
         &compiler_module,
         &typed_roots,
         &formal,
+        &optimized,
     )
     .map_err(ProductionWorkerHandoffError::CompilerDescriptor)?;
     assemble_production_worker_handoff(target, envelope, compiler_module, descriptor_source)

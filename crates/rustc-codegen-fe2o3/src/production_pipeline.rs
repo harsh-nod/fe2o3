@@ -578,14 +578,17 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilation {
     bindings: AuthenticatedProductionBindings,
 }
 
+#[path = "production_pipeline/retained_target_v30.rs"]
+mod retained_target_v30;
+pub(crate) use retained_target_v30::RetainedProductionTargetV30;
+
 /// Move-only production stage retaining formal admission, exact target-bound
 /// Kernel IR, deterministic exact-target LLVM text, and transaction bindings.
 pub(crate) struct TargetLoweredProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
-    target_module: fe2o3_kernel_ir::Module,
-    target_optimization: fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2,
+    optimized: RetainedProductionTargetV30,
     workgroups: Box<[(String, fe2o3_kernel_ir::WorkgroupSize)]>,
     llvm_ir: String,
     bindings: AuthenticatedProductionBindings,
@@ -596,7 +599,7 @@ pub(crate) struct TargetLoweredProductionCompilation {
 pub(crate) struct AuthenticatedProductionTargetModule {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     target: fe2o3_compiler_ffi::DeviceTargetV1,
-    target_module: fe2o3_kernel_ir::Module,
+    optimized: RetainedProductionTargetV30,
     llvm_ir: String,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
@@ -642,7 +645,7 @@ impl AuthenticatedProductionTargetModule {
     ) -> (
         fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
         fe2o3_compiler_ffi::DeviceTargetV1,
-        fe2o3_kernel_ir::Module,
+        RetainedProductionTargetV30,
         String,
         Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
         Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
@@ -650,7 +653,7 @@ impl AuthenticatedProductionTargetModule {
         (
             self.admitted,
             self.target,
-            self.target_module,
+            self.optimized,
             self.llvm_ir,
             self.typed_descriptor_roots,
             self.compiler_ffi_envelope,
@@ -1157,44 +1160,9 @@ impl FormalMemoryAdmittedProductionCompilation {
             )
             .map_err(ProductionPipelineError::Geometry)?;
         }
-        let target_bound = dialect_amdgcn::bind_production_target_v1(
-            admitted.semantic_kir().module(),
-            target_profile,
-        )
-        .map_err(ProductionPipelineError::TargetBinding)?;
-        let (target_module, kernel_ids) = target_bound.into_parts();
-        let production_kir_version = admitted
-            .semantic_kir()
-            .canonical_kernel_ir_identity()
-            .version();
-        let (target_module, target_optimization) = match production_kir_version {
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
-                let (module, _canonical, report) =
-                    fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)
-                        .map_err(ProductionPipelineError::TargetOptimizationV3)?
-                        .into_parts();
-                (module, report)
-            }
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8
-            | fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => {
-                let (module, _canonical, report) =
-                    fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)
-                        .map_err(ProductionPipelineError::TargetOptimization)?
-                        .into_parts();
-                (module, report)
-            }
-        };
-        if kernel_ids.len() != target_module.kernels.len()
-            || kernel_ids
-                .iter()
-                .zip(&target_module.kernels)
-                .any(|(kernel_id, kernel)| kernel_id != &kernel.id)
-        {
-            return Err(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
-            ));
-        }
-        let workgroups = exact_target_workgroup_roster_v1(&target_module)?;
+        let optimized = RetainedProductionTargetV30::try_lower(&admitted, target_profile)?;
+        let target_module = optimized.module();
+        let workgroups = exact_target_workgroup_roster_v1(target_module)?;
         let target_kir_identity = match admitted
             .semantic_kir()
             .canonical_kernel_ir_identity()
@@ -1225,13 +1193,13 @@ impl FormalMemoryAdmittedProductionCompilation {
         let lowering = match target_profile {
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
                 dialect_amdgcn::lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    &target_module,
+                    target_module,
                     target_kir_identity,
                 )
             }
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => {
                 dialect_amdgcn::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    &target_module,
+                    target_module,
                     target_kir_identity,
                 )
             }
@@ -1242,8 +1210,7 @@ impl FormalMemoryAdmittedProductionCompilation {
         Ok(TargetLoweredProductionCompilation {
             admitted,
             ranked_verification,
-            target_module,
-            target_optimization,
+            optimized,
             workgroups,
             llvm_ir,
             bindings,
@@ -1253,7 +1220,7 @@ impl FormalMemoryAdmittedProductionCompilation {
 
 impl TargetLoweredProductionCompilation {
     pub(crate) fn module(&self) -> &fe2o3_kernel_ir::Module {
-        &self.target_module
+        self.optimized.module()
     }
 
     pub(crate) fn target_name(&self) -> &'static str {
@@ -1274,7 +1241,8 @@ impl TargetLoweredProductionCompilation {
     }
 
     pub(crate) fn guarded_store_count(&self) -> usize {
-        self.target_module
+        self.optimized
+            .module()
             .functions
             .iter()
             .filter_map(|function| function.body.as_ref())
@@ -1391,11 +1359,12 @@ impl TargetLoweredProductionCompilation {
     }
 
     pub(crate) fn target_optimization_pass_count(&self) -> usize {
-        self.target_optimization.passes().len()
+        self.optimized.report().passes().len()
     }
 
     pub(crate) fn target_optimization_mutating_pass_count(&self) -> usize {
-        self.target_optimization
+        self.optimized
+            .report()
             .passes()
             .iter()
             .filter(|pass| pass.pliron().changed())
@@ -1403,11 +1372,11 @@ impl TargetLoweredProductionCompilation {
     }
 
     pub(crate) const fn target_optimization_initial_epoch(&self) -> u64 {
-        self.target_optimization.initial_epoch()
+        self.optimized.report().initial_epoch()
     }
 
     pub(crate) const fn target_optimization_final_epoch(&self) -> u64 {
-        self.target_optimization.final_epoch()
+        self.optimized.report().final_epoch()
     }
 
     pub(crate) fn into_inert_worker_handoff_for_extraction(
@@ -1416,8 +1385,7 @@ impl TargetLoweredProductionCompilation {
         let Self {
             admitted,
             ranked_verification: _,
-            target_module,
-            target_optimization: _,
+            optimized,
             workgroups: _,
             llvm_ir,
             bindings,
@@ -1446,7 +1414,7 @@ impl TargetLoweredProductionCompilation {
         let compiler_module = AuthenticatedProductionTargetModule {
             admitted,
             target: rustc_target.device_target(),
-            target_module,
+            optimized,
             llvm_ir,
             typed_descriptor_roots,
             compiler_ffi_envelope: transaction.compiler_ffi_envelope,
@@ -1468,8 +1436,7 @@ impl TargetLoweredProductionCompilation {
         let Self {
             admitted,
             ranked_verification,
-            target_module,
-            target_optimization,
+            optimized,
             workgroups: _,
             llvm_ir,
             bindings,
@@ -1512,8 +1479,8 @@ impl TargetLoweredProductionCompilation {
                 &rustc_target,
                 ranked_verification,
                 &admitted,
-                &target_module,
-                &target_optimization,
+                optimized.module(),
+                optimized.report(),
                 &llvm_ir,
                 semantic_debug_inputs,
             )
@@ -1522,7 +1489,7 @@ impl TargetLoweredProductionCompilation {
         let compiler_module = AuthenticatedProductionTargetModule {
             admitted,
             target,
-            target_module,
+            optimized,
             llvm_ir,
             typed_descriptor_roots,
             compiler_ffi_envelope: transaction.compiler_ffi_envelope,
@@ -1566,8 +1533,7 @@ impl TargetLoweredProductionCompilation {
         let Self {
             admitted,
             ranked_verification,
-            target_module,
-            target_optimization,
+            optimized,
             workgroups: _,
             llvm_ir,
             bindings,
@@ -1618,8 +1584,8 @@ impl TargetLoweredProductionCompilation {
             &rustc_target,
             ranked_verification,
             &admitted,
-            &target_module,
-            &target_optimization,
+            optimized.module(),
+            optimized.report(),
             &llvm_ir,
             semantic_debug_inputs,
         )
@@ -1627,7 +1593,7 @@ impl TargetLoweredProductionCompilation {
         let compiler_module = AuthenticatedProductionTargetModule {
             admitted,
             target: rustc_target.device_target(),
-            target_module,
+            optimized,
             llvm_ir,
             typed_descriptor_roots,
             compiler_ffi_envelope,
@@ -4180,31 +4146,27 @@ mod tests {
             .split("impl TargetLoweredProductionCompilation")
             .next()
             .expect("bounded target-lowering body");
-        assert!(transaction.contains("dialect_amdgcn::bind_production_target_v1("));
-        assert!(
-            transaction.contains(
-                "fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)"
-            )
-        );
-        assert!(
-            transaction.contains(
-                "fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)"
-            )
-        );
-        assert!(transaction.contains("dialect_amdgcn::bind_production_llvm22_worker_layout_v1("));
-        let bind = transaction
+        let retained = include_str!("production_pipeline/retained_target_v30.rs");
+        assert!(retained.contains("dialect_amdgcn::bind_production_target_v1("));
+        let bind = retained
             .find("dialect_amdgcn::bind_production_target_v1(")
-            .expect("target binding");
-        let optimize = transaction
-            .find("fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)")
-            .expect("fixed production optimizer");
-        let optimize_v11 = transaction
-            .find("fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)")
-            .expect("fixed V11 production optimizer");
+            .unwrap();
+        for entry in [
+            "fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)",
+            "fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)",
+        ] {
+            assert!(bind < retained.find(entry).expect("fixed optimizer entry"));
+        }
+        assert!(transaction.contains("dialect_amdgcn::bind_production_llvm22_worker_layout_v1("));
+        let retain = transaction
+            .find("RetainedProductionTargetV30::try_lower(")
+            .unwrap();
         let lower = transaction
             .find("lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(")
-            .expect("AMDGPU LLVM lowering");
-        assert!(bind < optimize && bind < optimize_v11 && optimize < lower && optimize_v11 < lower);
+            .unwrap();
+        assert!(retain < lower);
+        assert!(!retained.contains("optimize_kernel_ir_module_v"));
+        assert!(!retained.contains(".clone()"));
         let target_lowered = source
             .split_once("impl TargetLoweredProductionCompilation {")
             .expect("target-lowered implementation")
@@ -4212,7 +4174,7 @@ mod tests {
             .split_once("\nfn require_complete_simulation_debug_source_capture_v2(")
             .expect("target-lowered implementation end")
             .0;
-        assert_eq!(target_lowered.matches("&target_optimization,").count(), 2);
+        assert_eq!(target_lowered.matches("optimized.report(),").count(), 2);
         assert!(!transaction.contains("required_capabilities.insert"));
     }
 

@@ -712,6 +712,12 @@
     "block": 5,
     "extern_block": 3
   },
+  "crates/fe2o3-kfd/examples/gfx950_debug_acceptance_noqueue_v1/rendezvous.rs": {
+    "attribute": 3
+  },
+  "crates/fe2o3-kfd/examples/gfx950_debug_acceptance_noqueue_v1/run.rs": {
+    "block": 1
+  },
   "crates/fe2o3-kfd/examples/gfx950_debug_noqueue_v1/run.rs": {
     "block": 1
   },

@@ -31,6 +31,10 @@ name = "observe_gfx950_debug_metadata_noqueue_v1"
 required-features = ["engineering-gfx950"]
 
 [[example]]
+name = "observe_gfx950_debug_acceptance_noqueue_v1"
+required-features = ["engineering-gfx950"]
+
+[[example]]
 name = "kfd-host-visible-memory"
 required-features = ["live-validation"]
 

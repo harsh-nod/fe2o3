@@ -39,6 +39,10 @@ mod runtime_fault_owner_tests;
 mod runtime_queries_v1;
 mod runtime_session_owner_v1;
 mod typed_layout_v1;
+// Pure controls; native qualification is a separate closed launch-owned example.
+#[cfg(all(test, target_os = "linux"))]
+#[path = "rocgdb_noqueue_acceptance_v1/tests.rs"]
+mod noqueue_acceptance_controls_v1;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;

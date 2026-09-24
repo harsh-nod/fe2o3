@@ -717,3 +717,6 @@ fn value_erasing_move_still_consumes_depth_and_exact_cumulative_work() {
         .is_none()
     );
 }
+
+#[path = "helper_inline_checked_owner_v30_tests.rs"]
+mod helper_checked_owner_tests;

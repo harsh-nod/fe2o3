@@ -51,6 +51,40 @@ impl fmt::Display for ProductionCompleteBodyCheckErrorV19 {
 }
 impl Error for ProductionCompleteBodyCheckErrorV19 {}
 
+/// Only the errors produced by projection, inspection text and formal-memory
+/// helpers. These helpers never run the ranked session, so they must not carry
+/// its complete report-bearing error in every local Result. No payload is
+/// reduced, cloned, boxed or allocated when crossing the public boundary.
+#[derive(Debug)]
+enum CompleteBodyAuxErrorV19 {
+    Resource(ArgumentResourceV1),
+    Relation(&'static str),
+    RankedRecipe(fe2o3_pliron::ProductionRankedKernelErrorV1),
+    Formal(fe2o3_kernel_ir::FormalMemoryObligationError),
+}
+impl From<ArgumentResourceV1> for CompleteBodyAuxErrorV19 {
+    fn from(error: ArgumentResourceV1) -> Self {
+        Self::Resource(error)
+    }
+}
+impl From<CompleteBodyAuxErrorV19> for ProductionCompleteBodyCheckErrorV19 {
+    fn from(error: CompleteBodyAuxErrorV19) -> Self {
+        match error {
+            CompleteBodyAuxErrorV19::Resource(error) => Self::Resource(error),
+            CompleteBodyAuxErrorV19::Relation(detail) => Self::Relation(detail),
+            CompleteBodyAuxErrorV19::RankedRecipe(error) => Self::RankedRecipe(error),
+            CompleteBodyAuxErrorV19::Formal(error) => Self::Formal(error),
+        }
+    }
+}
+// Guard the actual allocation-free transport representation in every build,
+// rather than suppressing result_large_err or assuming a particular enum layout.
+const _: () = assert!(std::mem::size_of::<CompleteBodyAuxErrorV19>() < 128);
+
+#[cfg(test)]
+#[path = "production_complete_body_error_transport_v19_tests.rs"]
+mod error_transport;
+
 /// Move-only source, canonical, ranked-check and formal-memory custody.
 ///
 /// This owner cannot be made from canonical bytes, a model plan or detached
@@ -236,14 +270,12 @@ impl ProductionCompleteBodyCheckedKirOwnerV19 {
 
 fn complete_body_formal_v19(
     materialized: &ProductionCompleteBodyPreRankedKirOwnerVNext,
-) -> Result<FormalMemoryObligations, ProductionCompleteBodyCheckErrorV19> {
+) -> Result<FormalMemoryObligations, CompleteBodyAuxErrorV19> {
     let [kernel] = materialized.executable().module().kernels.as_slice() else {
-        return Err(ProductionCompleteBodyCheckErrorV19::Relation(
-            "formal kernel roster",
-        ));
+        return Err(CompleteBodyAuxErrorV19::Relation("formal kernel roster"));
     };
     let [root] = materialized.source_launch().roots() else {
-        return Err(ProductionCompleteBodyCheckErrorV19::Relation(
+        return Err(CompleteBodyAuxErrorV19::Relation(
             "formal source launch roster",
         ));
     };
@@ -256,9 +288,9 @@ fn complete_body_formal_v19(
         },
         FormalIndexWidth::Bits64,
     )
-    .map_err(ProductionCompleteBodyCheckErrorV19::Formal)?;
+    .map_err(CompleteBodyAuxErrorV19::Formal)?;
     let FormalMemoryObligationAnalysis::Complete(obligations) = report else {
-        return Err(ProductionCompleteBodyCheckErrorV19::Relation(
+        return Err(CompleteBodyAuxErrorV19::Relation(
             "actual body formal analysis remains incomplete",
         ));
     };
@@ -268,7 +300,7 @@ fn complete_body_formal_v19(
         || !obligations.runtime_alias_requirements().is_empty()
         || obligations.bounds_requirements().len() > 1
     {
-        return Err(ProductionCompleteBodyCheckErrorV19::Relation(
+        return Err(CompleteBodyAuxErrorV19::Relation(
             "unexpected formal effect/obligation roster",
         ));
     }
@@ -279,7 +311,7 @@ fn complete_body_formal_v19(
 /// explicit domain labels it analysis-only; it is not LLVM or executable KIR.
 fn ranked_text_v19(
     recipe: &fe2o3_pliron::ProductionRankedKernelV1,
-) -> Result<String, ProductionCompleteBodyCheckErrorV19> {
+) -> Result<String, CompleteBodyAuxErrorV19> {
     struct Text(String);
     impl fmt::Write for Text {
         fn write_str(&mut self, text: &str) -> fmt::Result {
@@ -307,6 +339,6 @@ fn ranked_text_v19(
         &mut text,
         format_args!("complete-body-v19-safety-projection {recipe:#?}\n"),
     )
-    .map_err(|_| ProductionCompleteBodyCheckErrorV19::Relation("ranked inspection text bound"))?;
+    .map_err(|_| CompleteBodyAuxErrorV19::Relation("ranked inspection text bound"))?;
     Ok(text.0)
 }

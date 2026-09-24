@@ -89,6 +89,16 @@ before mutation. Later assertions consume copied transition snapshots, never a
 saved shared-derived pointer across mutable access. This reconciliation grants
 no GPU qualification or production launch authority.
 
+The separate debugger-observation sibling adds one call to that same consuming
+no-queue unsafe function, under the unchanged reviewed-process lifetime and
+no-foreign-runtime contract. Its three unique host-only rendezvous exports use
+`unsafe(no_mangle)` solely to retain fixed breakpoint names; they expose no
+pointer or GPU capability and perform only host atomic operations. The first
+marker precedes the sibling's KFD/VM work. Marker presence and entry snapshots
+do not prove startup or lifetime isolation. The controller must retain owned
+process custody and an independent outer family-cleanup contract. These source
+inventory additions do not qualify debugger acceptance or GPU execution.
+
 The source-safety fixture `owned_unsafe_closure.rs` deliberately contains one
 empty unsafe block inside an owned `FnOnce` closure. It exercises rooted source
 rejection even when MIR optimization removes the empty block. There is no unsafe

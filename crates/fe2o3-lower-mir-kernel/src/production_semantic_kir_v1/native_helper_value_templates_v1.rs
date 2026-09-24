@@ -16,6 +16,11 @@ struct Binding<'a> {
 
 include!("native_helper_constant_shift_v1.rs");
 include!("native_helper_masked_shift_v1.rs");
+include!("native_helper_inline_value_v30.rs");
+
+#[cfg(test)]
+#[path = "native_helper_inline_value_v30_tests.rs"]
+mod inline_tests;
 
 fn lookup_work(length: usize, meter: &mut dyn Meter) -> Result<(), Error> {
     let depth = usize::BITS as usize - length.leading_zeros() as usize;
@@ -111,6 +116,9 @@ fn operation<'a>(
         return Err("native helper checked pair mismatch");
     }
     let value = match &operation.kind {
+        OperationKind::InlineAssembly(_) => {
+            native_helper_inline_value_v30(operation, rows, output, meter)?
+        }
         OperationKind::Constant(constant) => {
             let (actual, bits) =
                 normalize_kir_constant_v1(constant).ok_or("native helper constant unsupported")?;

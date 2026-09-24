@@ -12,6 +12,8 @@ use fe2o3_mir_model::semantic_mir_v1::{SemanticCanonAbiV1, SemanticExternAbiV1};
 type Error = &'static str;
 type Key = (usize, BlockId, usize);
 
+include!("native_helper_inline_source_v30.rs");
+
 struct Call<'a> {
     key: Key,
     operation: &'a Operation,
@@ -133,7 +135,8 @@ fn signature(
         || result.adjusted().is_some()
         || result.pointee_override().is_some()
         || !matches!(result.mode(), SemanticAbiPassModeV1::Direct(_))
-        || scalar_type(semantic, abi.source_output_type())? != function.signature.results[0]
+        || native_helper_return_type_v30(semantic, abi.source_output_type(), meter)?
+            != function.signature.results[0]
     {
         return Err("native helper exact scalar return ABI mismatch");
     }
@@ -625,6 +628,14 @@ fn build(context: &mut NativeHelperValues<'_>, meter: &mut dyn Meter) -> Result<
                         .ok_or("native helper source association missing")?;
                     let result =
                         signature(context.semantic, source, function, meter).and_then(|()| {
+                            native_helper_inline_source_v30(
+                                context.semantic,
+                                context.correspondence,
+                                context.root,
+                                source,
+                                function,
+                                meter,
+                            )?;
                             native::derive(
                                 function,
                                 |location, operation, meter| {

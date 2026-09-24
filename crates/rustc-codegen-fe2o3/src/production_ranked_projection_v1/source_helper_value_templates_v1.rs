@@ -2,7 +2,8 @@
 use super::helper_value_template_v1::{Kind, Meter, Template, Value, vector};
 use super::*;
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticCanonAbiV1, SemanticExternAbiV1, SemanticFunctionAbiV1, SemanticSaturatingIntegerOpV1,
+    SemanticCanonAbiV1, SemanticExternAbiV1, SemanticFunctionAbiV1, SemanticLocalDeclV1,
+    SemanticSaturatingIntegerOpV1,
 };
 
 type Error = &'static str;
@@ -10,6 +11,8 @@ type Scalar = ProductionSemanticScalarTypeV2;
 
 include!("source_helper_constant_shift_v1.rs");
 include!("source_helper_masked_shift_v1.rs");
+include!("source_helper_singleton_u32_v1.rs");
+include!("source_helper_inline_u32_v1.rs");
 
 #[derive(Clone, Copy)]
 enum Slot {
@@ -18,6 +21,8 @@ enum Slot {
     // Checked arithmetic is total, but this first template domain cannot
     // represent its overflow flag. Only the exact numeric component is usable.
     CheckedValue(Value),
+    // Exact scalar backend transport for the generated (u32,) helper result.
+    SingletonU32(Value),
 }
 
 pub(super) fn scalar(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> Result<Scalar, Error> {
@@ -93,7 +98,7 @@ pub(super) fn abi(
         scalar(types, *ty)?;
     }
     let returned = abi.return_value();
-    scalar(types, abi.source_output_type())?;
+    result_scalar(types, abi.source_output_type())?;
     if returned.source_ty() != abi.source_output_type()
         || returned.adjusted().is_some()
         || returned.pointee_override().is_some()
@@ -137,6 +142,11 @@ impl Frame<'_, '_, '_> {
             {
                 *value
             }
+            (Some(Slot::SingletonU32(value)), _)
+                if singleton_field(self.types, declaration.ty(), place) =>
+            {
+                *value
+            }
             _ => return Err("helper value is uninitialized, projected, or an overflow flag"),
         };
         if self.output.scalar(value)? != scalar(self.types, place.ty())? {
@@ -171,7 +181,7 @@ impl Frame<'_, '_, '_> {
         }
     }
 
-    fn write(&mut self, place: &SemanticPlaceV1, value: Slot) -> Result<(), Error> {
+    fn write(&mut self, place: &SemanticPlaceV1, mut value: Slot) -> Result<(), Error> {
         self.meter.work(4)?;
         let index = place.local().index() as usize;
         let local = self
@@ -179,11 +189,18 @@ impl Frame<'_, '_, '_> {
             .locals()
             .get(index)
             .ok_or("helper destination outside function")?;
-        if !place.projections().is_empty()
-            || place.ty() != local.ty()
-            || self.live.get(index).copied() != Some(true)
-        {
-            return Err("helper destination is projected, mistyped or outside lifetime");
+        if self.live.get(index).copied() != Some(true) {
+            return Err("helper destination is outside lifetime");
+        }
+        // A singleton has no other component whose state could be lost.
+        // This does not permit projected writes into any other aggregate.
+        if singleton_field(self.types, local.ty(), place) {
+            let Slot::Scalar(component) = value else {
+                return Err("helper singleton field requires a scalar value");
+            };
+            value = Slot::SingletonU32(component);
+        } else if !place.projections().is_empty() || place.ty() != local.ty() {
+            return Err("helper destination is projected or mistyped");
         }
         let expected = match value {
             Slot::Scalar(_) => scalar(self.types, place.ty())?,
@@ -191,9 +208,16 @@ impl Frame<'_, '_, '_> {
                 self.types,
                 checked_type(self.types, place.ty()).ok_or("helper checked tuple type mismatch")?,
             )?,
+            Slot::SingletonU32(_) => scalar(
+                self.types,
+                singleton_u32_type(self.types, local.ty())
+                    .ok_or("helper singleton destination type mismatch")?,
+            )?,
             Slot::Uninitialized => return Err("missing helper destination value"),
         };
-        let (Slot::Scalar(value_id) | Slot::CheckedValue(value_id)) = value else {
+        let (Slot::Scalar(value_id) | Slot::CheckedValue(value_id) | Slot::SingletonU32(value_id)) =
+            value
+        else {
             unreachable!()
         };
         if self.output.scalar(value_id)? != expected {
@@ -210,6 +234,9 @@ impl Frame<'_, '_, '_> {
         statement: usize,
     ) -> Result<Slot, Error> {
         self.meter.work(3)?;
+        if let Some(component) = singleton_u32_type(self.types, value.result_type()) {
+            return self.singleton_rvalue(value, component);
+        }
         if let SemanticRvalueKindV1::CheckedBinary(binary) = value.kind() {
             let ty = checked_type(self.types, value.result_type())
                 .ok_or("invalid helper checked tuple")?;
@@ -410,6 +437,14 @@ impl Frame<'_, '_, '_> {
             .callables
             .get(call.callee().index() as usize)
             .ok_or("missing helper callable")?;
+        if let SemanticCallableDeclV1::CompilerIntrinsic {
+            binding,
+            operation: SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(assembly),
+            ..
+        } = declaration
+        {
+            return self.inline_u32_call(call, binding, *assembly);
+        }
         let (signature, template, saturation) = match declaration {
             SemanticCallableDeclV1::Defined { function } => {
                 let index = function.index() as usize;
@@ -459,7 +494,12 @@ impl Frame<'_, '_, '_> {
                     &arguments,
                 )?
             };
-            self.write(destination.place(), Slot::Scalar(value))?;
+            let slot = if singleton_u32_type(self.types, signature.source_output_type()).is_some() {
+                Slot::SingletonU32(value)
+            } else {
+                Slot::Scalar(value)
+            };
+            self.write(destination.place(), slot)?;
             Ok(destination.edge().target())
         })();
         drop(arguments);
@@ -686,6 +726,7 @@ fn derive_inner(
             }
             if scalar(frame.types, local.ty()).is_err()
                 && checked_type(frame.types, local.ty()).is_none()
+                && singleton_u32_type(frame.types, local.ty()).is_none()
             {
                 return Err("helper local has pointer, aggregate or unsupported layout");
             }
@@ -764,15 +805,29 @@ fn derive_inner(
                     if visited != function.blocks().len() {
                         return Err("helper has unvisited or extra return blocks");
                     }
-                    let Some(Slot::Scalar(value)) = frame.locals.get(returned).copied() else {
-                        return Err("helper return is uninitialized or non-scalar");
+                    let value = match frame.locals.get(returned).copied() {
+                        Some(Slot::Scalar(value))
+                            if scalar(frame.types, function.abi().source_output_type()).is_ok() =>
+                        {
+                            value
+                        }
+                        Some(Slot::SingletonU32(value))
+                            if singleton_u32_type(
+                                frame.types,
+                                function.abi().source_output_type(),
+                            )
+                            .is_some() =>
+                        {
+                            value
+                        }
+                        _ => return Err("helper return is uninitialized or has wrong transport"),
                     };
                     if !frame.live[returned] {
                         return Err("helper return is outside storage lifetime");
                     }
                     frame.output.finish(
                         value,
-                        scalar(frame.types, function.abi().source_output_type())?,
+                        result_scalar(frame.types, function.abi().source_output_type())?,
                     )?;
                     return Ok(());
                 }

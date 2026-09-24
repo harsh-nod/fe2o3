@@ -122,6 +122,35 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                     (false, false) => Err("GPU semantic local has no exact reaching assignment"),
                 };
             }
+            // The generated private helper returns one scalar in an exact
+            // singleton tuple. Only its field zero can select the same source-
+            // owned template; generic aggregate or arbitrary call projection
+            // remains unsupported.
+            if matches!(projections.as_slice(), [projection]
+                if matches!(projection.kind(), SemanticProjectionKindV1::Field(0))
+                && projection.result_type() == ty)
+                && super::source_helper_value_templates_v1::singleton_u32_type(
+                    self.types,
+                    declaration.ty(),
+                ) == Some(ty)
+                && self.helper_values.is_some()
+                && self
+                    .scalar_calls
+                    .get(local as usize)
+                    .and_then(|entry| *entry)
+                    .is_some_and(|(_, call)| {
+                        matches!(
+                            self.scalar_callables.get(call.callee().index() as usize),
+                            Some(super::SemanticCallableDeclV1::Defined { .. })
+                        )
+                    })
+                && !self
+                    .inline_calls_v30
+                    .as_ref()
+                    .is_some_and(|roster| roster.contains_local(local as usize))
+            {
+                return self.resolve_saturating_call_local_v2(local as usize, site, depth);
+            }
             return Err("GPU semantic local has no exact reaching assignment");
         };
         let SemanticStatementKindV1::Assign(assignment) =

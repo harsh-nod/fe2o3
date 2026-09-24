@@ -9,6 +9,9 @@ use std::cell::Cell;
 #[path = "native_helper_value_ledger_v1_tests.rs"]
 mod ledger_tests;
 
+#[path = "native_helper_inline_source_v30_tests.rs"]
+mod inline_source_tests;
+
 struct TestMeter<'a, 'w> {
     first: Budget<'w>,
     second: Budget<'w>,

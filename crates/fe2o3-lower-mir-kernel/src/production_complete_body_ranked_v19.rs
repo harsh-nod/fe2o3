@@ -20,7 +20,7 @@ const OUTPUT_VIEW_V19: IdR = IdR::new(0);
 // access index and a 128-byte name.
 // The existing ranked constructor/session owns its independently bounded
 // validation and preverification-transform allocation domain.
-fn projection_storage_bound_v19() -> Result<usize, ProductionCompleteBodyCheckErrorV19> {
+fn projection_storage_bound_v19() -> Result<usize, CompleteBodyAuxErrorV19> {
     Ok(argument_sum_v1(&[
         std::mem::size_of::<Recipe>(),
         argument_product_v1(6, std::mem::size_of::<Block>())?,
@@ -30,7 +30,7 @@ fn projection_storage_bound_v19() -> Result<usize, ProductionCompleteBodyCheckEr
         128,
     ])?)
 }
-fn projection_vec_v19<T>(count: usize) -> Result<Vec<T>, ProductionCompleteBodyCheckErrorV19> {
+fn projection_vec_v19<T>(count: usize) -> Result<Vec<T>, CompleteBodyAuxErrorV19> {
     let mut output = Vec::new();
     output
         .try_reserve_exact(count)
@@ -40,16 +40,14 @@ fn projection_vec_v19<T>(count: usize) -> Result<Vec<T>, ProductionCompleteBodyC
     }
     Ok(output)
 }
-fn projection_copy_v19<T: Clone>(
-    values: &[T],
-) -> Result<Vec<T>, ProductionCompleteBodyCheckErrorV19> {
+fn projection_copy_v19<T: Clone>(values: &[T]) -> Result<Vec<T>, CompleteBodyAuxErrorV19> {
     let mut output = projection_vec_v19(values.len())?;
     output.extend_from_slice(values);
     Ok(output)
 }
 
-fn projection_refusal(detail: &'static str) -> ProductionCompleteBodyCheckErrorV19 {
-    ProductionCompleteBodyCheckErrorV19::Relation(detail)
+fn projection_refusal(detail: &'static str) -> CompleteBodyAuxErrorV19 {
+    CompleteBodyAuxErrorV19::Relation(detail)
 }
 
 struct ValuesV19 {
@@ -63,11 +61,7 @@ impl ValuesV19 {
             count: 0,
         }
     }
-    fn insert(
-        &mut self,
-        source: ValueId,
-        target: ValueR,
-    ) -> Result<(), ProductionCompleteBodyCheckErrorV19> {
+    fn insert(&mut self, source: ValueId, target: ValueR) -> Result<(), CompleteBodyAuxErrorV19> {
         if self.count == self.values.len()
             || self.values[..self.count]
                 .iter()
@@ -82,7 +76,7 @@ impl ValuesV19 {
         self.count += 1;
         Ok(())
     }
-    fn get(&self, source: ValueId) -> Result<ValueR, ProductionCompleteBodyCheckErrorV19> {
+    fn get(&self, source: ValueId) -> Result<ValueR, CompleteBodyAuxErrorV19> {
         self.values[..self.count]
             .iter()
             .flatten()
@@ -92,9 +86,7 @@ impl ValuesV19 {
             })
     }
 }
-fn result_v19(
-    operation: &fe2o3_kernel_ir::Operation,
-) -> Result<ValueId, ProductionCompleteBodyCheckErrorV19> {
+fn result_v19(operation: &fe2o3_kernel_ir::Operation) -> Result<ValueId, CompleteBodyAuxErrorV19> {
     let [result] = operation.results.as_slice() else {
         return Err(projection_refusal("V19 projection expected one result"));
     };
@@ -103,7 +95,7 @@ fn result_v19(
 fn edge_values_v19(
     values: &ValuesV19,
     edge: &[ValueId],
-) -> Result<Vec<ValueR>, ProductionCompleteBodyCheckErrorV19> {
+) -> Result<Vec<ValueR>, CompleteBodyAuxErrorV19> {
     if edge.len() > 2 {
         return Err(projection_refusal("V19 projection edge bound"));
     }
@@ -119,7 +111,7 @@ fn guard_tail_v19(
     length: ValueR,
     store: u32,
     done: u32,
-) -> Result<EndR, ProductionCompleteBodyCheckErrorV19> {
+) -> Result<EndR, CompleteBodyAuxErrorV19> {
     Ok(EndR::IndexLessThanArgs {
         lhs: index,
         rhs: length,
@@ -129,7 +121,7 @@ fn guard_tail_v19(
         false_block: done,
     })
 }
-fn store_block_v19(store: u32, done: u32) -> Result<Block, ProductionCompleteBodyCheckErrorV19> {
+fn store_block_v19(store: u32, done: u32) -> Result<Block, CompleteBodyAuxErrorV19> {
     let mut operations = projection_vec_v19(1)?;
     operations.push(OpR::Access {
         kind: dialect_kernel::AccessKindAttr::Write,
@@ -153,7 +145,7 @@ pub(super) fn complete_body_ranked_recipe_v19(
     owner: &VerifiedCanonicalKernelIrModuleV19,
     launch: &crate::ProductionSourceLaunchRosterV1,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<Recipe, ProductionCompleteBodyCheckErrorV19> {
+) -> Result<Recipe, CompleteBodyAuxErrorV19> {
     budget.charge_work(PROJECTION_WORK_V19)?;
     // One small fixed profile only; reserve before any vectors/strings below.
     // The returned receipt is serviced by the caller's enclosing scope.
@@ -397,8 +389,7 @@ pub(super) fn complete_body_ranked_recipe_v19(
         body.blocks.len() as u32 + 1,
     )?);
     blocks.push(Block::new(Vec::new(), EndR::Return));
-    Recipe::new(function.id.as_str(), 5, blocks)
-        .map_err(ProductionCompleteBodyCheckErrorV19::RankedRecipe)
+    Recipe::new(function.id.as_str(), 5, blocks).map_err(CompleteBodyAuxErrorV19::RankedRecipe)
 }
 
 #[cfg(test)]

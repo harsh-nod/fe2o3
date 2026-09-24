@@ -416,3 +416,6 @@ fn success_error_and_panic_detect_lost_inherited_floor() {
     assert_eq!(*result.unwrap_err().downcast::<u32>().unwrap(), 173);
     assert_eq!(storage, 4096); // Unwinding drops cache payload before scope rollback.
 }
+
+#[path = "source_helper_inline_singleton_u32_v1_tests.rs"]
+mod inline_singleton_tests;

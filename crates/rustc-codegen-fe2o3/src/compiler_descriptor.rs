@@ -1,5 +1,8 @@
 //! Workload-neutral rustc-derived descriptor input for production typed kernels.
 
+#[path = "compiler_descriptor_inline_helpers_v30.rs"]
+mod inline_helpers_v30;
+
 #[path = "compiler_descriptor_complete_body_v19.rs"]
 pub(crate) mod complete_body_v19;
 
@@ -437,11 +440,10 @@ pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
     compiler_module: &InertCompilerModuleTextV1,
     typed_roots: &[TypedDescriptorRootV1],
     formal: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    optimized: &crate::production_pipeline::RetainedProductionTargetV30,
 ) -> Result<CompilerDescriptorSourceV1, CompilerDescriptorError> {
-    formal
-        .verify_equivalence()
-        .map_err(CompilerDescriptorError::ProductionFormalMemory)?;
     let target = envelope.target().to_string();
+    let inline = inline_helpers_v30::verify_and_admit(formal, optimized, module, &target)?;
     let geometries =
         validate_production_v1_descriptor_evidence(module, typed_roots, formal, &target)?;
     let producer_version = match envelope.target().as_amd_target_id().processor() {
@@ -462,12 +464,16 @@ pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
             producer_version,
         })
         .collect::<Vec<_>>();
-    construct_compiler_descriptor_source_with_profiles_v1(
+    construct_compiler_descriptor_source_with_profiles_and_admission_v1(
         envelope,
         module,
         compiler_module,
         typed_roots,
         &profiles,
+        inline.as_ref().map_or(
+            DescriptorCapabilityAdmissionV1::Ordinary,
+            DescriptorCapabilityAdmissionV1::InlineHelpersV30,
+        ),
     )?
     .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
         "complete typed descriptor closure",
@@ -1163,6 +1169,13 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
     )
 }
 
+#[derive(Clone, Copy)]
+enum DescriptorCapabilityAdmissionV1<'a> {
+    Ordinary,
+    CompleteBodyV19,
+    InlineHelpersV30(&'a inline_helpers_v30::InlineHelperDescriptorAdmissionV30<'a>),
+}
+
 // Only the child V19 constructor passes true, after the genuine source/ranked/
 // formal owner and actual module/typed-root/geometry relations have been joined.
 fn construct_compiler_descriptor_source_with_profiles_and_complete_body_v19(
@@ -1172,6 +1185,28 @@ fn construct_compiler_descriptor_source_with_profiles_and_complete_body_v19(
     typed_roots: &[TypedDescriptorRootV1],
     profiles: &[DescriptorConstructionProfileV1],
     complete_body_v19: bool,
+) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
+    construct_compiler_descriptor_source_with_profiles_and_admission_v1(
+        envelope,
+        module,
+        compiler_module,
+        typed_roots,
+        profiles,
+        if complete_body_v19 {
+            DescriptorCapabilityAdmissionV1::CompleteBodyV19
+        } else {
+            DescriptorCapabilityAdmissionV1::Ordinary
+        },
+    )
+}
+
+fn construct_compiler_descriptor_source_with_profiles_and_admission_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    module: &Module,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    profiles: &[DescriptorConstructionProfileV1],
+    admission: DescriptorCapabilityAdmissionV1<'_>,
 ) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
     if typed_roots.is_empty() {
         return Ok(None);
@@ -1223,7 +1258,7 @@ fn construct_compiler_descriptor_source_with_profiles_and_complete_body_v19(
         device_layouts.push(layout);
     }
 
-    let module_capabilities = descriptor_capabilities_with_complete_body_v19(
+    let module_capabilities = descriptor_capabilities_with_admission_v1(
         module,
         profiles
             .iter()
@@ -1231,7 +1266,7 @@ fn construct_compiler_descriptor_source_with_profiles_and_complete_body_v19(
         profiles
             .iter()
             .any(|profile| profile.allow_workgroup_memory),
-        complete_body_v19,
+        admission,
     )?;
     let mut seen_exports = BTreeSet::new();
     let mut kernels = Vec::with_capacity(typed_roots.len());
@@ -1437,11 +1472,30 @@ fn descriptor_capabilities(
     )
 }
 
+#[cfg(test)]
 fn descriptor_capabilities_with_complete_body_v19(
     module: &Module,
     allow_exact_tiled_matrix: bool,
     allow_workgroup_memory: bool,
     complete_body_v19: bool,
+) -> Result<Vec<CapabilityV1>, CompilerDescriptorError> {
+    descriptor_capabilities_with_admission_v1(
+        module,
+        allow_exact_tiled_matrix,
+        allow_workgroup_memory,
+        if complete_body_v19 {
+            DescriptorCapabilityAdmissionV1::CompleteBodyV19
+        } else {
+            DescriptorCapabilityAdmissionV1::Ordinary
+        },
+    )
+}
+
+fn descriptor_capabilities_with_admission_v1(
+    module: &Module,
+    allow_exact_tiled_matrix: bool,
+    allow_workgroup_memory: bool,
+    admission: DescriptorCapabilityAdmissionV1<'_>,
 ) -> Result<Vec<CapabilityV1>, CompilerDescriptorError> {
     let mut result = BTreeSet::new();
     let mut effective = module.effective_capabilities();
@@ -1470,13 +1524,20 @@ fn descriptor_capabilities_with_complete_body_v19(
         )
     });
     for capability in effective {
-        if complete_body_v19
+        if matches!(admission, DescriptorCapabilityAdmissionV1::CompleteBodyV19)
             && matches!(&capability, TargetCapability::Extension { namespace, name }
                 if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_COMPLETE_BODY_CAPABILITY_NAMESPACE_V19
                     && name == fe2o3_kernel_ir::AMDGPU_GFX942_COMPLETE_BODY_CAPABILITY_NAME_V19)
         {
             // Closed whole-body structural contract; target and Wave64 continue
             // through the existing runtime-capability projection below.
+            continue;
+        }
+        if let DescriptorCapabilityAdmissionV1::InlineHelpersV30(checked) = admission
+            && checked.admits(module, &capability)
+        {
+            // Source structure remains in the unchanged canonical subject.
+            // Only execution requirements enter the runtime descriptor.
             continue;
         }
         let Some(projected) = dialect_amdgcn::project_descriptor_capability_v1(
