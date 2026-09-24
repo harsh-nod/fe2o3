@@ -2,11 +2,14 @@ use crate::production::{ConditionalPendingSubjectV1, ConditionalPipelineSubjectV
 use crate::production_analysis::pliron_effect_refinement::conditional_v1 as conditional_effect;
 use crate::production_analysis::pliron_pass_contract::PlironStructuralIdentityProviderV1;
 use crate::production_analysis::{
-    conditional_execution_v1 as conditional_ownership,
+    conditional_bounds_v1 as conditional_bounds, conditional_execution_v1 as conditional_ownership,
     conditional_semantic_v1 as conditional_semantic,
     conditional_validation_v1 as conditional_validation,
 };
 use pliron::op::Op;
+
+#[cfg(all(test, feature = "internal-proof-staging"))]
+include!("conditional_bounds_resource_v1_tests.rs");
 
 #[derive(Clone, Copy)]
 enum PipelineFamilyV1<'a> {
@@ -49,11 +52,12 @@ impl<'a> BoundConditionalInvocationV1<'a> {
     reason = "transfer the admitted producer payload without another fallible allocation"
 )]
 pub(crate) enum ProducedConditionalPayloadV1 {
+    Bounds(conditional_bounds::ReportV1),
     Ownership(conditional_ownership::ReportV1),
     Semantic(conditional_semantic::ReportV1),
 }
 
-// The two fixed producer branches mint this packet after their own checkpoint.
+// The fixed conditional producers mint this packet after their own checkpoint.
 // There is no exposed constructor or caller-supplied producer closure.
 pub(crate) struct ProducedConditionalStageV1 {
     subject: ConditionalPendingSubjectV1,
@@ -88,6 +92,7 @@ impl ProducedConditionalStageV1 {
 pub(crate) enum PipelineErrorV1 {
     Ordinary(ProductionPlironPreloweringErrorV2),
     ConditionalValidation(conditional_validation::ErrorV1),
+    ConditionalBounds(conditional_bounds::ErrorV1),
     ConditionalOwnership(conditional_ownership::ReportV1),
     ConditionalSemantic(conditional_semantic::ErrorV1),
     ConditionalPreparation(conditional_ownership::FailureV1),
@@ -100,6 +105,9 @@ impl fmt::Display for PipelineErrorV1 {
             Self::Ordinary(error) => error.fmt(formatter),
             Self::ConditionalValidation(error) => {
                 write!(formatter, "conditional validation: {error:?}")
+            }
+            Self::ConditionalBounds(error) => {
+                write!(formatter, "conditional bounds rejected: {error:?}")
             }
             Self::ConditionalOwnership(report) => {
                 write!(formatter, "conditional ownership rejected: {report:?}")
@@ -157,7 +165,6 @@ enum PipelineReportsV1 {
 pub(crate) struct ConditionalPipelineReportV1 {
     target_contract: Option<PlironLaunchContractReportV1>,
     tensor_layout: PlironTensorLayoutReportV1,
-    bounds: RankedBoundsReportV1,
     atomics: PlironAtomicLegalityReportV1,
     race: RankedRaceReportV1,
     barriers: PlironBarrierReportV1,
@@ -335,7 +342,10 @@ impl PipelineFamilyV1<'_> {
         let bound = compose_hierarchical_ownership_resource_upper_bound_v1(
             census,
             local,
-            dependencies.0,
+            match self {
+                Self::Ordinary => dependencies.0,
+                Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::default(),
+            },
             dependencies.1,
         )
         .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?;
@@ -554,6 +564,11 @@ pub(crate) fn test_conditional_foreign_endpoint_v1(
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CaptureFaultV1 {
+    #[cfg(feature = "internal-proof-staging")]
+    BoundsBorrowResources(ConditionalBoundsResourceCaseV1),
+    MissingBounds,
+    ForeignBoundsManager,
+    ForeignBoundsSubject(ConditionalPendingSubjectV1),
     Duplicate,
     OutOfOrder,
     WrongFamily,

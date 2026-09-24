@@ -17,6 +17,7 @@ use std::fmt;
 mod live_inputs_v1;
 mod live_v1;
 pub(crate) use live_inputs_v1::LiveReadBoundV1;
+pub(crate) use live_inputs_v1::preflight_in_phase as preflight_live_rule_with_inputs_v1;
 
 use super::pliron_pipeline::invocation_receipt_v1::{
     AdditionalObservationV1, observe_additional_admission_v1,
@@ -69,23 +70,37 @@ pub(crate) enum RuleRefusalV1 {
     Cycle { predicate: bool },
 }
 type LiveResultV1 = Result<Result<RuleFactsV1, RuleRefusalV1>, Limit>;
+#[cfg(test)]
 fn live_limit(resource: &'static str) -> Limit {
-    Limit {
-        phase: Phase::HierarchicalOwnership,
-        resource,
+    PhaseArithmetic(Phase::HierarchicalOwnership).limit(resource)
+}
+struct PhaseArithmetic(Phase);
+impl PhaseArithmetic {
+    fn limit(&self, resource: &'static str) -> Limit {
+        Limit {
+            phase: self.0,
+            resource,
+        }
+    }
+    fn sum(&self, xs: &[usize]) -> Result<usize, Limit> {
+        xs.iter().try_fold(0usize, |n, &x| {
+            n.checked_add(x)
+                .ok_or_else(|| self.limit("conditional coverage arithmetic"))
+        })
+    }
+    fn mul(&self, a: usize, b: usize) -> Result<usize, Limit> {
+        a.checked_mul(b)
+            .ok_or_else(|| self.limit("conditional coverage arithmetic"))
     }
 }
-fn live_sum(xs: &[usize]) -> Result<usize, Limit> {
-    xs.iter().try_fold(0usize, |n, &x| {
-        n.checked_add(x)
-            .ok_or_else(|| live_limit("conditional coverage arithmetic"))
-    })
-}
-fn live_mul(a: usize, b: usize) -> Result<usize, Limit> {
-    a.checked_mul(b)
-        .ok_or_else(|| live_limit("conditional coverage arithmetic"))
-}
+#[cfg(test)]
 fn live_preflight(c: Census) -> Result<Bound, Limit> {
+    live_preflight_in_phase(c, Phase::HierarchicalOwnership)
+}
+fn live_preflight_in_phase(c: Census, phase: Phase) -> Result<Bound, Limit> {
+    let arithmetic = PhaseArithmetic(phase);
+    let live_sum = |xs: &[usize]| arithmetic.sum(xs);
+    let live_mul = |a, b| arithmetic.mul(a, b);
     let (b, o, r, a, k, j, t) = (
         c.blocks,
         c.operations,
@@ -124,7 +139,7 @@ fn live_preflight(c: Census) -> Result<Bound, Limit> {
         size_of::<LiveResultV1>(),
     ])?;
     Bound::checked_phase(
-        Phase::HierarchicalOwnership,
+        phase,
         live_sum(&[core, preparation, literals, terminators, capture])?,
         0,
         scratch,
@@ -132,14 +147,17 @@ fn live_preflight(c: Census) -> Result<Bound, Limit> {
 }
 struct ReservedMeter {
     remaining: Option<usize>,
+    phase: Phase,
 }
 impl Meter for ReservedMeter {
     type Error = Limit;
     fn charge(&mut self, n: usize) -> CheckResult<(), Limit> {
         self.remaining = self.remaining.and_then(|left| left.checked_sub(n));
-        self.remaining
-            .map(|_| ())
-            .ok_or_else(|| Failure::Resource(live_limit("conditional coverage admitted work")))
+        self.remaining.map(|_| ()).ok_or_else(|| {
+            Failure::Resource(
+                PhaseArithmetic(self.phase).limit("conditional coverage admitted work"),
+            )
+        })
     }
 }
 fn live_key(
@@ -231,10 +249,13 @@ fn live_exit(
     }
     Ok(b)
 }
-fn live_refusal(fault: Fault) -> Result<RuleRefusalV1, Limit> {
-    let u = |n: u32| usize::try_from(n).map_err(|_| live_limit("conditional coverage arithmetic"));
+fn live_refusal(fault: Fault, phase: Phase) -> Result<RuleRefusalV1, Limit> {
+    let arithmetic = PhaseArithmetic(phase);
+    let u = |n: u32| {
+        usize::try_from(n).map_err(|_| arithmetic.limit("conditional coverage arithmetic"))
+    };
     Ok(match fault {
-        Fault::Arithmetic => return Err(live_limit("conditional coverage arithmetic")),
+        Fault::Arithmetic => return Err(arithmetic.limit("conditional coverage arithmetic")),
         Fault::Coordinate => RuleRefusalV1::Coordinate,
         Fault::UnsupportedOperation { block, operation } => RuleRefusalV1::UnsupportedOperation {
             site: RuleSiteV1 {
@@ -295,7 +316,7 @@ pub(super) fn check_conditional_ownership_live_rule_with_observation_v1(
     am: &mut Manager,
     additional: AdditionalObservationV1<'_, '_, '_>,
 ) -> LiveResultV1 {
-    check_conditional_ownership_live_rule_scoped_v1(
+    check_conditional_live_rule_in_phase_v1(
         endpoint,
         inv,
         census,
@@ -304,6 +325,7 @@ pub(super) fn check_conditional_ownership_live_rule_with_observation_v1(
         None,
         am,
         additional,
+        Phase::HierarchicalOwnership,
     )
 }
 
@@ -318,7 +340,7 @@ pub(crate) fn check_conditional_ownership_live_rule_with_input_bounds_v1(
     am: &mut Manager,
     additional: AdditionalObservationV1<'_, '_, '_>,
 ) -> LiveResultV1 {
-    check_conditional_ownership_live_rule_scoped_v1(
+    check_conditional_live_rule_in_phase_v1(
         endpoint,
         inv,
         census,
@@ -327,11 +349,12 @@ pub(crate) fn check_conditional_ownership_live_rule_with_input_bounds_v1(
         Some(reads),
         am,
         additional,
+        Phase::HierarchicalOwnership,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn check_conditional_ownership_live_rule_scoped_v1(
+pub(crate) fn check_conditional_live_rule_in_phase_v1(
     endpoint: (&Context, &FuncOp),
     inv: &Inventory,
     census: Census,
@@ -340,6 +363,7 @@ fn check_conditional_ownership_live_rule_scoped_v1(
     reads: Option<&[LiveReadBoundV1]>,
     am: &mut Manager,
     additional: AdditionalObservationV1<'_, '_, '_>,
+    phase: Phase,
 ) -> LiveResultV1 {
     match additional {
         None => check_conditional_ownership_live_rule_inner_v1(
@@ -351,6 +375,7 @@ fn check_conditional_ownership_live_rule_scoped_v1(
             reads,
             am,
             None,
+            phase,
         ),
         Some((observer, _)) => observer
             .with_projection(&Ok, |_| {
@@ -363,6 +388,7 @@ fn check_conditional_ownership_live_rule_scoped_v1(
                     reads,
                     am,
                     additional,
+                    phase,
                 )
             })
             .map_err(|error| observer.deny(error)),
@@ -379,24 +405,25 @@ fn check_conditional_ownership_live_rule_inner_v1(
     reads: Option<&[LiveReadBoundV1]>,
     am: &mut Manager,
     additional: AdditionalObservationV1<'_, '_, '_>,
+    phase: Phase,
 ) -> LiveResultV1 {
     let (ctx, function) = endpoint;
     let (ownership, original_view) = selection;
     let bound = match reads {
-        None => live_preflight(census)?,
-        Some(reads) => live_inputs_v1::preflight(census, reads.len())?,
+        None => live_preflight_in_phase(census, phase)?,
+        Some(reads) => live_inputs_v1::preflight_in_phase(census, reads.len(), phase)?,
     };
     if additional.is_some() {
-        let phase = Phase::HierarchicalOwnership;
         let limits = am.remaining_resource_limits(phase)?;
         observe_additional_admission_v1(additional, limits, phase, Ok(bound))?;
     }
-    am.admit_retained_resource_upper_bound(Phase::HierarchicalOwnership, bound)?;
+    am.admit_retained_resource_upper_bound(phase, bound)?;
     let mut m = ReservedMeter {
         remaining: Some(bound.work_upper_bound()),
+        phase,
     };
     let result = (|| -> CheckResult<RuleFactsV1, Limit> {
-        m.charge(live_sum(&[size_of::<Census>(), 16]).map_err(Failure::Resource)?)?;
+        m.charge(size_of::<Census>() + 16)?;
         if am.input_census() != Some(census) {
             return Err(Fault::Coordinate.into());
         }
@@ -448,7 +475,7 @@ fn check_conditional_ownership_live_rule_inner_v1(
     match result {
         Ok(facts) => Ok(Ok(facts)),
         Err(Failure::Resource(error)) => Err(error),
-        Err(Failure::Rule(fault)) => Ok(Err(live_refusal(fault)?)),
+        Err(Failure::Rule(fault)) => Ok(Err(live_refusal(fault, phase)?)),
     }
 }
 

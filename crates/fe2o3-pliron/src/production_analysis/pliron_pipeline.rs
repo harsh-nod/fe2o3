@@ -496,6 +496,7 @@ struct ProductionAnalysisStageV1 {
 include!("pliron_pipeline/scoped_stage_v67.rs");
 include!("pliron_pipeline/barrier_resources_v1.rs");
 include!("pliron_pipeline/conditional_v1.rs");
+include!("pliron_pipeline/conditional_bounds_stage_v1.rs");
 
 #[path = "pliron_pipeline/invocation_receipt_v1.rs"]
 pub(crate) mod invocation_receipt_v1;

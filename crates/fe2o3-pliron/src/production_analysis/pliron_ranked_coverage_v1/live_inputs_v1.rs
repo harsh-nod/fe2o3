@@ -12,12 +12,22 @@ pub(crate) struct LiveReadBoundV1 {
     pub(crate) domain: Domain,
 }
 
+#[cfg(test)]
 pub(super) fn preflight(census: Census, count: usize) -> Result<Bound, Limit> {
-    let base = live_preflight(census)?;
+    preflight_in_phase(census, count, Phase::HierarchicalOwnership)
+}
+
+pub(crate) fn preflight_in_phase(
+    census: Census,
+    count: usize,
+    phase: Phase,
+) -> Result<Bound, Limit> {
+    let arithmetic = PhaseArithmetic(phase);
+    let live_sum = |xs: &[usize]| arithmetic.sum(xs);
+    let live_mul = |a, b| arithmetic.mul(a, b);
+    let base = live_preflight_in_phase(census, phase)?;
     if count > census.operations {
-        return Err(live_limit(
-            "conditional input roster exceeds operation census",
-        ));
+        return Err(arithmetic.limit("conditional input roster exceeds operation census"));
     }
     // Each read adds two CFG walks, including literal resolution and roster
     // searches; all walks inspect at most B blocks and scan at most O operations.
@@ -37,10 +47,10 @@ pub(super) fn preflight(census: Census, count: usize) -> Result<Bound, Limit> {
         live_mul(count, size_of::<InputBound<LiveValue>>())?,
         size_of::<Vec<InputBound<LiveValue>>>(),
     ])?;
-    let extra = Bound::checked_phase(Phase::HierarchicalOwnership, work, 0, storage)?;
+    let extra = Bound::checked_phase(phase, work, 0, storage)?;
     // Input rows stay alive during the original query's temporary allocations.
     Bound::checked_phase(
-        Phase::HierarchicalOwnership,
+        phase,
         live_sum(&[base.work_upper_bound(), extra.work_upper_bound()])?,
         0,
         live_sum(&[

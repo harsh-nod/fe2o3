@@ -8,6 +8,106 @@ mod source259_consuming_pipeline {
         effect_owner(0).check_pipeline_v1().unwrap()
     }
 
+    fn bounds_resource_case(case: Option<pa::ConditionalBoundsResourceCaseV1>) {
+        for reads in [None, Some(&[][..])] {
+            let pending = effect_owner(0);
+            let mut resources =
+                ProductionAnalysisResourceContractV1::new(Limits::production_hard_ceiling());
+            resources
+                .admit_retained(
+                    Phase::PipelineVerification,
+                    pending.analysis._analyses.resource_upper_bound(),
+                )
+                .unwrap();
+            let input = pending
+                .prepare_pipeline_subject_with_budget_v1(&mut resources, None, reads)
+                .unwrap();
+            assert_eq!(
+                input.conditional_reads().map(<[_]>::len),
+                reads.map(<[_]>::len)
+            );
+            match case {
+                None => pa::test_conditional_bounds_composition_v1(&input),
+                Some(case) => {
+                    let error = pa::test_capture_rejection_v1(
+                        &input,
+                        resources.remaining(Phase::PipelineVerification).unwrap(),
+                        pa::CaptureFaultV1::BoundsBorrowResources(case),
+                    );
+                    assert!(matches!(
+                        error,
+                        pa::PipelineErrorV1::ConditionalValidation(
+                            pa::conditional_validation_v1::ErrorV1::Family {
+                                position: usize::MAX
+                            }
+                        )
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn conditional_bounds_resources_composition_preserves_ordinary_and_omits_reborrowed_producer() {
+        bounds_resource_case(None);
+    }
+
+    #[test]
+    fn conditional_bounds_resources_foreign_manager_never_debits_either_ledger() {
+        bounds_resource_case(Some(pa::ConditionalBoundsResourceCaseV1::ForeignManager));
+    }
+
+    #[test]
+    fn conditional_bounds_resources_borrow_exact_and_one_short_report_validation_work() {
+        use pa::ConditionalBoundsResourceCaseV1::*;
+        for case in [Exact, ManagerWorkShort, ReceiptWorkShort] {
+            bounds_resource_case(Some(case));
+        }
+    }
+
+    #[test]
+    fn conditional_bounds_slot_rejects_omission_and_foreign_custody() {
+        use pa::{CaptureFaultV1 as Fault, conditional_validation_v1::ErrorV1 as Error};
+        let first = effect_owner(0);
+        let other = effect_owner(0);
+        let mut resources =
+            ProductionAnalysisResourceContractV1::new(Limits::production_hard_ceiling());
+        for pending in [&first, &other] {
+            resources
+                .admit_retained(
+                    Phase::PipelineVerification,
+                    pending.analysis._analyses.resource_upper_bound(),
+                )
+                .unwrap();
+        }
+        let input = first.prepare_pipeline_subject_v1(&mut resources).unwrap();
+        let foreign = other.prepare_pipeline_subject_v1(&mut resources).unwrap();
+        for (fault, expected) in [
+            (
+                Fault::MissingBounds,
+                Error::Order {
+                    expected: 1,
+                    observed: 2,
+                },
+            ),
+            (Fault::ForeignBoundsManager, Error::Ledger),
+            (
+                Fault::ForeignBoundsSubject(foreign.pending_subject()),
+                Error::Subject,
+            ),
+        ] {
+            let error = pa::test_capture_rejection_v1(
+                &input,
+                resources.remaining(Phase::PipelineVerification).unwrap(),
+                fault,
+            );
+            let pa::PipelineErrorV1::ConditionalValidation(actual) = error else {
+                panic!("wrong bounds refusal: {error:?}")
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
     fn replay_failure(fault: replay_test_v1::Fault) -> ProductionConditionalPipelineErrorV1 {
         let pending = effect_owner(0);
         let function = pending.analysis.payload.function();

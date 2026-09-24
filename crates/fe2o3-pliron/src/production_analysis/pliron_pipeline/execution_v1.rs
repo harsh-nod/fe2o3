@@ -287,33 +287,17 @@ fn run_shared_production_checks_inner_v1<'a>(
         },
     )?;
     let tensor_layout = tensor_layout.map_err(ProductionPlironPreloweringErrorV2::TensorLayout)?;
-    let (bounds, ranked_bounds_upper_bound) = run_preflight_production_stage_v1(
+    let (bounds, ranked_bounds_upper_bound) = run_memory_bounds_stage_v1(
         (context, function),
         &mut analyses,
         &mut preservation,
-        (&mut report_validation, receipt.as_deref_mut()),
-        (
-            ProductionAnalysisResourcePhaseV1::MemoryBounds,
-            |analyses, observer| {
-                let phase = ProductionAnalysisResourcePhaseV1::MemoryBounds;
-                let limits = observed_remaining_resource_limits_v1(analyses, phase, observer)?;
-                let bound =
-                    preflight_ranked_bounds_resource_upper_bound_v1(input_census, limits)
-                        .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?;
-                Ok(PreparedProductionStageV1 {
-                    stage: ProductionAnalysisStageV1 {
-                        pass: KernelCheckPassKindV1::MemoryBounds,
-                        producing_phase: phase,
-                        producing_phase_upper_bound: bound,
-                    },
-                    input: (),
-                    prefix: ProductionAnalysisResourceUpperBoundV1::default(),
-                })
-            },
-        ),
-        |analyses, observer| require_observed_bounds_v1(context, function, analyses, observer),
+        &mut report_validation,
+        receipt.as_deref_mut(),
+        family,
+        input_census,
+        #[cfg(test)]
+        capture_fault,
     )?;
-    let bounds = bounds.map_err(ProductionPlironPreloweringErrorV2::Bounds)?;
     let (atomics, _) = run_preflight_production_stage_v1(
         (context, function),
         &mut analyses,
@@ -448,6 +432,11 @@ fn run_shared_production_checks_inner_v1<'a>(
             )
         }
         PipelineFamilyV1::Conditional(input) => {
+            let bounds = borrow_conditional_bounds_v1(
+                &report_validation,
+                &mut analyses,
+                receipt.as_deref_mut(),
+            )?;
             let (report, stage) = prepare_and_invoke_production_stage_v1(
                 &mut analyses,
                 &mut preservation,
@@ -468,7 +457,7 @@ fn run_shared_production_checks_inner_v1<'a>(
                         pass,
                         limits,
                         || {
-                            let report = conditional_ownership::run_preadmitted_with_admissions_v1(
+                            let report = conditional_ownership::run_preadmitted_with_bounds_v1(
                                 conditional_ownership::ExecutionInputV1 {
                                     ctx: context,
                                     function,
@@ -479,6 +468,7 @@ fn run_shared_production_checks_inner_v1<'a>(
                                 },
                                 analyses,
                                 conditional_ownership::RaceSourceV1::SameInvocation(&race),
+                                &conditional_ownership::BoundsSourceV1::SameInvocation(bounds),
                                 rows.rows,
                                 (producer, additional),
                             );
@@ -726,6 +716,11 @@ fn run_shared_production_checks_inner_v1<'a>(
             Some(report.map_err(|error| ProductionPlironPreloweringErrorV2::Semantic(*error))?)
         }
         PipelineFamilyV1::Conditional(input) => {
+            let bounds = borrow_conditional_bounds_v1(
+                &report_validation,
+                &mut analyses,
+                receipt.as_deref_mut(),
+            )?;
             let (report, _) = prepare_and_invoke_production_stage_v1(
                 &mut analyses,
                 &mut preservation,
@@ -754,10 +749,13 @@ fn run_shared_production_checks_inner_v1<'a>(
                             with_scoped_producer_observation_v1(producer, |observer| {
                                 let (query, admitted) = additional.unzip();
                                 with_scoped_producer_observation_v1(query, |query| {
-                                    conditional_semantic::require_with_scoped_admissions_v1(
+                                    conditional_semantic::require_with_scoped_bounds_v1(
                                         input,
                                         analyses,
                                         prepared,
+                                        &conditional_ownership::BoundsSourceV1::SameInvocation(
+                                            bounds,
+                                        ),
                                         (observer, query.zip(admitted)),
                                     )
                                 })
@@ -851,7 +849,8 @@ fn run_shared_production_checks_inner_v1<'a>(
                         })
                 },
             )?;
-            let (Some(ownership), Some(semantics)) = (ownership, semantics) else {
+            let (Some(bounds), Some(ownership), Some(semantics)) = (bounds, ownership, semantics)
+            else {
                 return Err(PipelineErrorV1::ConditionalInput);
             };
             let report = ProductionPlironPreloweringReportV2 {
@@ -871,7 +870,7 @@ fn run_shared_production_checks_inner_v1<'a>(
             PipelineReportsV1::Ordinary(report)
         }
         ValidationFamilyV1::Conditional(validation) => {
-            if ownership.is_some() || semantics.is_some() {
+            if bounds.is_some() || ownership.is_some() || semantics.is_some() {
                 return Err(PipelineErrorV1::ConditionalInput);
             }
             let validation = with_invocation_phase_v1(
@@ -890,7 +889,6 @@ fn run_shared_production_checks_inner_v1<'a>(
             PipelineReportsV1::Conditional(ConditionalPipelineReportV1 {
                 target_contract,
                 tensor_layout,
-                bounds,
                 atomics,
                 race,
                 barriers,

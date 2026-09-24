@@ -7,6 +7,7 @@ struct AccessCheck<'a> {
     presburger: &'a PlironPresburgerAnalysisV1,
     findings: &'a mut Vec<RankedBoundsFindingV1>,
     budget: &'a mut RankedBoundsBudget,
+    capture: Option<&'a mut conditional_v1::ReadCaptureV1>,
 }
 
 fn verify_access(
@@ -93,12 +94,25 @@ fn verify_access(
                 let presburger_map = check
                     .presburger
                     .map_for_facts(&[sparse_fact])
-                    .inspect_err(|failure| observe_bounds_presburger_failure_v1(observer, failure))
+                    .inspect_err(|failure| {
+                        observe_bounds_presburger_failure_v1(observer, failure);
+                        if let Some(capture) = check.capture.as_deref_mut() {
+                            capture.failure(failure);
+                        }
+                    })
                     .ok();
                 let presburger_decision = static_extent.zip(presburger_map).map(|(extent, map)| {
                     let decision = map.find_out_of_bounds(&[extent]);
                     if let PresburgerRangeDecisionV1::Incomplete(failure) = &decision {
                         observe_bounds_presburger_failure_v1(observer, failure);
+                        if let Some(capture) = check.capture.as_deref_mut() {
+                            capture.failure(failure);
+                        }
+                    }
+                    if matches!(decision, PresburgerRangeDecisionV1::Counterexample { .. })
+                        && let Some(capture) = check.capture.as_deref_mut()
+                    {
+                        capture.counterexample = true;
                     }
                     (extent, decision)
                 });
@@ -141,6 +155,22 @@ fn verify_access(
                                 extent: extent_expr.describe(context),
                             }
                         })?;
+                        if let Some(capture) = check.capture.as_deref_mut()
+                            && access_kind == AccessKindAttr::Read
+                            && dimension == 0
+                            && let IndexExpr::Value(extent) = extent_expr
+                        {
+                            capture.push(conditional_v1::ReadObligationV1 {
+                                finding: check.findings.len() - 1,
+                                block,
+                                operation,
+                                live_operation: access.get_operation(),
+                                view,
+                                index,
+                                extent,
+                                read: None,
+                            })?;
+                        }
                     }
                 }
             }
@@ -274,7 +304,7 @@ mod observed_presburger_tests {
 
     type Query = Result<PresburgerRangeDecisionV1, Failure>;
 
-    fn fixture(launch: u64, extent: u64) -> (Context, FuncOp, Value) {
+    pub(super) fn fixture(launch: u64, extent: u64) -> (Context, FuncOp, Value) {
         let mut context = Context::new();
         dialect_kernel::register_dialect(
             &mut context,

@@ -9,6 +9,11 @@ use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as CanonicalB
 use std::cell::{Cell, RefCell};
 
 type CanonicalAccountV1<'a, 'work> = RefCell<&'a mut CanonicalBudget<'work>>;
+type RecipeReadBoundV1 = crate::ProductionConditionalRankedReadBoundV1;
+type LiveReadBoundV1 = crate::production_analysis::ConditionalLiveReadBoundV1;
+
+#[path = "conditional_pipeline_reads_v1.rs"]
+mod conditional_pipeline_reads_v1;
 
 fn canonical_limit_v1(phase: Phase) -> ProductionAnalysisResourceLimitV1 {
     ProductionAnalysisResourceLimitV1 {
@@ -33,6 +38,7 @@ pub(crate) struct ConditionalPipelineSubjectV1<'a> {
     function: FuncOp,
     census: crate::production_analysis::ProductionAnalysisInputCensusV1,
     occurrences: Vec<crate::production_analysis::conditional_execution_v1::OccurrenceV1>,
+    reads: Option<Vec<LiveReadBoundV1>>,
 }
 
 impl ConditionalPipelineSubjectV1<'_> {
@@ -82,6 +88,10 @@ impl ConditionalPipelineSubjectV1<'_> {
     ) -> &[crate::production_analysis::conditional_execution_v1::OccurrenceV1] {
         &self.occurrences
     }
+
+    pub(crate) fn conditional_reads(&self) -> Option<&[LiveReadBoundV1]> {
+        self.reads.as_deref()
+    }
 }
 
 impl ProductionConditionalRankedAnalysisV1 {
@@ -90,13 +100,14 @@ impl ProductionConditionalRankedAnalysisV1 {
         &self,
         resources: &mut ProductionAnalysisResourceContractV1,
     ) -> Result<ConditionalPipelineSubjectV1<'_>, ProductionSessionErrorV1> {
-        self.prepare_pipeline_subject_with_budget_v1(resources, None)
+        self.prepare_pipeline_subject_with_budget_v1(resources, None, None)
     }
 
     fn prepare_pipeline_subject_with_budget_v1(
         &self,
         resources: &mut ProductionAnalysisResourceContractV1,
         canonical: Option<&CanonicalAccountV1<'_, '_>>,
+        source_reads: Option<&[RecipeReadBoundV1]>,
     ) -> Result<ConditionalPipelineSubjectV1<'_>, ProductionSessionErrorV1> {
         use crate::production_analysis::conditional_execution_v1::OccurrenceV1;
         let phase = Phase::PipelineVerification;
@@ -229,6 +240,19 @@ impl ProductionConditionalRankedAnalysisV1 {
             census,
         )?;
 
+        let reads = source_reads
+            .map(|reads| {
+                conditional_pipeline_reads_v1::bind_live_reads_v1(
+                    recipe,
+                    &record.read_occurrences,
+                    census,
+                    reads,
+                    resources,
+                    canonical,
+                )
+            })
+            .transpose()?;
+
         let mut occurrences = Vec::new();
         occurrences
             .try_reserve_exact(requests.len())
@@ -258,6 +282,7 @@ impl ProductionConditionalRankedAnalysisV1 {
             function,
             census,
             occurrences,
+            reads,
         })
     }
 }
@@ -290,6 +315,7 @@ pub struct ProductionConditionalPipelineAnalysisV1 {
     first: Option<ConditionalPipelineOutcomeV1>,
     replay: Option<ConditionalPipelineOutcomeV1>,
     input: Option<RetainedConditionalInputV1>,
+    source_reads: Option<Vec<RecipeReadBoundV1>>,
     observations: [Option<ConditionalInvocationHistoryV1>; 2],
     resources: Bound,
     caught_panic: bool,
@@ -300,6 +326,7 @@ struct RetainedConditionalInputV1 {
     _function: FuncOp,
     _census: crate::production_analysis::ProductionAnalysisInputCensusV1,
     _occurrences: Vec<crate::production_analysis::conditional_execution_v1::OccurrenceV1>,
+    reads: Option<Vec<LiveReadBoundV1>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -316,11 +343,12 @@ impl ProductionConditionalPipelineAnalysisV1 {
             first,
             replay,
             input,
+            source_reads,
             observations,
             pending,
             ..
         } = self;
-        drop((first, replay, input, observations));
+        drop((first, replay, input, source_reads, observations));
         pending
     }
 
@@ -362,8 +390,17 @@ impl ProductionConditionalPipelineAnalysisV1 {
                 .admit_retained(Phase::PipelineVerification, self.resources)
                 .map_err(resource)?;
             self.pending
-                .prepare_pipeline_subject_with_budget_v1(&mut resources, Some(&account))
-                .map(drop)
+                .prepare_pipeline_subject_with_budget_v1(
+                    &mut resources,
+                    Some(&account),
+                    self.source_reads.as_deref(),
+                )
+                .and_then(|input| {
+                    if input.reads != self.input.as_ref().unwrap().reads {
+                        return Err(ProductionSessionErrorV1::RankedGraphChanged);
+                    }
+                    Ok(())
+                })
         }));
         let mut budget = account.borrow_mut();
         let released = budget
@@ -464,7 +501,18 @@ impl ProductionConditionalRankedAnalysisV1 {
         budget: &mut CanonicalBudget<'_>,
     ) -> Result<ProductionConditionalPipelineAnalysisV1, ProductionConditionalPipelineErrorV1> {
         let limits = self._session.analysis_resource_limits();
-        self.check_pipeline_accounted_v1(limits, Some(budget))
+        self.check_pipeline_accounted_v1(limits, Some(budget), None)
+    }
+
+    // Only the source-authenticated aggregate constructor may supply premises.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::production) fn check_pipeline_with_source_bounds_v1(
+        self,
+        reads: &[RecipeReadBoundV1],
+        budget: &mut CanonicalBudget<'_>,
+    ) -> Result<ProductionConditionalPipelineAnalysisV1, ProductionConditionalPipelineErrorV1> {
+        let limits = self._session.analysis_resource_limits();
+        self.check_pipeline_accounted_v1(limits, Some(budget), Some(reads))
     }
 
     #[allow(clippy::result_large_err)]
@@ -472,7 +520,7 @@ impl ProductionConditionalRankedAnalysisV1 {
         self,
         limits: ProductionAnalysisResourceLimitsV1,
     ) -> Result<ProductionConditionalPipelineAnalysisV1, ProductionConditionalPipelineErrorV1> {
-        self.check_pipeline_accounted_v1(limits, None)
+        self.check_pipeline_accounted_v1(limits, None, None)
     }
 
     #[allow(clippy::result_large_err)]
@@ -480,6 +528,7 @@ impl ProductionConditionalRankedAnalysisV1 {
         self,
         limits: ProductionAnalysisResourceLimitsV1,
         canonical: Option<&mut CanonicalBudget<'_>>,
+        source_reads: Option<&[RecipeReadBoundV1]>,
     ) -> Result<ProductionConditionalPipelineAnalysisV1, ProductionConditionalPipelineErrorV1> {
         let canonical_floor = canonical.as_ref().map(|budget| budget.storage());
         let canonical = canonical.map(RefCell::new);
@@ -490,6 +539,7 @@ impl ProductionConditionalRankedAnalysisV1 {
             first: None,
             replay: None,
             input: None,
+            source_reads: None,
             observations: [None; 2],
             resources: retained,
             caught_panic: false,
@@ -507,9 +557,23 @@ impl ProductionConditionalRankedAnalysisV1 {
                 }
                 resources.admit_retained(phase, retained)?;
                 admitted_pending = true;
+                analysis.source_reads = source_reads
+                    .map(|reads| {
+                        conditional_pipeline_reads_v1::retain_source_reads_v1(
+                            reads,
+                            &mut resources,
+                            canonical.as_ref(),
+                        )
+                    })
+                    .transpose()
+                    .map_err(ConditionalPipelineFailureV1::Session)?;
                 let input = analysis
                     .pending
-                    .prepare_pipeline_subject_with_budget_v1(&mut resources, canonical.as_ref())
+                    .prepare_pipeline_subject_with_budget_v1(
+                        &mut resources,
+                        canonical.as_ref(),
+                        analysis.source_reads.as_deref(),
+                    )
                     .map_err(ConditionalPipelineFailureV1::Session)?;
                 run_owned_conditional_invocation_v1(
                     &input,
@@ -590,6 +654,7 @@ impl ProductionConditionalRankedAnalysisV1 {
                     _function: input.function,
                     _census: input.census,
                     _occurrences: input.occurrences,
+                    reads: input.reads,
                 });
                 Ok(())
             },

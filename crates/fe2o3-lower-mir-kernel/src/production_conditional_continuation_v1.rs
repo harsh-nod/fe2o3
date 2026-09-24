@@ -219,6 +219,22 @@ pub struct ProductionConditionalAggregateStageV1<'source, 'ledger> {
 
 /// Callback-scoped source correspondence and explicit conditional formula input.
 /// This request conveys neither an aggregate proof nor GPU launch authority.
+/// Unlike bare Pliron aggregate input, it is minted only under the original
+/// continuation ledger guard after complete source-body replay. Public aggregate
+/// replay on a fresh account cannot construct this request.
+///
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::{ProductionConditionalSourceTranslationV1,
+///     ProductionSourceBoundConditionalAggregateRequestV1};
+/// use fe2o3_pliron::ProductionConditionalAggregateInputV1;
+/// fn forge<'a>(translation: &'a ProductionConditionalSourceTranslationV1<'a>,
+///     pliron: &'a ProductionConditionalAggregateInputV1<'a>)
+///     -> ProductionSourceBoundConditionalAggregateRequestV1<'a> {
+///     ProductionSourceBoundConditionalAggregateRequestV1 {
+///         translation, pliron, arguments: &[],
+///     }
+/// }
+/// ```
 pub struct ProductionSourceBoundConditionalAggregateRequestV1<'a> {
     translation: &'a ProductionConditionalSourceTranslationV1<'a>,
     pliron: &'a fe2o3_pliron::ProductionConditionalAggregateInputV1<'a>,
@@ -381,12 +397,26 @@ fn continue_conditional_root_with_ledger_v1<'source, 'ledger>(
             count.checked_add(1).ok_or(Resource::Arithmetic)?,
             budget,
         )?;
+        let relation = source
+            .checked_source_argument_relation_v1(
+                association.correspondence_owner(),
+                association.semantic_function(),
+                budget,
+            )
+            .map_err(|error| E::Binding(error.into()))?;
+        let output_argument = relation
+            .bind_whole_parameter_v1(
+                binding.coverage().output_parameter_index(),
+                binding.coverage().output_value(),
+                budget,
+            )
+            .map_err(|error| E::Binding(ProductionSemanticKirErrorV1::from(error).into()))?;
         arguments.push(ProductionConditionalSourceArgumentV1 {
-            canonical_parameter: binding.coverage().output_parameter_index(),
-            source_argument: binding.source_argument(),
-            adjusted_argument: binding.adjusted_argument(),
-            semantic_local: binding.semantic_local(),
-            semantic_type: binding.semantic_type(),
+            canonical_parameter: output_argument.canonical_parameter(),
+            source_argument: output_argument.source_argument(),
+            adjusted_argument: output_argument.adjusted_argument(),
+            semantic_local: output_argument.semantic_local(),
+            semantic_type: output_argument.semantic_type(),
         });
         for read in &reads {
             let (ranked_source, _) =
@@ -399,27 +429,15 @@ fn continue_conditional_root_with_ledger_v1<'source, 'ledger>(
                 block: ranked_source.ranked_block(),
                 operation: ranked_source.ranked_operation(),
             });
-            let argument = source
-                .with_checked_arguments_v1(
-                    association.correspondence_owner(),
-                    association.semantic_function(),
-                    budget,
-                    |view| {
-                        conditional_output_argument_v1(
-                            view,
-                            read.parameter() as usize,
-                            read.slice(),
-                        )
-                    },
-                )
-                .map_err(|error| E::Binding(error.into()))?
-                .ok_or(E::Subject("input source argument"))?;
+            let argument = relation
+                .bind_whole_parameter_v1(read.parameter(), read.slice(), budget)
+                .map_err(|error| E::Binding(ProductionSemanticKirErrorV1::from(error).into()))?;
             arguments.push(ProductionConditionalSourceArgumentV1 {
                 canonical_parameter: read.parameter(),
-                source_argument: argument.source,
-                adjusted_argument: argument.adjusted,
-                semantic_local: argument.local,
-                semantic_type: argument.ty,
+                source_argument: argument.source_argument(),
+                adjusted_argument: argument.adjusted_argument(),
+                semantic_local: argument.semantic_local(),
+                semantic_type: argument.semantic_type(),
             });
         }
         let read_storage = reads
@@ -445,7 +463,7 @@ fn continue_conditional_root_with_ledger_v1<'source, 'ledger>(
                     write,
                     reads: read_sites,
                 },
-                *source.semantic_ssa.source_semantic_sha256(),
+                &relation,
                 reference_subjects,
                 budget,
             )
@@ -515,6 +533,70 @@ fn conditional_continuation_vec_v1<T>(
     Ok(rows)
 }
 
+// Relations are created only inside an active borrow of the original ledger.
+// Neither the relation nor its bindings are retained by the durable continuation.
+fn conditional_source_relation_v1<'source, 'work>(
+    source: &'source ProductionPreRankedKirOwnerV1,
+    root: u32,
+    budget: &mut ArgumentBudgetV1<'work>,
+) -> Result<
+    fe2o3_pliron::ProductionSourceArgumentRelationV1<'source, 'work>,
+    ProductionConditionalContinuationErrorV1,
+> {
+    use ProductionConditionalContinuationErrorV1 as E;
+    let mut selected = None;
+    for row in source.correspondence.lowered_functions() {
+        budget.charge_work(3)?;
+        if row.role() == SemanticKirFunctionRoleV1::KernelEntry
+            && row.correspondence_owner().index() == root
+            && selected.replace(row).is_some()
+        {
+            return Err(E::Subject("source root association"));
+        }
+    }
+    let row = selected.ok_or(E::Subject("source root association"))?;
+    source
+        .checked_source_argument_relation_v1(
+            row.correspondence_owner(),
+            row.semantic_function(),
+            budget,
+        )
+        .map_err(|error| E::Binding(error.into()))
+}
+
+fn require_conditional_argument_rows_v1(
+    arguments: &[ProductionConditionalSourceArgumentV1],
+    input: &fe2o3_pliron::ProductionConditionalAggregateInputV1<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionConditionalContinuationErrorV1> {
+    use ProductionConditionalContinuationErrorV1 as E;
+    budget.charge_work(2)?;
+    if input.outputs().len() != 1
+        || arguments.len()
+            != input
+                .reads()
+                .len()
+                .checked_add(1)
+                .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?
+    {
+        return Err(E::Subject("complete source argument roster"));
+    }
+    let rows = std::iter::once(input.outputs()[0].source())
+        .chain(input.reads().iter().map(|read| read.source()));
+    for (argument, row) in arguments.iter().zip(rows) {
+        budget.charge_work(6)?;
+        if argument.canonical_parameter != row.canonical_parameter()
+            || argument.source_argument != row.source_argument()
+            || argument.adjusted_argument != row.adjusted_argument()
+            || argument.semantic_local != row.semantic_local()
+            || argument.semantic_type != row.semantic_type()
+        {
+            return Err(E::Subject("source argument coordinates changed"));
+        }
+    }
+    Ok(())
+}
+
 impl<'source, 'ledger> ProductionConditionalFinalRootV1<'source, 'ledger> {
     fn protected_storage_v1(
         &self,
@@ -563,8 +645,10 @@ impl<'source, 'ledger> ProductionConditionalFinalRootV1<'source, 'ledger> {
             protected,
             &mut self.poisoned,
             |budget| {
+                let relation =
+                    conditional_source_relation_v1(self.source, self.semantic_root, budget)?;
                 graph
-                    .into_aggregate_state_v1(budget)
+                    .into_aggregate_state_v1(&relation, budget)
                     .map_err(conditional_aggregate_error_v1)
             },
         );
@@ -621,18 +705,21 @@ impl ProductionConditionalAggregateStageV1<'_, '_> {
                     .source
                     .check_conditional_source_translation_v1(pending, candidate, budget)
                     .map_err(ProductionConditionalContinuationErrorV1::Source)?;
+                let relation =
+                    conditional_source_relation_v1(root.source, root.semantic_root, budget)?;
                 state
-                    .with_input_v1(budget, |pliron, budget| {
-                        consume(
+                    .with_input_v1(&relation, budget, |pliron, budget| {
+                        require_conditional_argument_rows_v1(&root.arguments, pliron, budget)?;
+                        Ok(consume(
                             &ProductionSourceBoundConditionalAggregateRequestV1 {
                                 translation: &translation,
                                 pliron,
                                 arguments: &root.arguments,
                             },
                             budget,
-                        )
+                        ))
                     })
-                    .map_err(conditional_aggregate_error_v1)
+                    .map_err(conditional_aggregate_error_v1)?
             },
         )
     }
@@ -672,8 +759,9 @@ pub fn with_conditional_root_request_v1<R>(
         protected,
         &mut root.poisoned,
         |budget| {
+            let relation = conditional_source_relation_v1(root.source, root.semantic_root, budget)?;
             graph
-                .into_pending_analysis_v1(budget)
+                .into_pending_analysis_v1(&relation, budget)
                 .map_err(conditional_aggregate_error_v1)
         },
     )?;

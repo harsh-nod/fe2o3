@@ -665,7 +665,10 @@ fn live_preflight_rejects_counter_overflow_without_admission() {
 
 #[test]
 fn reserved_meter_exhaustion_is_sticky_even_for_zero() {
-    let mut meter = ReservedMeter { remaining: Some(3) };
+    let mut meter = ReservedMeter {
+        remaining: Some(3),
+        phase: Phase::HierarchicalOwnership,
+    };
     assert!(meter.charge(3).is_ok() && meter.charge(0).is_ok());
     assert_eq!(meter.remaining, Some(0));
     for charge in [1, 0, 1, usize::MAX] {

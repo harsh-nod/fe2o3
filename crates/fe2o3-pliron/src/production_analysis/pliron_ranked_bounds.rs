@@ -54,6 +54,9 @@ use crate::{
     SparseIndexFailureV1,
 };
 
+pub(crate) mod conditional_v1;
+pub(crate) use conditional_v1 as conditional_bounds_v1;
+
 pub const MAX_RANKED_BOUNDS_BLOCKS: usize = 1_024;
 pub const MAX_RANKED_BOUNDS_OPERATIONS: usize = 65_536;
 pub const MAX_RANKED_BOUNDS_EDGES: usize = MAX_RANKED_BOUNDS_BLOCKS * 2;

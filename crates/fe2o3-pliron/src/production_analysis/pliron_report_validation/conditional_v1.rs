@@ -1,5 +1,6 @@
 use super::*;
 use crate::production::{ConditionalPendingSubjectV1, ConditionalPipelineSubjectV1};
+use crate::production_analysis::conditional_bounds_v1;
 use crate::production_analysis::pliron_pipeline::{
     BoundConditionalInvocationV1, ProducedConditionalPayloadV1 as PayloadV1,
     ProducedConditionalStageV1,
@@ -44,6 +45,7 @@ fn admit_with_observation_v1(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ImplementationV1 {
+    ConditionalBoundsV1,
     ConditionalOwnershipV1,
     ConditionalSemanticV1,
 }
@@ -51,6 +53,7 @@ enum ImplementationV1 {
 impl ImplementationV1 {
     fn at(position: usize) -> Option<Self> {
         match position {
+            1 => Some(Self::ConditionalBoundsV1),
             4 => Some(Self::ConditionalOwnershipV1),
             8 => Some(Self::ConditionalSemanticV1),
             _ => None,
@@ -61,6 +64,7 @@ impl ImplementationV1 {
 impl PayloadV1 {
     fn implementation(&self) -> ImplementationV1 {
         match self {
+            Self::Bounds(_) => ImplementationV1::ConditionalBoundsV1,
             Self::Ownership(_) => ImplementationV1::ConditionalOwnershipV1,
             Self::Semantic(_) => ImplementationV1::ConditionalSemanticV1,
         }
@@ -133,6 +137,79 @@ pub(crate) struct ReportV1 {
     stages: Vec<Option<StageV1>>,
 }
 
+// The payload stays in slot 1 of the same live validation session. This borrow
+// cannot be constructed from an ordinary clean report or copied digest bundle.
+pub(crate) struct BoundsDependencyV1<'a> {
+    input: &'a ConditionalPipelineSubjectV1<'a>,
+    preservation: &'a PlironPassValidationHandleV1,
+    checkpoint: &'a ProductionAnalysisCheckpointV1,
+    manager_address: usize,
+    report: &'a conditional_bounds_v1::ReportV1,
+}
+
+impl BoundsDependencyV1<'_> {
+    pub(crate) fn is_clean(&self) -> bool {
+        self.report.is_clean()
+    }
+
+    pub(crate) fn reads(
+        &self,
+    ) -> Option<&[crate::production_analysis::ConditionalLiveReadBoundV1]> {
+        self.input.conditional_reads()
+    }
+
+    pub(crate) fn validate_v1(
+        &self,
+        input: &ConditionalPipelineSubjectV1<'_>,
+        analyses: &Manager,
+    ) -> Result<(), ErrorV1> {
+        if !std::ptr::eq(input, self.input) {
+            return Err(ErrorV1::Subject);
+        }
+        self.matches_endpoint_v1(
+            input.context(),
+            input.function(),
+            input.census(),
+            input.epoch(),
+            analyses,
+        )
+    }
+
+    pub(crate) fn matches_endpoint_v1(
+        &self,
+        context: &Context,
+        function: &FuncOp,
+        census: ProductionAnalysisInputCensusV1,
+        epoch: u64,
+        analyses: &Manager,
+    ) -> Result<(), ErrorV1> {
+        if self.manager_address != analyses as *const Manager as usize {
+            return Err(ErrorV1::Ledger);
+        }
+        if !std::ptr::eq(context, self.input.context())
+            || function.get_operation() != self.input.function().get_operation()
+            || census != self.input.census()
+            || analyses.input_census() != Some(census)
+        {
+            return Err(ErrorV1::Subject);
+        }
+        if epoch != self.input.epoch() || !current_epoch(self.input) {
+            return Err(ErrorV1::Epoch);
+        }
+        if self.checkpoint.position != 1
+            || self.checkpoint.pass != KernelCheckPassKindV1::MemoryBounds
+            || self.checkpoint.identity != self.preservation.input_identity()
+            || self.checkpoint.mutation_epoch != epoch
+            || self.preservation.input_mutation_epoch() != epoch
+            || !self.report.is_clean()
+            || !self.report.matches_subject(self.input)
+        {
+            return Err(ErrorV1::Checkpoint);
+        }
+        Ok(())
+    }
+}
+
 impl ReportV1 {
     pub(crate) fn typed_root_commitments_v1(&self) -> Option<&[[u64; 4]]> {
         match self.stages.get(8)?.as_ref()? {
@@ -146,6 +223,45 @@ impl ReportV1 {
 }
 
 impl<'a> SessionV1<'a> {
+    pub(crate) fn borrow_bounds_with_observation_v1(
+        &self,
+        analyses: &mut Manager,
+        observer: ReportObservationV1<'_, '_, '_>,
+    ) -> Result<(BoundsDependencyV1<'_>, Bound), ErrorV1> {
+        with_observation_v1(observer, |observer| {
+            if self.manager_address != analyses as *const Manager as usize {
+                return Err(ErrorV1::Ledger);
+            }
+            let bound = bounds_dependency_work_v1(self.input)?;
+            admit_with_observation_v1(analyses, bound, observer)?;
+            let dependency = self.bounds_dependency_v1()?;
+            dependency.validate_v1(self.input, analyses)?;
+            Ok((dependency, bound))
+        })
+    }
+
+    fn bounds_dependency_v1(&self) -> Result<BoundsDependencyV1<'_>, ErrorV1> {
+        let Some(StageV1::Conditional(leaf)) = self.stages.get(1).and_then(Option::as_ref) else {
+            return Err(ErrorV1::Checkpoint);
+        };
+        let PayloadV1::Bounds(report) = &leaf.payload else {
+            return Err(ErrorV1::Family { position: 1 });
+        };
+        if self.next < 2
+            || leaf.implementation != ImplementationV1::ConditionalBoundsV1
+            || leaf.subject != self.input.pending_subject()
+        {
+            return Err(ErrorV1::Subject);
+        }
+        Ok(BoundsDependencyV1 {
+            input: self.input,
+            preservation: &self.preservation,
+            checkpoint: &leaf.checkpoint,
+            manager_address: self.manager_address,
+            report,
+        })
+    }
+
     // Initial exact-byte comparison is performed by the shared pipeline before
     // this constructor; the retained input is never replaced with a fresh epoch.
     pub(crate) fn begin_with_observation_v1(
@@ -365,6 +481,25 @@ impl<'a> SessionV1<'a> {
                     position: self.next,
                 });
             }
+            let mut bound = bound;
+            if let PayloadV1::Bounds(report) = &payload {
+                let query = bounds_dependency_work_v1(self.input)?;
+                let mut check = |observer: ReportObservationV1<'_, '_, '_>| -> Result<(), ErrorV1> {
+                    admit_with_observation_v1(analyses, query, observer)?;
+                    if !report.is_clean() || !report.matches_subject(self.input) {
+                        return Err(ErrorV1::Subject);
+                    }
+                    Ok(())
+                };
+                match observer {
+                    None => check(None)?,
+                    Some(observer) => observer.with_projection(
+                        &|local| bound.checked_then_retain(local, Phase::ReportValidation),
+                        |nested| check(Some(nested)),
+                    )?,
+                }
+                bound = bound.checked_then_retain(query, Phase::ReportValidation)?;
+            }
             // The producer's reservation retains the payload; setup retains the
             // slot backing. Moving between the two introduces no allocation.
             self.stages[self.next] = Some(StageV1::Conditional(LeafV1 {
@@ -443,6 +578,19 @@ impl<'a> SessionV1<'a> {
             ))
         })
     }
+}
+
+fn bounds_dependency_work_v1(input: &ConditionalPipelineSubjectV1<'_>) -> Result<Bound, ErrorV1> {
+    let work = input
+        .census()
+        .operands
+        .checked_add(input.conditional_reads().map_or(0, <[_]>::len))
+        .and_then(|n| n.checked_add(input.occurrences().len()))
+        .and_then(|n| n.checked_mul(8))
+        .and_then(|n| n.checked_add(std::mem::size_of::<ProductionAnalysisInputCensusV1>()))
+        .and_then(|n| n.checked_add(128))
+        .ok_or_else(|| resource("conditional bounds dependency work"))?;
+    Ok(Bound::checked_phase(Phase::ReportValidation, work, 0, 0)?)
 }
 
 fn current_epoch(input: &ConditionalPipelineSubjectV1<'_>) -> bool {

@@ -57,10 +57,20 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_observation_v1(
     analyses: &mut PlironAnalysisManagerV1,
     observer: RankedBoundsObserverV1<'_, '_, '_>,
 ) -> RankedBoundsReportV1 {
+    run_pliron_ranked_bounds_with_capture_v1(context, function, analyses, observer, None)
+}
+
+fn run_pliron_ranked_bounds_with_capture_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+    capture: Option<&mut conditional_v1::ReadCaptureV1>,
+) -> RankedBoundsReportV1 {
     match observer {
-        None => run_pliron_ranked_bounds_inner_v1(context, function, analyses, None),
+        None => run_pliron_ranked_bounds_inner_v1(context, function, analyses, None, capture),
         Some(observer) => observer.with_projection(&Ok, |nested| {
-            run_pliron_ranked_bounds_inner_v1(context, function, analyses, Some(nested))
+            run_pliron_ranked_bounds_inner_v1(context, function, analyses, Some(nested), capture)
         }),
     }
 }
@@ -70,6 +80,7 @@ fn run_pliron_ranked_bounds_inner_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
     observer: RankedBoundsObserverV1<'_, '_, '_>,
+    mut capture: Option<&mut conditional_v1::ReadCaptureV1>,
 ) -> RankedBoundsReportV1 {
     let mut budget = RankedBoundsBudget::default();
     analyses.prepare_function_inventory(context, function);
@@ -388,6 +399,7 @@ fn run_pliron_ranked_bounds_inner_v1(
                         presburger,
                         findings: &mut findings,
                         budget: &mut budget,
+                        capture: capture.as_deref_mut(),
                     },
                     observer,
                 )

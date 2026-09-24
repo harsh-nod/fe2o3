@@ -4,6 +4,11 @@ use kir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKernelIrWorkBudgetV1 as Work,
 };
+#[path = "conditional_aggregate_source_fixture_v1_tests.rs"]
+mod source_fixture;
+use source_fixture::SourceFixture;
+#[path = "conditional_aggregate_source_replay_v1_tests.rs"]
+mod source_replay;
 
 fn canonical(read: bool) -> kir::Module {
     use kir::*;
@@ -241,7 +246,38 @@ fn pending(read: bool, bad_input_bounds: bool) -> ProductionConditionalRankedAna
                 subjects: subjects(),
             });
         },
-        stage,
+        |kernel| {
+            if !read || bad_input_bounds {
+                return stage(kernel);
+            }
+            // The shared helper first validates a one-argument recipe. Rebuild
+            // before effect hashing so the read cannot borrow output bounds.
+            let mut blocks = kernel.blocks().to_vec();
+            let mut entry = blocks[0].operations().to_vec();
+            let input_extent = entry
+                .iter_mut()
+                .find_map(|operation| match operation {
+                    O::View {
+                        result,
+                        dynamic_extents,
+                        ..
+                    }
+                    | O::ViewInSpace {
+                        result,
+                        dynamic_extents,
+                        ..
+                    } if *result == ProductionRankedValueIdV1::new(2) => Some(dynamic_extents),
+                    _ => None,
+                })
+                .expect("input view");
+            assert_eq!(
+                input_extent.as_slice(),
+                [ProductionRankedValueV1::Argument(0)]
+            );
+            input_extent[0] = ProductionRankedValueV1::Argument(1);
+            blocks[0] = ProductionRankedBlockV1::new(entry, blocks[0].terminator().clone());
+            stage(ProductionRankedKernelV1::new(kernel.function_name(), 2, blocks).unwrap())
+        },
     )
 }
 
@@ -282,18 +318,25 @@ fn proposal(read: bool) -> ProductionConditionalRankedProposalV1 {
 
 fn aggregate<'a>(
     module: &'a kir::Module,
+    source: &crate::ProductionSourceArgumentRelationV1<'a, '_>,
     read: bool,
     budget: &mut Budget<'_>,
 ) -> ProductionConditionalAggregateStateV1<'a> {
     let pending = pending(read, false);
+    if read {
+        assert!(
+            pending.mandatory_bounds_failure().is_some(),
+            "independent input length must require conditional MemoryBounds"
+        );
+    }
     budget
         .reserve_storage(pending.retained_analysis_storage_v1())
         .unwrap();
     let canonical = facts(module, budget);
     pending
-        .verify_conditional_final_graph_v1(canonical, proposal(read), [71; 32], subjects(), budget)
+        .verify_conditional_final_graph_v1(canonical, proposal(read), source, subjects(), budget)
         .unwrap()
-        .into_aggregate_state_v1(budget)
+        .into_aggregate_state_v1(source, budget)
         .unwrap()
 }
 
@@ -303,17 +346,31 @@ fn conditional_aggregate_consumes_actual_fill_and_independently_checked_read_exp
     use kir::ConditionalTotalViewAddressDomainV1::{GlobalLaunch, GuardedOutput};
     for read in [false, true] {
         let module = canonical(read);
+        let source = SourceFixture::new(read);
         let mut work = Work::new(usize::MAX);
         let mut budget = Budget::new(&mut work, usize::MAX);
         budget.charge_work(19).unwrap();
         let account = budget.work_ledger_identity_v1();
-        let state = aggregate(&module, read, &mut budget);
+        let relation = source.relation(&module, &mut budget);
+        let state = aggregate(&module, &relation, read, &mut budget);
         let floor = budget.storage();
         state
-            .with_input_v1(&mut budget, |input, budget| {
+            .with_input_v1(&relation, &mut budget, |input, budget| {
                 assert!(budget.work_ledger_identity_v1() == account);
                 assert_eq!(input.reference_subjects(), subjects());
                 assert_eq!(input.outputs().len(), 1);
+                assert_eq!(
+                    input.canonical_output_store_location_v1(),
+                    kir::FunctionOperationLocation::new(kir::BlockId(1), if read { 2 } else { 0 })
+                );
+                let output = input.outputs()[0].source();
+                assert_eq!(output.canonical_parameter(), 0);
+                assert_eq!(output.canonical_value(), kir::ValueId(0));
+                assert_eq!(output.source_argument(), 0);
+                assert_eq!(output.adjusted_argument(), 0);
+                assert_eq!(output.semantic_local().index(), 1);
+                assert_eq!(output.semantic_type().index(), 3);
+                assert_eq!(output.allocation_origin(), 1);
                 assert_eq!(input.reads().len(), usize::from(read));
                 assert!(!input.typed_root_commitments().is_empty());
                 assert_eq!(input.retained_policy_checked_refinement_staging().len(), 1);
@@ -325,6 +382,14 @@ fn conditional_aggregate_consumes_actual_fill_and_independently_checked_read_exp
                     alignment: 4
                 }));
                 if read {
+                    let bound = input.reads()[0].source();
+                    assert_eq!(bound.canonical_parameter(), 1);
+                    assert_eq!(bound.canonical_value(), kir::ValueId(1));
+                    assert_eq!(bound.source_argument(), 1);
+                    assert_eq!(bound.adjusted_argument(), 1);
+                    assert_eq!(bound.semantic_local().index(), 2);
+                    assert_eq!(bound.semantic_type().index(), 4);
+                    assert_eq!(bound.allocation_origin(), 2);
                     assert!(input.premises().contains(&P::ReadableInput {
                         parameter: 1,
                         domain: GuardedOutput
@@ -363,6 +428,7 @@ fn conditional_aggregate_consumes_actual_fill_and_independently_checked_read_exp
 fn conditional_aggregate_rejects_unbound_receipt_and_read_or_cpu_substitution() {
     for case in 0..4 {
         let module = canonical(true);
+        let source = SourceFixture::new(true);
         let mut work = Work::new(usize::MAX);
         let mut budget = Budget::new(&mut work, usize::MAX);
         let pending = pending(true, false);
@@ -421,9 +487,10 @@ fn conditional_aggregate_rejects_unbound_receipt_and_read_or_cpu_substitution() 
             subjects()
         };
         let canonical = facts(&module, &mut budget);
+        let relation = source.relation(&module, &mut budget);
         assert!(
             pending
-                .verify_conditional_final_graph_v1(canonical, proposal, [71; 32], cpu, &mut budget)
+                .verify_conditional_final_graph_v1(canonical, proposal, &relation, cpu, &mut budget)
                 .is_err()
         );
     }
@@ -432,6 +499,7 @@ fn conditional_aggregate_rejects_unbound_receipt_and_read_or_cpu_substitution() 
 #[test]
 fn conditional_aggregate_does_not_replace_a_failed_input_bounds_proof_with_a_premise() {
     let module = canonical(true);
+    let source = SourceFixture::new(true);
     let mut work = Work::new(usize::MAX);
     let mut budget = Budget::new(&mut work, usize::MAX);
     let pending = pending(true, true);
@@ -440,12 +508,13 @@ fn conditional_aggregate_does_not_replace_a_failed_input_bounds_proof_with_a_pre
         .reserve_storage(pending.retained_analysis_storage_v1())
         .unwrap();
     let canonical = facts(&module, &mut budget);
+    let relation = source.relation(&module, &mut budget);
     assert!(
         pending
             .verify_conditional_final_graph_v1(
                 canonical,
                 proposal(true),
-                [71; 32],
+                &relation,
                 subjects(),
                 &mut budget
             )
@@ -457,10 +526,12 @@ fn conditional_aggregate_does_not_replace_a_failed_input_bounds_proof_with_a_pre
 fn conditional_aggregate_rejects_callback_budget_substitution_and_floor_release() {
     for replace in [false, true] {
         let module = canonical(false);
+        let source = SourceFixture::new(false);
         let mut work = Work::new(usize::MAX);
         let mut budget = Budget::new(&mut work, usize::MAX);
-        let state = aggregate(&module, false, &mut budget);
-        let result = state.with_input_v1(&mut budget, |_, budget| {
+        let relation = source.relation(&module, &mut budget);
+        let state = aggregate(&module, &relation, false, &mut budget);
+        let result = state.with_input_v1(&relation, &mut budget, |_, budget| {
             if replace {
                 *budget = Budget::new(Box::leak(Box::new(Work::new(usize::MAX))), usize::MAX);
             } else {
@@ -479,14 +550,18 @@ fn conditional_aggregate_rejects_callback_budget_substitution_and_floor_release(
 #[test]
 fn conditional_aggregate_exhausted_original_ledger_never_exposes_subject() {
     let module = canonical(false);
+    let source = SourceFixture::new(false);
     let mut work = Work::new(usize::MAX);
     let mut budget = Budget::new(&mut work, usize::MAX);
-    let state = aggregate(&module, false, &mut budget);
+    let relation = source.relation(&module, &mut budget);
+    let state = aggregate(&module, &relation, false, &mut budget);
     let floor = budget.storage();
     budget.charge_work(usize::MAX - budget.work()).unwrap();
     assert!(
         state
-            .with_input_v1(&mut budget, |_, _| panic!("unpaid subject exposure"))
+            .with_input_v1(&relation, &mut budget, |_, _| panic!(
+                "unpaid subject exposure"
+            ))
             .is_err()
     );
     assert_eq!(budget.work(), usize::MAX);
@@ -496,9 +571,11 @@ fn conditional_aggregate_exhausted_original_ledger_never_exposes_subject() {
 #[test]
 fn conditional_aggregate_identical_live_replacement_invalidates_epoch() {
     let module = canonical(false);
+    let source = SourceFixture::new(false);
     let mut work = Work::new(usize::MAX);
     let mut budget = Budget::new(&mut work, usize::MAX);
-    let state = aggregate(&module, false, &mut budget);
+    let relation = source.relation(&module, &mut budget);
+    let state = aggregate(&module, &relation, false, &mut budget);
     let pending = state.pending_analysis();
     let context = &pending._session.inner.context;
     let function = pending.analysis.payload.function();
@@ -506,7 +583,9 @@ fn conditional_aggregate_identical_live_replacement_invalidates_epoch() {
     drop(function.deref_mut(context));
     assert!(
         state
-            .with_input_v1(&mut budget, |_, _| panic!("stale subject exposure"))
+            .with_input_v1(&relation, &mut budget, |_, _| panic!(
+                "stale subject exposure"
+            ))
             .is_err()
     );
 }

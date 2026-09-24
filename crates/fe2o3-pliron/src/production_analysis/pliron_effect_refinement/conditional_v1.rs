@@ -27,6 +27,7 @@ enum NestedOwnershipV1 {
 #[derive(Debug, Eq, PartialEq)]
 enum FailureV1 {
     InputMismatch,
+    BoundsDependency(own::BoundsFailureV1),
     BindingMismatch,
     Resource(Limit),
 }
@@ -71,10 +72,18 @@ pub(crate) fn preflight_v1(census: Census, selections: usize) -> Result<Bound, L
         selections,
         1,
     ])?;
-    let work = checked_effect_product_v1(
-        128,
-        checked_effect_product_v1(checked_effect_sum_v1(&[contracts, selections, 1])?, items)?,
-    )?;
+    let work = checked_effect_sum_v1(&[
+        own::BOUNDS_DEPENDENCY_VALIDATION_WORK_V1,
+        checked_effect_product_v1(own::BOUNDS_DEPENDENCY_OBLIGATION_WORK_V1, census.operands)?,
+        checked_effect_product_v1(
+            own::BOUNDS_DEPENDENCY_ROSTER_WORK_V1,
+            checked_effect_sum_v1(&[census.operations, census.ownership_contracts])?,
+        )?,
+        checked_effect_product_v1(
+            128,
+            checked_effect_product_v1(checked_effect_sum_v1(&[contracts, selections, 1])?, items)?,
+        )?,
+    ])?;
     let retained = checked_effect_sum_v1(&[
         std::mem::size_of::<ReportV1>(),
         checked_effect_product_v1(contracts, std::mem::size_of::<BindingV1>())?,
@@ -108,15 +117,16 @@ pub(crate) fn prepare_preadmitted_v1<'a>(
     })
 }
 
-struct ModeV1<'a, 'o, 'p, 'r> {
+struct ModeV1<'a, 'b, 'o, 'p, 'r> {
     additional:
         crate::production_analysis::invocation_receipt_v1::AdditionalObservationV1<'o, 'p, 'r>,
     input: &'a ConditionalPipelineSubjectV1<'a>,
+    bounds: &'b own::BoundsSourceV1<'b>,
     rows: Vec<own::RowV1>,
     out: ReportV1,
 }
 
-impl ModeV1<'_, '_, '_, '_> {
+impl ModeV1<'_, '_, '_, '_, '_> {
     fn binding(
         &self,
         ctx: &Context,
@@ -161,7 +171,7 @@ impl ModeV1<'_, '_, '_, '_> {
     }
 }
 
-impl EffectModeV1 for ModeV1<'_, '_, '_, '_> {
+impl EffectModeV1 for ModeV1<'_, '_, '_, '_, '_> {
     fn no_contracts(&mut self) {
         self.out.ownership = NestedOwnershipV1::NoEffectContracts;
     }
@@ -178,7 +188,7 @@ impl EffectModeV1 for ModeV1<'_, '_, '_, '_> {
             function,
             analyses,
         } = execution;
-        let ownership = own::run_preadmitted_with_admissions_v1(
+        let ownership = own::run_preadmitted_with_bounds_v1(
             own::ExecutionInputV1 {
                 ctx,
                 function,
@@ -189,6 +199,7 @@ impl EffectModeV1 for ModeV1<'_, '_, '_, '_> {
             },
             analyses,
             own::RaceSourceV1::FreshNested,
+            self.bounds,
             std::mem::take(&mut self.rows),
             (observer, self.additional),
         );
@@ -279,6 +290,7 @@ impl ReportV1 {
         let contract = &contracts[0];
         let mut mode = ModeV1 {
             input,
+            bounds: &own::BoundsSourceV1::Ordinary,
             rows: Vec::new(),
             additional: None,
             out: self,
@@ -373,11 +385,33 @@ pub(crate) fn run_preadmitted_with_observation_v1(
     run_preadmitted_with_admissions_v1(ctx, function, analyses, prepared, (observer, None))
 }
 
+#[cfg(test)]
 pub(crate) fn run_preadmitted_with_admissions_v1(
     ctx: &Context,
     function: &FuncOp,
     analyses: &mut Manager,
     prepared: PreparedV1<'_>,
+    observations: (
+        EffectObserverV1<'_, '_, '_>,
+        crate::production_analysis::invocation_receipt_v1::AdditionalObservationV1<'_, '_, '_>,
+    ),
+) -> ReportV1 {
+    run_preadmitted_with_bounds_v1(
+        ctx,
+        function,
+        analyses,
+        prepared,
+        &own::BoundsSourceV1::Ordinary,
+        observations,
+    )
+}
+
+pub(crate) fn run_preadmitted_with_bounds_v1(
+    ctx: &Context,
+    function: &FuncOp,
+    analyses: &mut Manager,
+    prepared: PreparedV1<'_>,
+    bounds: &own::BoundsSourceV1<'_>,
     observations: (
         EffectObserverV1<'_, '_, '_>,
         crate::production_analysis::invocation_receipt_v1::AdditionalObservationV1<'_, '_, '_>,
@@ -393,6 +427,7 @@ pub(crate) fn run_preadmitted_with_admissions_v1(
         let mut mode = ModeV1 {
             additional,
             input,
+            bounds,
             rows,
             out: ReportV1 {
                 common: None,
@@ -411,6 +446,10 @@ pub(crate) fn run_preadmitted_with_admissions_v1(
                 != Some(input.epoch())
         {
             mode.out.failure = Some(FailureV1::InputMismatch);
+            return mode.out;
+        }
+        if let Err(error) = bounds.validate_v1(input, analyses) {
+            mode.out.failure = Some(FailureV1::BoundsDependency(error));
             return mode.out;
         }
         mode.out.common = Some(run_effect_core_v1(

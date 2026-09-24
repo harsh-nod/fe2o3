@@ -11,9 +11,11 @@ pub(crate) use crate::production_analysis::pliron_invocation_trace::{
 };
 use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::AdditionalObservationV1;
 use crate::production_analysis::{
+    conditional_validation_v1::{BoundsDependencyV1, ErrorV1 as BoundsValidationErrorV1},
     pliron_function_inventory::BoundedPlironFunctionInventoryV1 as Inventory,
     pliron_ranked_coverage_v1::{
-        RuleFactsV1, RuleRefusalV1, RuleSiteV1, ValueKeyV1,
+        LiveReadBoundV1, RuleFactsV1, RuleRefusalV1, RuleSiteV1, ValueKeyV1,
+        check_conditional_ownership_live_rule_with_input_bounds_v1,
         check_conditional_ownership_live_rule_with_observation_v1,
     },
 };
@@ -69,6 +71,7 @@ pub(crate) enum SelectionErrorV1 {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FailureV1 {
     Resource(Limit),
+    BoundsDependency(BoundsFailureV1),
     CensusIdentity,
     Inventory {
         resource: &'static str,
@@ -257,15 +260,23 @@ fn overhead(census: Census, selections: usize) -> Result<Bound, Limit> {
         census.attributes,
         1,
     ])?;
-    let work = mul(
-        128,
-        sum(&[
-            mul(sum(&[selections, contracts, 1])?, items)?,
-            mul(values, sum(&[values, census.attributes, 1])?)?,
-            mul(selections, selections)?,
-            1,
-        ])?,
-    )?;
+    let work = sum(&[
+        BOUNDS_DEPENDENCY_VALIDATION_WORK_V1,
+        mul(BOUNDS_DEPENDENCY_OBLIGATION_WORK_V1, census.operands)?,
+        mul(
+            BOUNDS_DEPENDENCY_ROSTER_WORK_V1,
+            sum(&[census.operations, census.ownership_contracts])?,
+        )?,
+        mul(
+            128,
+            sum(&[
+                mul(sum(&[selections, contracts, 1])?, items)?,
+                mul(values, sum(&[values, census.attributes, 1])?)?,
+                mul(selections, selections)?,
+                1,
+            ])?,
+        )?,
+    ])?;
     let slots = contracts.max(4);
     let retained = sum(&[
         std::mem::size_of::<ReportV1>(),
@@ -492,6 +503,89 @@ pub(crate) enum RaceSourceV1<'a> {
     FreshNested,
 }
 
+// Included in each consuming producer's preadmitted local work reservation.
+pub(crate) const BOUNDS_DEPENDENCY_VALIDATION_WORK_V1: usize = std::mem::size_of::<Census>() + 128;
+// The producer retains at most census.operands obligation rows. Endpoint
+// validation and prerequisite cleanliness together scan them at most three times.
+pub(crate) const BOUNDS_DEPENDENCY_OBLIGATION_WORK_V1: usize = 16;
+// matches_subject compares at most census.operations reads and
+// census.ownership_contracts captured occurrences, including each row's coordinates.
+pub(crate) const BOUNDS_DEPENDENCY_ROSTER_WORK_V1: usize = 96;
+
+pub(crate) enum BoundsSourceV1<'a> {
+    Ordinary,
+    SameInvocation(BoundsDependencyV1<'a>),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum BoundsFailureV1 {
+    Validation(BoundsValidationErrorV1),
+    NotClean,
+}
+
+impl BoundsSourceV1<'_> {
+    pub(crate) fn validate_v1(
+        &self,
+        subject: &crate::production::ConditionalPipelineSubjectV1<'_>,
+        analyses: &Manager,
+    ) -> Result<(), BoundsFailureV1> {
+        if let Self::SameInvocation(dependency) = self {
+            dependency
+                .validate_v1(subject, analyses)
+                .map_err(BoundsFailureV1::Validation)?;
+            if !dependency.is_clean() {
+                return Err(BoundsFailureV1::NotClean);
+            }
+        }
+        Ok(())
+    }
+
+    fn matches_endpoint_v1(
+        &self,
+        ctx: &Context,
+        function: &FuncOp,
+        census: Census,
+        expected_epoch: u64,
+        analyses: &Manager,
+    ) -> Result<(), BoundsFailureV1> {
+        if let Self::SameInvocation(dependency) = self {
+            dependency
+                .matches_endpoint_v1(ctx, function, census, expected_epoch, analyses)
+                .map_err(BoundsFailureV1::Validation)?;
+            if !dependency.is_clean() {
+                return Err(BoundsFailureV1::NotClean);
+            }
+        }
+        Ok(())
+    }
+
+    fn reads(&self) -> Option<&[LiveReadBoundV1]> {
+        match self {
+            Self::Ordinary => None,
+            Self::SameInvocation(dependency) => dependency.reads(),
+        }
+    }
+}
+
+fn check_selected_live_rule_v1(
+    endpoint: (&Context, &FuncOp),
+    inventory: &Inventory,
+    identity: (Census, u64),
+    selection: (Ptr<Operation>, Value),
+    reads: Option<&[LiveReadBoundV1]>,
+    analyses: &mut Manager,
+    additional: AdditionalObservationV1<'_, '_, '_>,
+) -> Result<Result<RuleFactsV1, RuleRefusalV1>, Limit> {
+    match reads {
+        Some(reads) => check_conditional_ownership_live_rule_with_input_bounds_v1(
+            endpoint, inventory, identity.0, identity.1, selection, reads, analyses, additional,
+        ),
+        None => check_conditional_ownership_live_rule_with_observation_v1(
+            endpoint, inventory, identity.0, identity.1, selection, analyses, additional,
+        ),
+    }
+}
+
 // The pipeline admits the full-roster ownership/prerequisite bound and prepares
 // dependency/trace caches once. It retains stage scratch across self-admitting
 // live queries. This entry does not repeat those admissions or refund them.
@@ -567,10 +661,32 @@ pub(crate) struct ExecutionInputV1<'a> {
     pub(crate) occurrences: &'a [OccurrenceV1],
 }
 
+#[cfg(test)]
 pub(crate) fn run_preadmitted_with_admissions_v1(
     input: ExecutionInputV1<'_>,
     am: &mut Manager,
     race: RaceSourceV1<'_>,
+    rows: Vec<RowV1>,
+    observations: (
+        OwnershipObserverV1<'_, '_, '_>,
+        AdditionalObservationV1<'_, '_, '_>,
+    ),
+) -> ReportV1 {
+    run_preadmitted_with_bounds_v1(
+        input,
+        am,
+        race,
+        &BoundsSourceV1::Ordinary,
+        rows,
+        observations,
+    )
+}
+
+pub(crate) fn run_preadmitted_with_bounds_v1(
+    input: ExecutionInputV1<'_>,
+    am: &mut Manager,
+    race: RaceSourceV1<'_>,
+    bounds: &BoundsSourceV1<'_>,
     rows: Vec<RowV1>,
     observations: (
         OwnershipObserverV1<'_, '_, '_>,
@@ -594,6 +710,9 @@ pub(crate) fn run_preadmitted_with_admissions_v1(
             admitted: am.resource_upper_bound(),
         };
         let result = (|| -> Result<(), FailureV1> {
+            bounds
+                .matches_endpoint_v1(ctx, function, census, expected_epoch, am)
+                .map_err(FailureV1::BoundsDependency)?;
             check_epoch(ctx, expected_epoch)?;
             check_input(am, census, occurrences.len())?;
             if !out.selected.is_empty() || out.selected.capacity() != occurrences.len() {
@@ -624,8 +743,8 @@ pub(crate) fn run_preadmitted_with_admissions_v1(
                 .contracts
                 .iter()
                 .any(|contract| contract.coverage == OwnershipCoverageAttr::ExactEffectDomain);
-            let mut prerequisites = prepare_ownership_prerequisites_with_observation_v1(
-                ctx, function, am, &prepared, observer,
+            let mut prerequisites = prepare_ownership_prerequisites_with_bounds_v1(
+                ctx, function, am, &prepared, observer, bounds,
             )
             .map_err(FailureV1::Prerequisite)?;
             if let Some(detail) = prerequisites.mandatory_bounds_failure.take() {
@@ -672,12 +791,12 @@ pub(crate) fn run_preadmitted_with_admissions_v1(
                         .view_type(ctx)
                         .is_some_and(|ty| ty.deref(ctx).shape() == [DYNAMIC_EXTENT]);
                 let checked = if supported {
-                    check_conditional_ownership_live_rule_with_observation_v1(
+                    check_selected_live_rule_v1(
                         (ctx, function),
                         &prepared.inventory,
-                        census,
-                        expected_epoch,
+                        (census, expected_epoch),
                         (occurrences[index].1, occurrences[index].2),
+                        bounds.reads(),
                         am,
                         additional,
                     )?
@@ -734,3 +853,7 @@ impl ReportV1 {
                 .is_some_and(HierarchicalOwnershipReportV1::is_clean)
     }
 }
+
+#[cfg(test)]
+#[path = "conditional_bounds_consumption_v1_tests.rs"]
+mod bounds_consumption_tests;

@@ -189,6 +189,24 @@ fn prepare_ownership_prerequisites_with_observation_v1(
     prepared: &PreparedOwnershipContractsV1,
     observer: OwnershipObserverV1<'_, '_, '_>,
 ) -> Result<PreparedOwnershipPrerequisitesV1, HierarchicalOwnershipReportV1> {
+    prepare_ownership_prerequisites_with_bounds_v1(
+        context,
+        function,
+        analyses,
+        prepared,
+        observer,
+        &conditional_execution_v1::BoundsSourceV1::Ordinary,
+    )
+}
+
+fn prepare_ownership_prerequisites_with_bounds_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    prepared: &PreparedOwnershipContractsV1,
+    observer: OwnershipObserverV1<'_, '_, '_>,
+    bounds: &conditional_execution_v1::BoundsSourceV1<'_>,
+) -> Result<PreparedOwnershipPrerequisitesV1, HierarchicalOwnershipReportV1> {
     let contracts = &prepared.contracts;
     let inventory = &prepared.inventory;
     let coverage_summary = prepared.coverage_summary;
@@ -236,14 +254,25 @@ fn prepare_ownership_prerequisites_with_observation_v1(
     });
     let mut mandatory_bounds_failure = None;
     if needs_mandatory_bounds {
-        let bounds = run_pliron_ranked_bounds_check_with_observation_v1(
-            context, function, analyses, observer,
-        );
-        if !bounds.is_clean() {
-            let detail = bounded_nested_findings_detail_v1(
-                "mandatory ranked bounds failed: ",
-                bounds.findings(),
-            );
+        let failure = match bounds {
+            conditional_execution_v1::BoundsSourceV1::Ordinary => {
+                let report = run_pliron_ranked_bounds_check_with_observation_v1(
+                    context, function, analyses, observer,
+                );
+                (!report.is_clean()).then(|| {
+                    bounded_nested_findings_detail_v1(
+                        "mandatory ranked bounds failed: ",
+                        report.findings(),
+                    )
+                })
+            }
+            conditional_execution_v1::BoundsSourceV1::SameInvocation(dependency) => {
+                // The conditional entry validated this borrow before collecting contracts.
+                (!dependency.is_clean())
+                    .then(|| "mandatory conditional ranked bounds failed".to_owned())
+            }
+        };
+        if let Some(detail) = failure {
             if needs_effect_domain {
                 return Err(one_with_summary(
                     HierarchicalOwnershipFindingV1::EffectDomainIncomplete { detail },

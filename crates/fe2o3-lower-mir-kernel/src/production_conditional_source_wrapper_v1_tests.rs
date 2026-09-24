@@ -1,4 +1,5 @@
 include!("production_conditional_continuation_accounting_v1_tests.rs");
+include!("production_conditional_continuation_source_relation_v1_tests.rs");
 
 fn conditional_wrapper_pending(
     source: &ProductionPreRankedKirOwnerV1,

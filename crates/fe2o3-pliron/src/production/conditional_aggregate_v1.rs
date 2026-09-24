@@ -2,6 +2,7 @@
 //! The statement is an implication. It is never unconditional V5 evidence.
 
 use super::*;
+use crate::ProductionSourceArgumentRelationV1;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as ResourceError,
@@ -10,6 +11,10 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
+
+#[path = "conditional_aggregate_source_v1.rs"]
+mod source_v1;
+pub use source_v1::ProductionConditionalSourceCoordinatesV1;
 
 pub use fe2o3_functional_proof::FunctionalRefinementSubjectsV2 as ProductionConditionalReferenceSubjectsV1;
 
@@ -62,6 +67,7 @@ pub struct ProductionConditionalRankedProposalV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionConditionalOutputBindingV1 {
     parameter: u32,
+    source: ProductionConditionalSourceCoordinatesV1,
     index: ProductionRankedValueV1,
     extent: ProductionRankedValueV1,
     view: ProductionRankedValueV1,
@@ -72,6 +78,9 @@ pub struct ProductionConditionalOutputBindingV1 {
 }
 
 impl ProductionConditionalOutputBindingV1 {
+    pub const fn source(self) -> ProductionConditionalSourceCoordinatesV1 {
+        self.source
+    }
     pub const fn canonical_parameter(self) -> u32 {
         self.parameter
     }
@@ -102,12 +111,16 @@ impl ProductionConditionalOutputBindingV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionConditionalReadBindingV1 {
     canonical: ConditionalTotalViewReadV1,
+    source: ProductionConditionalSourceCoordinatesV1,
     site: ProductionConditionalReadProposalV1,
     view: ProductionRankedValueV1,
     index: ProductionRankedValueV1,
 }
 
 impl ProductionConditionalReadBindingV1 {
+    pub const fn source(self) -> ProductionConditionalSourceCoordinatesV1 {
+        self.source
+    }
     pub const fn canonical(self) -> ConditionalTotalViewReadV1 {
         self.canonical
     }
@@ -126,6 +139,7 @@ impl ProductionConditionalReadBindingV1 {
 #[allow(clippy::large_enum_variant)]
 pub enum ProductionConditionalAggregateErrorV1 {
     Resource(ResourceError),
+    Source(crate::ProductionSourceArgumentErrorV1),
     Canonical(fe2o3_kernel_ir::ConditionalTotalViewErrorV1),
     Coverage(crate::ProductionRankedRecipeCoverageErrorV1),
     Session(ProductionSessionErrorV1),
@@ -151,11 +165,15 @@ pub struct ProductionConditionalFinalGraphV1<'canonical> {
     reads: Vec<ProductionConditionalReadBindingV1>,
     premises: Vec<ProductionConditionalRuntimePremiseV1>,
     source_semantic_identity: DigestV1,
+    source_owner: &'canonical crate::ProductionSemanticSsaOwnerV1,
+    source_association: &'canonical crate::source_argument_v1::SemanticKirFunctionCorrespondenceV1,
     reference_subjects: ProductionConditionalReferenceSubjectsV1,
     pipeline: ProductionConditionalPipelineAnalysisV1,
 }
 
-/// Retains the final graph through aggregate preparation and verifier replay.
+/// Retains checked graph/source facts through aggregate preparation and replay.
+/// This state does not retain or authenticate an original work account. Lower's
+/// source-bound request additionally requires its original-ledger continuation.
 pub struct ProductionConditionalAggregateStateV1<'canonical> {
     identity: DigestV1,
     graph: ProductionConditionalFinalGraphV1<'canonical>,
@@ -165,6 +183,7 @@ pub struct ProductionConditionalAggregateStateV1<'canonical> {
 /// subject data must still be authenticated by the backend reference join.
 pub struct ProductionConditionalAggregateInputV1<'a> {
     state: &'a ProductionConditionalAggregateStateV1<'a>,
+    source: &'a ProductionSourceArgumentRelationV1<'a, 'a>,
 }
 
 /// Shared graph view for formula replay. The conditional variant intentionally
@@ -225,23 +244,28 @@ fn reserve_rows<T>(
 }
 
 impl ProductionConditionalRankedAnalysisV1 {
+    /// Replays the checked source ABI relation before deriving conditional read
+    /// bounds. This does not replace lower's complete source-body translation
+    /// replay or the backend's authenticated CPU-reference join.
     #[allow(clippy::result_large_err)]
     pub fn verify_conditional_final_graph_v1<'canonical>(
         self,
         canonical: ConditionalTotalViewFactsV1<'canonical>,
         proposal: ProductionConditionalRankedProposalV1,
-        source_semantic_identity: [u8; 32],
+        source: &ProductionSourceArgumentRelationV1<'canonical, '_>,
         reference_subjects: ProductionConditionalReferenceSubjectsV1,
         budget: &mut Budget<'_>,
     ) -> Result<ProductionConditionalFinalGraphV1<'canonical>, ProductionConditionalAggregateErrorV1>
     {
         use ProductionConditionalAggregateErrorV1 as E;
         budget.charge_work(16)?;
-        if source_semantic_identity == [0; 32] || proposal.reads.len() != canonical.read_count() {
+        source_v1::replay_canonical(source, &canonical, budget)?;
+        if proposal.reads.len() != canonical.read_count() {
             return Err(E::Subject("canonical/source/read roster"));
         }
         budget.reserve_storage(std::mem::size_of::<ProductionConditionalFinalGraphV1<'_>>())?;
         let kernel = self.kernel().map_err(E::Session)?;
+        source_v1::require_global_x(kernel, proposal.index, budget)?;
         let [ownership] = self.selections() else {
             return Err(E::Subject("conditional output roster"));
         };
@@ -289,23 +313,33 @@ impl ProductionConditionalRankedAnalysisV1 {
             return Err(E::Subject("complete ranked read roster"));
         }
         let effect = selected.ok_or(E::Subject("missing reference effect"))?;
-        let exits = crate::check_ranked_recipe_paths_v1(
-            kernel,
-            proposal.index,
-            proposal.extent,
-            proposal.write,
+        let output_source = source_v1::bind(
+            source,
+            canonical.output_parameter_index(),
+            canonical.output_value(),
             budget,
-        )
-        .map_err(E::Coverage)?;
+        )?;
+        if source_v1::view_extent(
+            kernel,
+            ownership.view,
+            output_source,
+            canonical.element_bytes(),
+            true,
+            budget,
+        )? != proposal.extent
+        {
+            return Err(E::Subject("source-bound output extent"));
+        }
         let output = ProductionConditionalOutputBindingV1 {
             parameter: canonical.output_parameter_index(),
+            source: output_source,
             index: proposal.index,
             extent: proposal.extent,
             view: ownership.view,
             write: proposal.write,
             ownership: *ownership,
             effect,
-            exits,
+            exits: [0; 2],
         };
         let mut raw_reads = reserve_rows(canonical.read_count(), budget)?;
         canonical
@@ -318,6 +352,7 @@ impl ProductionConditionalRankedAnalysisV1 {
             })
             .map_err(E::Canonical)?;
         let mut reads = reserve_rows(raw_reads.len(), budget)?;
+        let mut read_bounds = reserve_rows(raw_reads.len(), budget)?;
         let mut premises = reserve_rows(
             raw_reads
                 .len()
@@ -372,8 +407,26 @@ impl ProductionConditionalRankedAnalysisV1 {
             if indices != &[proposal.index] || *view == output.view {
                 return Err(E::Subject("read coordinate or output alias"));
             }
+            let read_source = source_v1::bind(source, read.parameter(), read.slice(), budget)?;
+            let extent = source_v1::view_extent(
+                kernel,
+                *view,
+                read_source,
+                read.element_bytes(),
+                false,
+                budget,
+            )?;
+            read_bounds.push(crate::ProductionConditionalRankedReadBoundV1 {
+                block: site.block,
+                operation: site.operation,
+                view: *view,
+                index: proposal.index,
+                extent,
+                domain: read.access_domain(),
+            });
             reads.push(ProductionConditionalReadBindingV1 {
                 canonical: *read,
+                source: read_source,
                 site,
                 view: *view,
                 index: proposal.index,
@@ -401,9 +454,26 @@ impl ProductionConditionalRankedAnalysisV1 {
             .ok_or(ResourceError::Arithmetic)?;
         drop(raw_reads);
         budget.release_storage(raw_storage)?;
-        let pipeline = self
-            .check_pipeline_with_budget_v1(budget)
-            .map_err(E::Pipeline)?;
+        let exits = crate::check_ranked_recipe_paths_with_input_bounds_v1(
+            kernel,
+            proposal.index,
+            proposal.extent,
+            proposal.write,
+            &read_bounds,
+            budget,
+        )
+        .map_err(E::Coverage)?;
+        let output = ProductionConditionalOutputBindingV1 { exits, ..output };
+        let pipeline = self.check_pipeline_with_source_bounds_v1(&read_bounds, budget);
+        let read_bound_storage = read_bounds
+            .capacity()
+            .checked_mul(std::mem::size_of::<
+                crate::ProductionConditionalRankedReadBoundV1,
+            >())
+            .ok_or(ResourceError::Arithmetic)?;
+        drop(read_bounds);
+        budget.release_storage(read_bound_storage)?;
+        let pipeline = pipeline.map_err(E::Pipeline)?;
         pipeline
             .require_current_graph_v1(budget)
             .map_err(E::Session)?;
@@ -412,7 +482,11 @@ impl ProductionConditionalRankedAnalysisV1 {
             output: [output],
             reads,
             premises,
-            source_semantic_identity: DigestV1::from_untrusted_bytes(source_semantic_identity),
+            source_semantic_identity: DigestV1::from_untrusted_bytes(
+                *source.source_semantic_identity(),
+            ),
+            source_owner: source.source_owner(),
+            source_association: source.association(),
             reference_subjects,
             pipeline,
         })
@@ -427,11 +501,13 @@ impl<'canonical> ProductionConditionalFinalGraphV1<'canonical> {
     #[allow(clippy::result_large_err)]
     pub fn into_aggregate_state_v1(
         self,
+        source: &ProductionSourceArgumentRelationV1<'_, '_>,
         budget: &mut Budget<'_>,
     ) -> Result<
         ProductionConditionalAggregateStateV1<'canonical>,
         ProductionConditionalAggregateErrorV1,
     > {
+        self.require_source_v1(source, budget)?;
         self.pipeline
             .require_current_graph_v1(budget)
             .map_err(ProductionConditionalAggregateErrorV1::Session)?;
@@ -515,6 +591,16 @@ impl<'canonical> ProductionConditionalFinalGraphV1<'canonical> {
                     ))?
                     .digest())?;
                 put(self.source_semantic_identity.as_bytes())?;
+                put(&self
+                    .source_association
+                    .correspondence_owner()
+                    .index()
+                    .to_le_bytes())?;
+                put(&self
+                    .source_association
+                    .semantic_function()
+                    .index()
+                    .to_le_bytes())?;
                 for digest in [
                     self.reference_subjects.safe_reference_identity(),
                     self.reference_subjects.safe_reference_source_hash(),
@@ -550,6 +636,7 @@ impl<'canonical> ProductionConditionalFinalGraphV1<'canonical> {
                     None => put(&[0])?,
                 }
                 for output in &self.output {
+                    source_v1::emit(output.source, &mut put)?;
                     for value in [
                         output.index,
                         output.extent,
@@ -574,6 +661,7 @@ impl<'canonical> ProductionConditionalFinalGraphV1<'canonical> {
                 }
                 put(&(self.reads.len() as u64).to_le_bytes())?;
                 for read in &self.reads {
+                    source_v1::emit(read.source, &mut put)?;
                     put(&read.canonical.parameter().to_le_bytes())?;
                     for value in [
                         read.canonical.slice(),
@@ -683,9 +771,10 @@ impl ProductionConditionalAggregateStateV1<'_> {
     #[allow(clippy::result_large_err)]
     pub fn into_pending_analysis_v1(
         self,
+        source: &ProductionSourceArgumentRelationV1<'_, '_>,
         budget: &mut Budget<'_>,
     ) -> Result<ProductionConditionalRankedAnalysisV1, ProductionConditionalAggregateErrorV1> {
-        self.with_input_v1(budget, |_, _| ())?;
+        self.with_input_v1(source, budget, |_, _| ())?;
         let ProductionConditionalFinalGraphV1 {
             canonical,
             output,
@@ -701,12 +790,18 @@ impl ProductionConditionalAggregateStateV1<'_> {
     pub fn pending_analysis(&self) -> &ProductionConditionalRankedAnalysisV1 {
         self.graph.pending_analysis()
     }
+    /// Replays source and graph checks on the supplied active account. A fresh
+    /// relation checked on a different account can pass: this public state does
+    /// not attest cumulative original-ledger history. Production lower creates
+    /// the relation inside its original-ledger guard before minting a request.
     #[allow(clippy::result_large_err)]
     pub fn with_input_v1<R>(
         &self,
+        source: &ProductionSourceArgumentRelationV1<'_, '_>,
         budget: &mut Budget<'_>,
         consume: impl for<'a> FnOnce(&ProductionConditionalAggregateInputV1<'a>, &mut Budget<'_>) -> R,
     ) -> Result<R, ProductionConditionalAggregateErrorV1> {
+        self.graph.require_source_v1(source, budget)?;
         self.graph
             .pipeline
             .require_current_graph_v1(budget)
@@ -719,12 +814,16 @@ impl ProductionConditionalAggregateStateV1<'_> {
         let account = budget.work_ledger_identity_v1();
         let floor = budget.storage();
         let result = consume(
-            &ProductionConditionalAggregateInputV1 { state: self },
+            &ProductionConditionalAggregateInputV1 {
+                state: self,
+                source,
+            },
             budget,
         );
         if budget.work_ledger_identity_v1() != account || budget.storage() < floor {
             return Err(ResourceError::Accounting.into());
         }
+        self.graph.require_source_v1(source, budget)?;
         self.graph
             .pipeline
             .require_current_graph_v1(budget)
@@ -734,6 +833,10 @@ impl ProductionConditionalAggregateStateV1<'_> {
 }
 
 impl<'a> ProductionConditionalAggregateInputV1<'a> {
+    /// The checked canonical store location, not a ranked write ordinal.
+    pub fn canonical_output_store_location_v1(&self) -> FunctionOperationLocation {
+        self.state.graph.canonical.store_location()
+    }
     pub fn kernel(&self) -> &'a ProductionRankedKernelV1 {
         self.state.graph.kernel()
     }
@@ -796,6 +899,7 @@ impl<'a> ProductionConditionalAggregateInputV1<'a> {
         &self,
         budget: &mut Budget<'_>,
     ) -> Result<(), ProductionConditionalAggregateErrorV1> {
+        self.state.graph.require_source_v1(self.source, budget)?;
         self.state
             .graph
             .pipeline
