@@ -21,6 +21,9 @@ use reserved_fe2o3_symbols::{
 
 #[path = "fe2o3-rustc-extract/ordered_origin_v1.rs"]
 mod ordered_origin_v1;
+include!("fe2o3-rustc-extract/ordered_composition_v1.rs");
+include!("fe2o3-rustc-extract/composition_promotion_v1.rs");
+include!("fe2o3-rustc-extract/normal_composition_v1.rs");
 
 const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
 const EXTRACT_RANKED_MEMORY_ENV_V1: &str = "FE2O3_EXTRACT_RANKED_MEMORY_V1";
@@ -60,6 +63,21 @@ fn main() {
     let physical_entry_v20 = env::var_os(EXTRACT_PHYSICAL_ENTRY_DIRECTORY_ENV_V20);
     let physical_global_copy_v21 = env::var_os(EXTRACT_PHYSICAL_GLOBAL_COPY_DIRECTORY_ENV_V21);
     let physical_lds_exchange_v22 = env::var_os(EXTRACT_PHYSICAL_LDS_EXCHANGE_DIRECTORY_ENV_V22);
+    let ordered_composition_v1 = env::var_os(EXTRACT_ORDERED_COMPOSITION_DIRECTORY_ENV_V1);
+    if let Err(error) = require_disjoint_ordered_composition_diagnostic_v1(
+        ordered_composition_v1.is_some(),
+        [
+            diagnostic_kir_v16.is_some(),
+            diagnostic_kir_v17.is_some(),
+            diagnostic_kir_v19.is_some(),
+            physical_entry_v20.is_some(),
+            physical_global_copy_v21.is_some(),
+            physical_lds_exchange_v22.is_some(),
+        ],
+    ) {
+        eprintln!("fe2o3 rustc extraction: {error}");
+        std::process::exit(1);
+    }
     if let Err(error) = require_disjoint_physical_lds_exchange_diagnostic_v22(
         physical_lds_exchange_v22.is_some(),
         [
@@ -150,6 +168,9 @@ fn main() {
     })
     .and_then(|prepared| {
         select_physical_lds_exchange_diagnostic_v22_mode(prepared, physical_lds_exchange_v22)
+    })
+    .and_then(|prepared| {
+        select_ordered_composition_diagnostic_v1_mode(prepared, ordered_composition_v1)
     });
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
@@ -212,6 +233,7 @@ enum ExtractionModeV1 {
     PhysicalEntryDiagnosticV20(OsString),
     PhysicalGlobalCopyDiagnosticV21(OsString),
     PhysicalLdsExchangeDiagnosticV22(OsString),
+    OrderedCompositionDiagnosticV1(OsString),
 }
 
 fn require_disjoint_physical_entry_diagnostic_v20(
@@ -788,7 +810,9 @@ fn passthrough_command(executable: OsString, forwarded_args: Vec<OsString>) -> C
         .args(forwarded_args)
         .env_remove(CRATE_BINDING_ID_ENV_V1)
         .env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)
-        .env_remove(ordered_origin_v1::OUTPUT_ENV);
+        .env_remove(ordered_origin_v1::OUTPUT_ENV)
+        .env_remove(EXTRACT_COMPOSITION_PROMOTION_REQUEST_ENV_V1)
+        .env_remove(EXTRACT_COMPOSITION_NORMAL_ENV_V1);
     command
 }
 
@@ -801,6 +825,15 @@ fn execute_passthrough(executable: OsString, forwarded_args: Vec<OsString>) -> R
 }
 
 fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
+    require_normal_composition_mode_v1(
+        &selected.mode,
+        selected.crate_binding_output.is_some(),
+        env::var_os(EXTRACT_COMPOSITION_NORMAL_ENV_V1).as_deref(),
+    )?;
+    let promotion_request = selected_composition_promotion_request_v1(
+        &selected.mode,
+        env::var_os(EXTRACT_COMPOSITION_PROMOTION_REQUEST_ENV_V1),
+    )?;
     let origin_output = ordered_origin_v1::selected_output(
         &selected.mode,
         env::var_os(ordered_origin_v1::OUTPUT_ENV),
@@ -887,6 +920,23 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
                 &selected.args,
                 std::path::Path::new(&output),
             )?;
+        }
+        ExtractionModeV1::OrderedCompositionDiagnosticV1(output) => {
+            if let Some(request) = promotion_request {
+                #[cfg(target_os = "linux")]
+                rustc_codegen_fe2o3::run_ordered_composition_source_promotion_driver_v1(
+                    &selected.args,
+                    std::path::Path::new(&output),
+                    &request,
+                )?;
+                #[cfg(not(target_os = "linux"))]
+                return Err("ordered composition source promotion requires Linux".into());
+            } else {
+                rustc_codegen_fe2o3::run_diagnostic_ordered_composition_extraction_driver_v1(
+                    &selected.args,
+                    std::path::Path::new(&output),
+                )?;
+            }
         }
         ExtractionModeV1::PhysicalLdsExchangeDiagnosticV22(output) => {
             rustc_codegen_fe2o3::run_diagnostic_physical_lds_exchange_extraction_driver_v22(
@@ -995,6 +1045,9 @@ mod tests {
     include!("fe2o3-rustc-extract/physical_entry_v20_tests.rs");
     include!("fe2o3-rustc-extract/physical_global_copy_v21_tests.rs");
     include!("fe2o3-rustc-extract/physical_lds_exchange_v22_tests.rs");
+    include!("fe2o3-rustc-extract/ordered_composition_v1_tests.rs");
+    include!("fe2o3-rustc-extract/composition_promotion_v1_tests.rs");
+    include!("fe2o3-rustc-extract/normal_composition_v1_tests.rs");
 
     #[test]
     fn simulation_bundle_environment_is_versioned_and_mutually_exclusive() {

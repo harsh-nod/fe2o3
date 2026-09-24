@@ -11,6 +11,10 @@ use std::rc::Rc;
 pub(super) mod abi;
 
 const URI_CAPACITY: usize = 128;
+#[path = "runtime_debug_empty_metadata_v1.rs"]
+mod empty;
+pub(super) use empty::DebugEmptyRetirementTransportV1;
+
 static NOTIFICATION_SIDE_EFFECT: AtomicU8 = AtomicU8::new(0);
 
 /// A genuine executable rendezvous function. Preparation never calls it.
@@ -43,6 +47,8 @@ enum Phase {
     Prepared,
     ActiveAbsent,
     ActivePresent,
+    LocalRuntimeDisabled,
+    LocalTrapCleared,
     #[cfg(test)]
     Detached,
     Poisoned,
@@ -285,7 +291,10 @@ impl MetadataStorageV1 {
     fn take_storage_to_retain(&mut self) -> Option<(Vec<Record>, Vec<u8>)> {
         if matches!(
             self.phase,
-            Phase::ActiveAbsent | Phase::ActivePresent | Phase::Poisoned
+            Phase::ActiveAbsent
+                | Phase::ActivePresent
+                | Phase::LocalRuntimeDisabled
+                | Phase::Poisoned
         ) {
             Some((
                 core::mem::take(&mut self.record),

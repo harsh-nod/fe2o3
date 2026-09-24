@@ -49,6 +49,44 @@ impl<T> Drop for RetainNativeOnDropV1<T> {
     }
 }
 
+/// Only the concrete full local teardown object can open ColdResources retention.
+/// This is deliberately not a generic disarm/take API.
+pub(super) fn release_after_local_empty_teardown(
+    mut witness: super::empty_queue::DebugLocalTeardownWitnessV1,
+) -> Result<
+    super::Gfx950DebugColdPreparationFactsV1,
+    (
+        super::empty_queue::DebugLocalTeardownWitnessV1,
+        super::empty_queue::Gfx950DebugLocalErrorV1,
+    ),
+> {
+    if let Err(error) =
+        crate::queue_linux::ProcessGlobalKfdDebugReservationV1::finish_local_empty_teardown(
+            &mut witness,
+        )
+    {
+        return Err((
+            witness,
+            super::empty_queue::Gfx950DebugLocalErrorV1::Native(format!("{error:?}")),
+        ));
+    }
+    let super::Gfx950DebugColdOwnerV1 {
+        mut resources,
+        _reservation,
+        facts,
+    } = witness.into_retired_cold();
+    // The terminal witness proved actual native retirement of every resource.
+    // Taking only this specialized ColdResources value prevents its fallback
+    // retention; native descriptors are closed by ordinary Rust Drop LAST.
+    let retired = resources
+        .value
+        .take()
+        .expect("terminal retained cold custody");
+    drop(retired);
+    drop(_reservation);
+    Ok(facts)
+}
+
 #[cfg(test)]
 #[path = "runtime_debug_cold_retention_v1_tests.rs"]
 mod tests;

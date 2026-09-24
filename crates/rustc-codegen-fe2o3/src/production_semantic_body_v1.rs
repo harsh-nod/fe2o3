@@ -307,11 +307,22 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     callables: HashMap<Instance<'tcx>, ProductionSemanticCallableOwnerRecordV1>,
     inline_sources: crate::production_inline_source_occurrences_v30::InlineSourceOccurrencesV30,
     ordered_sources: crate::production_ordered_source_occurrences_v31::OrderedSourceOccurrencesV31,
-    program_sources: crate::production_ordered_program_source_occurrences_v32::OrderedProgramSourceOccurrencesV32<'tcx>,
-    complete_body_annotation: Option<crate::production_complete_body_annotation_vnext::CompleteBodyCallAnnotationVNext<'tcx>>,
-    physical_entry_annotations: Option<crate::production_physical_entry_annotation_v37::PhysicalEntryAnnotationsV37<'tcx>>,
-    physical_global_copy_annotations: Option<crate::production_physical_global_copy_annotation_v38::PhysicalGlobalCopyAnnotationsV38<'tcx>>,
-    physical_lds_exchange_annotations: Option<crate::production_physical_lds_exchange_annotation_v39::PhysicalLdsExchangeAnnotationsV39<'tcx>>,
+    program_sources: crate::production_ordered_composition_source_v1::OrderedProgramSourcesV1<'tcx>,
+    complete_body_annotation: Option<
+        crate::production_complete_body_annotation_vnext::CompleteBodyCallAnnotationVNext<'tcx>,
+    >,
+    physical_entry_annotations:
+        Option<crate::production_physical_entry_annotation_v37::PhysicalEntryAnnotationsV37<'tcx>>,
+    physical_global_copy_annotations: Option<
+        crate::production_physical_global_copy_annotation_v38::PhysicalGlobalCopyAnnotationsV38<
+            'tcx,
+        >,
+    >,
+    physical_lds_exchange_annotations: Option<
+        crate::production_physical_lds_exchange_annotation_v39::PhysicalLdsExchangeAnnotationsV39<
+            'tcx,
+        >,
+    >,
     defined_functions: usize,
     context_entries: Vec<crate::collector::RetainedContextEntryV29>,
     function_commitments: Option<PendingFunctionCommitmentsV29<'tcx>>,
@@ -439,14 +450,56 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         mut self,
         sources: crate::production_ordered_program_source_occurrences_v32::OrderedProgramSourceOccurrencesV32<'tcx>,
     ) -> Self {
-        self.program_sources = sources;
+        self.program_sources =
+            crate::production_ordered_composition_source_v1::OrderedProgramSourcesV1::Singleton(
+                sources,
+            );
         self
+    }
+
+    pub(crate) fn prepare_ordered_composition_sources_v1(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        plan: &crate::rustc_semantic_plan_v1::ProductionSemanticPreflightPlanV1<'tcx>,
+        types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+        abis: &[SemanticFunctionAbiV1],
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        use crate::production_ordered_composition_source_v1::{
+            OrderedCompositionSourcesV1, OrderedProgramSourcesV1,
+        };
+        if self.totals.functions != 0
+            || matches!(
+                self.program_sources,
+                OrderedProgramSourcesV1::Composition(_)
+            )
+            || self.program_sources.require_drained().is_err()
+        {
+            return Err(table(
+                "ordered composition source custody cannot be replaced",
+            ));
+        }
+        let work = OrderedCompositionSourcesV1::validation_work(plan).map_err(table)?;
+        self.charge(SemanticMirResourceV1::ValidationWork, work)?;
+        let sources =
+            OrderedCompositionSourcesV1::from_plan(tcx, plan, types, abis).map_err(table)?;
+        self.program_sources = OrderedProgramSourcesV1::Composition(sources);
+        Ok(())
     }
 
     pub(crate) fn require_program_sources_consumed_v32(
         &self,
     ) -> Result<(), ProductionSemanticBodyErrorV1> {
         self.program_sources.require_drained().map_err(table)
+    }
+
+    pub(crate) fn complete_ordered_source_import_v1(
+        &mut self,
+        semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    ) -> Result<
+        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1<'tcx>,
+        ProductionSemanticBodyErrorV1,
+    > {
+        self.program_sources.complete(semantic).map_err(table)
     }
 
     pub(crate) fn prepare_physical_entry_annotations_v37(
@@ -1940,7 +1993,21 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 let program_source = self
                     .owner
                     .program_sources
-                    .take(self.function, raw_block, semantic_callee, observed_program)
+                    .take(
+                        crate::production_ordered_composition_source_v1::ImportedOrderedCallV1 {
+                            function: self.function,
+                            raw_block,
+                            block: self.blocks_by_raw[raw_block as usize].semantic_block,
+                            block_identity: self.blocks_by_raw[raw_block as usize].identity,
+                            caller: self.instance,
+                            callee: resolved,
+                            callable: semantic_callee,
+                            marker: observed_program,
+                            arguments: &arguments,
+                            destination: destination.as_ref(),
+                            unwind,
+                        },
+                    )
                     .map_err(table)?;
                 if requires_program != program_source.is_some() {
                     return Err(table("ordered program call occurrence source binding"));
@@ -3112,7 +3179,7 @@ fn normalize_type_v1<'tcx>(
         .map_err(|_| ())
 }
 
-fn resolve_direct_call_v1<'tcx>(
+pub(crate) fn resolve_direct_call_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: Instance<'tcx>,
     body: &Body<'tcx>,

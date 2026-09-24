@@ -3,3 +3,4 @@
 tools/rocgdb-runtime-observation-v1/patches/0001-native-observation.patch -whitespace
 tools/rocgdb-runtime-observation-v1/patches/0002-mi-safe-points.patch -whitespace
 tools/rocgdb-runtime-observation-v1/patches/0003-lifecycle-causes.patch -whitespace
+tools/rocgdb-stopped-wave-observation-v1/patches/0001-stopped-wave-observation.patch -whitespace

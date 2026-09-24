@@ -103,6 +103,7 @@ pub(crate) mod gfx942_physical_global_copy_fixture_v21_tests;
 #[cfg(test)]
 #[path = "../tests/fixtures/physical_lds_exchange_v22.rs"]
 pub(crate) mod gfx942_physical_lds_exchange_fixture_v22_tests;
+mod ordered_program_composition_v1;
 #[cfg(test)]
 use crate as physical_entry_fixture_ir;
 #[cfg(test)]
@@ -235,6 +236,7 @@ pub(crate) use operation_capability_visitation_v1::*;
 pub use operation_capability_visitation_v1::{
     TargetCapabilityNameRefV1, TargetCapabilityRefV1, atomic_pointer_capability_v1,
 };
+pub use ordered_program_composition_v1::*;
 pub use production_semantic_debug_fragment_v1::*;
 pub use region_effects::*;
 pub use semantic_debug_map_v1::*;

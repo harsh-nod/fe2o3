@@ -79,6 +79,14 @@ include!("production_pre_ranked_v1.rs");
 include!("production_ordered_region_pre_ranked_v16.rs");
 include!("production_ordered_region_inspection_v1.rs");
 include!("production_ordered_program_pre_ranked_v17.rs");
+include!("production_ordered_composition_pre_ranked_v1.rs");
+include!("production_ordered_composition_lowering_v1.rs");
+#[path = "production_ordered_composition_checks_v1.rs"]
+mod ordered_composition_checks_v1;
+pub use ordered_composition_checks_v1::{
+    OrderedCompositionLaunchEnvelopeRequirementV1, OrderedCompositionRankedDependencyV1,
+    ProductionOrderedCompositionCheckErrorV1, ProductionOrderedCompositionCheckedKirOwnerV1,
+};
 include!("production_complete_body_source_vnext.rs");
 include!("production_physical_entry_source_v20.rs");
 include!("production_physical_global_copy_source_v21.rs");
@@ -10855,7 +10863,7 @@ fn helper_function_id_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lower_one_semantic_function_v1<'facts>(
+fn lower_one_semantic_function_for_composition_v1<'facts>(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     plan: &LoweredFunctionPlanV1,
     semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
@@ -10872,8 +10880,9 @@ fn lower_one_semantic_function_v1<'facts>(
     call_budget: &mut ArgumentBudgetV1<'_>,
     placement: SemanticEmissionPlacementV1,
     execution: Option<ExecutionAvailabilityV29<'_>>,
+    ordered_composition: Option<OrderedCompositionPermitV1>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
-    lower_one_semantic_function_with_calls_v29(
+    lower_one_semantic_function_with_composition_v1(
         semantic,
         plan,
         semantic_ssa,
@@ -10892,11 +10901,12 @@ fn lower_one_semantic_function_v1<'facts>(
         execution,
         None,
         None,
+        ordered_composition,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lower_one_semantic_function_with_calls_v29<'facts>(
+fn lower_one_semantic_function_with_composition_v1<'facts>(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     plan: &LoweredFunctionPlanV1,
     semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
@@ -10915,7 +10925,11 @@ fn lower_one_semantic_function_with_calls_v29<'facts>(
     execution: Option<ExecutionAvailabilityV29<'_>>,
     execution_calls: Option<&mut dyn ExecutionDefinedCallConsumerV29>,
     lifecycle: Option<&mut dyn ExecutionLifecycleConsumerV29>,
+    ordered_composition: Option<OrderedCompositionPermitV1>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
+    if ordered_composition.is_some_and(|permit| !permit.matches(semantic)) {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
     let infallible_asserts = infallible_asserts.into();
     infallible_asserts.require_source(semantic, plan)?;
     // Diagnostic cursors lack the scoped output owner that retains this charge.
@@ -11024,6 +11038,7 @@ fn lower_one_semantic_function_with_calls_v29<'facts>(
             None => None,
         },
     )?;
+    lowering.ordered_composition = ordered_composition.is_some();
     lowering.execution_calls = match execution_calls {
         Some(consumer) => Some(&mut *consumer as &mut (dyn ExecutionDefinedCallConsumerV29 + '_)),
         None => None,
@@ -11431,6 +11446,8 @@ fn lower_module_with_assert_origins_v1(
 enum HelperLoweringAdmissionV1 {
     RawPure,
     PendingUnitLocal { requires_source: bool },
+    // Private same-source permit; final V17 structural admission is mandatory.
+    PendingOrderedComposition(OrderedCompositionPermitV1),
 }
 
 struct PendingHelperSourceLoweringV1 {
@@ -11484,6 +11501,11 @@ fn lower_module_for_helper_admission_v1(
             assert_origins,
             &mut budget,
         ),
+        HelperLoweringAdmissionV1::PendingOrderedComposition(_) => {
+            return Err(ordered_composition_refusal_v1(
+                "composition requires the caller-owned cumulative ledger",
+            ));
+        }
         HelperLoweringAdmissionV1::PendingUnitLocal { .. } => {
             lower_module_with_call_budget_for_helper_admission_v1(
                 owner,
@@ -12469,7 +12491,7 @@ fn lower_single_root_module(
                 let semantic_ssa = owner
                     .plan_for_function(plan.semantic_function)
                     .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-                let lowered = lower_one_semantic_function_v1(
+                let lowered = lower_one_semantic_function_for_composition_v1(
                     semantic,
                     plan,
                     semantic_ssa,
@@ -12486,6 +12508,12 @@ fn lower_single_root_module(
                     call_budget,
                     SemanticEmissionPlacementV1::default(),
                     None,
+                    match admission {
+                        HelperLoweringAdmissionV1::PendingOrderedComposition(permit) => {
+                            Some(*permit)
+                        }
+                        _ => None,
+                    },
                 )?;
                 remaining_operations = remaining_operations
                     .checked_sub(lowered.emitted_operations)
@@ -12554,6 +12582,15 @@ fn lower_single_root_module(
                 module.functions.push(declaration);
             }
 
+            if let HelperLoweringAdmissionV1::PendingOrderedComposition(permit) = admission {
+                propagate_ordered_composition_capabilities_v1(
+                    &mut module,
+                    semantic,
+                    *permit,
+                    symbol,
+                    call_budget,
+                )?;
+            }
             finish_semantic_root_module_v1(
                 &mut module,
                 symbol,
@@ -12569,6 +12606,15 @@ fn lower_single_root_module(
                     .function(&plan.kernel_ir_function)
                     .is_some_and(|decision| decision.is_complete_and_pure())
                 {
+                    // Source context has checked every helper scalar/marker statement.
+                    // This private continuation cannot escape as an owner until the
+                    // complete immutable V17 composition independently validates it.
+                    if matches!(
+                        admission,
+                        HelperLoweringAdmissionV1::PendingOrderedComposition(_)
+                    ) {
+                        continue;
+                    }
                     if let HelperLoweringAdmissionV1::PendingUnitLocal { requires_source } =
                         admission
                     {
@@ -12728,6 +12774,7 @@ include!("production_emission_read_only_v1.rs");
 include!("production_semantic_kir_v1/function_construction_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
+    ordered_composition: bool,
     emission_work: Option<&'a mut dyn SemanticEmissionBudgetV1>,
     scoped_memory: Option<ScopedMemoryRecorderV29>,
     fixed_array_analysis: Option<FixedArrayGuardAnalysisV1<'a>>,

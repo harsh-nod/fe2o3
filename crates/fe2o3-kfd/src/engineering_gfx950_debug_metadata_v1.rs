@@ -11,6 +11,8 @@ mod storage;
 pub(super) use storage::MetadataErrorV1;
 use storage::{MetadataStorageV1, checked_load_bias};
 
+#[path = "runtime_debug_empty_transport_v1.rs"]
+mod empty_native;
 #[path = "runtime_debug_native_noqueue_v1.rs"]
 mod native;
 
@@ -100,6 +102,31 @@ impl OwnedPreparedDebugMetadataV1 {
         let mut transport = native::NativeNoQueueTransportV1::new(context);
         self.storage
             .activate_no_queue(trap.va, gpu_id, &mut transport)
+    }
+
+    pub(super) fn withdraw_empty_queue(
+        &mut self,
+        context: &mut Context,
+    ) -> Result<(), MetadataErrorV1> {
+        self.storage
+            .withdraw_empty_queue(&mut empty_native::NativeEmptyRetirementV1::new(context))
+    }
+    pub(super) fn disable_empty_runtime(
+        &mut self,
+        context: &mut Context,
+    ) -> Result<(), MetadataErrorV1> {
+        self.storage
+            .disable_empty_runtime(&mut empty_native::NativeEmptyRetirementV1::new(context))
+    }
+    pub(super) fn clear_empty_trap(
+        &mut self,
+        context: &mut Context,
+    ) -> Result<(), MetadataErrorV1> {
+        self.storage
+            .clear_empty_trap(&mut empty_native::NativeEmptyRetirementV1::new(context))
+    }
+    pub(super) fn empty_local_trap_cleared(&self) -> bool {
+        self.storage.empty_local_trap_cleared()
     }
 
     pub(super) fn facts(&self) -> PreparedMetadataFactsV1 {

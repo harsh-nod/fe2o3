@@ -3962,6 +3962,8 @@ pub(crate) mod physical_global_copy_diagnostic_v21;
 pub(crate) mod physical_lds_exchange_diagnostic_v22;
 pub(crate) use complete_body_vnext::AuthenticatedCompleteBodyTargetModuleV19;
 pub(crate) use physical_entry_target_v20::AuthenticatedPhysicalEntryTargetModuleV20;
+pub(crate) mod ordered_composition_target_v1;
+pub(crate) mod ordered_composition_v1;
 pub(crate) mod ordered_program_diagnostic_v32;
 pub(crate) mod ordered_program_origin_v1;
 pub(crate) mod ordered_region_diagnostic_v31;

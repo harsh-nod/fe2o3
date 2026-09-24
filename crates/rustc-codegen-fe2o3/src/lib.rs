@@ -37,6 +37,7 @@ mod production_inline_assembly_v30;
 mod production_inline_source_occurrences_v30;
 mod production_mir_pliron_verus_join_v1;
 mod production_native_source_lineage_v1;
+mod production_ordered_composition_source_v1;
 mod production_ordered_origin_report_v1;
 mod production_ordered_program_source_occurrences_v32;
 mod production_ordered_program_v32;
@@ -58,6 +59,9 @@ mod production_physical_lds_exchange_census_v39;
 mod production_physical_lds_exchange_source_abi_v39;
 mod production_physical_lds_exchange_terminal_v39;
 mod production_pipeline;
+pub use production_rustc_driver_v1::run_diagnostic_ordered_composition_extraction_driver_v1;
+#[cfg(target_os = "linux")]
+pub use production_rustc_driver_v1::run_ordered_composition_source_promotion_driver_v1;
 mod production_policy;
 mod production_primitive_from_v1;
 mod production_ranked_projection_v1;

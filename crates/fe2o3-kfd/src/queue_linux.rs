@@ -921,6 +921,29 @@ impl LinuxQueueExceptionEventV1 {
         }
     }
 
+    #[cfg(all(feature = "engineering-gfx950", target_endian = "little"))]
+    pub(crate) fn destroy_empty_debug_in_place(
+        &mut self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<LinuxDestroyedQueueExceptionEventV1, LinuxDoorbellErrorV1> {
+        self.check_binding(kfd, opener_pid)?;
+        // Preserve binding on failure. No repeat call is possible after attempt.
+        self.poisoned = true;
+        let args = KfdIoctlDestroyEventArgsV1::new(self.binding.event_id);
+        // SAFETY: same retained fd/event, exact owned setter record. No retry
+        // or cleanup follows error; the outer sticky owner retains all resources.
+        unsafe { rustix::ioctl::ioctl(kfd, Setter::<DESTROY_EVENT_OPCODE, _>::new(args)) }
+            .map_err(|source| LinuxDoorbellErrorV1::EventSyscall {
+                operation: "AMDKFD_IOC_DESTROY_EVENT(local empty)",
+                source,
+            })?;
+        self.active = false;
+        Ok(LinuxDestroyedQueueExceptionEventV1 {
+            binding: self.binding,
+        })
+    }
+
     pub(crate) fn destroy(
         mut self,
         kfd: BorrowedFd<'_>,
@@ -1679,6 +1702,28 @@ impl LinuxDoorbellSliceV1 {
             );
         }
         Ok(())
+    }
+
+    #[cfg(all(feature = "engineering-gfx950", target_endian = "little"))]
+    pub(super) fn release_empty_debug_in_place(&mut self) -> Result<(), LinuxDoorbellErrorV1> {
+        if self.opener_pid != std::process::id() {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        if !self.active {
+            return Err(LinuxDoorbellErrorV1::InvalidObservation(
+                "local doorbell release state",
+            ));
+        }
+        // No retry even if munmap is ambiguous. Address/extent remain owned.
+        self.active = false;
+        // SAFETY: exact owned VMA, after actual queue/event/runtime/trap retirement.
+        // This method exposes no pointer and never writes the doorbell.
+        unsafe { rustix::mm::munmap(self.address.as_ptr(), self.plan.slice_bytes) }.map_err(
+            |source| LinuxDoorbellErrorV1::Syscall {
+                operation: "munmap local empty doorbell",
+                source,
+            },
+        )
     }
 
     pub(super) fn release(mut self) -> Result<(), LinuxDoorbellErrorV1> {

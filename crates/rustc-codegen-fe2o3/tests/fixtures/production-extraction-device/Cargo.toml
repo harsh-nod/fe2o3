@@ -8,6 +8,12 @@ rust-version.workspace = true
 publish = false
 
 [features]
+# Actual-source composition publisher controls; one feature per compiler session.
+ordered-composition-publish-direct = []
+ordered-composition-publish-collision = []
+ordered-composition-publish-const = []
+ordered-composition-publish-local = []
+ordered-composition-publish-wrapper = []
 physical-lds-exchange-one-v22 = []
 physical-lds-exchange-registers-v22 = []
 physical-lds-exchange-wrong-launch-v22 = []
@@ -224,6 +230,23 @@ scalar-transmute = []
 fabs-f32 = []
 is-finite-fabs-f32 = []
 volatile-load-f32 = []
+
+ordered-composition-finite-grid = []
+ordered-composition-root = []
+ordered-composition-helper = []
+ordered-composition-two-calls = []
+ordered-composition-root-helper = []
+ordered-composition-const-monos = []
+ordered-composition-scalar-helper = []
+ordered-composition-wrapping = []
+ordered-composition-nested = []
+ordered-composition-conditional = []
+ordered-composition-wrong-abi = []
+ordered-composition-foreign-marker = []
+ordered-composition-too-many = []
+ordered-composition-wrong-launch = []
+ordered-composition-dynamic-register = []
+ordered-composition-mixed-marker = []
 
 [dependencies]
 fe2o3-device.workspace = true

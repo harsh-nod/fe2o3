@@ -23,6 +23,25 @@ use retention::RetainNativeOnDropV1;
 mod noqueue;
 pub use noqueue::Gfx950DebugMetadataNoQueueOwnerV1;
 
+#[path = "engineering_gfx950_debug_execution_v1.rs"]
+mod execution;
+pub use execution::{
+    Gfx950DebugExecutionContractV1, Gfx950DebugExecutionPreparationErrorV1,
+    Gfx950DebugExecutionPreparationV1, Gfx950DebugNativeRequirementV1,
+    Gfx950DebugNativeUnavailableV1, Gfx950DebugQueueGeometryV1, Gfx950DebugQueueLifecycleErrorV1,
+    Gfx950DebugQueueLifecycleEventV1, Gfx950DebugQueueLifecyclePhaseV1,
+    validate_gfx950_debug_queue_lifecycle_v1,
+};
+
+#[path = "engineering_gfx950_debug_empty_local_v1.rs"]
+mod empty_queue;
+pub(crate) use empty_queue::DebugLocalTeardownWitnessV1;
+pub use empty_queue::{
+    Gfx950DebugAllocationRetirementV1, Gfx950DebugEmptyQueueV1, Gfx950DebugLocalErrorV1,
+    Gfx950DebugLocalFailureV1, Gfx950DebugLocalPhaseV1, Gfx950DebugLocalReleaseCompleteV1,
+    Gfx950DebugLocalStepV1, Gfx950DebugRuntimeEnableReturnedV1,
+};
+
 /// Immutable preparation facts, not a live debugger/queue/runtime capability.
 /// Digests establish content identity, not source authentication or execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

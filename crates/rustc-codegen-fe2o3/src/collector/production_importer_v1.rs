@@ -320,6 +320,75 @@ fn construct_production_semantic_mir_with_nominal_v35<'tcx>(
     debug_source_capture: DebugSourceCaptureRequestV2,
     nominal: bool,
 ) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
+    let (constructed, completion) = construct_production_semantic_mir_with_policy_v1(
+        tcx,
+        closure,
+        debug_source_capture,
+        nominal,
+        OrderedSourceImportPolicyV1::Singleton,
+    )?;
+    match completion {
+        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1::Singleton => Ok(constructed),
+        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1::Composition(_) =>
+            Err(body_owner_table_mismatch_v1("singleton import returned composition source custody")),
+    }
+}
+
+/// Private move-only custody of the explicitly selected live composition import.
+/// All marker/call definitions have been authenticated and drained before this
+/// value exists. Decoding MIR32 bytes cannot construct it.
+pub(crate) struct AuthenticatedOrderedCompositionMirV1<'tcx> {
+    constructed: ConstructedProductionSemanticMirV1,
+    source_seed: crate::production_ordered_composition_source_v1::AuthenticatedOrderedCompositionSourceSeedV1<'tcx>,
+}
+impl<'tcx> AuthenticatedOrderedCompositionMirV1<'tcx> {
+    pub(crate) fn into_parts(self) -> (
+        ConstructedProductionSemanticMirV1,
+        crate::production_ordered_composition_source_v1::AuthenticatedOrderedCompositionSourceSeedV1<'tcx>,
+    ){
+        (self.constructed, self.source_seed)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OrderedSourceImportPolicyV1 {
+    Singleton,
+    Composition,
+}
+
+pub(crate) fn construct_production_semantic_mir_ordered_composition_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+) -> Result<AuthenticatedOrderedCompositionMirV1<'tcx>, ProductionSemanticImportErrorV1> {
+    let (constructed, completion) = construct_production_semantic_mir_with_policy_v1(
+        tcx,
+        closure,
+        debug_source_capture,
+        false,
+        OrderedSourceImportPolicyV1::Composition,
+    )?;
+    match completion {
+        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1::Composition(source_seed) =>
+            Ok(AuthenticatedOrderedCompositionMirV1 { constructed, source_seed }),
+        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1::Singleton =>
+            Err(body_owner_table_mismatch_v1("composition import returned singleton source custody")),
+    }
+}
+
+fn construct_production_semantic_mir_with_policy_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+    nominal: bool,
+    ordered_policy: OrderedSourceImportPolicyV1,
+) -> Result<
+    (
+        ConstructedProductionSemanticMirV1,
+        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1<'tcx>,
+    ),
+    ProductionSemanticImportErrorV1,
+> {
     let AuthenticatedCollectedKernelClosureV1 {
         target,
         collection,
@@ -428,13 +497,14 @@ fn construct_production_semantic_mir_with_nominal_v35<'tcx>(
             ));
         }
     };
-    let (semantic_mir, context_entries) = construct_complete_request_v1(
+    let (semantic_mir, context_entries, ordered_completion) = construct_complete_request_v1(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
         &mut plan,
         semantic_types.into_records(),
         semantic_function_abis,
         semantic_terminal_abis,
+        ordered_policy,
     )?;
     #[cfg(test)]
     super::semantic_import_observation_v1_tests::observe_actual(tcx, &semantic_mir);
@@ -449,25 +519,28 @@ fn construct_production_semantic_mir_with_nominal_v35<'tcx>(
         .into_identity_transcript_and_debug_files()
         .map_err(|error| ProductionSemanticImportErrorV1::Preflight(Box::new(error)))?;
     drop(collection);
-    Ok(ConstructedProductionSemanticMirV1 {
-        semantic_mir,
-        context_entries,
-        rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3 {
-            sha256: rustc_identity_inventory_sha256,
-            canonical_transcript: rustc_identity_inventory_transcript,
+    Ok((
+        ConstructedProductionSemanticMirV1 {
+            semantic_mir,
+            context_entries,
+            rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3 {
+                sha256: rustc_identity_inventory_sha256,
+                canonical_transcript: rustc_identity_inventory_transcript,
+            },
+            rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3 {
+                sha256: rustc_preflight_plan_sha256,
+                rustc_identity_inventory_sha256,
+                canonical_transcript: rustc_preflight_plan_transcript,
+            },
+            rustc_target: target,
+            reference_effect_bindings,
+            debug_source_files,
+            debug_source_scopes,
+            debug_source_variables,
+            debug_capture_gap,
         },
-        rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3 {
-            sha256: rustc_preflight_plan_sha256,
-            rustc_identity_inventory_sha256,
-            canonical_transcript: rustc_preflight_plan_transcript,
-        },
-        rustc_target: target,
-        reference_effect_bindings,
-        debug_source_files,
-        debug_source_scopes,
-        debug_source_variables,
-        debug_capture_gap,
-    })
+        ordered_completion,
+    ))
 }
 
 fn require_lineage_transcript_bound_v3(
@@ -492,8 +565,13 @@ fn construct_complete_request_v1<'tcx>(
     types: Vec<SemanticTypeDeclV1>,
     function_abis: ConstructedSemanticFunctionAbisV1,
     terminal_abis: ConstructedSemanticFunctionAbisV1,
+    ordered_policy: OrderedSourceImportPolicyV1,
 ) -> Result<
-    (AdmittedInertSemanticMirV1, super::RetainedContextEntriesV29),
+    (
+        AdmittedInertSemanticMirV1,
+        super::RetainedContextEntriesV29,
+        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1<'tcx>,
+    ),
     ProductionSemanticImportErrorV1,
 > {
     let function_abis = function_abis.into_records();
@@ -557,12 +635,6 @@ fn construct_complete_request_v1<'tcx>(
     let contains_ordered_program = plan.terminal_producers().iter().any(|terminal| {
         terminal.expansion == ProductionTerminalExpansionV1::Gfx942OrderedProgramE32
     });
-    let program_sources = if contains_ordered_program {
-        crate::production_ordered_program_source_occurrences_v32::OrderedProgramSourceOccurrencesV32::from_plan(tcx, plan)
-            .map_err(body_owner_table_mismatch_v1)?
-    } else {
-        Default::default()
-    };
     let mut context_entries = plan.take_context_entries_v29();
     let mut body_owner = build_body_request_owner_v1(
         plan,
@@ -571,8 +643,30 @@ fn construct_complete_request_v1<'tcx>(
         !context_entries.is_empty(),
     )?
     .with_inline_sources_v30(inline_sources)
-    .with_ordered_sources_v31(ordered_sources)
-    .with_program_sources_v32(program_sources);
+    .with_ordered_sources_v31(ordered_sources);
+    match ordered_policy {
+        OrderedSourceImportPolicyV1::Singleton => {
+            let sources = if contains_ordered_program {
+                crate::production_ordered_program_source_occurrences_v32::OrderedProgramSourceOccurrencesV32::from_plan(tcx, plan)
+                    .map_err(body_owner_table_mismatch_v1)?
+            } else {
+                Default::default()
+            };
+            body_owner = body_owner.with_program_sources_v32(sources);
+        }
+        OrderedSourceImportPolicyV1::Composition => {
+            if !contains_ordered_program {
+                return Err(body_owner_table_mismatch_v1(
+                    "ordered composition marker roster missing",
+                ));
+            }
+            body_owner
+                .prepare_ordered_composition_sources_v1(tcx, plan, &types, &function_abis)
+                .map_err(|error| {
+                    ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error))
+                })?;
+        }
+    }
     if contains_physical_entry {
         body_owner
             .prepare_physical_entry_annotations_v37(tcx, plan)
@@ -840,10 +934,13 @@ fn construct_complete_request_v1<'tcx>(
         }
     })
     .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    let ordered_completion = body_owner
+        .complete_ordered_source_import_v1(&semantic)
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     let context_entries = body_owner
         .seal_context_entries(&semantic)
         .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
-    Ok((semantic, context_entries))
+    Ok((semantic, context_entries, ordered_completion))
 }
 
 fn build_body_request_owner_v1<'tcx>(

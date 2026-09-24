@@ -1,7 +1,8 @@
-//! Exclusive debug-profile reservation in the existing process-global gate.
+//! Exclusive debug-profile reservation and exact local terminal completion.
 //!
 //! This reserves a profile only. It does not enable a runtime, install a trap,
-//! expose metadata, retain native resources, or acknowledge native teardown.
+//! expose metadata or retain native resources. Only the separate concrete local
+//! empty-queue terminal witness can complete an exposed reservation.
 
 #[cfg(feature = "engineering-gfx950")]
 use super::KFD_RUNTIME_GATE;
@@ -149,9 +150,29 @@ impl ProcessGlobalKfdRuntimeGateV1 {
         }
     }
 
-    // There is intentionally no production acknowledgment/release path for an
-    // exposed reservation. A later consuming native owner must derive typed
-    // queue/event, runtime-disable and trap-clear acknowledgments first.
+    #[cfg(all(feature = "engineering-gfx950", target_endian = "little"))]
+    fn finish_local_debug_teardown_v1(
+        &mut self,
+        opener_pid: u32,
+        reservation_id: u64,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        if !self.is_blocked()
+            && matches!(self.runtime,
+            ProcessKfdRuntimeStateV1::DebugReserved {
+                opener_pid: owner, reservation_id: identity, exposed: true,
+            } if owner == opener_pid && identity == reservation_id && identity != 0)
+        {
+            self.runtime = ProcessKfdRuntimeStateV1::Disabled;
+            Ok(())
+        } else {
+            self.poison();
+            Err(LinuxDoorbellErrorV1::Runtime(
+                "local debug terminal reservation identity",
+            ))
+        }
+    }
+
+    // Synthetic tests remain separate from the private real terminal witness.
     #[cfg(test)]
     fn acknowledge_synthetic_debug_teardown_v1(
         &mut self,
@@ -260,6 +281,23 @@ impl ProcessGlobalKfdDebugReservationV1 {
         .map(Self)
     }
 
+    /// Accepts only the actual same-owner terminal object minted by the fixed
+    /// empty-queue retirement transaction. No IDs, flags or reports are inputs.
+    #[cfg(target_endian = "little")]
+    pub(crate) fn finish_local_empty_teardown(
+        witness: &mut crate::engineering_gfx950::DebugLocalTeardownWitnessV1,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        let reservation = witness.reservation_mut();
+        // Must precede inherited mutex access, including the terminal path.
+        reservation.0.check_process(std::process::id())?;
+        lock_runtime_gate_v1(reservation.0.gate).finish_local_debug_teardown_v1(
+            reservation.0.opener_pid,
+            reservation.0.reservation_id,
+        )?;
+        reservation.0.finished = true;
+        Ok(())
+    }
+
     /// Call before the first SET_TRAP_HANDLER or other external publication.
     /// This marks possible exposure, not successful runtime enable.
     pub(crate) fn begin_external_transition(&mut self) -> Result<(), LinuxDoorbellErrorV1> {
@@ -270,3 +308,7 @@ impl ProcessGlobalKfdDebugReservationV1 {
 #[cfg(test)]
 #[path = "runtime_debug_profile_gate_v1_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "engineering-gfx950", target_endian = "little"))]
+#[path = "runtime_debug_empty_gate_v1_tests.rs"]
+mod empty_tests;

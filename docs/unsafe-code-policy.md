@@ -259,6 +259,47 @@ doctest and strict Clippy checks remotely. Inventory review and CPU tests do
 not qualify the profiling ABI on installed firmware, turn raw GPU clock ticks
 into nanoseconds, or establish shader-only execution time.
 
+### Packet-Incapable Debug Empty-Queue Retirement
+
+The opt-in gfx950 empty-queue successor adds one consuming unsafe function,
+`Gfx950DebugExecutionPreparationV1::begin_empty_queue_runtime`. The caller
+must retain an isolated disposable process, exclude foreign KFD/ROCr runtimes,
+queues, code injection and concurrent runtime actors through completion or
+process termination (also after failure or Drop), and externally bound/reap
+blocking native calls. Neither static preparation nor the in-library gate
+proves these lifetime obligations. The returned move-only owners expose no
+packet publication, doorbell write, dispatch or sampling operation.
+
+Two new blocks in `runtime_debug_empty_transport_v1.rs` perform the fixed
+runtime-disable and trap-clear ioctls. Initialized 16-byte input/output and
+24-byte input-only ABI records respectively borrow the actual retained
+Context/device fd exclusively; mode-zero output must remain exact. Two blocks
+in `queue_linux.rs` destroy the same retained event with an owned 8-byte setter
+record and unmap the exact privately owned doorbell VMA. Event poisoning and
+doorbell deactivation precede their native attempts, preventing retry after
+an error or ambiguous return; no raw pointer or numeric-owner constructor
+escapes. These kernel ABI and VMA operations cannot be replaced by ordinary
+safe Rust memory access.
+
+The private cursor marks each step Attempting before its action and never
+advances on error or unwind. Actual queue destruction precedes event destruction,
+metadata withdrawal, runtime-disable return, trap clear and doorbell unmap;
+allocation GPU/CPU unmap, handle free, VA release and accounting follow.
+Unresolved backing and original descriptors remain in cold custody on failure,
+panic or Drop, with no Drop ioctl or speculative cleanup. Only the private
+same-owner terminal witness releases retention and closes descriptors last.
+Fork checks precede native work and inherited gate-lock access. Existing
+ambiguous-VA cleanup retains its abort policy. These are local retirement
+invariants, not debugger ACK, sampler exclusion, physical capture or dispatch
+qualification.
+
+The exact inventory delta is `queue_linux.rs` 45 to 47 blocks (its one extern
+block unchanged), two blocks in `runtime_debug_empty_transport_v1.rs`, and
+one function in `engineering_gfx950_debug_execution_v1.rs`. Failure-order,
+ABI and compile-fail controls supplement review; the source-inventory gate
+and feature tests remain required. This reconciliation changes no runtime
+implementation or existing plain/noqueue/gfx942 behavior.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

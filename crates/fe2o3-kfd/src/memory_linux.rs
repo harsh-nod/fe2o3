@@ -62,6 +62,11 @@ impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
         self.device.topology_snapshot()
     }
 
+    // Retained immutable facts only; this does not establish native currentness.
+    pub(super) fn engineering_debug_device(&self) -> &crate::CheckedGfx950XnackMinusDevice {
+        &self.device
+    }
+
     pub(super) fn engineering_peer_device(&mut self) -> &mut crate::CheckedGfx950XnackMinusDevice {
         &mut self.device
     }

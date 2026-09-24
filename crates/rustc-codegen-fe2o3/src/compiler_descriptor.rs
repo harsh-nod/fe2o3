@@ -2,6 +2,8 @@
 
 #[path = "compiler_descriptor_inline_helpers_v30.rs"]
 mod inline_helpers_v30;
+#[path = "compiler_descriptor_ordered_composition_v1.rs"]
+pub(crate) mod ordered_composition_v1;
 
 #[path = "compiler_descriptor_complete_body_v19.rs"]
 pub(crate) mod complete_body_v19;
@@ -1204,6 +1206,7 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
 
 #[derive(Clone, Copy)]
 enum DescriptorCapabilityAdmissionV1<'a> {
+    OrderedCompositionV1(&'a ordered_composition_v1::OrderedCompositionDescriptorAdmissionV1<'a>),
     Ordinary,
     CompleteBodyV19,
     PhysicalLdsExchangeV22(
@@ -1564,6 +1567,11 @@ fn descriptor_capabilities_with_admission_v1(
         )
     });
     for capability in effective {
+        if let DescriptorCapabilityAdmissionV1::OrderedCompositionV1(checked) = admission
+            && checked.admits(module, &capability)
+        {
+            continue;
+        }
         if matches!(admission, DescriptorCapabilityAdmissionV1::CompleteBodyV19)
             && matches!(&capability, TargetCapability::Extension { namespace, name }
                 if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_COMPLETE_BODY_CAPABILITY_NAMESPACE_V19
@@ -1747,6 +1755,8 @@ pub(crate) enum CompilerDescriptorError {
     },
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     CompleteBodyV19(Box<fe2o3_lower_mir_kernel::ProductionCompleteBodyCheckErrorV19>),
+    OrderedCompositionV1(Box<fe2o3_lower_mir_kernel::ProductionOrderedCompositionCheckErrorV1>),
+    OrderedCompositionResourceV1(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     PhysicalGlobalCopyV21(Box<fe2o3_lower_mir_kernel::ProductionPhysicalGlobalCopyCheckErrorV21>),
     PhysicalLdsExchangeV22(Box<fe2o3_lower_mir_kernel::ProductionPhysicalLdsExchangeCheckErrorV22>),
     PhysicalLdsExchangeResourceV22(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
@@ -1871,6 +1881,14 @@ impl fmt::Display for CompilerDescriptorError {
             Self::PhysicalEntryResourceV20(error) => write!(
                 formatter,
                 "physical-entry descriptor resource admission failed: {error}"
+            ),
+            Self::OrderedCompositionV1(error) => write!(
+                formatter,
+                "ordered composition checked replay failed: {error}"
+            ),
+            Self::OrderedCompositionResourceV1(error) => write!(
+                formatter,
+                "ordered composition condition accounting failed: {error}"
             ),
             Self::CompleteBodyV19(error) => write!(
                 formatter,
