@@ -262,6 +262,8 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         OperationKind::Constant(_)
         | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::Gfx942OrderedProgram(_)
+        | OperationKind::Gfx942CompleteBodyDeclaration(_)
+        | OperationKind::Gfx942CompleteBodyStep(_)
         | OperationKind::MemoryIntrinsic(_)
         | OperationKind::Unary { .. }
         | OperationKind::Binary { .. }

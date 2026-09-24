@@ -4889,6 +4889,14 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Gfx942OrderedProgram(_) => {
                 self.validate_ordered_program_v17(operation, &location)?;
             }
+            OperationKind::Gfx942CompleteBodyDeclaration(_)
+            | OperationKind::Gfx942CompleteBodyStep(_) => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::UnsupportedOperation,
+                    "complete bodies require the exact canonical V19 owner entry point",
+                ));
+            }
             OperationKind::Matrix(matrix) => {
                 self.validate_matrix(matrix, &location)?;
             }

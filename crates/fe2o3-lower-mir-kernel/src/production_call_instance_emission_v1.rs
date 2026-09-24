@@ -250,9 +250,11 @@ fn call_splice_check_callee_operation_v1(
         | Op::Matrix(_)
         | Op::Gfx950LdsTranspose(_) => Err(Error::CalleeCollective),
         Op::VerificationContract(_) => Err(Error::CalleeOrderedContract),
-        Op::InlineAssembly(_) | Op::Gfx942OrderedRegion(_) | Op::Gfx942OrderedProgram(_) => {
-            Err(Error::CalleeInlineAssembly)
-        }
+        Op::InlineAssembly(_)
+        | Op::Gfx942OrderedRegion(_)
+        | Op::Gfx942OrderedProgram(_)
+        | Op::Gfx942CompleteBodyDeclaration(_)
+        | Op::Gfx942CompleteBodyStep(_) => Err(Error::CalleeInlineAssembly),
         Op::Intrinsic(intrinsic) => match intrinsic.kind {
             fe2o3_kernel_ir::IntrinsicKind::InvocationIndex { .. }
             | fe2o3_kernel_ir::IntrinsicKind::LaunchExtent { .. } => Ok(()),

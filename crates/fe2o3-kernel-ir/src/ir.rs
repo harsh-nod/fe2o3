@@ -598,6 +598,10 @@ pub enum OperationKind {
     Gfx942OrderedRegion(crate::Gfx942OrderedRegionV1),
     /// Indivisible 1..16-step program; only the additive V17 wire carries it.
     Gfx942OrderedProgram(crate::Gfx942OrderedProgramV1),
+    /// Exact KIR19 whole-body declaration; no executable secondary CFG.
+    Gfx942CompleteBodyDeclaration(crate::Gfx942CompleteBodyDeclarationVNext),
+    /// One ordered typed step with actual SSA operands/result in its real block.
+    Gfx942CompleteBodyStep(crate::Gfx942CompleteBodyStepVNext),
 }
 
 impl OperationKind {

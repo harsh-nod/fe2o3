@@ -25,6 +25,12 @@ mod monomorphization_dead;
 #[cfg(test)]
 mod process_execution;
 mod production_canonical_phase_policy_v1;
+mod production_complete_body_annotation_vnext;
+mod production_complete_body_call_vnext;
+mod production_complete_body_census_vnext;
+mod production_complete_body_semantic_source_vnext;
+mod production_complete_body_source_occurrences_vnext;
+mod production_complete_body_terminal_v36;
 mod production_conditional_reference_output_v1;
 mod production_geometry_v1;
 mod production_inline_assembly_v30;
@@ -123,6 +129,7 @@ pub use production_ranked_projection_v1::ProductionRankedSemanticProjectionRoste
 
 #[doc(hidden)]
 pub use production_rustc_driver_v1::{
+    run_diagnostic_complete_body_kir_extraction_driver_v19,
     run_diagnostic_ordered_program_kir_extraction_driver_v17,
     run_diagnostic_ordered_program_origin_driver_v1,
     run_diagnostic_ordered_region_kir_extraction_driver_v16,

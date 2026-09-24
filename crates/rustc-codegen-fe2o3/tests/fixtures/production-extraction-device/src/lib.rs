@@ -140,7 +140,25 @@ mod ordered_region_v31;
 ))]
 mod ordered_program_v32;
 
+#[cfg(any(
+    feature = "complete-body-one-v19",
+    feature = "complete-body-diamond-v19",
+    feature = "complete-body-wrong-launch-v19",
+    feature = "complete-body-reserved-register-v19",
+    feature = "complete-body-foreign-input-v19",
+    feature = "complete-body-undefined-merge-v19",
+    feature = "complete-body-dynamic-grid-v19",
+))]
+mod complete_body_v19;
+
 #[cfg(not(any(
+    feature = "complete-body-one-v19",
+    feature = "complete-body-diamond-v19",
+    feature = "complete-body-wrong-launch-v19",
+    feature = "complete-body-reserved-register-v19",
+    feature = "complete-body-foreign-input-v19",
+    feature = "complete-body-undefined-merge-v19",
+    feature = "complete-body-dynamic-grid-v19",
     feature = "guarded-loop-read",
     feature = "nominal-policy4-unitlocal",
     feature = "guarded-loop-read-control",

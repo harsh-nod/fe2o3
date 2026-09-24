@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 type Error = Gfx942CompleteBodyEmissionErrorV1;
 type Result<T> = std::result::Result<T, Error>;
 
-/// Request the fixed text allowance (allocator capacity may be rounded up);
+/// Request the fixed text allowance and refuse allocator capacity rounding;
 /// each append checks logical bytes before extending the string. No temporary
 /// replacement/format string is allocated.
 struct Text {
@@ -25,6 +25,9 @@ impl Text {
         value
             .try_reserve_exact(cap)
             .map_err(|_| Error::Allocation)?;
+        if value.capacity() != cap {
+            return Err(Error::Allocation);
+        }
         Ok(Self {
             value,
             kind,

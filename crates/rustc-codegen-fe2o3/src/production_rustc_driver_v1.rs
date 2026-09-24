@@ -31,9 +31,16 @@ pub use source_local_order_recipe_driver_v1::run_source_local_order_recipe_drive
 #[path = "production_rustc_driver_checked_output_source_v1_tests.rs"]
 mod checked_output_source_v1_tests;
 
+#[path = "production_rustc_driver_v1/complete_body_v19.rs"]
+mod complete_body_v19;
+
 #[path = "production_rustc_driver_v1/ordered_region_diagnostic_export_v16.rs"]
 mod ordered_region_diagnostic_export_v16;
 pub use ordered_region_diagnostic_export_v16::run_diagnostic_ordered_region_kir_extraction_driver_v16;
+
+#[path = "production_rustc_driver_v1/complete_body_diagnostic_export_v19.rs"]
+mod complete_body_diagnostic_export_v19;
+pub use complete_body_diagnostic_export_v19::run_diagnostic_complete_body_kir_extraction_driver_v19;
 
 #[path = "production_rustc_driver_v1/ordered_program_diagnostic_export_v17.rs"]
 mod ordered_program_diagnostic_export_v17;
@@ -332,13 +339,17 @@ fn extract_amdgpu_llvm_in_active_session_v1(
             );
         }
     };
-    let lowered = transaction_with_census_in_active_session_v1(
+    let transaction = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
-    )?
-    .lower_production_target()
-    .map_err(|error| error.to_string())?;
+    )?;
+    if transaction.has_authenticated_complete_body_v19() {
+        return complete_body_v19::extract_llvm(transaction, output, expected_target);
+    }
+    let lowered = transaction
+        .lower_production_target()
+        .map_err(|error| error.to_string())?;
     if let Some(expected_target) = expected_target
         && lowered.target_name() != expected_target
     {
@@ -397,13 +408,17 @@ fn extract_amdgpu_compiler_handoff_in_active_session_v1(
             census,
         );
     }
-    let lowered = transaction_with_census_in_active_session_v1(
+    let transaction = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
-    )?
-    .lower_production_target()
-    .map_err(|error| error.to_string())?;
+    )?;
+    if transaction.has_authenticated_complete_body_v19() {
+        return complete_body_v19::extract_handoff(transaction, output, expected_target);
+    }
+    let lowered = transaction
+        .lower_production_target()
+        .map_err(|error| error.to_string())?;
     validate_compiler_handoff_target(lowered.target_name(), expected_target)?;
     let target_name = lowered.target_name().to_owned();
     let canonical_kernel_ir_version = lowered.canonical_kernel_ir_version();
@@ -434,13 +449,17 @@ fn extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
     census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
     let invocation = inert_extraction_invocation_v3()?;
-    let lowered = transaction_with_census_in_active_session_v1(
+    let transaction = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
-    )?
-    .lower_production_target()
-    .map_err(|error| error.to_string())?;
+    )?;
+    if transaction.has_authenticated_complete_body_v19() {
+        return Err("MIR36/KIR19 complete-body kernels have no admitted semantic V3/protected handoff route".to_owned());
+    }
+    let lowered = transaction
+        .lower_production_target()
+        .map_err(|error| error.to_string())?;
     validate_compiler_handoff_target(lowered.target_name(), expected_target)?;
     let target_name = lowered.target_name().to_owned();
     let canonical_kernel_ir_version = lowered.canonical_kernel_ir_version();
@@ -1181,6 +1200,9 @@ mod gfx942_ordered_region_qualification_v31_tests;
 
 #[cfg(all(test, target_os = "linux"))]
 mod source_bitselect_feasibility_v1_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_complete_body_qualification_v19_tests;
 
 #[cfg(test)]
 #[path = "production_rustc_driver_v1_tests.rs"]

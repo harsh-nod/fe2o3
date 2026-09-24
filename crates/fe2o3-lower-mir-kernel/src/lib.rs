@@ -2,6 +2,8 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+mod complete_body_materialization_vnext;
+pub use complete_body_materialization_vnext::*;
 mod production_context_roots_v1;
 mod production_correspondence_evidence_v4;
 mod production_correspondence_evidence_v5;

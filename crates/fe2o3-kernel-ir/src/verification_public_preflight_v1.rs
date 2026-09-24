@@ -162,6 +162,8 @@ fn operation_kind_exceeds_public_verifier_depth_v1<E>(
         | OperationKind::InlineAssembly(_)
         | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::Gfx942OrderedProgram(_)
+        | OperationKind::Gfx942CompleteBodyDeclaration(_)
+        | OperationKind::Gfx942CompleteBodyStep(_)
         | OperationKind::Execution(_) => None,
     };
     match ty {

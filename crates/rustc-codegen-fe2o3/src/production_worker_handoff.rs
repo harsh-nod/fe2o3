@@ -33,6 +33,10 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
+#[path = "production_worker_complete_body_v19.rs"]
+mod complete_body_v19;
+pub(crate) use complete_body_v19::prepare_complete_body_worker_handoff_v19;
+
 #[path = "production_worker_refined_forwarding_v1.rs"]
 pub(crate) mod refined_forwarding_v1;
 

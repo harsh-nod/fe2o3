@@ -18,6 +18,8 @@ use sha2::{Digest, Sha256};
 
 mod canonical_decode;
 mod capability_v29;
+mod complete_body_source_vnext;
+mod complete_body_v36;
 mod declaration_commitment_v1;
 mod function_commitment_v1;
 mod gfx942_inline_v30;
@@ -31,6 +33,9 @@ mod wire_schema_membership_v1;
 
 pub use canonical_decode::SemanticMirDecodeErrorV1;
 pub use capability_v29::{SemanticExecutionOperationV29, SemanticExecutionRoleV29};
+pub use complete_body_source_vnext::{
+    SemanticCompleteBodyPackingVNext, SemanticCompleteBodySourceVNext,
+};
 pub use declaration_commitment_v1::{
     SemanticDeclarationTablesCommitmentV1, canonical_declaration_tables_commitment_v1,
 };
@@ -88,6 +93,8 @@ pub const INERT_SEMANTIC_MIR_VERSION_V33: u16 = 33;
 pub const INERT_SEMANTIC_MIR_VERSION_V34: u16 = 34;
 /// Ordinary V15 grammar plus nominal pointer-sized integer type records.
 pub const INERT_SEMANTIC_MIR_VERSION_V35: u16 = 35;
+/// Ordinary V28 grammar plus exact whole-body packing and inert source tails.
+pub const INERT_SEMANTIC_MIR_VERSION_V36: u16 = 36;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -118,6 +125,7 @@ pub enum SemanticMirWireVersionV1 {
     V33,
     V34,
     V35,
+    V36,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -145,6 +153,7 @@ impl SemanticMirWireVersionV1 {
             Self::V33 => INERT_SEMANTIC_MIR_VERSION_V33,
             Self::V34 => INERT_SEMANTIC_MIR_VERSION_V34,
             Self::V35 => INERT_SEMANTIC_MIR_VERSION_V35,
+            Self::V36 => INERT_SEMANTIC_MIR_VERSION_V36,
         }
     }
 
@@ -172,6 +181,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V33 => Some(Self::V33),
             INERT_SEMANTIC_MIR_VERSION_V34 => Some(Self::V34),
             INERT_SEMANTIC_MIR_VERSION_V35 => Some(Self::V35),
+            INERT_SEMANTIC_MIR_VERSION_V36 => Some(Self::V36),
             _ => None,
         }
     }
@@ -4851,6 +4861,7 @@ pub struct SemanticDirectCallV1 {
     inline_assembly_source_v30: Option<SemanticInlineAssemblySourceV30>,
     ordered_region_source_v31: Option<SemanticOrderedRegionSourceV31>,
     ordered_program_source_v32: Option<SemanticOrderedProgramSourceV32>,
+    complete_body_source_vnext: Option<SemanticCompleteBodySourceVNext>,
 }
 
 impl SemanticDirectCallV1 {
@@ -4921,6 +4932,7 @@ impl SemanticDirectCallV1 {
             inline_assembly_source_v30: None,
             ordered_region_source_v31: None,
             ordered_program_source_v32: None,
+            complete_body_source_vnext: None,
         })
     }
 
@@ -4965,6 +4977,19 @@ impl SemanticDirectCallV1 {
 
     pub const fn ordered_program_source_v32(&self) -> Option<SemanticOrderedProgramSourceV32> {
         self.ordered_program_source_v32
+    }
+
+    /// Inert source observations only; actual source custody remains compiler-owned.
+    pub fn with_complete_body_source_vnext(
+        mut self,
+        source: SemanticCompleteBodySourceVNext,
+    ) -> Self {
+        self.complete_body_source_vnext = Some(source);
+        self
+    }
+
+    pub const fn complete_body_source_vnext(&self) -> Option<SemanticCompleteBodySourceVNext> {
+        self.complete_body_source_vnext
     }
 
     pub fn arguments(&self) -> &[SemanticOperandV1] {
@@ -5464,6 +5489,8 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     Gfx942OrderedRegion(SemanticGfx942OrderedRegionProfileV31),
     /// Exact checked descriptor sequence in the separate V32 grammar.
     Gfx942OrderedProgram(SemanticGfx942U32ProgramV32),
+    /// Fixed bounded whole-body const descriptors; source record is per call.
+    Gfx942CompleteBody(SemanticCompleteBodyPackingVNext),
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
@@ -6447,6 +6474,14 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V35, limits)
     }
 
+    /// Exact inert body grammar. Structural admission is not source/execution authority.
+    pub fn admit_exact_v36(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V36, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6465,6 +6500,11 @@ impl InertSemanticMirRequestV1 {
         self,
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        // V36 is explicit-only. The live importer selects it from its actual
+        // authenticated terminal; inert payloads never switch the ordinary path.
+        if complete_body_v36::uses_v36(&self) {
+            return Err(SemanticMirErrorV1::InvalidCompleteBodyV36);
+        }
         saturating_integer_v30::check_current_production_content(&self)?;
         let version = minimum_wire_version(&self).max(SemanticMirWireVersionV1::V5);
         self.admit_for_wire_version(version, limits)
@@ -6950,6 +6990,7 @@ pub enum SemanticMirErrorV1 {
     InvalidInlineAssemblyV30,
     InvalidOrderedRegionV31,
     InvalidOrderedProgramV32,
+    InvalidCompleteBodyV36,
     EmptyModel {
         entity: SemanticMirEntityV1,
     },
@@ -7063,6 +7104,12 @@ impl fmt::Display for SemanticMirErrorV1 {
             }
             Self::InvalidOrderedProgramV32 => {
                 formatter.write_str("closed gfx942 ordered program or source occurrence is invalid")
+            }
+            Self::InvalidCompleteBodyV36 => {
+                write!(
+                    formatter,
+                    "invalid bounded complete-body V36 grammar or source call"
+                )
             }
             Self::EmptyModel { entity } => write!(formatter, "model has no {entity:?} records"),
             Self::NonDeterministicOrder { entity } => {
@@ -7764,6 +7811,12 @@ fn validate_callables(context: &mut ValidationContextV1<'_>) -> Result<(), Seman
                 ) {
                     charge_validation_work(context, 4096)?;
                 }
+                if matches!(
+                    operation,
+                    SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_)
+                ) {
+                    charge_validation_work(context, complete_body_v36::VALIDATION_WORK)?;
+                }
                 if !intrinsic_identities.insert(*operation_identity)
                     || !compiler_intrinsic_signature_matches(
                         context.request,
@@ -7833,6 +7886,7 @@ fn record_intrinsic_capability_claims(
         SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(_) => true,
         SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(_) => true,
         SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(_) => true,
+        SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_) => true,
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, .. } => {
             claims.claim_mapping(index_witness, SemanticDisjointIndexSpaceV1::Index1d)
         }
@@ -8289,6 +8343,13 @@ fn compiler_intrinsic_signature_matches(
     {
         return false;
     }
+    if matches!(
+        operation,
+        SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_)
+    ) && inputs.len() != 10
+    {
+        return false;
+    }
     if request.types.get(output.0 as usize).is_none()
         || inputs
             .iter()
@@ -8312,6 +8373,10 @@ fn compiler_intrinsic_signature_matches(
             SemanticGfx942U32ProgramV32::from_descriptors(program.count(), *program.descriptors())
                 .is_ok()
                 && gfx942_ordered_program_v32::signature_matches(request, abi)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(packed) => {
+            complete_body_v36::validate_packing(packed).is_ok()
+                && complete_body_v36::signature_matches(request, abi)
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
@@ -15456,6 +15521,18 @@ fn validate_call(
     call: &SemanticDirectCallV1,
 ) -> Result<(), SemanticMirErrorV1> {
     context.callable_reference(call.callee, location)?;
+    if call.complete_body_source_vnext.is_some()
+        || matches!(
+            context.request.callables.get(call.callee.0 as usize),
+            Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_),
+                ..
+            })
+        )
+    {
+        charge_validation_work(context, complete_body_v36::VALIDATION_WORK)?;
+    }
+    complete_body_v36::validate_call_source(context.request, function, location, call)?;
     if call.ordered_program_source_v32.is_some()
         || matches!(
             context.request.callables.get(call.callee.0 as usize),
@@ -16116,6 +16193,7 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_)
         | SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_) => {}
         SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
             pending.push_back(scope);
@@ -16985,6 +17063,9 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
 fn minimum_wire_version_without_nominal(
     request: &InertSemanticMirRequestV1,
 ) -> SemanticMirWireVersionV1 {
+    if complete_body_v36::uses_v36(request) {
+        return SemanticMirWireVersionV1::V36;
+    }
     if gfx942_ordered_program_v32::uses_v32(request) {
         return SemanticMirWireVersionV1::V32;
     }
@@ -18107,6 +18188,9 @@ fn encode_compiler_intrinsic_operation(
     operation: SemanticCompilerIntrinsicOperationV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if let SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(packed) = operation {
+        return complete_body_v36::encode_packing(writer, packed, wire_version);
+    }
     if let SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(program) = operation {
         if wire_version != SemanticMirWireVersionV1::V32 {
             return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
@@ -18189,6 +18273,7 @@ fn encode_compiler_intrinsic_operation(
             | SemanticMirWireVersionV1::V32
             | SemanticMirWireVersionV1::V33
             | SemanticMirWireVersionV1::V34
+            | SemanticMirWireVersionV1::V36
     ) {
         SemanticMirWireVersionV1::V15
     } else {
@@ -18197,7 +18282,8 @@ fn encode_compiler_intrinsic_operation(
     match operation {
         SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(_)
         | SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(_)
-        | SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(_) => {
+        | SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(_)
+        | SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_) => {
             unreachable!("encoded above")
         }
         SemanticCompilerIntrinsicOperationV1::Execution(operation) => operation.encode(writer),

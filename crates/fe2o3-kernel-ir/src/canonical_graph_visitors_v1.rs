@@ -261,6 +261,8 @@ impl Operation {
             },
             Op::Gfx942OrderedRegion(_)
             | Op::Gfx942OrderedProgram(_)
+            | Op::Gfx942CompleteBodyDeclaration(_)
+            | Op::Gfx942CompleteBodyStep(_)
             | Op::VerificationContract(_)
             | Op::VectorLayoutConvert(_)
             | Op::Constant(_)

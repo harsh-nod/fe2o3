@@ -27,6 +27,12 @@ pub(super) fn validate_request_schema(
             required: SemanticMirWireVersionV1::V29,
         });
     }
+    if wire_version != SemanticMirWireVersionV1::V36 && complete_body_v36::uses_v36(request) {
+        return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version,
+            required: SemanticMirWireVersionV1::V36,
+        });
+    }
     // These schemas are siblings, not ordinal-compatible extensions.
     if wire_version != SemanticMirWireVersionV1::V31 && gfx942_ordered_region_v31::uses_v31(request)
     {
@@ -77,6 +83,20 @@ pub(super) fn encode_direct_call(
     call: &SemanticDirectCallV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if call.complete_body_source_vnext.is_some() {
+        if wire_version != SemanticMirWireVersionV1::V36 {
+            return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: wire_version,
+                required: SemanticMirWireVersionV1::V36,
+            });
+        }
+        if call.inline_assembly_source_v30.is_some()
+            || call.ordered_region_source_v31.is_some()
+            || call.ordered_program_source_v32.is_some()
+        {
+            return Err(SemanticMirErrorV1::InvalidCompleteBodyV36);
+        }
+    }
     if call.ordered_program_source_v32.is_some()
         && (call.inline_assembly_source_v30.is_some() || call.ordered_region_source_v31.is_some())
     {
@@ -156,6 +176,9 @@ pub(super) fn encode_direct_call(
             }
             None => writer.u8(0)?,
         }
+    }
+    if wire_version == SemanticMirWireVersionV1::V36 {
+        complete_body_v36::encode_source(writer, call.complete_body_source_vnext)?;
     }
     Ok(())
 }

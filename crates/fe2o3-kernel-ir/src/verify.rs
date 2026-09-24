@@ -67,6 +67,7 @@ pub enum DiagnosticCode {
     InvalidInlineAssembly,
     InvalidOrderedRegion,
     InvalidOrderedProgram,
+    InvalidCompleteBodyV19,
     InvalidTerminator,
 }
 

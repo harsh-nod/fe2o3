@@ -11,6 +11,7 @@
 namespace {
 #include "CompleteBodyPlans.inc"
 #include "CompleteBodyLlvm.inc"
+#include "CompleteBodySymbolControls.inc"
 #include "CompleteBodyNative.inc"
 #include "CompleteBodyMetadata.inc"
 #include "CompleteBodySelector.inc"
@@ -130,20 +131,30 @@ json::Object completeReport(const CompletePlan &P,const Input &InputValue,
 }
 int main(int Argc,char **Argv) {
   alarm(90);
-  require(Argc==5,"usage: complete-body-abi-candidate PROFILE O0|O3 ABS_LLVM ABS_FRESH_HSACO");
+  require(Argc==5 || (Argc==7 && StringRef(Argv[5])=="--entry-symbol"),
+      "usage: complete-body-abi-candidate PROFILE O0|O3 ABS_LLVM ABS_FRESH_HSACO [--entry-symbol SYMBOL]");
+  const bool ExplicitSymbol=Argc==7;
+  const StringRef ExpectedSymbol=ExplicitSymbol?StringRef(Argv[6]):StringRef("complete_body_fixture");
+  require(completeEntrySymbol(ExpectedSymbol),
+      "entry symbol must match [_A-Za-z][_A-Za-z0-9]{0,127}");
   const CompletePlan P=completePlan(Argv[1]);
   const StringRef LevelArg(Argv[2]);
   require(LevelArg=="O0" || LevelArg=="O3","optimization must be O0 or O3");
   const auto Level=LevelArg=="O0"?OptimizationLevel::O0:OptimizationLevel::O3;
   const auto InputValue=readCompleteLlvm(Argv[3]);
-  const auto Symbol=completeSymbol(InputValue,P);
+  const auto Symbol=completeSymbol(InputValue,P,ExpectedSymbol);
   require(Symbol.has_value(),"exact typed complete-body LLVM profile refused");
-  auto LlvmNegatives=completeLlvmNegatives(InputValue,P);
+  auto SymbolControls=completeEntrySymbolControls(InputValue,P,ExpectedSymbol);
+  auto LlvmNegatives=completeLlvmNegatives(InputValue,P,ExpectedSymbol);
   auto Built=buildRequest(makeInputRequest(InputValue,Level,*Symbol),*Symbol);
   auto Report=completeReport(P,InputValue,Level,*Symbol,Built,Argv[4]);
   const auto After=readCompleteLlvm(Argv[3]);
   require(After.Bytes==InputValue.Bytes && After.Digest==InputValue.Digest,"LLVM changed across native compilation");
   Report["llvm_mutation_refusals"]=std::move(LlvmNegatives);
+  Report["entry_symbol"]=*Symbol;
+  Report["entry_symbol_selection"]=ExplicitSymbol?"explicit_inert_symbol":"legacy_fixture_default";
+  Report["entry_symbol_controls"]=std::move(SymbolControls);
+  Report["source_handoff_symbol_join_verified_by_fixture"]=false;
   emitReport(std::move(Report));
   alarm(0);
   return 0;

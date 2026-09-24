@@ -79,6 +79,12 @@ include!("production_pre_ranked_v1.rs");
 include!("production_ordered_region_pre_ranked_v16.rs");
 include!("production_ordered_region_inspection_v1.rs");
 include!("production_ordered_program_pre_ranked_v17.rs");
+include!("production_complete_body_source_vnext.rs");
+#[path = "production_complete_body_checks_v19.rs"]
+mod complete_body_checks_v19;
+pub use complete_body_checks_v19::{
+    ProductionCompleteBodyCheckErrorV19, ProductionCompleteBodyCheckedKirOwnerV19,
+};
 include!("production_ordered_program_inspection_v1.rs");
 #[path = "native_source_correspondence_replay_v1.rs"]
 mod native_source_correspondence_replay_v1;
@@ -12529,17 +12535,13 @@ fn lower_single_root_module(
                 module.functions.push(declaration);
             }
 
-            let entry_function = module
-                .function(&FunctionId::new(symbol))
-                .expect("lowered entry function is retained");
-            let kernel = semantic_kernel_metadata_v1(
+            finish_semantic_root_module_v1(
+                &mut module,
                 symbol,
-                entry_function,
                 required_workgroup,
                 launch_rank,
                 authenticated_launch,
             )?;
-            module.kernels.push(kernel);
 
             let effects = analyze_interprocedural_effects_v1(&module)
                 .map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
@@ -16332,6 +16334,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(program) => {
                 self.lower_gfx942_ordered_program_v32(block, call, *program, operations)?
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx942CompleteBody(_) => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "complete-body source requires exact MIR36/KIR19 materialization",
+                ));
             }
             SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { .. } => {
                 return Err(unsupported(
@@ -24703,7 +24713,11 @@ fn authenticated_disjoint_slice_parameter(
     argument: u32,
     ty: SemanticTypeIdV1,
 ) -> Option<Type> {
-    let (element, raw_index, access) = disjoint_slice_descriptor(callables, ty)?;
+    let (element, raw_index, access) = disjoint_slice_descriptor(callables, ty).or_else(|| {
+        complete_body_parameter_vnext::complete_body_slice_parameter_vnext(
+            types, callables, function, argument, ty,
+        )
+    })?;
     let argument = usize::try_from(argument).ok()?;
     let abi = function.abi();
     if abi.source_input_types().get(argument) != Some(&ty)

@@ -4,6 +4,41 @@
 //! through an unrecognized compiler path they panic instead of pretending to
 //! provide device behavior.
 
+// Experimental exact source marker for the closed gfx942 complete-body profile.
+// MIR36/terminal144 registration does not bypass complete provider-closure admission.
+// Host invocation must refuse; there is no CPU substitute or native asm body.
+#[doc(hidden)]
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_amdgpu_complete_body_gfx942_v1"]
+pub fn __amdgpu_complete_body_gfx942_v1<
+    const BLOCKS: u8,
+    const STEPS: u8,
+    const B0: u64,
+    const B1: u64,
+    const B2: u64,
+    const B3: u64,
+    const I0: u64,
+    const I1: u64,
+    const I2: u64,
+    const I3: u64,
+>(
+    output: crate::DisjointSlice<u32>,
+    input0: u32,
+    input1: u32,
+    input2: u32,
+    selector: u32,
+    scratch: u8,
+    out: u8,
+    in0: u8,
+    in1: u8,
+    in2: u8,
+) {
+    let _ = (
+        output, input0, input1, input2, selector, scratch, out, in0, in1, in2,
+    );
+    unreachable!("complete-body marker is not executable without registered source lowering");
+}
+
 /// Maximum UTF-8 byte length admitted by the bounded format contract.
 pub const MAX_DIAGNOSTIC_FORMAT_BYTES_V1: usize = 96;
 

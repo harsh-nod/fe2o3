@@ -126,3 +126,20 @@ vendor manifest and its original producer provenance are unchanged. Actual
 Cargo target-roster checks, canonical/vendor materialization controls and fresh
 matching backend/source qualifications are required for these final bytes;
 test results belong in the dated qualification ledger, not in this pin update.
+
+## Exact MIR36 complete-body terminal source refresh
+
+This source adds the hidden, no-inline marker for the exact ten-constant and
+ten-runtime-argument complete-body source ABI. The existing terminal inventory
+is preserved; only actual authenticated calls select terminal144, CombinedV6
+and MIR36/intrinsic92. Older profiles do not auto-admit this marker.
+
+The final nightly-2026-04-03 rustfmt (edition 2024, skip_children=true) marker
+bytes produce canonical closure `970f321b61bf4320f4af4bb00089088baa92e7104c34b9ebbb71067dfe3369bd` and Cargo-vendor closure
+`52d648ec3d06ab04453b7146dcda03a575d399b620f8fc92376e7cf76f5c8897`. Only these two whole materializations are accepted; previous
+entries above are historical and are not appended as fallbacks. The exact
+1922-byte Cargo-produced vendor manifest and its historical producer provenance
+are unchanged, as are the raw-byte sorted-path length-framed identity rules.
+
+Fresh compiler/source and provider mutation gates are required. This pin entry
+does not claim successful compilation, source qualification or GPU execution.

@@ -81,9 +81,23 @@ bool ordinaryIntrinsicAttributes(const Function &F) {
   return F.getAttributes() ==
       Intrinsic::getAttributes(F.getContext(), F.getIntrinsicID(), F.getFunctionType());
 }
+// The exact canonical-emitter/native-decoder identifier intersection. This is
+// inert syntax, not symbol authenticity or source/handoff custody.
+bool completeEntrySymbol(StringRef Symbol) {
+  const auto Letter = [](char C) {
+    return (C >= 'A' && C <= 'Z') || (C >= 'a' && C <= 'z') || C == '_';
+  };
+  return !Symbol.empty() && Symbol.size() <= 128 && Letter(Symbol.front()) &&
+      llvm::all_of(Symbol.drop_front(), [&](char C) {
+        return Letter(C) || (C >= '0' && C <= '9');
+      });
+}
 // Complete typed mechanism dataflow/census, not source authority. The external
-// runner pins renderer/worker executable custody; there is no source/V17 owner.
-std::optional<std::string> completeSymbol(const Input &InputValue, const CompletePlan &Plan) {
+// runner pins source/canonical/handoff and executable custody. An explicit
+// symbol merely selects the expected sole typed kernel; it grants no authority.
+std::optional<std::string> completeSymbol(const Input &InputValue, const CompletePlan &Plan,
+                                        StringRef ExpectedSymbol = "complete_body_fixture") {
+  if (!completeEntrySymbol(ExpectedSymbol)) return std::nullopt;
   LLVMContext Context;
   SMDiagnostic Diagnostic;
   std::string Text(InputValue.Bytes.begin(), InputValue.Bytes.end());
@@ -112,7 +126,7 @@ std::optional<std::string> completeSymbol(const Input &InputValue, const Complet
       !Kernel->getReturnType()->isVoidTy() || Kernel->hasFnAttribute(Attribute::Naked) ||
       Kernel->getEntryBlock().size() != 18 ||
       !isa<UnreachableInst>(Kernel->getEntryBlock().getTerminator()) ||
-      Kernel->getName() != "complete_body_fixture" ||
+      Kernel->getName() != ExpectedSymbol ||
       !Kernel->hasExternalLinkage() || !Kernel->hasDefaultVisibility() ||
       Kernel->getDLLStorageClass() != GlobalValue::DefaultStorageClass ||
       Kernel->isDSOLocal() || Kernel->getUnnamedAddr() != GlobalValue::UnnamedAddr::None ||
@@ -193,7 +207,8 @@ std::optional<std::string> completeSymbol(const Input &InputValue, const Complet
   return Kernel->getName().str();
 }
 
-json::Array completeLlvmNegatives(const Input &InputValue, const CompletePlan &P) {
+json::Array completeLlvmNegatives(const Input &InputValue, const CompletePlan &P,
+                                  StringRef ExpectedSymbol = "complete_body_fixture") {
   std::vector<std::pair<std::string,std::string>> Changes{
     {"~{memory}","~{v5}"},{"{s22}","{s23}"},
     {"~{s21}","~{s23}"},{"s_mov_b64 exec, s[20:21]","s_mov_b64 exec, s[22:23]"},
@@ -228,7 +243,7 @@ json::Array completeLlvmNegatives(const Input &InputValue, const CompletePlan &P
     Input Changed=InputValue;
     Changed.Bytes.assign(Text.begin(),Text.end());
     Changed.Digest=SHA256::hash(Changed.Bytes);
-    require(!completeSymbol(Changed,P),"typed LLVM mutation accepted");
+    require(!completeSymbol(Changed,P,ExpectedSymbol),"typed LLVM mutation accepted");
     Results.emplace_back(json::Object{{"ordinal",I},{"phase","llvm_parser_or_exact_typed_profile"},
       {"changed_sha256",hex(Changed.Digest)},{"accepted",false}});
   }

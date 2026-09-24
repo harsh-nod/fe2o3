@@ -131,7 +131,9 @@ fn allowed(k: &OperationKind) -> bool {
         | OperationKind::Wave(_)
         | OperationKind::InlineAssembly(_)
         | OperationKind::Gfx942OrderedRegion(_)
-        | OperationKind::Gfx942OrderedProgram(_) => false,
+        | OperationKind::Gfx942OrderedProgram(_)
+        | OperationKind::Gfx942CompleteBodyDeclaration(_)
+        | OperationKind::Gfx942CompleteBodyStep(_) => false,
     }
 }
 
@@ -608,3 +610,7 @@ fn emit(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "loop_unroll_complete_body_v19_tests.rs"]
+mod complete_body_v19_tests;

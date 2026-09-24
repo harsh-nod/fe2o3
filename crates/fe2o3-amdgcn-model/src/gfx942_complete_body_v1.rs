@@ -123,10 +123,21 @@ impl Gfx942CompleteBodyPlanV1 {
         blocks: &[Gfx942CompleteBodyBlockV1<'_>],
         work: &mut CanonicalKernelIrWorkBudgetV1,
     ) -> Result<Self, Gfx942CompleteBodyErrorV1> {
+        work.charge_work(GFX942_COMPLETE_BODY_VALIDATION_WORK_V1)
+            .map_err(Gfx942CompleteBodyErrorV1::Work)?;
+        Self::check_prepaid_v19(boundary, registers, resources, blocks)
+    }
+
+    /// Same bounded checker, only for the canonical bridge that already debited
+    /// VALIDATION_WORK on its existing resource ledger. Never a fresh meter.
+    pub(crate) fn check_prepaid_v19(
+        boundary: Gfx942CompleteBodyBoundaryV1,
+        registers: Registers,
+        resources: Gfx942CompleteBodyResourcesV1,
+        blocks: &[Gfx942CompleteBodyBlockV1<'_>],
+    ) -> Result<Self, Gfx942CompleteBodyErrorV1> {
         use Gfx942CompleteBodyErrorV1 as Error;
         use Gfx942CompleteBodyTerminatorV1 as Terminator;
-        work.charge_work(GFX942_COMPLETE_BODY_VALIDATION_WORK_V1)
-            .map_err(Error::Work)?;
         if boundary != Gfx942CompleteBodyBoundaryV1::PROFILE {
             return Err(Error::Boundary);
         }

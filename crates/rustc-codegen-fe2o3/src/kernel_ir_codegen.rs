@@ -117,6 +117,7 @@ pub(crate) enum CompilerModuleConstructionError {
         max: usize,
     },
     DescriptorSourceAlreadyBound,
+    CompleteBodyIdentityMismatch,
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
     UnsupportedExecutionType,
@@ -135,6 +136,8 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::LimitExceeded { field, actual, max } => {
                 write!(formatter, "{field} count/size {actual} exceeds limit {max}")
             }
+            Self::CompleteBodyIdentityMismatch => formatter
+                .write_str("complete-body canonical emission identity/sole-root closure mismatch"),
             Self::DescriptorSourceAlreadyBound => {
                 formatter.write_str("compiler module already has a descriptor source")
             }
@@ -269,6 +272,41 @@ pub(crate) fn retain_production_compiler_module_text_v1(
         descriptor_source_identity: None,
     })
 }
+
+/// Consumes the immutable actual-V19-to-text relation without accepting raw
+/// caller LLVM or re-verifying through an unrelated fresh/default ledger.
+/// Source/ranked/formal custody is separately retained by the caller; this
+/// demotion remains ordinary bounded inert compiler-module data.
+pub(crate) fn retain_verified_complete_body_compiler_module_text_v19(
+    canonical: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV19,
+    emission: dialect_amdgcn::Gfx942CompleteBodyCanonicalEmissionV19,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    let module = canonical.module();
+    if canonical.identity() != emission.canonical_identity()
+        || module.functions.len() != 1
+        || module.kernels.len() != 1
+        || module.kernels[0].entry != module.functions[0].id
+        || module.kernels[0].id.as_str() != module.functions[0].id.as_str()
+    {
+        return Err(CompilerModuleConstructionError::CompleteBodyIdentityMismatch);
+    }
+    enforce_compiler_module_bounds(module)?;
+    enforce_llvm_text_bound(emission.llvm_ir())?;
+    let symbols = compiler_module_symbol_closure_v1(module);
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir: emission.into_llvm_ir(),
+        kernel_entries: symbols.kernel_entries,
+        device_definitions: symbols.device_definitions,
+        internal_helpers: symbols.internal_helpers,
+        device_ffi_exports: symbols.device_ffi_exports,
+        external_declarations: symbols.external_declarations,
+        descriptor_source_identity: None,
+    })
+}
+
+#[cfg(test)]
+#[path = "kernel_ir_codegen_complete_body_v19_tests.rs"]
+mod complete_body_v19_tests;
 
 fn compiler_module_symbol_closure_v1(module: &Module) -> CompilerModuleSymbolClosureV1 {
     let mut kernel_entries = module

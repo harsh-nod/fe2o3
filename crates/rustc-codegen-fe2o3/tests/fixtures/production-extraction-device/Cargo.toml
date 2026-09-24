@@ -8,6 +8,13 @@ rust-version.workspace = true
 publish = false
 
 [features]
+complete-body-one-v19 = []
+complete-body-diamond-v19 = []
+complete-body-wrong-launch-v19 = []
+complete-body-reserved-register-v19 = []
+complete-body-foreign-input-v19 = []
+complete-body-undefined-merge-v19 = []
+complete-body-dynamic-grid-v19 = []
 guarded-loop-read = []
 guarded-loop-read-control = []
 guarded-loop-read-stale = []

@@ -124,9 +124,9 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
             let expected = if mutation {
-                (2_732_468, 3_304_704, 2_685_847, 3_281_565)
+                (2_733_569, 3_304_704, 2_686_896, 3_281_565)
             } else {
-                (249_319, 1_944_506, 238_010, 1_929_013)
+                (249_631, 1_944_506, 238_296, 1_929_013)
             };
             assert_eq!((work, peak), (expected.0, expected.1));
             let (result, accepted, actual_peak, storage_denial, work_denial) =

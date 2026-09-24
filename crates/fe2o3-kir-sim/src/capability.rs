@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_885_766;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_925_628;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -118,10 +118,11 @@ pub enum SimulationKirWireVersionV1 {
     V12,
     V16,
     V17,
+    V19,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::V7,
         Self::V9,
         Self::V10,
@@ -129,6 +130,7 @@ impl SimulationKirWireVersionV1 {
         Self::V12,
         Self::V16,
         Self::V17,
+        Self::V19,
     ];
     const COUNT: usize = Self::ALL.len();
 }
@@ -178,10 +180,12 @@ pub enum SimulationOperationSurfaceV1 {
     Execution = 37,
     OrderedRegion = 38,
     OrderedProgram = 39,
+    CompleteBodyDeclaration = 40,
+    CompleteBodyStep = 41,
 }
 
 impl SimulationOperationSurfaceV1 {
-    const ALL: [Self; 40] = [
+    const ALL: [Self; 42] = [
         Self::Constant,
         Self::Intrinsic,
         Self::MemoryIntrinsic,
@@ -222,8 +226,10 @@ impl SimulationOperationSurfaceV1 {
         Self::Execution,
         Self::OrderedRegion,
         Self::OrderedProgram,
+        Self::CompleteBodyDeclaration,
+        Self::CompleteBodyStep,
     ];
-    const COUNT: usize = Self::OrderedProgram as usize + 1;
+    const COUNT: usize = Self::CompleteBodyStep as usize + 1;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -282,6 +288,8 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     OrderedRegionProfile,
     OrderedProgram,
     OrderedProgramProfile,
+    CompleteBody,
+    CompleteBodyProfile,
 }
 
 impl UnsupportedFeatureV1 {
@@ -292,6 +300,8 @@ impl UnsupportedFeatureV1 {
             Self::OrderedRegionProfile => SimulationUnsupportedReasonCodeV1::OrderedRegionProfile,
             Self::OrderedProgram => SimulationUnsupportedReasonCodeV1::OrderedProgram,
             Self::OrderedProgramProfile => SimulationUnsupportedReasonCodeV1::OrderedProgramProfile,
+            Self::CompleteBody => SimulationUnsupportedReasonCodeV1::CompleteBody,
+            Self::CompleteBodyProfile => SimulationUnsupportedReasonCodeV1::CompleteBodyProfile,
             Self::InertV12Carrier => SimulationUnsupportedReasonCodeV1::InertV12Carrier,
             Self::FloatType(_) => SimulationUnsupportedReasonCodeV1::FloatType,
             Self::UnsupportedType => SimulationUnsupportedReasonCodeV1::UnsupportedType,
@@ -434,6 +444,7 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
                         | SimulationKirWireVersionV1::V12
                         | SimulationKirWireVersionV1::V16
                         | SimulationKirWireVersionV1::V17
+                        | SimulationKirWireVersionV1::V19
                 ) {
                     SimulationCapabilityDispositionV1::Owned {
                         owner: SimulationSemanticOwnerV1::TypedMemory,
@@ -693,6 +704,18 @@ fn top_level_capability(
             )
         }
         Surface::OrderedProgram => unsupported(Reason::OrderedProgramProfile),
+        Surface::CompleteBodyDeclaration | Surface::CompleteBodyStep
+            if kir_wire_version == SimulationKirWireVersionV1::V19
+                && profile == SimulationCapabilityProfileV1::Gfx942XnackMinus =>
+        {
+            owned(
+                Owner::ScalarBits,
+                &[Reason::CompleteBody, Reason::CompleteBodyProfile],
+            )
+        }
+        Surface::CompleteBodyDeclaration | Surface::CompleteBodyStep => {
+            unsupported(Reason::CompleteBodyProfile)
+        }
         Surface::Execution => unsupported(Reason::InertExecutionV15),
         Surface::VectorLoad
         | Surface::VectorStore
@@ -746,6 +769,10 @@ pub(crate) fn operation_surface_v1(operation: &OperationKind) -> SimulationOpera
         OperationKind::InlineAssembly(_) => SimulationOperationSurfaceV1::InlineAssembly,
         OperationKind::Gfx942OrderedRegion(_) => SimulationOperationSurfaceV1::OrderedRegion,
         OperationKind::Gfx942OrderedProgram(_) => SimulationOperationSurfaceV1::OrderedProgram,
+        OperationKind::Gfx942CompleteBodyDeclaration(_) => {
+            SimulationOperationSurfaceV1::CompleteBodyDeclaration
+        }
+        OperationKind::Gfx942CompleteBodyStep(_) => SimulationOperationSurfaceV1::CompleteBodyStep,
     }
 }
 

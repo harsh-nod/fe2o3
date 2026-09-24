@@ -80,6 +80,8 @@ pub enum UnsupportedFeatureV1 {
     TargetConstantOutOfRange,
     OrderedProgram,
     OrderedProgramProfile,
+    CompleteBody,
+    CompleteBodyProfile,
 }
 
 /// One typed unsupported finding in the selected kernel's reachable call graph.
@@ -464,6 +466,7 @@ impl AdmittedSimulationModuleV1 {
             None,
             target,
             limits,
+            self.identity.wire_version(),
         )
     }
 
@@ -482,6 +485,7 @@ impl AdmittedSimulationModuleV1 {
             Some(dynamic),
             target,
             limits,
+            self.identity.wire_version(),
         )
     }
 }
@@ -493,6 +497,7 @@ pub(crate) fn preflight(
     dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
+    wire_version: u16,
 ) -> Result<SimulationPlanV1, SimulationPreflightErrorV1> {
     let limits = limits
         .validate()
@@ -545,8 +550,21 @@ pub(crate) fn preflight(
             dynamic.is_some(),
             target,
             limits,
-            crate::ordered_region_v16::launch_profile_matches(module, kernel, request, target),
-            crate::ordered_program_v17::launch_profile_matches(module, kernel, request, target),
+            OrderedProfiles {
+                region: crate::ordered_region_v16::launch_profile_matches(
+                    module, kernel, request, target,
+                ),
+                program: crate::ordered_program_v17::launch_profile_matches(
+                    module, kernel, request, target,
+                ),
+                complete_body: crate::complete_body_v19::launch_profile_matches(
+                    module,
+                    kernel,
+                    request,
+                    target,
+                    wire_version,
+                ),
+            },
         )?;
     if unsupported.total_findings() != 0 {
         return Err(SimulationPreflightErrorV1::Unsupported(unsupported));
@@ -1126,14 +1144,20 @@ fn check_limit(
     }
 }
 
+#[derive(Clone, Copy)]
+struct OrderedProfiles {
+    region: bool,
+    program: bool,
+    complete_body: bool,
+}
+
 fn scan_reachable(
     module: &Module,
     entry: &Function,
     allow_dynamic_workgroup_memory: bool,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
-    ordered_region_launch: bool,
-    ordered_program_launch: bool,
+    launch_profiles: OrderedProfiles,
 ) -> Result<(UnsupportedSimulationReportV1, Vec<usize>, usize, usize), SimulationPreflightErrorV1> {
     let mut functions = HashMap::new();
     functions
@@ -1165,14 +1189,16 @@ fn scan_reachable(
     while let Some(function_index) = pending.pop() {
         reachable.push(function_index);
         let function = &module.functions[function_index];
-        let ordered_region_profile = ordered_region_launch
+        let ordered_region_profile = launch_profiles.region
             && crate::ordered_region_v16::function_profile_is_consistent(
                 &function.required_capabilities,
             );
-        let ordered_program_profile = ordered_program_launch
+        let ordered_program_profile = launch_profiles.program
             && crate::ordered_program_v17::function_profile_is_consistent(
                 &function.required_capabilities,
             );
+        let complete_body_profile = launch_profiles.complete_body
+            && crate::complete_body_v19::scope_profile_matches(&function.required_capabilities);
         scan_signature(function, target, &mut findings);
         let Some(body) = &function.body else {
             let identifier_bytes = function.id.retained_capacity_bytes().saturating_mul(2);
@@ -1218,8 +1244,11 @@ fn scan_reachable(
                     &mut findings,
                     allow_dynamic_workgroup_memory,
                     target,
-                    ordered_region_profile,
-                    ordered_program_profile,
+                    OrderedProfiles {
+                        region: ordered_region_profile,
+                        program: ordered_program_profile,
+                        complete_body: complete_body_profile,
+                    },
                 )?;
             }
             scan_terminator(
@@ -1623,8 +1652,7 @@ fn scan_operation(
     findings: &mut UnsupportedCollectorV1,
     allow_dynamic_workgroup_memory: bool,
     target: SimulationTargetV1,
-    ordered_region_profile: bool,
-    ordered_program_profile: bool,
+    ordered_profiles: OrderedProfiles,
 ) -> Result<(), SimulationPreflightErrorV1> {
     let _surface = crate::capability::operation_surface_v1(&operation.kind);
     let identifier_bytes = function.id.retained_capacity_bytes();
@@ -1843,7 +1871,7 @@ fn scan_operation(
         OperationKind::Wave(_) => {}
         OperationKind::Gfx950LdsTranspose(_) => {}
         OperationKind::Gfx942OrderedRegion(_) => {
-            if !ordered_region_profile {
+            if !ordered_profiles.region {
                 reject!(UnsupportedFeatureV1::OrderedRegionProfile);
             }
             if validate_gfx942_ordered_region_v1(operation, |value| {
@@ -1855,7 +1883,7 @@ fn scan_operation(
             }
         }
         OperationKind::Gfx942OrderedProgram(_) => {
-            if !ordered_program_profile {
+            if !ordered_profiles.program {
                 reject!(UnsupportedFeatureV1::OrderedProgramProfile);
             }
             if validate_gfx942_ordered_program_v1(operation, |value| {
@@ -1864,6 +1892,38 @@ fn scan_operation(
             .is_err()
             {
                 reject!(UnsupportedFeatureV1::OrderedProgram);
+            }
+        }
+        OperationKind::Gfx942CompleteBodyDeclaration(declaration) => {
+            if !ordered_profiles.complete_body {
+                reject!(UnsupportedFeatureV1::CompleteBodyProfile);
+            }
+            let output_is_slice = matches!(value_types.get(&declaration.parameters[0]),
+                Some(Type::Slice(slice)) if slice.address_space == AddressSpace::Global
+                    && slice.access == AccessMode::ReadWrite
+                    && slice.element.as_ref() == &Type::Scalar(ScalarType::U32));
+            if declaration.validate_shape().is_err()
+                || !operation.results.is_empty()
+                || !output_is_slice
+                || declaration.parameters[1..].iter().any(|value| {
+                    value_types.get(value).copied() != Some(&Type::Scalar(ScalarType::U32))
+                })
+            {
+                reject!(UnsupportedFeatureV1::CompleteBody);
+            }
+        }
+        OperationKind::Gfx942CompleteBodyStep(step) => {
+            if !ordered_profiles.complete_body {
+                reject!(UnsupportedFeatureV1::CompleteBodyProfile);
+            }
+            if step.validate_shape().is_err()
+                || !matches!(operation.results.as_slice(),
+                    [result] if result.ty == Type::Scalar(ScalarType::U32))
+                || step.operands.iter().flatten().any(|value| {
+                    value_types.get(value).copied() != Some(&Type::Scalar(ScalarType::U32))
+                })
+            {
+                reject!(UnsupportedFeatureV1::CompleteBody);
             }
         }
         OperationKind::InlineAssembly(_) => {
@@ -2413,6 +2473,7 @@ mod tests {
                 None,
                 SimulationTargetV1::amdgpu_64(),
                 SimulationLimitsV1::default(),
+                fe2o3_kernel_ir::KERNEL_IR_VERSION_V12,
             ) {
                 Err(error) => error,
                 Ok(_) => panic!("Execution V15 cannot produce a simulation plan"),
@@ -2516,6 +2577,7 @@ mod tests {
                 None,
                 SimulationTargetV1::amdgpu_64(),
                 SimulationLimitsV1::default(),
+                fe2o3_kernel_ir::KERNEL_IR_VERSION_V12,
             ) {
                 Err(error) => error,
                 Ok(_) => panic!("inert V12 cannot produce an execution plan"),
@@ -2723,8 +2785,11 @@ mod tests {
             &mut findings,
             false,
             SimulationTargetV1::amdgpu_64(),
-            false,
-            false,
+            OrderedProfiles {
+                region: false,
+                program: false,
+                complete_body: false,
+            },
         )
         .unwrap();
 
@@ -2777,8 +2842,11 @@ mod tests {
             &mut findings,
             false,
             SimulationTargetV1::amdgpu_64(),
-            false,
-            false,
+            OrderedProfiles {
+                region: false,
+                program: false,
+                complete_body: false,
+            },
         )
         .unwrap();
 
@@ -2836,8 +2904,11 @@ mod tests {
             &mut findings,
             false,
             SimulationTargetV1::amdgpu_64(),
-            false,
-            false,
+            OrderedProfiles {
+                region: false,
+                program: false,
+                complete_body: false,
+            },
         )
         .unwrap();
 
@@ -2878,8 +2949,11 @@ mod tests {
             &mut findings,
             false,
             SimulationTargetV1::amdgpu_64(),
-            false,
-            false,
+            OrderedProfiles {
+                region: false,
+                program: false,
+                complete_body: false,
+            },
         )
         .unwrap();
         let report = findings.finish().unwrap();

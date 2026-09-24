@@ -821,7 +821,9 @@ impl<'a> Analyzer<'a> {
             OperationKind::MemoryIntrinsic(_) => Variation::Varying,
             OperationKind::InlineAssembly(_)
             | OperationKind::Gfx942OrderedRegion(_)
-            | OperationKind::Gfx942OrderedProgram(_) => Variation::Varying,
+            | OperationKind::Gfx942OrderedProgram(_)
+            | OperationKind::Gfx942CompleteBodyDeclaration(_)
+            | OperationKind::Gfx942CompleteBodyStep(_) => Variation::Varying,
             OperationKind::Matrix(_) => Variation::Varying,
             OperationKind::Gfx950LdsTranspose(transpose) => match transpose.kind {
                 fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current { .. }
