@@ -207,7 +207,8 @@ impl<'a> ProductionConditionalRankedOutputV1<'a> {
     /// and all runtime conditions remain unproved. In particular GlobalLaunch
     /// address representability remains required even when the output length is
     /// zero; GuardedOutput retains its existing output-span/zero-offset premise.
-    /// The matching success edge is not a dominance or complete CFG proof.
+    /// The matching guard is not a dominance or complete CFG proof. Coverage
+    /// separately checks any intervening input guards before the selected write.
     pub fn rederive_output_extent_v1(mut self, budget: &mut Budget<'_>) -> JoinResult<Self> {
         budget.charge_work(4)?;
         if budget.storage() < self.binding.owner().retained_analysis_storage_v1() {
@@ -433,7 +434,9 @@ fn check_extent_uses(
                 true_block,
                 false_block,
             } if *rhs == extent && *lhs == write.index && true_block != false_block => {
-                if *true_block == write.site.block() {
+                if *true_block == write.site.block()
+                    || binding.is_some_and(|binding| binding.coverage().read_count() != 0)
+                {
                     write_guard = true;
                 }
             }

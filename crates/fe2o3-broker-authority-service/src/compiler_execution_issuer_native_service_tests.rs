@@ -2,6 +2,8 @@
 //! Public service transport is not covered here or by the admission-only isolated
 //! fixture. These tests do not construct a synthetic Admission or observed occurrence.
 use super::*;
+#[path = "compiler_execution_worker_ledger_native_tests.rs"]
+mod worker_tests;
 use fe2o3_artifact_transaction::{
     RetainedDurableDirectoryHooksV1, RetainedDurableFaultTimingV1 as Timing,
     RetainedDurableRecordBoundaryV1 as Boundary,
@@ -191,7 +193,11 @@ fn native_consumer_rejects_signed_unsupported_position_without_disk_changes() {
             .expect("unsupported signed position must be rejected");
         assert_eq!(
             error.to_string(),
-            "native issuer service refused: native journal requires the unjoined Worker/anchor ledger",
+            if name == "compiler-execution-issuer-v3.redo" {
+                "native issuer service refused: native issuer genesis is not ready"
+            } else {
+                "native issuer service refused: native journal requires the unjoined Worker/anchor ledger"
+            },
             "{name}",
         );
         assert_eq!(writes.0, 0, "no promotion, stabilization, or sync: {name}");

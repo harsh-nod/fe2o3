@@ -106,7 +106,9 @@ impl std::error::Error for ProductionConditionalRankedCoverageErrorV1 {
 /// the true case performs exactly the selected write and the false case none;
 /// both reach normal returns. No other executable effects or possibly trapping
 /// computations are admitted. This statement is conditional on the joined
-/// output's unchanged address-arithmetic and pointer-validity premises.
+/// output's unchanged address-arithmetic and pointer-validity premises, plus
+/// each joined input's independent readable-access domain. Input premises do
+/// not shrink the retained address-formation domains.
 ///
 /// This does NOT authenticate source/ranked translation, reference coordinates,
 /// stored-value equivalence, ownership, runtime length/launch values, or N <= G.
@@ -162,18 +164,93 @@ pub(super) fn check_ranked_coverage_v1<'a>(
         }
         super::ProductionConditionalRankedExtentV1::Unbound(_) => return Err(Error::Coordinate),
     };
-    let [false_exit_block, true_exit_block] = check_paths(
-        output.candidate().kernel(),
-        output.ranked_index(),
-        extent,
-        output.gpu_write_site(),
-        budget,
-    )?;
+    let [false_exit_block, true_exit_block] = check_paths_with_reads(&output, extent, budget)?;
     Ok(ProductionConditionalRankedCoverageV1 {
         output,
         true_exit_block,
         false_exit_block,
     })
+}
+
+fn check_paths_with_reads(
+    output: &ProductionConditionalRankedOutputV1<'_>,
+    extent: Value,
+    budget: &mut Budget<'_>,
+) -> Result<[u32; 2]> {
+    use fe2o3_kernel_ir::ConditionalTotalViewReadV1 as Read;
+    use fe2o3_pliron::ProductionConditionalRankedReadBoundV1 as Bound;
+    let count = output.binding().coverage().read_count();
+    if count == 0 {
+        return check_paths(
+            output.candidate().kernel(),
+            output.ranked_index(),
+            extent,
+            output.gpu_write_site(),
+            budget,
+        );
+    }
+    budget.with_prepaid_scope(
+        budget.storage(),
+        1,
+        1,
+        std::mem::size_of::<Vec<Read>>() + std::mem::size_of::<Vec<Bound>>(),
+        |budget| {
+            let storage = count
+                .checked_mul(std::mem::size_of::<Read>() + std::mem::size_of::<Bound>())
+                .ok_or(ResourceError::Arithmetic)?;
+            budget.reserve_storage(storage)?;
+            let mut reads = Vec::new();
+            let mut bounds = Vec::new();
+            reads
+                .try_reserve_exact(count)
+                .map_err(|_| ResourceError::Allocation)?;
+            bounds
+                .try_reserve_exact(count)
+                .map_err(|_| ResourceError::Allocation)?;
+            if reads.capacity() != count || bounds.capacity() != count {
+                return Err(ResourceError::Accounting.into());
+            }
+            output
+                .binding()
+                .coverage()
+                .visit_reads_v1(budget, |read| {
+                    if reads.len() == count {
+                        return Err(ResourceError::Accounting);
+                    }
+                    reads.push(read);
+                    Ok(())
+                })
+                .map_err(|error| match error {
+                    fe2o3_kernel_ir::ConditionalTotalViewErrorV1::Resource(error) => {
+                        Error::Resource(error)
+                    }
+                    _ => Error::Coordinate,
+                })?;
+            if reads.len() != count {
+                return Err(Error::Coordinate);
+            }
+            for read in reads {
+                bounds.push(
+                    super::production_conditional_ranked_output_v1::checked_read_bound_v1(
+                        output.binding(),
+                        output.candidate(),
+                        read,
+                        output.ranked_index(),
+                        budget,
+                    )?,
+                );
+            }
+            fe2o3_pliron::check_ranked_recipe_paths_with_input_bounds_v1(
+                output.candidate().kernel(),
+                output.ranked_index(),
+                extent,
+                output.gpu_write_site(),
+                &bounds,
+                budget,
+            )
+            .map_err(coverage_error)
+        },
+    )
 }
 
 fn check_paths(
@@ -183,21 +260,24 @@ fn check_paths(
     write: ProductionGpuWriteSiteV2,
     budget: &mut Budget<'_>,
 ) -> Result<[u32; 2]> {
+    fe2o3_pliron::check_ranked_recipe_paths_v1(kernel, index, extent, write, budget)
+        .map_err(coverage_error)
+}
+
+fn coverage_error(error: fe2o3_pliron::ProductionRankedRecipeCoverageErrorV1) -> Error {
     use fe2o3_pliron::ProductionRankedRecipeCoverageErrorV1 as E;
-    fe2o3_pliron::check_ranked_recipe_paths_v1(kernel, index, extent, write, budget).map_err(
-        |error| match error {
-            E::Resource(error) => Error::Resource(error),
-            E::Coordinate => Error::Coordinate,
-            E::UnsupportedOperation { block, operation } => {
-                Error::UnsupportedOperation { block, operation }
-            }
-            E::UnsupportedTerminator { block } => Error::UnsupportedTerminator { block },
-            E::UnresolvedCondition { block } => Error::UnresolvedCondition { block },
-            E::AbnormalExit { block, predicate } => Error::AbnormalExit { block, predicate },
-            E::WriteCount { block, predicate } => Error::WriteCount { block, predicate },
-            E::Cycle { predicate } => Error::Cycle { predicate },
-        },
-    )
+    match error {
+        E::Resource(error) => Error::Resource(error),
+        E::Coordinate => Error::Coordinate,
+        E::UnsupportedOperation { block, operation } => {
+            Error::UnsupportedOperation { block, operation }
+        }
+        E::UnsupportedTerminator { block } => Error::UnsupportedTerminator { block },
+        E::UnresolvedCondition { block } => Error::UnresolvedCondition { block },
+        E::AbnormalExit { block, predicate } => Error::AbnormalExit { block, predicate },
+        E::WriteCount { block, predicate } => Error::WriteCount { block, predicate },
+        E::Cycle { predicate } => Error::Cycle { predicate },
+    }
 }
 
 #[cfg(test)]

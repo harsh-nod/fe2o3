@@ -12,6 +12,9 @@ use fe2o3_external_anchor_protocol::{
 use fe2o3_runtime_protocol::CompilerExecutionIssuerPolicyV1;
 
 use crate::{ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1};
+#[path = "compiler_execution_external_anchor_native.rs"]
+mod native;
+pub(crate) use native::NativeAnchor;
 
 /// Fixed production deadline for one compiler external-anchor request and response.
 pub const COMPILER_EXECUTION_EXTERNAL_ANCHOR_TIMEOUT_V1: Duration = Duration::from_secs(30);
@@ -188,8 +191,16 @@ fn send_challenge(
     peer: BorrowedFd<'_>,
     challenge: &AnchorChallengeV1,
 ) -> Result<(), ProtectedCompilerExecutionExternalAnchorErrorV1> {
+    send_challenge_metered(peer, challenge, &mut || Ok(()))
+}
+fn send_challenge_metered(
+    peer: BorrowedFd<'_>,
+    challenge: &AnchorChallengeV1,
+    permit: &mut impl FnMut() -> Result<(), ProtectedCompilerExecutionExternalAnchorErrorV1>,
+) -> Result<(), ProtectedCompilerExecutionExternalAnchorErrorV1> {
     let bytes = challenge.as_bytes();
     loop {
+        permit()?;
         // SAFETY: `bytes` remains readable for its fixed length and `peer` remains borrowed for
         // the duration of this nonblocking, signal-suppressed send.
         let sent = unsafe {
@@ -226,8 +237,18 @@ fn receive_observation_nonblocking(
     Option<[u8; ANCHOR_OBSERVATION_WIRE_LEN_V1]>,
     ProtectedCompilerExecutionExternalAnchorErrorV1,
 > {
+    receive_observation_metered(peer, &mut || Ok(()))
+}
+fn receive_observation_metered(
+    peer: BorrowedFd<'_>,
+    permit: &mut impl FnMut() -> Result<(), ProtectedCompilerExecutionExternalAnchorErrorV1>,
+) -> Result<
+    Option<[u8; ANCHOR_OBSERVATION_WIRE_LEN_V1]>,
+    ProtectedCompilerExecutionExternalAnchorErrorV1,
+> {
     let mut bytes = [0_u8; ANCHOR_OBSERVATION_WIRE_LEN_V1];
     loop {
+        permit()?;
         let mut vector = libc::iovec {
             iov_base: bytes.as_mut_ptr().cast(),
             iov_len: bytes.len(),
@@ -297,7 +318,17 @@ fn wait_for_service(
     wanted: i16,
     deadline: Instant,
 ) -> Result<(), ProtectedCompilerExecutionExternalAnchorErrorV1> {
+    wait_for_service_metered(peer, service_pidfd, wanted, deadline, &mut || Ok(()))
+}
+fn wait_for_service_metered(
+    peer: BorrowedFd<'_>,
+    service_pidfd: BorrowedFd<'_>,
+    wanted: i16,
+    deadline: Instant,
+    permit: &mut impl FnMut() -> Result<(), ProtectedCompilerExecutionExternalAnchorErrorV1>,
+) -> Result<(), ProtectedCompilerExecutionExternalAnchorErrorV1> {
     loop {
+        permit()?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::Timeout);
@@ -367,6 +398,10 @@ fn duration_to_poll_millis(duration: Duration) -> i32 {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ProtectedCompilerExecutionExternalAnchorErrorV1 {
+    /// Native callers exhausted their original cumulative resource ledger.
+    Resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
+    /// Native callers exhausted their cumulative syscall attempt limit.
+    AttemptLimit,
     /// Retained endpoint or process admission failed continuity validation.
     Admission(ProtectedServiceAdmissionErrorV1),
     /// Signed anchor protocol validation failed.
@@ -412,6 +447,8 @@ pub enum ProtectedCompilerExecutionExternalAnchorErrorV1 {
 impl fmt::Display for ProtectedCompilerExecutionExternalAnchorErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Resource(error) => write!(formatter, "external-anchor resource: {error}"),
+            Self::AttemptLimit => formatter.write_str("external-anchor attempt limit exhausted"),
             Self::Admission(error) => write!(formatter, "external-anchor admission: {error}"),
             Self::Protocol(error) => write!(formatter, "external-anchor protocol: {error}"),
             Self::InvalidTimeout => formatter.write_str("external-anchor timeout is zero"),

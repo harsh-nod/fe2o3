@@ -505,17 +505,6 @@ pub(crate) fn generate_ranked_effect_formula_replay_v2(
     generate_effect_formula_replay(kernel, block_index, operation_index, lemma_name, false)
 }
 
-/// Conditional composition needs usable equality postconditions, not just a
-/// successful call to a proof whose body contains local assertions.
-pub(crate) fn generate_conditional_effect_formula_replay_v1(
-    kernel: &ProductionRankedKernelV1,
-    block_index: usize,
-    operation_index: usize,
-    lemma_name: &str,
-) -> Result<RankedEffectFormulaReplayV2, FunctionalRefinementVerusExecutionErrorV2> {
-    generate_effect_formula_replay(kernel, block_index, operation_index, lemma_name, true)
-}
-
 fn generate_effect_formula_replay(
     kernel: &ProductionRankedKernelV1,
     block_index: usize,
@@ -523,6 +512,29 @@ fn generate_effect_formula_replay(
     lemma_name: &str,
     export_equalities: bool,
 ) -> Result<RankedEffectFormulaReplayV2, FunctionalRefinementVerusExecutionErrorV2> {
+    let pairs = checked_effect_formula_pairs(kernel, block_index, operation_index)?;
+    let program = SemanticFormulaProgramV2::build(kernel, &pairs)?;
+    Ok(RankedEffectFormulaReplayV2 {
+        lemma: program
+            .render_lemma(&pairs, lemma_name, export_equalities)?
+            .into_boxed_str(),
+        symbols: program
+            .symbols
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    })
+}
+
+fn checked_effect_formula_pairs(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+) -> Result<
+    Vec<(ProductionRankedValueV1, ProductionRankedValueV1)>,
+    FunctionalRefinementVerusExecutionErrorV2,
+> {
     let operation = kernel
         .blocks()
         .get(block_index)
@@ -556,19 +568,15 @@ fn generate_effect_formula_replay(
         ),
         (contract.gpu_value(), contract.reference_value()),
     ]);
-    let program = SemanticFormulaProgramV2::build(kernel, &pairs)?;
-    Ok(RankedEffectFormulaReplayV2 {
-        lemma: program
-            .render_lemma(&pairs, lemma_name, export_equalities)?
-            .into_boxed_str(),
-        symbols: program
-            .symbols
-            .iter()
-            .copied()
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-    })
+    Ok(pairs)
 }
+
+mod conditional_memory_formula_v1;
+#[cfg(test)]
+pub(crate) use conditional_memory_formula_v1::with_conditional_memory_development_v1;
+pub(crate) use conditional_memory_formula_v1::{
+    ConditionalMemoryFormulaV1, ConditionalMemoryLeafV1, with_conditional_memory_formula_v1,
+};
 
 pub(crate) const fn ranked_effect_formula_replay_prelude_v2() -> &'static str {
     BITVECTOR_SEMANTICS_V2

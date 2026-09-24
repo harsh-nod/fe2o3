@@ -19,6 +19,9 @@ type Expr = ProductionSemanticExpressionV2;
 type Op = ProductionRankedOperationV1;
 type Value = ProductionRankedValueV1;
 
+#[path = "production_conditional_cpu_read_premises_v1.rs"]
+pub(crate) mod read_premises_v1;
+
 fn reject(why: &'static str) -> Error {
     Error::UnsupportedReference(why)
 }
@@ -64,8 +67,9 @@ pub(crate) fn with_source_bound_cpu_formula_v1<R>(
     check_source_identity(request, binding, semantic_root, budget)?;
     // This bridge uses the existing MIR resolver and the caller's original meter.
     binding
-        .with_replayed_output_writes_v1(budget, |writes, budget| {
-            check_outputs(request, binding, writes, budget)?;
+        .with_replayed_output_writes_v1(budget, |replay, budget| {
+            check_outputs(request, binding, &replay.writes, budget)?;
+            read_premises_v1::check_source_bound_reads_v1(request, binding, replay, budget)?;
             let cpu = SourceBoundCpuCorrespondenceV1 { request, binding };
             cpu.with_formula_execution(runtime, budget, timeout_seconds, consume)
         })

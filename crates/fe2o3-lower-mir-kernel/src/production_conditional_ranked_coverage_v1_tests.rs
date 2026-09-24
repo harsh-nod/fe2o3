@@ -114,6 +114,201 @@ fn dynamic_single_write_accepts_non_topological_block_order() {
     assert_eq!(kernel.blocks()[0].terminator(), &Term::Branch { target: 3 });
 }
 
+fn input_guard_recipe(
+    global_read: bool,
+) -> (
+    ProductionRankedKernelV1,
+    fe2o3_pliron::ProductionConditionalRankedReadBoundV1,
+) {
+    use fe2o3_kernel_ir::ConditionalTotalViewAddressDomainV1 as Domain;
+    let mut blocks = blocks();
+    let mut entry = blocks[0].operations().to_vec();
+    entry.push(Op::ViewInSpace {
+        result: Id::new(6),
+        element_width: 32,
+        writable: false,
+        shape: vec![DYNAMIC_EXTENT],
+        dynamic_extents: vec![Value::Argument(1)],
+        memory_space: MemorySpaceAttr::Global,
+        allocation_origin: 2,
+        noalias_class: 2,
+    });
+    set_operations(&mut blocks, 0, entry);
+    let read = Op::Access {
+        kind: AccessKindAttr::Read,
+        view: local(6),
+        indices: vec![local(1)],
+    };
+    blocks.push(Block::new(
+        vec![],
+        Term::IndexLessThan {
+            lhs: local(1),
+            rhs: Value::Argument(1),
+            true_block: 5,
+            false_block: 6,
+        },
+    ));
+    blocks.push(Block::new(
+        vec![read],
+        Term::Branch {
+            target: if global_read { 3 } else { 2 },
+        },
+    ));
+    blocks.push(Block::new(vec![], Term::Trap));
+    if global_read {
+        set_terminator(&mut blocks, 0, Term::Branch { target: 4 });
+    } else {
+        set_terminator(&mut blocks, 3, guard(4, 1));
+    }
+    (
+        construct(blocks),
+        fe2o3_pliron::ProductionConditionalRankedReadBoundV1 {
+            block: 5,
+            operation: 0,
+            view: local(6),
+            index: local(1),
+            extent: Value::Argument(1),
+            domain: if global_read {
+                Domain::GlobalLaunch
+            } else {
+                Domain::GuardedOutput
+            },
+        },
+    )
+}
+
+fn input_query(
+    kernel: &ProductionRankedKernelV1,
+    reads: &[fe2o3_pliron::ProductionConditionalRankedReadBoundV1],
+    budget: &mut Budget<'_>,
+) -> std::result::Result<[u32; 2], fe2o3_pliron::ProductionRankedRecipeCoverageErrorV1> {
+    fe2o3_pliron::check_ranked_recipe_paths_with_input_bounds_v1(
+        kernel,
+        local(1),
+        EXTENT,
+        WRITE,
+        reads,
+        budget,
+    )
+}
+
+#[test]
+fn input_guard_coverage_keeps_output_and_global_domains_distinct() {
+    use fe2o3_kernel_ir::ConditionalTotalViewAddressDomainV1 as Domain;
+    for global in [false, true] {
+        let (kernel, read) = input_guard_recipe(global);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.reserve_storage(37).unwrap();
+        assert_eq!(input_query(&kernel, &[read], &mut budget), Ok([1, 1]));
+        assert_eq!(budget.storage(), 37);
+        let mut wrong = read;
+        wrong.domain = if global {
+            Domain::GuardedOutput
+        } else {
+            Domain::GlobalLaunch
+        };
+        assert!(input_query(&kernel, &[wrong], &mut budget).is_err());
+        // The false output case is exercised even for an empty output. A read
+        // before the output guard therefore retains its whole-launch premise.
+        assert!(query(&kernel).is_err());
+    }
+}
+
+#[test]
+fn input_guard_coverage_rejects_wrong_read_coordinates_and_complete_roster_omissions() {
+    let (kernel, read) = input_guard_recipe(false);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    for change in 0..6 {
+        let mut wrong = read;
+        match change {
+            0 => wrong.view = local(2),
+            1 => wrong.index = local(4),
+            2 => wrong.extent = EXTENT,
+            3 => wrong.block = 2,
+            4 => wrong.operation = 1,
+            _ => wrong.extent = local(5),
+        }
+        assert!(input_query(&kernel, &[wrong], &mut budget).is_err());
+    }
+    assert!(input_query(&kernel, &[], &mut budget).is_err());
+    assert!(input_query(&kernel, &[read, read], &mut budget).is_err());
+    // This fixture's executed load is unused by the store value and is still
+    // part of the mandatory read roster.
+    assert_eq!(input_query(&kernel, &[read], &mut budget), Ok([1, 1]));
+}
+
+#[test]
+fn input_guard_coverage_does_not_hide_inverted_shifted_or_missing_trap_guards() {
+    for change in 0..4 {
+        let (kernel, read) = input_guard_recipe(false);
+        let mut blocks = kernel.blocks().to_vec();
+        if change == 2 {
+            let mut entry = blocks[0].operations().to_vec();
+            entry.push(Op::IndexBinary {
+                result: Id::new(7),
+                kind: IndexBinaryKindAttr::Add,
+                lhs: local(1),
+                rhs: local(5),
+            });
+            set_operations(&mut blocks, 0, entry);
+        }
+        let terminator = match change {
+            0 => Term::IndexLessThan {
+                lhs: local(1),
+                rhs: Value::Argument(1),
+                true_block: 6,
+                false_block: 5,
+            },
+            1 | 2 => Term::IndexLessThan {
+                lhs: if change == 1 { local(4) } else { local(7) },
+                rhs: Value::Argument(1),
+                true_block: 5,
+                false_block: 6,
+            },
+            _ => Term::Branch { target: 6 },
+        };
+        set_terminator(&mut blocks, 4, terminator);
+        let kernel = construct(blocks);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        assert!(input_query(&kernel, &[read], &mut budget).is_err());
+    }
+}
+
+#[test]
+fn input_guard_coverage_preserves_the_original_account_and_exact_limits() {
+    let (kernel, read) = input_guard_recipe(true);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    budget.reserve_storage(37).unwrap();
+    budget.charge_work(11).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    assert!(input_query(&kernel, &[read], &mut budget).is_ok());
+    let used = budget.work();
+    let peak = budget.peak_storage();
+    assert_eq!(budget.storage(), 37);
+    assert!(budget.work_ledger_identity_v1() == ledger);
+    assert!(input_query(&kernel, &[read], &mut budget).is_ok());
+    assert_eq!(budget.work(), 11 + 2 * (used - 11));
+    assert_eq!(budget.peak_storage(), peak);
+    assert_eq!(budget.storage(), 37);
+    assert!(budget.work_ledger_identity_v1() == ledger);
+    for (work_limit, storage_limit, accepted) in [
+        (used, peak, true),
+        (used - 1, peak, false),
+        (used, peak - 1, false),
+    ] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(37).unwrap();
+        budget.charge_work(11).unwrap();
+        assert_eq!(input_query(&kernel, &[read], &mut budget).is_ok(), accepted);
+        assert_eq!(budget.storage(), 37);
+    }
+}
+
 #[test]
 fn different_normal_exits_and_access_without_value_remain_structural() {
     let mut blocks = blocks();

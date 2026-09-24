@@ -10,6 +10,7 @@ use dialect_kernel::AccessKindAttr;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as ResourceError,
+    ConditionalTotalViewAddressDomainV1 as Domain,
 };
 use std::fmt;
 
@@ -424,6 +425,12 @@ impl std::error::Error for ProductionRankedRecipeCoverageErrorV1 {
     }
 }
 
+impl From<ResourceError> for ProductionRankedRecipeCoverageErrorV1 {
+    fn from(error: ResourceError) -> Self {
+        Self::Resource(error)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Fault {
     Arithmetic,
@@ -473,6 +480,26 @@ struct Selection<V> {
     index: V,
     extent: V,
     write: Site,
+}
+
+/// Descriptive input coordinates. These are not authenticated premises or a
+/// production bounds report; callers must separately bind canonical/source reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionConditionalRankedReadBoundV1 {
+    pub block: u32,
+    pub operation: u32,
+    pub view: Value,
+    pub index: Value,
+    pub extent: Value,
+    pub domain: Domain,
+}
+
+#[derive(Clone, Copy)]
+struct InputBound<V> {
+    site: Site,
+    index: V,
+    extent: V,
+    domain: Domain,
 }
 
 enum OperationView {
@@ -532,6 +559,15 @@ fn check_paths<R: Reader, M: Meter>(
     selected: Selection<R::Value>,
     meter: &mut M,
 ) -> CheckResult<[u32; 2], M::Error> {
+    check_paths_with_inputs(reader, selected, &[], meter)
+}
+
+fn check_paths_with_inputs<R: Reader, M: Meter>(
+    reader: &R,
+    selected: Selection<R::Value>,
+    inputs: &[InputBound<R::Value>],
+    meter: &mut M,
+) -> CheckResult<[u32; 2], M::Error> {
     let mut write_seen = false;
     for b in 0..reader.block_count() {
         meter.charge(4)?;
@@ -552,15 +588,24 @@ fn check_paths<R: Reader, M: Meter>(
                 }
             }
         }
-        successor(reader, block, selected, false, meter)?;
+        successor(reader, block, selected, false, inputs, true, meter)?;
     }
     if !write_seen {
         return Err(Fault::Coordinate.into());
     }
-    Ok([
-        walk(reader, selected, false, meter)?,
-        walk(reader, selected, true, meter)?,
-    ])
+    let exits = [
+        walk(reader, selected, false, inputs, None, meter)?.0,
+        walk(reader, selected, true, inputs, None, meter)?.0,
+    ];
+    for input in inputs {
+        meter.charge(4)?;
+        let tail = walk(reader, selected, false, inputs, Some(input.site), meter)?.1;
+        let body = walk(reader, selected, true, inputs, Some(input.site), meter)?.1;
+        if !body || tail != (input.domain == Domain::GlobalLaunch) {
+            return Err(Fault::Coordinate.into());
+        }
+    }
+    Ok(exits)
 }
 
 enum Edge {
@@ -573,22 +618,26 @@ fn walk<R: Reader, M: Meter>(
     reader: &R,
     selected: Selection<R::Value>,
     predicate: bool,
+    inputs: &[InputBound<R::Value>],
+    read: Option<Site>,
     meter: &mut M,
-) -> CheckResult<u32, M::Error> {
+) -> CheckResult<(u32, bool), M::Error> {
     let mut block = 0;
     let mut wrote = false;
+    let mut read_seen = false;
     // Each fixed predicate case has one successor. More than B visits is a cycle.
     for _ in 0..reader.block_count() {
         meter.charge(4)?;
+        read_seen |= read.is_some_and(|site| site.block == block);
         if block == selected.write.block {
             if wrote || !predicate {
                 return Err(Fault::WriteCount { block, predicate }.into());
             }
             wrote = true;
         }
-        match successor(reader, block, selected, predicate, meter)? {
+        match successor(reader, block, selected, predicate, inputs, false, meter)? {
             Edge::Block(target) => block = target,
-            Edge::Return if wrote == predicate => return Ok(block),
+            Edge::Return if wrote == predicate => return Ok((block, read_seen)),
             Edge::Return => return Err(Fault::WriteCount { block, predicate }.into()),
             Edge::Trap => return Err(Fault::AbnormalExit { block, predicate }.into()),
         }
@@ -601,6 +650,8 @@ fn successor<R: Reader, M: Meter>(
     block: u32,
     selected: Selection<R::Value>,
     predicate: bool,
+    inputs: &[InputBound<R::Value>],
+    structural: bool,
     meter: &mut M,
 ) -> CheckResult<Edge, M::Error> {
     meter.charge(6)?;
@@ -620,6 +671,20 @@ fn successor<R: Reader, M: Meter>(
         } => {
             let condition = if !equal && lhs == selected.index && rhs == selected.extent {
                 predicate
+            } else if !equal
+                && inputs.iter().try_fold(false, |found, input| {
+                    meter.charge(4)?;
+                    Ok::<_, Failure<M::Error>>(
+                        found
+                            || (lhs == input.index
+                                && rhs == input.extent
+                                && (structural
+                                    || predicate
+                                    || input.domain == Domain::GlobalLaunch)),
+                    )
+                })?
+            {
+                true
             } else {
                 let lhs = literal(reader, lhs, meter)?;
                 let rhs = literal(reader, rhs, meter)?;
@@ -878,4 +943,142 @@ pub fn check_ranked_recipe_paths_v1(
         budget,
     )
     .map_err(recipe_error)
+}
+
+/// Checks an implication under exactly the supplied descriptive read domains.
+/// This API cannot produce an authenticated conditional pipeline subject.
+pub fn check_ranked_recipe_paths_with_input_bounds_v1(
+    kernel: &ProductionRankedKernelV1,
+    index: Value,
+    extent: Value,
+    write: ProductionGpuWriteSiteV2,
+    reads: &[ProductionConditionalRankedReadBoundV1],
+    budget: &mut Budget<'_>,
+) -> Result<[u32; 2], ProductionRankedRecipeCoverageErrorV1> {
+    budget.with_prepaid_scope(
+        budget.storage(),
+        1,
+        1,
+        size_of::<Vec<InputBound<Value>>>(),
+        |budget| {
+            let bytes = reads
+                .len()
+                .checked_mul(size_of::<InputBound<Value>>())
+                .ok_or(ResourceError::Arithmetic)?;
+            budget.reserve_storage(bytes)?;
+            let mut inputs = Vec::new();
+            inputs
+                .try_reserve_exact(reads.len())
+                .map_err(|_| ResourceError::Allocation)?;
+            if inputs.capacity() != reads.len() {
+                return Err(ResourceError::Accounting.into());
+            }
+            let mut count = 0usize;
+            for (b, block) in kernel.blocks().iter().enumerate() {
+                budget.charge_work(1)?;
+                for (o, op) in block.operations().iter().enumerate() {
+                    budget.charge_work(4)?;
+                    if let Op::Access {
+                        kind: AccessKindAttr::Read,
+                        view,
+                        indices,
+                    } = op
+                    {
+                        count += 1;
+                        let mut matched = None;
+                        for read in reads {
+                            budget.charge_work(4)?;
+                            if read.block as usize == b && read.operation as usize == o {
+                                if matched.replace(read).is_some()
+                                    || read.view != *view
+                                    || read.index != index
+                                    || indices.as_slice() != [index]
+                                {
+                                    return Err(ProductionRankedRecipeCoverageErrorV1::Coordinate);
+                                }
+                            }
+                        }
+                        let read =
+                            matched.ok_or(ProductionRankedRecipeCoverageErrorV1::Coordinate)?;
+                        check_recipe_read_extent_v1(kernel, read, budget)?;
+                        inputs.push(InputBound {
+                            site: Site {
+                                block: read.block,
+                                operation: read.operation,
+                            },
+                            index,
+                            extent: read.extent,
+                            domain: read.domain,
+                        });
+                    }
+                }
+            }
+            if count != reads.len() {
+                return Err(ProductionRankedRecipeCoverageErrorV1::Coordinate);
+            }
+            check_paths_with_inputs(
+                &RecipeReader(kernel),
+                Selection {
+                    index,
+                    extent,
+                    write: Site {
+                        block: write.block(),
+                        operation: write.operation(),
+                    },
+                },
+                &inputs,
+                budget,
+            )
+            .map_err(recipe_error)
+        },
+    )
+}
+
+fn check_recipe_read_extent_v1(
+    kernel: &ProductionRankedKernelV1,
+    read: &ProductionConditionalRankedReadBoundV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), ProductionRankedRecipeCoverageErrorV1> {
+    use ProductionRankedRecipeCoverageErrorV1 as E;
+    use dialect_kernel::{DYNAMIC_EXTENT, MemorySpaceAttr};
+    let mut found = false;
+    for block in kernel.blocks() {
+        budget.charge_work(1)?;
+        for operation in block.operations() {
+            budget.charge_work(8)?;
+            match operation {
+                Op::View {
+                    result,
+                    writable,
+                    shape,
+                    dynamic_extents,
+                    ..
+                }
+                | Op::ViewInSpace {
+                    result,
+                    writable,
+                    shape,
+                    dynamic_extents,
+                    ..
+                } if Value::Local(*result) == read.view => {
+                    if found
+                        || *writable
+                        || shape.as_slice() != [DYNAMIC_EXTENT]
+                        || dynamic_extents.as_slice() != [read.extent]
+                        || !matches!(read.extent, Value::Argument(_))
+                        || matches!(operation, Op::ViewInSpace { memory_space, .. }
+                            if *memory_space != MemorySpaceAttr::Global)
+                    {
+                        return Err(E::Coordinate);
+                    }
+                    found = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    if !found {
+        return Err(E::Coordinate);
+    }
+    Ok(())
 }

@@ -79,6 +79,51 @@ pub(super) fn checked_read_source_v1<'a>(
     Ok((source, view))
 }
 
+pub(super) fn checked_read_bound_v1(
+    binding: &ProductionConditionalOutputBindingV1<'_>,
+    candidate: NativeRankedSourceCandidateV1<'_>,
+    read: fe2o3_kernel_ir::ConditionalTotalViewReadV1,
+    index: ProductionRankedValueV1,
+    budget: &mut Budget<'_>,
+) -> JoinResult<fe2o3_pliron::ProductionConditionalRankedReadBoundV1> {
+    let (source, view) = checked_read_source_v1(binding, candidate, read, index, budget)?;
+    let mut extent = None;
+    for block in candidate.kernel().blocks() {
+        budget.charge_work(1)?;
+        for operation in block.operations() {
+            budget.charge_work(4)?;
+            match operation {
+                ProductionRankedOperationV1::View {
+                    result,
+                    dynamic_extents,
+                    ..
+                }
+                | ProductionRankedOperationV1::ViewInSpace {
+                    result,
+                    dynamic_extents,
+                    ..
+                } if ProductionRankedValueV1::Local(*result) == view => {
+                    let [value] = dynamic_extents.as_slice() else {
+                        return Err(JoinError::ExtentSource);
+                    };
+                    if extent.replace(*value).is_some() {
+                        return Err(JoinError::AmbiguousView);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(fe2o3_pliron::ProductionConditionalRankedReadBoundV1 {
+        block: source.ranked_block(),
+        operation: source.ranked_operation(),
+        view,
+        index,
+        extent: extent.ok_or(JoinError::ExtentSource)?,
+        domain: read.access_domain(),
+    })
+}
+
 fn check_ranked_read_v1(
     candidate: NativeRankedSourceCandidateV1<'_>,
     source: &ProductionRankedAccessSourceV1,

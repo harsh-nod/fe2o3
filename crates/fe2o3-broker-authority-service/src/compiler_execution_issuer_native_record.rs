@@ -173,12 +173,22 @@ impl Record {
     }
 
     fn check(&self, p: &Policy, b: &mut Budget<'_>) -> Result<()> {
-        // Recovery may mutate names immediately after decode. Reject positions
-        // needing the unimplemented Worker/anchor join before returning a record.
-        if self.sequence != 1 || self.prior != [0; 32] || self.last_ack.is_some() {
-            return Err(Error::rejected(
-                "native journal requires the unjoined Worker/anchor ledger",
-            ));
+        // Full Worker/anchor custody is checked on the combined read-only
+        // recovery plans before any of their namespaces may be changed.
+        match &self.last_ack {
+            None if self.sequence == 1 && self.prior == [0; 32] => (),
+            Some(ack)
+                if ack.sequence().checked_add(1) == Some(self.sequence)
+                    && ack.current_rollback_anchor() == self.prior
+                    && ack.policy_identity() == p.identity() =>
+            {
+                ()
+            }
+            _ => {
+                return Err(Error::rejected(
+                    "issuer sequence/previous acknowledgment mismatch",
+                ));
+            }
         }
         match &self.body {
             Body::Ready if self.occurrence == [0; 32] => Ok(()),
@@ -283,6 +293,81 @@ impl Record {
     }
     pub fn bytes(&self) -> &[u8; BYTES] {
         &self.wire
+    }
+
+    pub(super) fn advance(
+        &self,
+        ack: &Ack,
+        p: &Policy,
+        key: &Key,
+        b: &mut Budget<'_>,
+    ) -> Result<Self> {
+        if !matches!(self.body, Body::Issued { .. }) {
+            return Err(Error::rejected(
+                "publication advance requires issued journal",
+            ));
+        }
+        let publication = self.publication(b)?;
+        ack.matches_publication(&publication, b)?;
+        let next = self.sequence.checked_add(1).ok_or(Resource::Arithmetic)?;
+        let ack = retain(Ack::decode(ack.canonical_bytes(), b)?, b)?;
+        Self::build(
+            p,
+            key,
+            next,
+            ack.current_rollback_anchor(),
+            Some(ack),
+            [0; 32],
+            Body::Ready,
+            b,
+        )
+    }
+
+    // Ordinary durable-consumer fixtures, never public admission or an observed
+    // compiler occurrence. Production preparation still requires NativeOccurrence.
+    #[cfg(test)]
+    pub(super) fn fixture_prepared(
+        &self,
+        subject: Subject,
+        p: &Policy,
+        key: &Key,
+        b: &mut Budget<'_>,
+    ) -> Result<Self> {
+        let challenge = retain(
+            Challenge::new(p, &subject, [42; 32], self.sequence, self.prior, b)?,
+            b,
+        )?;
+        Self::build(
+            p,
+            key,
+            self.sequence,
+            self.prior,
+            self.copy_ack(b)?,
+            [43; 32],
+            Body::Prepared { subject, challenge },
+            b,
+        )
+    }
+    #[cfg(test)]
+    pub(super) fn fixture_issued(&self, p: &Policy, key: &Key, b: &mut Budget<'_>) -> Result<Self> {
+        let Body::Prepared { subject, challenge } = &self.body else {
+            return Err(Error::rejected("fixture must be prepared"));
+        };
+        let (subject, charge) = Subject::decode(subject.canonical_bytes(), b)?;
+        b.reserve_storage(charge.retained_storage())?;
+        let challenge = retain(Challenge::decode(challenge.canonical_bytes(), b)?, b)?;
+        let request = retain(Request::new(challenge, subject, b)?, b)?;
+        let receipt = retain(key.issue_receipt(p, &request, b)?, b)?;
+        Self::build(
+            p,
+            key,
+            self.sequence,
+            self.prior,
+            self.copy_ack(b)?,
+            self.occurrence,
+            Body::Issued { request, receipt },
+            b,
+        )
     }
     pub fn identity(&self) -> [u8; 32] {
         hash(ID_DOMAIN, &self.wire[..IDENTITY])

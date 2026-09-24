@@ -1,5 +1,6 @@
-//! Consuming first-sequence native issuer session. Worker publication is gated.
+//! Consuming native issuer session with durable Worker/external-anchor joins.
 use super::{Admission, Budget, Key, KeyError, Policy, Resource};
+use crate::compiler_execution_external_anchor::NativeAnchor;
 use crate::compiler_execution_occurrence::NativeOccurrence;
 use crate::compiler_execution_service::{
     COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1, MAX_COMPILER_EXECUTION_SERVICE_PACKETS_V1,
@@ -11,8 +12,10 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationReceiptV2 as Receipt,
     CompilerExecutionAttestationRequestV2 as Request,
     CompilerExecutionAttestationStorageV2 as ProtocolStorage,
+    CompilerExecutionCurrentRecordVerificationV3 as Current,
     CompilerExecutionReceiptPublicationAckV2 as Ack,
     CompilerExecutionReceiptPublicationV2 as Publication,
+    CompilerExecutionServicePublishDispositionV1 as Disposition,
     CompilerExecutionServiceRequestKindV2 as Kind, CompilerExecutionServiceRequestV2 as Packet,
     CompilerExecutionServiceResponsePayloadV2 as Payload,
     CompilerExecutionServiceResponseV2 as Response,
@@ -27,6 +30,8 @@ mod error;
 mod ledger;
 #[path = "compiler_execution_issuer_native_record.rs"]
 mod record;
+#[path = "compiler_execution_worker_ledger_native.rs"]
+mod worker;
 pub use error::NativeIssuerServiceError;
 use error::NativeIssuerServiceError as Error;
 type Result<T> = std::result::Result<T, Error>;
@@ -34,19 +39,20 @@ use ledger::Ledger;
 use record::{Body, Record};
 
 const FIXED_WORK: usize = 64 * 1024;
-const FRAME: usize = 8 * (REQUEST_BYTES + RESPONSE_BYTES + Record::STORAGE) + 65536;
+const FRAME: usize = 32 * (REQUEST_BYTES + RESPONSE_BYTES + Ledger::STORAGE) + 65536;
 const IO_ATTEMPTS: usize = 256;
 
 impl<'work> Admission<'work> {
     /// Consumes native custody and the original work ledger into the canonical
-    /// bounded Prepare/Issue transport. Only cancellation returns successfully.
+    /// bounded native transport. Only cancellation returns successfully.
     /// Prepared challenges and signed receipts are sent only after durable commit
     /// and fresh retained-custody checks. Issue accepts only the independently
     /// observed, still-locked V4 occurrence named by the prepared record.
     ///
-    /// This is a first-sequence integration boundary, not production activation:
-    /// Worker/anchor publication, currentness replies and non-genesis positions
-    /// refuse. No readiness descriptor is written and the V1 entrypoint is unchanged.
+    /// Publication requires a durable independently signed anchor transition and
+    /// exact Worker reacquisition before issuer advancement or an ACK. Currentness
+    /// requires a fresh external observation joined to the reacquired carriage.
+    /// No readiness descriptor is written and the V1 entrypoint is unchanged.
     /// Linux inspection denial is terminal; no caller-supplied subject or alternate
     /// permission path replaces the observed compiler. The caller must retain all
     /// input storage reservations. Work, denial history and I/O attempts never reset.
@@ -71,13 +77,15 @@ impl<'work> Admission<'work> {
             )?;
             b.reserve_storage(Ledger::STORAGE)?;
             self.validate_continuity(b)?;
+            let mut anchor = NativeAnchor::new(&self.anchor, &self.policy, b)?;
+            b.reserve_storage(anchor.retained_storage())?;
             let deadline = Instant::now()
                 .checked_add(COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1)
                 .ok_or_else(|| Error::rejected("native service deadline overflow"))?;
             let mut attempts = 0;
             for _ in 0..MAX_COMPILER_EXECUTION_SERVICE_PACKETS_V1 {
                 let cancelled = b.with_prepaid_scope(
-                    self.retained_storage() + Ledger::STORAGE,
+                    self.retained_storage() + Ledger::STORAGE + anchor.retained_storage(),
                     8,
                     FIXED_WORK,
                     FRAME,
@@ -92,7 +100,15 @@ impl<'work> Admission<'work> {
                         )?;
                         self.validate_continuity(b)?;
                         let packet = retain(Packet::decode(bytes.as_slice(), b)?, b)?;
-                        let response = dispatch(&self, &mut ledger, &packet, b)?;
+                        let response = dispatch(
+                            &self,
+                            &mut ledger,
+                            &mut anchor,
+                            &packet,
+                            deadline,
+                            &mut attempts,
+                            b,
+                        )?;
                         self.validate_continuity(b)?;
                         ledger.validate(b)?;
                         send_packet_metered(
@@ -118,7 +134,10 @@ impl<'work> Admission<'work> {
 fn dispatch(
     a: &Admission<'_>,
     ledger: &mut Ledger,
+    anchor: &mut NativeAnchor<'_>,
     packet: &Packet,
+    deadline: Instant,
+    attempts: &mut usize,
     b: &mut Budget<'_>,
 ) -> Result<Response> {
     if packet.policy_identity() != a.policy.identity() {
@@ -172,12 +191,90 @@ fn dispatch(
             }
             occurrence.revalidate(&a.service, b)?;
         }
-        Kind::Publish | Kind::VerifyCurrent => {
-            return Err(Error::rejected(
-                "native Worker/anchor publication and currentness are not integrated",
-            ));
+        Kind::Publish => {
+            let request = retain(packet.decode_request(b)?, b)?;
+            let publication = retain(packet.decode_publication(b)?, b)?;
+            let (ack, advanced) = ledger.publish(
+                &a.policy,
+                &a.signing_key,
+                &request,
+                &publication,
+                &mut |c, b| {
+                    a.validate_continuity(b)?;
+                    let receipt = anchor.exchange(c, deadline, attempts, b)?;
+                    a.validate_continuity(b)?;
+                    Ok(receipt)
+                },
+                b,
+            )?;
+            b.reserve_storage(ack.retained_storage())?;
+            a.validate_continuity(b)?;
+            return retain(
+                Response::new(
+                    packet.identity(),
+                    &a.policy,
+                    Payload::Published {
+                        acknowledgment: &ack,
+                        disposition: if advanced {
+                            Disposition::Advanced
+                        } else {
+                            Disposition::AlreadyAcknowledged
+                        },
+                    },
+                    b,
+                )?,
+                b,
+            );
         }
-        Kind::Inspect | Kind::Recover | Kind::Cancel => (),
+        Kind::VerifyCurrent => {
+            let carriage = retain(packet.decode_carriage(b)?, b)?;
+            let challenge = packet
+                .verification_challenge()
+                .ok_or_else(|| Error::rejected("native currentness challenge absent"))?;
+            let current = ledger.verify_current(
+                &carriage,
+                challenge,
+                &mut |c, b| {
+                    a.validate_continuity(b)?;
+                    let receipt = anchor.exchange(c, deadline, attempts, b)?;
+                    a.validate_continuity(b)?;
+                    Ok(receipt)
+                },
+                b,
+            )?;
+            b.reserve_storage(std::mem::size_of::<(Current, ProtocolStorage)>())?;
+            let attestation = retain(
+                a.signing_key
+                    .attest_current(&a.policy, &carriage, current, challenge, b)?,
+                b,
+            )?;
+            a.validate_continuity(b)?;
+            ledger.validate(b)?;
+            return retain(
+                Response::new(
+                    packet.identity(),
+                    &a.policy,
+                    Payload::VerifiedCurrent(&attestation),
+                    b,
+                )?,
+                b,
+            );
+        }
+        Kind::Recover => {
+            let subject = retain(packet.decode_subject(b)?, b)?;
+            let carriage = ledger.recover_carriage(&subject, b)?;
+            let payload = if let Some(carriage) = &carriage {
+                b.reserve_storage(carriage.retained_storage())?;
+                Payload::Recovered(carriage)
+            } else {
+                Payload::ReceiptAbsent {
+                    sequence: ledger.record.sequence,
+                    prior_rollback_anchor: ledger.record.prior,
+                }
+            };
+            return retain(Response::new(packet.identity(), &a.policy, payload, b)?, b);
+        }
+        Kind::Inspect | Kind::Cancel => (),
     }
     let publication;
     let payload = match packet.kind() {

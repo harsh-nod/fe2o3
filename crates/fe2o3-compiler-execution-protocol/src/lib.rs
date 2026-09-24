@@ -42,6 +42,12 @@ mod supervisor_handoff_codec;
 mod supervisor_handoff_v2;
 mod supervisor_ready;
 mod worker_anchor_journal;
+mod worker_anchor_journal_codec;
+mod worker_anchor_journal_v2;
+pub use worker_anchor_journal_v2::{
+    COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V2, CompilerExecutionWorkerAnchorJournalErrorV2,
+    CompilerExecutionWorkerAnchorJournalV2,
+};
 
 /// Sole production runtime directory for the protected compiler-execution supervisor.
 pub const COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_V1: &str = "/run/fe2o3";

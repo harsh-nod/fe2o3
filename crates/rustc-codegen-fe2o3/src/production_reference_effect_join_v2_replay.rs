@@ -1,6 +1,9 @@
 //! Borrowed replay of retained CPU MIR, not authentication of a new binding.
 
 use super::*;
+use crate::production_reference_effect_join_v2::conditional_source_v1::read_premises_v1::{
+    ReplayedCpuEffectsV1, ReplayedCpuValueV1,
+};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
@@ -15,13 +18,14 @@ fn resource(error: Resource) -> Error {
 
 impl AuthenticatedReferenceEffectBindingV1 {
     /// Replays the existing acyclic CPU MIR resolver and checks both retained
-    /// effect lists before exposing fresh, callback-scoped output expressions.
+    /// effect lists before exposing fresh, callback-scoped output expressions,
+    /// computations and bounds assertions from the same retained CPU body.
     /// Source authentication stays with this original binding's caller. This
     /// does not discharge CPU bounds, prove GPU equivalence or grant lowering.
     pub(crate) fn with_replayed_output_writes_v1<R>(
         &self,
         budget: &mut Budget<'_>,
-        consume: impl for<'cpu> FnOnce(&'cpu [ReferenceOutputWriteV1], &mut Budget<'_>) -> R,
+        consume: impl for<'cpu> FnOnce(&'cpu ReplayedCpuEffectsV1, &mut Budget<'_>) -> R,
     ) -> Result<R, Error> {
         let account = budget.work_ledger_identity_v1();
         let floor = budget.storage();
@@ -75,7 +79,7 @@ impl AuthenticatedReferenceEffectBindingV1 {
 fn checked_replay(
     binding: &AuthenticatedReferenceEffectBindingV1,
     meter: &ReferenceExtractionWorkV1<'_>,
-) -> Result<Vec<ReferenceOutputWriteV1>, Error> {
+) -> Result<ReplayedCpuEffectsV1, Error> {
     meter.charge(16)?;
     let ir = &binding.effect_ir;
     if ir.blocks.is_empty()
@@ -149,8 +153,44 @@ fn checked_replay(
             ));
         }
     }
-    meter.charge(1)?;
-    Ok(writes)
+    let resolver = ReferenceExpressionResolverV1::new(meter, ir)?;
+    let mut values = Vec::new();
+    let mut bounds = Vec::new();
+    for block in &ir.blocks {
+        meter.charge(1)?;
+        for assignment in &block.assignments {
+            meter.grow::<ReplayedCpuValueV1>(values.len())?;
+            values.push(ReplayedCpuValueV1 {
+                block: block.block,
+                statement: assignment.statement,
+                expression: resolver.resolve_value_v1(meter, &assignment.value)?,
+            });
+        }
+        if let ReferenceTerminatorV1::Assert {
+            condition,
+            expected,
+            bounds_check: Some(check),
+            ..
+        } = &block.terminator
+        {
+            meter.grow::<ResolvedReferenceBoundsCheckV1>(bounds.len())?;
+            let resolve = |operand| {
+                resolver.resolve_operand_inner_v1(meter, operand, &mut BTreeSet::new(), &mut 0, 1)
+            };
+            bounds.push(ResolvedReferenceBoundsCheckV1 {
+                block: block.block,
+                expected: *expected,
+                condition: resolve(condition)?,
+                index: resolve(&check.index)?,
+                length: resolve(&check.length)?,
+            });
+        }
+    }
+    Ok(ReplayedCpuEffectsV1 {
+        writes,
+        values,
+        bounds,
+    })
 }
 
 #[cfg(test)]

@@ -2,12 +2,12 @@
 
 use std::{error::Error, fmt};
 
+use crate::worker_anchor_journal_codec as codec;
 use fe2o3_external_anchor_protocol::{
     ANCHOR_CHALLENGE_WIRE_LEN_V1, ANCHOR_TRANSITION_RECEIPT_BYTES_V1, AnchorChallengeV1,
     AnchorPositionV1, AnchorProtocolErrorV1, AnchorTransitionReceiptV1, ChallengeKindV1,
     HashChainHeadV1, PinnedAnchorKeyV1,
 };
-use sha2::{Digest, Sha256};
 
 use crate::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V1,
@@ -21,6 +21,11 @@ const STAGE_AND_RESERVED_BYTES: usize = 8;
 const VERSION_V1: u16 = 1;
 const JOURNAL_MAGIC: [u8; 8] = *b"F2O3CAJ1";
 const JOURNAL_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-WORKER-ANCHOR-JOURNAL/V1\0";
+const SCHEMA: codec::Schema = codec::Schema {
+    magic: JOURNAL_MAGIC,
+    version: VERSION_V1,
+    domain: JOURNAL_IDENTITY_DOMAIN,
+};
 
 const JOURNAL_PREIMAGE_BYTES: usize = HEADER_BYTES
     + STAGE_AND_RESERVED_BYTES
@@ -44,7 +49,7 @@ pub enum CompilerExecutionWorkerAnchorJournalStageV1 {
 }
 
 impl CompilerExecutionWorkerAnchorJournalStageV1 {
-    fn decode(value: u8) -> Result<Self, CompilerExecutionWorkerAnchorJournalErrorV1> {
+    pub(crate) fn decode(value: u8) -> Result<Self, CompilerExecutionWorkerAnchorJournalErrorV1> {
         match value {
             1 => Ok(Self::PreparedAnchor),
             2 => Ok(Self::AnchorCommitted),
@@ -166,52 +171,29 @@ impl CompilerExecutionWorkerAnchorJournalV1 {
                 actual: bytes.len(),
             });
         }
-        let mut reader = Reader::new(bytes);
-        decode_header(&mut reader)?;
-        let stage = CompilerExecutionWorkerAnchorJournalStageV1::decode(reader.u8()?)?;
-        if reader.fixed::<7>()? != [0; 7] {
-            return Err(
-                CompilerExecutionWorkerAnchorJournalErrorV1::InvalidEncoding(
-                    "journal stage reserved bytes are nonzero",
-                ),
-            );
-        }
-        let transaction = CompilerExecutionExternalAnchorTransactionV1::decode(
-            reader.take(COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V1)?,
+        let parts = SCHEMA.decode(
+            bytes,
+            COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V1,
         )?;
-        let challenge = AnchorChallengeV1::decode(reader.take(ANCHOR_CHALLENGE_WIRE_LEN_V1)?)?;
-        let receipt_bytes = reader.take(ANCHOR_TRANSITION_RECEIPT_BYTES_V1)?;
-        let worker_record_identity = reader.fixed::<SHA256_BYTES>()?;
-        let declared_identity =
-            CompilerExecutionWorkerAnchorJournalIdentityV1(reader.fixed::<SHA256_BYTES>()?);
-        if !reader.is_empty() {
-            return Err(
-                CompilerExecutionWorkerAnchorJournalErrorV1::InvalidEncoding(
-                    "journal record has trailing bytes",
-                ),
-            );
-        }
+        let transaction = CompilerExecutionExternalAnchorTransactionV1::decode(parts.transaction)?;
         let key = pinned_anchor_key(&transaction)?;
-        let receipt = match stage {
-            CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor => {
-                if receipt_bytes != [0; ANCHOR_TRANSITION_RECEIPT_BYTES_V1] {
-                    return Err(CompilerExecutionWorkerAnchorJournalErrorV1::StagePayloadMismatch);
-                }
-                None
+        let receipt = if parts.stage == CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor
+        {
+            if parts.receipt != [0; ANCHOR_TRANSITION_RECEIPT_BYTES_V1] {
+                return Err(CompilerExecutionWorkerAnchorJournalErrorV1::StagePayloadMismatch);
             }
-            _ => Some(AnchorTransitionReceiptV1::decode(receipt_bytes, &key)?),
+            None
+        } else {
+            Some(AnchorTransitionReceiptV1::decode(parts.receipt, &key)?)
         };
         let decoded = Self::encode(
-            stage,
+            parts.stage,
             transaction,
-            challenge,
+            parts.challenge,
             receipt,
-            worker_record_identity,
+            parts.worker,
         )?;
-        if decoded.identity != declared_identity
-            || decoded.canonical_bytes.as_slice() != bytes
-            || !declared_identity.matches_canonical_bytes(bytes)
-        {
+        if decoded.canonical_bytes.as_slice() != bytes {
             return Err(CompilerExecutionWorkerAnchorJournalErrorV1::IdentityMismatch);
         }
         Ok(decoded)
@@ -233,31 +215,16 @@ impl CompilerExecutionWorkerAnchorJournalV1 {
             worker_record_identity,
         )?;
 
-        let mut canonical_bytes = [0_u8; COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1];
-        let mut offset = encode_header(&mut canonical_bytes);
-        put(&mut canonical_bytes, &mut offset, &[stage as u8]);
-        put(&mut canonical_bytes, &mut offset, &[0; 7]);
-        put(
-            &mut canonical_bytes,
-            &mut offset,
+        let canonical_bytes = SCHEMA.encode::<COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1>(
+            stage,
             transaction.canonical_bytes(),
-        );
-        put(&mut canonical_bytes, &mut offset, challenge.as_bytes());
-        match receipt.as_ref() {
-            Some(receipt) => put(&mut canonical_bytes, &mut offset, receipt.canonical_bytes()),
-            None => put(
-                &mut canonical_bytes,
-                &mut offset,
-                &[0; ANCHOR_TRANSITION_RECEIPT_BYTES_V1],
-            ),
-        }
-        put(&mut canonical_bytes, &mut offset, &worker_record_identity);
-        debug_assert_eq!(offset, JOURNAL_PREIMAGE_BYTES);
+            &challenge,
+            receipt.as_ref(),
+            worker_record_identity,
+        )?;
         let identity = CompilerExecutionWorkerAnchorJournalIdentityV1(journal_identity(
-            &canonical_bytes[..offset],
+            &canonical_bytes[..JOURNAL_PREIMAGE_BYTES],
         ));
-        put(&mut canonical_bytes, &mut offset, identity.as_bytes());
-        debug_assert_eq!(offset, canonical_bytes.len());
         Ok(Self {
             stage,
             transaction,
@@ -271,51 +238,21 @@ impl CompilerExecutionWorkerAnchorJournalV1 {
 
     /// Checks one exact legal durable-journal successor without granting authority.
     pub fn is_legal_successor_of(&self, prior: &Self) -> bool {
-        let same_transaction = self.transaction == prior.transaction
-            && self.challenge == prior.challenge
-            && self.transaction.canonical_bytes() == prior.transaction.canonical_bytes()
-            && self.challenge.as_bytes() == prior.challenge.as_bytes();
-        match (prior.stage, self.stage) {
-            (
-                CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor,
-                CompilerExecutionWorkerAnchorJournalStageV1::AnchorCommitted
-                | CompilerExecutionWorkerAnchorJournalStageV1::Aborted,
-            ) => same_transaction && prior.receipt.is_none() && self.receipt.is_some(),
-            (
-                CompilerExecutionWorkerAnchorJournalStageV1::AnchorCommitted,
-                CompilerExecutionWorkerAnchorJournalStageV1::Published,
-            ) => {
-                same_transaction
-                    && self.receipt == prior.receipt
-                    && prior.worker_record_identity == [0; SHA256_BYTES]
-                    && self.worker_record_identity != [0; SHA256_BYTES]
-            }
-            (
-                CompilerExecutionWorkerAnchorJournalStageV1::Published,
-                CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor,
-            ) => self.is_next_transaction_after(prior),
-            (
-                CompilerExecutionWorkerAnchorJournalStageV1::Aborted,
-                CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor,
-            ) => self.is_replacement_after_abort(prior),
-            _ => false,
+        codec::successor(prior.position(), self.position())
+    }
+
+    fn position(&self) -> codec::Position<'_> {
+        codec::Position {
+            stage: self.stage,
+            transaction: self.transaction.canonical_bytes(),
+            policy: self.transaction.policy().canonical_bytes(),
+            sequence: self.transaction.sequence(),
+            prior: self.transaction.prior_rollback_anchor(),
+            current: self.transaction.current_rollback_anchor(),
+            challenge: &self.challenge,
+            receipt: self.receipt.as_ref(),
+            worker: self.worker_record_identity,
         }
-    }
-
-    fn is_next_transaction_after(&self, prior: &Self) -> bool {
-        prior.transaction.sequence().checked_add(1) == Some(self.transaction.sequence())
-            && self.transaction.policy() == prior.transaction.policy()
-            && self.transaction.prior_rollback_anchor()
-                == prior.transaction.current_rollback_anchor()
-            && self.challenge.prior_head() == prior.challenge.proposed_head()
-    }
-
-    fn is_replacement_after_abort(&self, prior: &Self) -> bool {
-        self.transaction != prior.transaction
-            && self.transaction.policy() == prior.transaction.policy()
-            && self.transaction.sequence() == prior.transaction.sequence()
-            && self.transaction.prior_rollback_anchor() == prior.transaction.prior_rollback_anchor()
-            && self.challenge.prior_head() == prior.challenge.prior_head()
     }
 
     pub const fn stage(&self) -> CompilerExecutionWorkerAnchorJournalStageV1 {
@@ -405,44 +342,13 @@ fn validate_stage_payload(
     receipt: Option<&AnchorTransitionReceiptV1>,
     worker_record_identity: [u8; SHA256_BYTES],
 ) -> Result<(), CompilerExecutionWorkerAnchorJournalErrorV1> {
-    let key = pinned_anchor_key(transaction)?;
-    match stage {
-        CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor
-            if receipt.is_none() && worker_record_identity == [0; SHA256_BYTES] =>
-        {
-            Ok(())
-        }
-        CompilerExecutionWorkerAnchorJournalStageV1::AnchorCommitted
-        | CompilerExecutionWorkerAnchorJournalStageV1::Aborted
-        | CompilerExecutionWorkerAnchorJournalStageV1::Published => {
-            let receipt =
-                receipt.ok_or(CompilerExecutionWorkerAnchorJournalErrorV1::StagePayloadMismatch)?;
-            let reverified = AnchorTransitionReceiptV1::decode(receipt.canonical_bytes(), &key)?;
-            if reverified != *receipt || receipt.challenge() != challenge {
-                return Err(CompilerExecutionWorkerAnchorJournalErrorV1::ReceiptMismatch);
-            }
-            let position_matches = match stage {
-                CompilerExecutionWorkerAnchorJournalStageV1::Aborted => {
-                    receipt.position() == AnchorPositionV1::Prior
-                        && worker_record_identity == [0; SHA256_BYTES]
-                }
-                CompilerExecutionWorkerAnchorJournalStageV1::AnchorCommitted => {
-                    receipt.position() == AnchorPositionV1::Proposed
-                        && worker_record_identity == [0; SHA256_BYTES]
-                }
-                CompilerExecutionWorkerAnchorJournalStageV1::Published => {
-                    receipt.position() == AnchorPositionV1::Proposed
-                        && worker_record_identity != [0; SHA256_BYTES]
-                }
-                CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor => false,
-            };
-            if !position_matches {
-                return Err(CompilerExecutionWorkerAnchorJournalErrorV1::StagePayloadMismatch);
-            }
-            Ok(())
-        }
-        _ => Err(CompilerExecutionWorkerAnchorJournalErrorV1::StagePayloadMismatch),
-    }
+    codec::validate_payload(
+        stage,
+        challenge,
+        receipt,
+        worker_record_identity,
+        &pinned_anchor_key(transaction)?,
+    )
 }
 
 fn pinned_anchor_key(
@@ -452,106 +358,8 @@ fn pinned_anchor_key(
         .map_err(Into::into)
 }
 
-fn encode_header(output: &mut [u8]) -> usize {
-    let mut offset = 0;
-    put(output, &mut offset, &JOURNAL_MAGIC);
-    put(output, &mut offset, &VERSION_V1.to_le_bytes());
-    put(output, &mut offset, &0_u16.to_le_bytes());
-    put(
-        output,
-        &mut offset,
-        &(COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1 as u64).to_le_bytes(),
-    );
-    put(output, &mut offset, &0_u32.to_le_bytes());
-    offset
-}
-
-fn decode_header(
-    reader: &mut Reader<'_>,
-) -> Result<(), CompilerExecutionWorkerAnchorJournalErrorV1> {
-    if reader.fixed::<8>()? != JOURNAL_MAGIC
-        || reader.u16()? != VERSION_V1
-        || reader.u16()? != 0
-        || reader.u64()? != COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1 as u64
-        || reader.u32()? != 0
-    {
-        return Err(
-            CompilerExecutionWorkerAnchorJournalErrorV1::InvalidEncoding(
-                "journal header is not canonical",
-            ),
-        );
-    }
-    Ok(())
-}
-
 fn journal_identity(bytes: &[u8]) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(JOURNAL_IDENTITY_DOMAIN);
-    digest.update(bytes);
-    digest.finalize().into()
-}
-
-fn put(output: &mut [u8], offset: &mut usize, bytes: &[u8]) {
-    let end = *offset + bytes.len();
-    output[*offset..end].copy_from_slice(bytes);
-    *offset = end;
-}
-
-struct Reader<'a> {
-    bytes: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> Reader<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
-    }
-
-    fn take(
-        &mut self,
-        length: usize,
-    ) -> Result<&'a [u8], CompilerExecutionWorkerAnchorJournalErrorV1> {
-        let end = self.offset.checked_add(length).ok_or(
-            CompilerExecutionWorkerAnchorJournalErrorV1::InvalidEncoding("journal offset overflow"),
-        )?;
-        let value = self.bytes.get(self.offset..end).ok_or(
-            CompilerExecutionWorkerAnchorJournalErrorV1::InvalidEncoding(
-                "journal record is truncated",
-            ),
-        )?;
-        self.offset = end;
-        Ok(value)
-    }
-
-    fn fixed<const N: usize>(
-        &mut self,
-    ) -> Result<[u8; N], CompilerExecutionWorkerAnchorJournalErrorV1> {
-        self.take(N)?.try_into().map_err(|_| {
-            CompilerExecutionWorkerAnchorJournalErrorV1::InvalidEncoding(
-                "journal record is truncated",
-            )
-        })
-    }
-
-    fn u8(&mut self) -> Result<u8, CompilerExecutionWorkerAnchorJournalErrorV1> {
-        Ok(self.fixed::<1>()?[0])
-    }
-
-    fn u16(&mut self) -> Result<u16, CompilerExecutionWorkerAnchorJournalErrorV1> {
-        Ok(u16::from_le_bytes(self.fixed()?))
-    }
-
-    fn u32(&mut self) -> Result<u32, CompilerExecutionWorkerAnchorJournalErrorV1> {
-        Ok(u32::from_le_bytes(self.fixed()?))
-    }
-
-    fn u64(&mut self) -> Result<u64, CompilerExecutionWorkerAnchorJournalErrorV1> {
-        Ok(u64::from_le_bytes(self.fixed()?))
-    }
-
-    const fn is_empty(&self) -> bool {
-        self.offset == self.bytes.len()
-    }
+    SCHEMA.identity(bytes)
 }
 
 /// Failure while constructing or decoding one compiler Worker anchor-journal state.

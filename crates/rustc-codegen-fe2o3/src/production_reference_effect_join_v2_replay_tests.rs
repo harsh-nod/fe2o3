@@ -145,7 +145,8 @@ fn cpu_replay_fill_and_two_input_add_preserve_raw_argument_mapping() {
         budget.charge_work(17).unwrap();
         let account = budget.work_ledger_identity_v1();
         binding
-            .with_replayed_output_writes_v1(&mut budget, |writes, budget| {
+            .with_replayed_output_writes_v1(&mut budget, |replay, budget| {
+                let writes = replay.writes.as_slice();
                 assert_eq!(writes, binding.observable_output_writes.as_ref());
                 assert!(!std::ptr::eq(
                     writes.as_ptr(),
@@ -262,6 +263,353 @@ fn cpu_replay_rejects_callback_account_substitution_and_floor_release() {
         let mut budget = Budget::new(&mut work, usize::MAX);
         budget.reserve_storage(31).unwrap();
         let result = binding.with_replayed_output_writes_v1(&mut budget, |_, budget| {
+            if substitute {
+                *budget = Budget::new(Box::leak(Box::new(Work::new(usize::MAX))), usize::MAX);
+            } else {
+                budget.release_storage(1).unwrap();
+            }
+        });
+        assert!(result.is_err());
+    }
+}
+
+fn local(local: u32) -> ReferencePlaceV1 {
+    ReferencePlaceV1 {
+        local,
+        projection: Box::default(),
+    }
+}
+
+fn copy(local_id: u32) -> ReferenceOperandV1 {
+    ReferenceOperandV1::Copy(local(local_id))
+}
+
+// Recompute descriptive fixture records, never an authenticated source binding.
+fn refresh(binding: &mut AuthenticatedReferenceEffectBindingV1) {
+    let writes = binding
+        .effect_ir
+        .observable_output_writes_v1(&ReferenceExtractionWorkV1::Inspection)
+        .unwrap();
+    binding.effect_ir.observable_output_effects = writes.clone().into_boxed_slice();
+    binding.observable_output_writes = writes.into_boxed_slice();
+    binding.effect_ir_sha256 = binding.effect_ir.canonical_sha256_v1();
+}
+
+fn bounded_fixture() -> AuthenticatedReferenceEffectBindingV1 {
+    let mut binding = fixture(true);
+    let mut output = binding.effect_ir.blocks[0].clone();
+    output.block = 2;
+    let bound = |block, raw, len, condition| ReferenceBlockV1 {
+        block,
+        assignments: vec![
+            ReferenceAssignmentV1 {
+                statement: 0,
+                destination: local(len),
+                value: ReferenceValueV1::InputLength {
+                    reference_argument: raw,
+                },
+            },
+            ReferenceAssignmentV1 {
+                statement: 1,
+                destination: local(condition),
+                value: ReferenceValueV1::Binary {
+                    operation: ReferenceBinaryOpV1::LessThan,
+                    lhs: copy(1),
+                    rhs: copy(len),
+                    checked: false,
+                },
+            },
+        ]
+        .into_boxed_slice(),
+        terminator: ReferenceTerminatorV1::Assert {
+            condition: copy(condition),
+            expected: true,
+            success: block + 1,
+            bounds_check: Some(ReferenceBoundsCheckV1 {
+                index: copy(1),
+                length: copy(len),
+            }),
+        },
+    };
+    binding.effect_ir.local_count = 9;
+    binding.effect_ir.blocks =
+        vec![bound(0, 1, 5, 6), bound(1, 2, 7, 8), output].into_boxed_slice();
+    refresh(&mut binding);
+    binding
+}
+
+fn check_cpu_reads(
+    binding: &AuthenticatedReferenceEffectBindingV1,
+    replay: &ReplayedCpuEffectsV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2> {
+    use crate::production_reference_effect_join_v2::conditional_source_v1::read_premises_v1::check_replay_v1;
+    check_replay_v1(&binding.effect_ir, replay, budget, |raw, budget| {
+        budget.charge_work(3).unwrap();
+        assert!(raw == 1 || raw == 2, "point ABI argument is not an input");
+        Ok(())
+    })
+}
+
+#[test]
+fn cpu_read_premises_replay_bounds_and_raw_arguments_before_consumer() {
+    // This tests the consuming replay algorithm, not source or proof authority.
+    for binding in [fixture(false), bounded_fixture()] {
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.reserve_storage(31).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        binding
+            .with_replayed_output_writes_v1(&mut budget, |replay, budget| {
+                check_cpu_reads(&binding, replay, budget).unwrap();
+                if !replay.bounds.is_empty() {
+                    assert_eq!(replay.bounds.len(), 2);
+                    assert_eq!(replay.values.len(), 5);
+                    assert_eq!(replay.writes[0].argument, 2);
+                    assert_eq!(
+                        replay.bounds[0].length,
+                        ReferenceEffectExpressionV1::InputLength {
+                            reference_argument: 1
+                        }
+                    );
+                    assert_eq!(
+                        replay.bounds[1].length,
+                        ReferenceEffectExpressionV1::InputLength {
+                            reference_argument: 2
+                        }
+                    );
+                }
+                assert!(budget.work_ledger_identity_v1() == account);
+                budget.reserve_storage(7).unwrap();
+            })
+            .unwrap();
+        assert_eq!(budget.storage(), 38);
+    }
+}
+
+#[test]
+fn cpu_read_premises_refuse_missing_wrong_late_and_unmatched_assertions() {
+    for mutation in 0..9 {
+        let mut binding = bounded_fixture();
+        match mutation {
+            0 => binding.effect_ir.blocks[0].terminator = ReferenceTerminatorV1::Goto { target: 1 },
+            1 => {
+                let ReferenceTerminatorV1::Assert { expected, .. } =
+                    &mut binding.effect_ir.blocks[0].terminator
+                else {
+                    unreachable!()
+                };
+                *expected = false;
+            }
+            2 => {
+                let ReferenceValueV1::Binary { operation, .. } =
+                    &mut binding.effect_ir.blocks[0].assignments[1].value
+                else {
+                    unreachable!()
+                };
+                *operation = ReferenceBinaryOpV1::LessEqual;
+            }
+            3 => {
+                binding.effect_ir.blocks[0].assignments[0].value = ReferenceValueV1::InputLength {
+                    reference_argument: 2,
+                }
+            }
+            4 => {
+                let ReferenceTerminatorV1::Assert {
+                    bounds_check: Some(check),
+                    ..
+                } = &mut binding.effect_ir.blocks[0].terminator
+                else {
+                    unreachable!()
+                };
+                check.length = copy(7);
+            }
+            5 => {
+                binding.effect_ir.local_count = 10;
+                let ReferenceValueV1::Binary { lhs, .. } =
+                    &binding.effect_ir.blocks[2].assignments[0].value
+                else {
+                    unreachable!()
+                };
+                let read = ReferenceAssignmentV1 {
+                    statement: 2,
+                    destination: local(9),
+                    value: ReferenceValueV1::Use(lhs.clone()),
+                };
+                let mut assignments = binding.effect_ir.blocks[0].assignments.to_vec();
+                assignments.push(read);
+                binding.effect_ir.blocks[0].assignments = assignments.into_boxed_slice();
+            }
+            6 => {
+                let ReferenceValueV1::Binary { rhs, .. } =
+                    &binding.effect_ir.blocks[2].assignments[0].value
+                else {
+                    unreachable!()
+                };
+                binding.effect_ir.blocks[2].assignments[0].value =
+                    ReferenceValueV1::Use(rhs.clone());
+            }
+            7 => {
+                binding.effect_ir.local_count = 10;
+                let mut store = binding.effect_ir.blocks[2].assignments[0].clone();
+                store.statement = 1;
+                let ReferenceValueV1::Binary {
+                    lhs: ReferenceOperandV1::Copy(place),
+                    ..
+                } = &mut store.value
+                else {
+                    unreachable!()
+                };
+                place.projection[1] = ReferencePlaceProjectionV1::Index(9);
+                binding.effect_ir.blocks[2].assignments = vec![
+                    ReferenceAssignmentV1 {
+                        statement: 0,
+                        destination: local(9),
+                        value: ReferenceValueV1::Use(ReferenceOperandV1::Constant(
+                            ReferenceConstantV1::Scalar {
+                                scalar: ReferenceScalarTypeV1::Usize,
+                                bits: 1,
+                            },
+                        )),
+                    },
+                    store,
+                ]
+                .into_boxed_slice();
+            }
+            8 => binding.effect_ir.blocks[0].terminator = ReferenceTerminatorV1::Goto { target: 2 },
+            _ => unreachable!(),
+        }
+        refresh(&mut binding);
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.reserve_storage(31).unwrap();
+        let result = binding
+            .with_replayed_output_writes_v1(&mut budget, |replay, budget| {
+                check_cpu_reads(&binding, replay, budget)
+            })
+            .unwrap();
+        assert!(result.is_err(), "CPU bounds mutation {mutation}");
+        assert_eq!(budget.storage(), 31);
+    }
+}
+
+#[test]
+fn cpu_read_premises_refuse_nonbounds_traps_and_branches_after_the_output() {
+    for branch in [false, true] {
+        let mut binding = fixture(false);
+        let condition = ReferenceOperandV1::Constant(ReferenceConstantV1::Scalar {
+            scalar: ReferenceScalarTypeV1::Bool,
+            bits: 0,
+        });
+        binding.effect_ir.blocks[0].terminator = if branch {
+            ReferenceTerminatorV1::Switch {
+                discriminant: condition,
+                values: Box::default(),
+                otherwise: 1,
+            }
+        } else {
+            ReferenceTerminatorV1::Assert {
+                condition,
+                expected: true,
+                success: 1,
+                bounds_check: None,
+            }
+        };
+        let mut blocks = binding.effect_ir.blocks.to_vec();
+        blocks.push(ReferenceBlockV1 {
+            block: 1,
+            assignments: Box::default(),
+            terminator: ReferenceTerminatorV1::Return,
+        });
+        binding.effect_ir.blocks = blocks.into_boxed_slice();
+        refresh(&mut binding);
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        assert!(
+            binding
+                .with_replayed_output_writes_v1(&mut budget, |replay, budget| {
+                    check_cpu_reads(&binding, replay, budget)
+                })
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(budget.storage(), 0);
+    }
+}
+
+#[test]
+fn cpu_read_premises_cannot_treat_expression_only_reads_as_safe_cpu_mir() {
+    let binding = fixture(true);
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    assert!(
+        binding
+            .with_replayed_output_writes_v1(&mut budget, |replay, budget| {
+                check_cpu_reads(&binding, replay, budget)
+            })
+            .unwrap()
+            .is_err()
+    );
+}
+
+#[test]
+fn cpu_read_premises_original_budget_exhaustion_cannot_reach_consumer() {
+    use crate::production_reference_effect_join_v2::conditional_source_v1::read_premises_v1::check_replay_v1;
+    let binding = bounded_fixture();
+    let run = |limit, storage| {
+        let mut work = Work::new(limit);
+        let mut budget = Budget::new(&mut work, storage);
+        budget.charge_work(17).unwrap();
+        budget.reserve_storage(31).unwrap();
+        let mut consumed = false;
+        let result = binding.with_replayed_output_writes_v1(&mut budget, |replay, budget| {
+            check_replay_v1(&binding.effect_ir, replay, budget, |_, _| Ok(()))?;
+            consumed = true;
+            Ok::<(), crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2>(())
+        });
+        let ok = matches!(result, Ok(Ok(())));
+        assert_eq!(ok, consumed);
+        assert_eq!(budget.storage(), 31);
+        (ok, budget.work(), budget.peak_storage())
+    };
+    let (ok, work, storage) = run(usize::MAX, usize::MAX);
+    assert!(ok);
+    assert!(run(work, storage).0);
+    assert!(!run(work - 1, storage).0);
+    assert!(!run(work, storage - 1).0);
+}
+
+#[test]
+fn cpu_read_premises_checked_replay_keeps_error_unwind_and_account_cleanup() {
+    let binding = bounded_fixture();
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    budget.reserve_storage(31).unwrap();
+    let result = binding
+        .with_replayed_output_writes_v1(&mut budget, |replay, budget| {
+            check_cpu_reads(&binding, replay, budget).unwrap();
+            budget.reserve_storage(7).unwrap();
+            Err::<(), _>("later conditional consumer refused")
+        })
+        .unwrap();
+    assert_eq!(result, Err("later conditional consumer refused"));
+    assert_eq!(budget.storage(), 38);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = binding.with_replayed_output_writes_v1(&mut budget, |replay, budget| {
+                check_cpu_reads(&binding, replay, budget).unwrap();
+                panic!("later conditional consumer panicked");
+            });
+        }))
+        .is_err()
+    );
+    assert_eq!(budget.storage(), 38);
+    for substitute in [false, true] {
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.reserve_storage(31).unwrap();
+        let result = binding.with_replayed_output_writes_v1(&mut budget, |replay, budget| {
+            check_cpu_reads(&binding, replay, budget).unwrap();
             if substitute {
                 *budget = Budget::new(Box::leak(Box::new(Work::new(usize::MAX))), usize::MAX);
             } else {

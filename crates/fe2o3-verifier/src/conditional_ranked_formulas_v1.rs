@@ -1,4 +1,4 @@
-//! Executed conditional formulas over the retained production graph.
+//! Executed conditional memory transitions over the retained production graph.
 //!
 //! This is deliberately not the ordinary MIR/Pliron semantic-contract owner.
 //! The source request authenticates GPU correspondence; its CPU subject hashes
@@ -21,20 +21,25 @@ use sha2::{Digest as _, Sha256};
 use crate::functional_refinement_receipt_v2::{
     RetainedImportedFunctionalRefinementReceiptV2,
     execute_and_import_generated_mir_pliron_composition_locally_v1,
-    generate_conditional_effect_formula_replay_v1, ranked_effect_formula_replay_prelude_v2,
+    ranked_effect_formula_replay_prelude_v2, with_conditional_memory_formula_v1,
 };
 use crate::{
     CanonicalGeneratedVerusProofInputV3, FunctionalRefinementVerusExecutionErrorV2,
     FunctionalRefinementVerusRuntimeLeaseV1, MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3,
 };
 
+#[path = "conditional_ranked_memory_source_v1.rs"]
+mod memory;
 #[path = "conditional_ranked_formula_source_v1.rs"]
 mod source;
 
-const OBLIGATION_DOMAIN: &[u8] = b"FE2O3/CONDITIONAL-RANKED-FORMULAS/V1\0";
+// Distinct from the old expression-only statement, including byte layout and
+// the deliberately shared (not ISA-proved) IEEE operator interpretation.
+const OBLIGATION_DOMAIN: &[u8] = b"FE2O3/CONDITIONAL-MEMORY-TRANSITION/V1/LE/SHARED-IEEE\0";
 const SOURCE_LIMIT: usize = MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3;
 
-/// Identities of an executed formula replay, not a CPU-reference or launch claim.
+/// Identities of an executed ranked memory-model theorem, not an independently
+/// authenticated CPU-reference, hardware numerical, or safe-launch claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionConditionalFormulaReportV1 {
     statement: DigestV1,
@@ -93,6 +98,11 @@ impl From<Resource> for ProductionConditionalFormulaErrorV1 {
         Self::Resource(error)
     }
 }
+impl From<FunctionalRefinementVerusExecutionErrorV2> for ProductionConditionalFormulaErrorV1 {
+    fn from(error: FunctionalRefinementVerusExecutionErrorV2) -> Self {
+        Self::Execution(error)
+    }
+}
 impl fmt::Display for ProductionConditionalFormulaErrorV1 {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(out, "conditional formula replay: {self:?}")
@@ -142,7 +152,7 @@ pub fn with_conditional_ranked_formula_execution_v1<R>(
             * std::mem::size_of::<u32>()
         + std::mem::size_of::<ProductionConditionalFormulaExecutionV1>();
     with_scratch(budget, scratch, |budget| {
-        let prepared = prepare(input, budget)?;
+        let prepared = prepare(request, budget)?;
         let (retained, policy) = execute_and_import_generated_mir_pliron_composition_locally_v1(
             runtime,
             prepared.source,
@@ -162,7 +172,7 @@ pub fn with_conditional_ranked_formula_execution_v1<R>(
         current(input, budget)?;
         let execution = ProductionConditionalFormulaExecutionV1 {
             report: ProductionConditionalFormulaReportV1 {
-                statement: input.identity(),
+                statement: prepared.binding.normalized_obligation_effect_ir_hash(),
                 generated_source: prepared.generated_source,
                 binding: prepared.binding,
                 execution: proof.execution_identity(),
@@ -223,9 +233,10 @@ struct Prepared {
 // roster. Native admission must rederive this same preparation, not import a
 // conditional receipt through the ordinary clean-graph aggregate gate.
 fn prepare(
-    input: &ProductionConditionalAggregateInputV1<'_>,
+    request: &ProductionSourceBoundConditionalAggregateRequestV1<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<Prepared, Error> {
+    let input = request.pliron_input();
     budget.charge_work(8)?;
     let [output] = input.outputs() else {
         return Err(Error::Subject("conditional output roster"));
@@ -242,30 +253,33 @@ fn prepare(
     }
     // Charge all new source generation/hash traversals before allocating. Formula
     // replay below retains the preexisting bounded generator, not a fresh ledger.
-    budget.charge_work(SOURCE_LIMIT.checked_mul(4).ok_or(Resource::Arithmetic)?)?;
+    budget.charge_work(SOURCE_LIMIT.checked_mul(16).ok_or(Resource::Arithmetic)?)?;
+    require_read_roster(request, budget)?;
     let (block, operation) = output.effect_site();
-    let replay = generate_conditional_effect_formula_replay_v1(
+    let generated = with_conditional_memory_formula_v1(
         input.kernel(),
         block as usize,
         operation as usize,
-        "fe2o3_conditional_effect_v1",
-    )
-    .map_err(Error::Execution)?;
-    let mut generated = BoundedSource::new()?;
-    generated
-        .write_str("use vstd::prelude::*;\nverus! {\n")
-        .map_err(source_limit)?;
-    generated
-        .write_str(ranked_effect_formula_replay_prelude_v2())
-        .map_err(source_limit)?;
-    generated.write_str(replay.lemma()).map_err(source_limit)?;
-    source::append_premise_theorem(
-        &mut generated,
-        input.premises(),
-        output.canonical_parameter(),
-        budget,
+        |formula| -> Result<BoundedSource, Error> {
+            let mut generated = BoundedSource::new()?;
+            generated
+                .write_str("use vstd::prelude::*;\nverus! {\n")
+                .map_err(source_limit)?;
+            generated
+                .write_str(ranked_effect_formula_replay_prelude_v2())
+                .map_err(source_limit)?;
+            memory::append_memory_theorem(
+                &mut generated,
+                input.premises(),
+                output.canonical_parameter(),
+                formula,
+                |load, budget| resolve_memory_load(request, load, budget),
+                budget,
+            )?;
+            generated.write_str("}\n").map_err(source_limit)?;
+            Ok(generated)
+        },
     )?;
-    generated.write_str("}\n").map_err(source_limit)?;
     let source = CanonicalGeneratedVerusProofInputV3::new(generated.0.into_bytes())
         .map_err(|_| Error::Subject("canonical conditional source"))?;
     let generated_source = DigestV1::from_untrusted_bytes(source.identity().as_bytes());
@@ -287,6 +301,96 @@ fn prepare(
         generated_source,
         binding,
     })
+}
+
+fn require_read_roster(
+    request: &ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), Error> {
+    use fe2o3_pliron::ProductionConditionalRuntimePremiseV1 as P;
+    let input = request.pliron_input();
+    let output = input.outputs()[0].canonical_parameter();
+    let expected = input
+        .reads()
+        .len()
+        .checked_mul(3)
+        .and_then(|n| n.checked_add(4))
+        .ok_or(Resource::Arithmetic)?;
+    if input.premises().len() != expected {
+        return Err(Error::Subject("memory executed-read roster"));
+    }
+    for (read, row) in input
+        .reads()
+        .iter()
+        .zip(input.premises()[4..].chunks_exact(3))
+    {
+        budget.charge_work(3)?;
+        let read = read.canonical();
+        let p = read.parameter();
+        if row
+            != [
+                P::ReadableInput {
+                    parameter: p,
+                    domain: read.access_domain(),
+                },
+                P::SeparateInputOutput { input: p, output },
+                P::RepresentableAddress {
+                    parameter: p,
+                    domain: read.address_domain(),
+                    element_bytes: read.element_bytes(),
+                    alignment: read.alignment(),
+                },
+            ]
+        {
+            return Err(Error::Subject("memory executed-read premise mismatch"));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_memory_load(
+    request: &ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+    load: &fe2o3_pliron::ProductionSemanticLoadV2,
+    budget: &mut Budget<'_>,
+) -> Result<memory::MemoryLoad, Error> {
+    let mut found = None;
+    for read in request.pliron_input().reads() {
+        budget.charge_work(1)?;
+        if read.site().block != load.block || read.site().operation != load.operation {
+            continue;
+        }
+        if found.is_some()
+            || load.view != read.view()
+            || load.indices.as_ref() != [read.index()]
+            || u64::from(load.scalar.bit_width())
+                != read
+                    .canonical()
+                    .element_bytes()
+                    .checked_mul(8)
+                    .ok_or(Resource::Arithmetic)?
+        {
+            return Err(Error::Subject("conditional memory load occurrence"));
+        }
+        let parameter = read.canonical().parameter();
+        let mut origin = None;
+        for argument in request.arguments() {
+            budget.charge_work(1)?;
+            if argument.canonical_parameter() == parameter {
+                if origin.is_some() {
+                    return Err(Error::Subject("duplicate memory source argument"));
+                }
+                origin = Some(u64::from(argument.adjusted_argument()) + 1);
+            }
+        }
+        if origin != Some(load.allocation_origin) {
+            return Err(Error::Subject("conditional memory allocation origin"));
+        }
+        found = Some(memory::MemoryLoad {
+            parameter,
+            width: read.canonical().element_bytes(),
+        });
+    }
+    found.ok_or(Error::Subject("unbound conditional memory load"))
 }
 
 fn obligation_identity(commitments: [DigestV1; 6]) -> DigestV1 {
@@ -361,6 +465,15 @@ mod tests {
         assert_ne!(
             original,
             DigestV1::from_untrusted_bytes(ordinary.finalize().into())
+        );
+        let mut old = Sha256::new();
+        old.update(b"FE2O3/CONDITIONAL-RANKED-FORMULAS/V1\0");
+        for identity in commitments {
+            old.update(identity.as_bytes());
+        }
+        assert_ne!(
+            original,
+            DigestV1::from_untrusted_bytes(old.finalize().into())
         );
     }
 

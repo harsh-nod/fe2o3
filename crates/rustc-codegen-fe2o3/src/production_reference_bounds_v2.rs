@@ -30,6 +30,13 @@ pub(crate) struct CompilerOwnedOutputDomainV2<'a> {
 pub(crate) struct ReferenceBoundsDischargeErrorV2 {
     block: u32,
     detail: String,
+    kind: ReferenceBoundsFailureKindV2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReferenceBoundsFailureKindV2 {
+    Invalid,
+    DynamicPointExtent,
 }
 
 impl ReferenceBoundsDischargeErrorV2 {
@@ -37,6 +44,7 @@ impl ReferenceBoundsDischargeErrorV2 {
         Self {
             block,
             detail: detail.into(),
+            kind: ReferenceBoundsFailureKindV2::Invalid,
         }
     }
 
@@ -46,6 +54,11 @@ impl ReferenceBoundsDischargeErrorV2 {
 
     pub(crate) fn detail(&self) -> &str {
         &self.detail
+    }
+
+    /// A pending host obligation, never an unconditional bounds conclusion.
+    pub(crate) fn pending_host_extent_v1(&self) -> Option<u32> {
+        (self.kind == ReferenceBoundsFailureKindV2::DynamicPointExtent).then_some(self.block)
     }
 }
 
@@ -174,6 +187,7 @@ pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
     }
 
     let mut used = vec![false; normalized.len()];
+    let mut pending_extent = None;
     for access in &accesses {
         let matches = normalized
             .iter()
@@ -199,7 +213,14 @@ pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
             &definitions,
             access.block,
         )?;
-        prove_bound(access, &extent, &domains)?;
+        if let Err(error) = prove_bound(access, &extent, &domains) {
+            if error.pending_host_extent_v1().is_none() {
+                return Err(error);
+            }
+            // Continue validation: one unresolved extent cannot hide another
+            // malformed access, arithmetic failure or unused bounds assertion.
+            pending_extent.get_or_insert(error);
+        }
         for index in matches {
             used[index] = true;
         }
@@ -210,7 +231,10 @@ pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
             "bounds assertion has no exact retained reference load or output access",
         ));
     }
-    Ok(())
+    match pending_extent {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn validate_check(
@@ -656,14 +680,24 @@ fn prove_bound(
             }
         }
     }
-    Err(ReferenceBoundsDischargeErrorV2::new(
+    let mut error = ReferenceBoundsDischargeErrorV2::new(
         access.block,
         format!(
             "cannot prove full-domain bound `{}` < `{input_extent}` over {}: no exact ranked extent relation connects this bound to every point-coordinate extent",
             describe_expr(&access.index),
             describe_domains(domains),
         ),
-    ))
+    );
+    if matches!(
+        access.index,
+        ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }
+    ) && domains.len() == 1
+        && matches!(domains.get(&0), Some(ExtentExprV2::Argument(_)))
+        && matches!(input_extent, ExtentExprV2::Argument(_))
+    {
+        error.kind = ReferenceBoundsFailureKindV2::DynamicPointExtent;
+    }
+    Err(error)
 }
 
 fn interval(
@@ -1239,6 +1273,7 @@ mod tests {
             true,
         );
         let error = discharge(&kernel, &effect_ir, &output).unwrap_err();
+        assert_eq!(error.pending_host_extent_v1(), Some(output.block));
         assert!(error.detail().contains("`point[0]` < `%arg3`"), "{error:?}");
         assert!(error.detail().contains("point[0] < %arg4"), "{error:?}");
         assert!(
@@ -1256,11 +1291,72 @@ mod tests {
             false,
         );
         let error = discharge(&kernel, &effect_ir, &output).unwrap_err();
+        assert_eq!(error.pending_host_extent_v1(), None);
         assert!(
             error
                 .detail()
                 .contains("no exact retained bounds assertion")
         );
+    }
+
+    #[test]
+    fn pending_dynamic_extent_does_not_hide_an_unmatched_later_read() {
+        let (kernel, effect_ir, mut output) = fixture(
+            ReferenceEffectExpressionV1::PointCoordinate { axis: 0 },
+            TestExtent::Argument(3),
+            TestExtent::Argument(4),
+            true,
+        );
+        output.rhs = binary(
+            ReferenceBinaryOpV1::Add,
+            output.rhs,
+            ReferenceEffectExpressionV1::InputLoad {
+                reference_argument: 1,
+                index: Box::new(constant(1)),
+            },
+        );
+        let error = discharge(&kernel, &effect_ir, &output).unwrap_err();
+        assert_eq!(error.pending_host_extent_v1(), None);
+        assert!(
+            error
+                .detail()
+                .contains("no exact retained bounds assertion")
+        );
+    }
+
+    #[test]
+    fn only_exact_dynamic_d1_point_relations_can_be_deferred() {
+        let cases = [
+            (
+                constant(0),
+                TestExtent::Argument(3),
+                TestExtent::Argument(4),
+            ),
+            (
+                binary(
+                    ReferenceBinaryOpV1::Add,
+                    ReferenceEffectExpressionV1::PointCoordinate { axis: 0 },
+                    constant(1),
+                ),
+                TestExtent::Argument(3),
+                TestExtent::Argument(4),
+            ),
+            (
+                ReferenceEffectExpressionV1::PointCoordinate { axis: 0 },
+                TestExtent::Static(1),
+                TestExtent::Argument(4),
+            ),
+            (
+                ReferenceEffectExpressionV1::PointCoordinate { axis: 0 },
+                TestExtent::Static(1),
+                TestExtent::Static(2),
+            ),
+        ];
+        for (index, input, output) in cases {
+            let (kernel, effect_ir, output) = fixture(index, input, output, true);
+            let error = discharge(&kernel, &effect_ir, &output).unwrap_err();
+            assert_eq!(error.pending_host_extent_v1(), None, "{error:?}");
+        }
     }
 
     #[test]
