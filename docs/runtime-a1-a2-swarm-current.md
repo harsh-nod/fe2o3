@@ -1,5 +1,16 @@
 # Current Runtime Swarm Work Orders
 
+Latest native-witness preparation (2026-09-24): the
+[backing-budget witness CPU packet](evidence/dev-xgmi-backing-budget-witness-cpu-2026-09-24/README.md)
+qualifies asymmetric native capacity/retry and bidirectional-copy oracles without
+changing production runtime sources. Five example tests pass on each GNU/musl
+target and twenty Python tests run without skips. Formatting, strict Clippy,
+tool continuity and 3,917 unchanged inputs pass. Pre-import and remote-bootstrap
+authentication, scrubbed Git, qualified source ancestry and remote cleanup
+sequencing have hostile-input tests. Interrupted and superseded cohorts remain
+recorded. Fresh native execution and sealed replay are next; native fault,
+aggregate memory, formal correspondence, performance and A1/A2 gates stay open.
+
 Latest resource integration (2026-09-24): the
 [XGMI backing-budget CPU packet](evidence/dev-xgmi-backing-budgets-cpu-2026-09-24/README.md)
 connects argument-ordered endpoint limits and inert usage snapshots to the

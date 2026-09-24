@@ -1,0 +1,19 @@
+{
+  "command": [
+    "cargo",
+    "--locked",
+    "test",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--example",
+    "gfx942-runtime-xgmi-backing-budget-smoke",
+    "--target",
+    "x86_64-unknown-linux-musl"
+  ],
+  "started_ns": 1790252509528008636,
+  "process_group": 2901468,
+  "group_absent": true,
+  "finished_ns": 1790252721139168695,
+  "status": 0
+}

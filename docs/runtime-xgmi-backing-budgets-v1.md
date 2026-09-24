@@ -85,6 +85,9 @@ HIP/HSA performance remain open.
 
 ## Next Native Witness
 
+The [witness and sibling campaign](runtime-xgmi-backing-budget-witness-v1.md)
+are now CPU-qualified. Fresh signed native execution remains required.
+
 Use a new signed-source copy-only smoke example and campaign, without editing
 the historical diamond witness. A direct journaled Context permits inspecting
 usage both before and after logical shutdown and native queue retirement.
