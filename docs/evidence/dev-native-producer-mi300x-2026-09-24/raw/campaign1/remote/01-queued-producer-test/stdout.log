@@ -1,0 +1,7 @@
+
+running 1 test
+test kfd_backend::retained_release_tests::producer_launch::native_runtime_producer_launch_queued_chain ... native_producer_launch=complete published=false authority_calls=2 launches=2 checked_bytes=1048576 peak_readers=4 terminal_readers=0 terminal_writers=0 public_event=released observation=consumer_first data_path=PersistentDeviceReused materializations=0 a_sha256=1202ea159669597ce883b2af7745fc94afd5d9de7e1985cacb341cec3ae914a7 b_sha256=2c1e99dcde81f5dd034e1cda167af61dd9c7109c72c6a0ede80801f2e1d665d8 c_sha256=564b131bbd3f6eae41a23c72fea11ce4efa9ff0539b16eca66f4aa365d1ad8a7 d_sha256=275fe5e215ed3701e9f0d694119cf46d89846916ea29269dec0533d56e410925 cleanup=complete
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1421 filtered out; finished in 2.10s
+

@@ -1,0 +1,10 @@
+test_actual_owned_removal_and_failure_preservation (__main__.CleanupTests.test_actual_owned_removal_and_failure_preservation) ... ok
+test_final_recheck_rejects_changed_added_and_aliased_entries (__main__.CleanupTests.test_final_recheck_rejects_changed_added_and_aliased_entries) ... ok
+test_loader_authenticates_before_compile (__main__.CleanupTests.test_loader_authenticates_before_compile) ... ok
+test_missing_file_and_live_recorded_group_prevent_deletion (__main__.CleanupTests.test_missing_file_and_live_recorded_group_prevent_deletion) ... ok
+test_mount_refuses_owned_snapshot (__main__.CleanupTests.test_mount_refuses_owned_snapshot) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.070s
+
+OK

@@ -1,0 +1,39 @@
+{
+  "commit": "f3f8206fe4727f1f535ad820721fff7e7bdd4a39",
+  "cases": [
+    {
+      "case": "queued-producer",
+      "ordinal": 1,
+      "failures": [],
+      "transcript": {
+        "case": "queued-producer",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "published-producer",
+      "ordinal": 2,
+      "failures": [],
+      "transcript": {
+        "case": "published-producer",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    }
+  ],
+  "failures": [],
+  "spawn_failures": [],
+  "complete_matrix": true,
+  "exclusive_reservation": false,
+  "performance_acceptance": false,
+  "formal_refinement": false
+}

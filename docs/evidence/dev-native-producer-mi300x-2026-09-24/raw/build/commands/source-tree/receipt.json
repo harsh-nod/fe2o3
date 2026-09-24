@@ -1,0 +1,42 @@
+{
+  "command": [
+    "/usr/bin/git",
+    "--no-replace-objects",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.untrackedCache=false",
+    "ls-tree",
+    "-rz",
+    "f3f8206fe4727f1f535ad820721fff7e7bdd4a39",
+    "--",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    ".cargo",
+    "crates",
+    "examples",
+    "benchmarks/runtime_gfx942",
+    "scripts/unsafe-source-baseline.json",
+    "docs/runtime-primary-queue-release-v1.md"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790289603555928082,
+  "group_absent": true,
+  "pid": 206144,
+  "started_ns": 1790289603226108368,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "322fc1d01c54333d28f7dc2ee7e80c1b1f5ab87764f4f94a458e768224f93d39",
+  "timeout_seconds": 120
+}

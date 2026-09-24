@@ -1,0 +1,21 @@
+{
+  "pid": 91100,
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/fe2o3-native-producer-20260924.8ccd68a03dacb132/topology.py",
+    "topology",
+    "--gpu-index",
+    "1",
+    "--pci-bdf",
+    "0000:26:00.0",
+    "--unique-id",
+    "0xab83d2ffef0d3cdf"
+  ],
+  "started": {
+    "realtime_ns": 1790290080347115545,
+    "monotonic_ns": 7788977768787216
+  },
+  "purpose": "record group before unblocking managed signals"
+}

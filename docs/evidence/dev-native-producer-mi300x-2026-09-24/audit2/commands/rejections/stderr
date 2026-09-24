@@ -1,0 +1,21 @@
+test_actual_owned_removal_and_failure_preservation (__main__.CleanupTests.test_actual_owned_removal_and_failure_preservation) ... ok
+test_final_recheck_rejects_changed_added_and_aliased_entries (__main__.CleanupTests.test_final_recheck_rejects_changed_added_and_aliased_entries) ... ok
+test_loader_authenticates_before_compile (__main__.CleanupTests.test_loader_authenticates_before_compile) ... ok
+test_missing_file_and_live_recorded_group_prevent_deletion (__main__.CleanupTests.test_missing_file_and_live_recorded_group_prevent_deletion) ... ok
+test_mount_refuses_owned_snapshot (__main__.CleanupTests.test_mount_refuses_owned_snapshot) ... ok
+test_absence_is_independent_and_boolean (__main__.ReplayTests.test_absence_is_independent_and_boolean) ... ok
+test_active_group_identity_cannot_change (__main__.ReplayTests.test_active_group_identity_cannot_change) ... ok
+test_cleanup_requires_prior_collection (__main__.ReplayTests.test_cleanup_requires_prior_collection) ... ok
+test_complete_flag_cannot_replace_missing_case (__main__.ReplayTests.test_complete_flag_cannot_replace_missing_case) ... ok
+test_false_resource_headroom_rejects (__main__.ReplayTests.test_false_resource_headroom_rejects) ... ok
+test_missing_delayed_observation_rejects (__main__.ReplayTests.test_missing_delayed_observation_rejects) ... ok
+test_native_status_must_be_integer_success (__main__.ReplayTests.test_native_status_must_be_integer_success) ... ok
+test_positive_complete_replay (__main__.ReplayTests.test_positive_complete_replay) ... ok
+test_rehashed_incomplete_output_rejects (__main__.ReplayTests.test_rehashed_incomplete_output_rejects) ... ok
+test_reordered_binding_rejects (__main__.ReplayTests.test_reordered_binding_rejects) ... ok
+test_retained_elf_is_not_only_metadata (__main__.ReplayTests.test_retained_elf_is_not_only_metadata) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 5.182s
+
+OK

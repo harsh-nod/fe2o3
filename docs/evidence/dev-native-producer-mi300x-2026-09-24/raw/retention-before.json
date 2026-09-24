@@ -1,0 +1,30 @@
+{
+  "absent": false,
+  "allocated_bytes": 530509824,
+  "excluded": [
+    "build/source",
+    "build/target"
+  ],
+  "finished_ns": null,
+  "replay": {
+    "cpu_hardware_ignores": 22,
+    "cpu_tests": 1400,
+    "endpoint_observations": 6,
+    "formal_refinement": false,
+    "harness_passes": 2,
+    "local_build_commands": 11,
+    "local_campaign_commands": 8,
+    "native_commands": 2,
+    "performance_acceptance": false,
+    "producer_witnesses_accepted": true,
+    "record_replay": "pass",
+    "refused_observations": 0,
+    "remote_commands": 10,
+    "strict_admitted": 6,
+    "whole_elf_retained": true
+  },
+  "retained_files": 138,
+  "retained_sha256": "0ce25aaf1c28b1cbe1dbc86df9e43dfb35b566528af5c82bc3b7d6606b5cef46",
+  "source": "/home/harsh/.codex-tmp/fe2o3-native-producer-20260924-BSu4wHKM",
+  "started_ns": 1790290155673949084
+}

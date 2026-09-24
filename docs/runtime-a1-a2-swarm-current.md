@@ -1,5 +1,45 @@
 # Current Runtime Swarm Work Orders
 
+## Milestone Snapshot
+
+As of 2026-09-24, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
+remains open. These are exit-criteria statuses, not API implementation counts.
+No full HIP/HSA behavioral or performance parity is accepted.
+
+| Milestone | Status | Remaining exit gates |
+| --- | --- | --- |
+| A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
+| A1: single-device async | Active, incomplete | Protected generated execution, native high-depth/out-of-order qualification, aggregate accounting and production refinement |
+| A2: dependencies and overlap | Active, incomplete | Repeated generated compute/copy graphs, proved mixed-input acquisition/reconciliation, physical overlap and bounded residency |
+| A3: local multi-GPU | Partial foundations | XGMI copy witnesses exist; unified compute, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
+| A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
+| A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
+| A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
+| A7: performance and release | Not qualified | Matched performance thresholds, scaling, device timelines, resource/tail metrics and production closure audits |
+
+Broader accepted lane checkpoints remain Native R125, Admission R118B
+C1/C2/C3 and Resources R116/V3. Protected Worker/compiler refinement,
+device-language and atomic/collective authority, target expansion, deployment
+and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
+
+## Latest Qualification
+
+Latest native producer qualification (2026-09-24): the
+[two-case MI300X packet](evidence/dev-native-producer-mi300x-2026-09-24/README.md)
+passes queued and already-published producer chains on GPU 1 from signed
+`f3f8206fe`. Both tests retain exact input/dependency custody, release public
+events before progress, observe the consumer first and check complete A/B/C/D
+buffers: 2,097,152 bytes total, four launches and zero persistent input
+materializations. All six strict endpoint observations, ten remote commands,
+byte-exact collection, owned remote cleanup and independent absence pass.
+The cold musl ELF also passes all 1,400 CPU tests with 22 hardware-only ignores.
+Retained replay passes; local collection preserves 138 artifacts and removes
+530,509,824 path-accounted allocated bytes of owned scratch. No protected
+generated execution, physical overlap, fault, production refinement, aggregate
+memory or performance qualification is added. A1/A2 and broader acceptance
+remain unchanged. Next are production mixed-input acquisition and completion
+reconciliation correspondence, then the remaining generated/resource/native gates.
+
 Latest native producer witness CPU qualification (2026-09-24): the
 [two-case preparation packet](evidence/dev-native-producer-witness-cpu-2026-09-24/README.md)
 passes all thirteen corrected stages. GNU/musl each pass 1,400 runtime tests,
