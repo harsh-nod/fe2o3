@@ -1843,3 +1843,9 @@ pub mod resource_projection_v1;
 
 mod physical_entry_v20;
 pub use physical_entry_v20::{PhysicalEntryDebugNavigationV20, PhysicalEntryDebugSessionV20};
+
+mod physical_cursor_v1;
+mod physical_global_copy_v21;
+pub use physical_global_copy_v21::{
+    PhysicalGlobalCopyDebugNavigationV21, PhysicalGlobalCopyDebugSessionV21,
+};

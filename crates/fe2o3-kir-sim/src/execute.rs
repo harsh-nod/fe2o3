@@ -64,12 +64,21 @@ pub use observed_storage::ObservationExecutionOptionsV1;
 mod alloca_v1;
 #[path = "execute_complete_body_v19.rs"]
 mod complete_body_v19;
+#[path = "execute_debug_physical_symbolic_v1.rs"]
+mod debug_physical_symbolic_v1;
+pub use debug_physical_symbolic_v1::PhysicalDebugSymbolicV1;
 #[path = "execute_debug_physical_value_v20.rs"]
 mod debug_physical_value_v20;
 pub use debug_physical_value_v20::*;
 #[path = "execute_debug_physical_capture_v20.rs"]
 mod debug_physical_capture_v20;
 pub use debug_physical_capture_v20::*;
+#[path = "execute_debug_global_copy_value_v21.rs"]
+mod debug_global_copy_value_v21;
+pub use debug_global_copy_value_v21::*;
+#[path = "execute_debug_global_copy_capture_v21.rs"]
+mod debug_global_copy_capture_v21;
+pub use debug_global_copy_capture_v21::*;
 #[path = "execute_debug_frames.rs"]
 mod debug_frames;
 #[path = "execute_debug_identity.rs"]
@@ -3400,10 +3409,10 @@ fn execute(
     sink: &mut impl SimulationEventSinkV1,
     debug_sink: &mut impl SimulationDebugSinkV1,
 ) -> Result<SimulationExecutionV1, SimulationExecutionErrorV1> {
-    execute_with_physical_debug_v20(admitted, request, configuration, sink, debug_sink, None)
+    execute_with_physical_debug(admitted, request, configuration, sink, debug_sink, None)
 }
 
-fn execute_with_physical_debug_v20(
+fn execute_with_physical_debug(
     admitted: &AdmittedSimulationModuleV1,
     request: &SimulationRequestV1,
     configuration: ExecutionConfiguration<'_>,
@@ -3412,8 +3421,10 @@ fn execute_with_physical_debug_v20(
     physical_debug: Option<&mut debug_physical_capture_v20::State>,
 ) -> Result<SimulationExecutionV1, SimulationExecutionErrorV1> {
     if configuration.debug_capture.is_enabled()
-        && (admitted.uses_physical_global_copy_v21()
-            || (admitted.uses_physical_entry_v20() && physical_debug.is_none()))
+        && (admitted.uses_physical_global_copy_v21() || admitted.uses_physical_entry_v20())
+        && !physical_debug
+            .as_ref()
+            .is_some_and(|capture| capture.matches(admitted))
     {
         return Err(top_level_error(
             SimulationExecutionErrorKindV1::InternalInvariant(

@@ -110,11 +110,12 @@ def decode_body(raw, expected_action):
     return value
 
 
-def read_request(peer, host, allowed_origin, token):
-    deadline = time.monotonic() + HTTP_SECONDS
+def read_request(peer, host, allowed_origin, token, clock=None):
+    clock = time.monotonic if clock is None else clock
+    deadline = clock() + HTTP_SECONDS
     data = bytearray()
     while b"\r\n\r\n" not in data:
-        if time.monotonic() >= deadline:
+        if clock() >= deadline:
             raise BridgeError("invalid_request")
         try:
             chunk = peer.recv(min(4096, HEADER_CAP + 1 - len(data)))
@@ -132,7 +133,7 @@ def read_request(peer, host, allowed_origin, token):
     if len(body) > length:
         raise BridgeError("invalid_request")
     while len(body) < length:
-        if time.monotonic() >= deadline:
+        if clock() >= deadline:
             raise BridgeError("invalid_request")
         try:
             chunk = peer.recv(min(4096, length + 1 - len(body)))
@@ -143,9 +144,11 @@ def read_request(peer, host, allowed_origin, token):
         body.extend(chunk)
         if len(body) > length:
             raise BridgeError("invalid_request")
-    if method == "OPTIONS":
-        return None
-    return decode_body(bytes(body), PATHS[path])
+    result = None if method == "OPTIONS" else decode_body(bytes(body), PATHS[path])
+    # Final receive, authentication and decoding must also finish on time.
+    if clock() >= deadline:
+        raise BridgeError("invalid_request")
+    return result
 
 
 def response_bytes(value, allowed_origin, preflight=False):
@@ -173,11 +176,12 @@ def response_bytes(value, allowed_origin, preflight=False):
     return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
 
 
-def write_response(peer, wire):
-    deadline = time.monotonic() + HTTP_SECONDS
+def write_response(peer, wire, clock=None):
+    clock = time.monotonic if clock is None else clock
+    deadline = clock() + HTTP_SECONDS
     offset = 0
     while offset < len(wire):
-        if time.monotonic() >= deadline:
+        if clock() >= deadline:
             raise OSError("response transport deadline")
         try:
             count = peer.send(wire[offset:offset + 65536])
@@ -186,3 +190,8 @@ def write_response(peer, wire):
         if count <= 0:
             raise OSError("response transport closed")
         offset += count
+
+    # Bytes may already have reached the caller; report failure, not rollback.
+    # serve_peer poisons any dispatched session and never retries the command.
+    if clock() >= deadline:
+        raise OSError("response transport deadline")

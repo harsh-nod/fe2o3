@@ -140,7 +140,7 @@ pub(super) fn phase(record: &SimulationDebugRecordV1) -> Option<SimulationDebugC
 }
 fn observed_value(value: &SimulationDebugValueV1) -> Value {
     match value {
-        SimulationDebugValueV1::PhysicalEntrySymbolicV20(_) => {
+        SimulationDebugValueV1::PhysicalSymbolicV1(_) => {
             json!({"kind":"unavailable","reason":"not_represented"})
         }
         SimulationDebugValueV1::Scalar(value) => {

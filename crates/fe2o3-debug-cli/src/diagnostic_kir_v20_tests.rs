@@ -714,3 +714,6 @@ fn supplied_actual_v20_input_uses_same_public_loader_and_jsonl_session() {
  "source_custody":false,"hardware_observed":false,"resumable_execution":false,"protected_authority":false});
     println!("{output}");
 }
+
+#[path = "diagnostic_physical_v20_compatibility_tests.rs"]
+mod compatibility_tests;
