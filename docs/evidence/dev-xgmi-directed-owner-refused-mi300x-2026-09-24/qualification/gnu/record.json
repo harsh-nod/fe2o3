@@ -1,0 +1,16 @@
+{
+  "command": [
+    "cargo",
+    "--locked",
+    "test",
+    "-p",
+    "fe2o3-runtime",
+    "--example",
+    "gfx942-runtime-xgmi-directed-owner-smoke"
+  ],
+  "started_ns": 1790237866423411874,
+  "process_group": 362130,
+  "group_absent": true,
+  "finished_ns": 1790237867790720914,
+  "status": 0
+}

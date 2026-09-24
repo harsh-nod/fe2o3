@@ -1,5 +1,19 @@
 # Current Runtime Swarm Work Orders
 
+Latest native result (2026-09-24): the
+[directed owner attempt](evidence/dev-xgmi-directed-owner-refused-mi300x-2026-09-24/README.md)
+fails graph qualification on GPUs 5/6. Root and left are admitted, but right is
+rejected because the native allocation-owner gate treats independent readers of
+the same source as a hazard. Internal shutdown retains pending resources until
+process exit. All six host endpoints, exact collection, external owned cleanup
+and separate path/process absence checks pass; these do not qualify the graph.
+The sealed refusal replay and six mutation-test groups pass. Correction must
+jointly admit exact directed read/read sharing and publish allocation-disjoint
+FIFO prefixes, preserving full-ready-set flush and exact aggregate contracts.
+Relaxing admission alone would take the same mapping twice. Fresh CPU and native
+qualification remain required; Native R125, Admission R118B, Resources R116/V3,
+A1/A2, formal-refinement and performance acceptance are unchanged.
+
 Latest native-witness preparation (2026-09-24): the
 [directed owner packet](evidence/dev-directed-owner-witness-cpu-2026-09-24/README.md)
 adds a four-copy native XGMI dependency-diamond example and source-bound sibling

@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/harsh/fe2o3-xgmi-directed-owner-20260924.5ea83059de917b7d/native.py", line 150, in <module>
+    B.main()
+  File "/home/harsh/fe2o3-xgmi-directed-owner-20260924.5ea83059de917b7d/base.py", line 583, in main
+    run_native(marker)
+  File "/home/harsh/fe2o3-xgmi-directed-owner-20260924.5ea83059de917b7d/native.py", line 145, in run_native
+    need(not failures, "native owner campaign failed: " + repr(failures))
+  File "/home/harsh/fe2o3-xgmi-directed-owner-20260924.5ea83059de917b7d/hot.py", line 58, in need
+    raise RuntimeError(message)
+RuntimeError: native owner campaign failed: ["RuntimeError('directed-owner failed')"]

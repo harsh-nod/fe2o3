@@ -1,0 +1,10 @@
+{
+  "commit": "1d1992d07a0de94a683c9f6a1d8ddcd184262ea5",
+  "exclusive_reservation": false,
+  "failures": [
+    "RuntimeError('directed-owner failed')"
+  ],
+  "formal_refinement": false,
+  "native_execution": false,
+  "performance_acceptance": false
+}

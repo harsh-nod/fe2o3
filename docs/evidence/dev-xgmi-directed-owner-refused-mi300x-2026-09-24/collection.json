@@ -1,0 +1,10 @@
+{
+  "exclusive_reservation": false,
+  "failures": [
+    "RuntimeError('native failed')"
+  ],
+  "formal_refinement": false,
+  "owned_cleanup": true,
+  "performance_acceptance": false,
+  "source_commit": "1d1992d07a0de94a683c9f6a1d8ddcd184262ea5"
+}

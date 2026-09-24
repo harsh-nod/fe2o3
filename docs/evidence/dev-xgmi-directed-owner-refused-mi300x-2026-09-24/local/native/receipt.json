@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I -B /home/harsh/fe2o3-xgmi-directed-owner-20260924.5ea83059de917b7d/native.py run '{\"binding_sha256\":\"8ba0cbfaa89ce6ea45c7a123f67029733b92277320e2f5037e2a0dd95254d464\",\"commit\":\"1d1992d07a0de94a683c9f6a1d8ddcd184262ea5\",\"path\":\"/home/harsh/fe2o3-xgmi-directed-owner-20260924.5ea83059de917b7d\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-directed-owner-20260924-mamEIcU0/source",
+  "environment": null,
+  "error": null,
+  "exit": 1,
+  "finished_ns": 1790238730380877768,
+  "group_absent": true,
+  "pid": 512844,
+  "started_ns": 1790238694006952830,
+  "stderr_sha256": "1a933c7ff2b2267edaa320703d9810368f804b60d8330fe6d909b94a52087969",
+  "stdin_sha256": null,
+  "stdout_sha256": "497e0a9a7e7ae91cc87f9390704fda450432c9a013fb8ab63accc8f0a8003daf",
+  "timeout_seconds": 1200
+}
