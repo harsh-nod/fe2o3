@@ -245,8 +245,35 @@ fn record(id: u64, direction: usize) -> XgmiRuntimeSubmissionV1 {
         byte_len: 4096,
         dependencies: Vec::new(),
         dependency_cursor: 0,
+        ready_indexed: true,
         ticket: None,
         sequence: None,
+    }
+}
+
+#[test]
+fn admission_rejects_a_ready_flag_missing_from_its_fifo_or_owner() {
+    for indexed in [false, true] {
+        let mut owner = record(1, 0);
+        owner.ready_indexed = indexed;
+        let ready = [
+            if indexed {
+                VecDeque::new()
+            } else {
+                VecDeque::from([1])
+            },
+            VecDeque::new(),
+        ];
+        assert_eq!(
+            admit(
+                &[1],
+                &HashMap::from([(1, owner)]),
+                &ready,
+                &[vec![], vec![]],
+                &HashMap::new()
+            ),
+            Err(AdmissionError::Corrupt)
+        );
     }
 }
 
@@ -354,6 +381,7 @@ fn admission_separates_caller_errors_from_corrupt_indexes() {
 fn admission_leaves_dependency_blocked_successors_outside_the_batch() {
     let mut successor = record(3, 1);
     successor.dependencies.push(1);
+    successor.ready_indexed = false;
     successor.source = 3;
     let active = HashMap::from([(1, record(1, 0)), (2, record(2, 0)), (3, successor)]);
     let ready = [VecDeque::from([2, 1]), VecDeque::new()];

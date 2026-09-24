@@ -95,6 +95,7 @@ mod directional_wait_diagnostic;
 mod drain_capture;
 mod xgmi_batch;
 mod xgmi_batch_diagnostic;
+mod xgmi_progress;
 mod xgmi_segments;
 mod xgmi_segments_diagnostic;
 #[cfg(feature = "hardware-diagnostic")]
@@ -7152,6 +7153,7 @@ struct XgmiRuntimeSubmissionV1 {
     byte_len: u32,
     dependencies: Vec<u64>,
     dependency_cursor: usize,
+    ready_indexed: bool,
     ticket: Option<Gfx942SdmaCopyTicketV1>,
     sequence: Option<xgmi_segments::Sequence>,
 }
@@ -7510,6 +7512,24 @@ fn prepend_xgmi_ready_id_v1(ids: &mut VecDeque<u64>, id: u64) {
     ids.push_front(id);
 }
 
+fn index_xgmi_ready_id_v1(
+    ids: &mut VecDeque<u64>,
+    indexed: &mut bool,
+    id: u64,
+    front: bool,
+) -> bool {
+    if *indexed {
+        return false;
+    }
+    if front {
+        prepend_xgmi_ready_id_v1(ids, id);
+    } else {
+        enqueue_xgmi_ready_id_v1(ids, id);
+    }
+    *indexed = true;
+    true
+}
+
 fn remove_xgmi_ready_id_v1(ids: &mut VecDeque<u64>, id: u64) -> bool {
     let Some(index) = ids.iter().position(|candidate| *candidate == id) else {
         return false;
@@ -7527,13 +7547,20 @@ enum XgmiProgressIndexPhaseV1 {
 
 fn remove_xgmi_progress_index_v1(
     ready: &mut VecDeque<u64>,
+    ready_indexed: bool,
     in_flight: &mut Vec<u64>,
     id: u64,
 ) -> XgmiProgressIndexPhaseV1 {
     if remove_ordered_xgmi_id_v1(in_flight, id) {
+        if ready_indexed {
+            std::process::abort();
+        }
         return XgmiProgressIndexPhaseV1::InFlight;
     }
-    if remove_xgmi_ready_id_v1(ready, id) {
+    if ready_indexed {
+        if !remove_xgmi_ready_id_v1(ready, id) {
+            std::process::abort();
+        }
         XgmiProgressIndexPhaseV1::Ready
     } else {
         XgmiProgressIndexPhaseV1::Waiting
@@ -9675,8 +9702,9 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         {
             std::process::abort();
         }
-        let _ = remove_xgmi_progress_index_v1(
+        remove_xgmi_progress_index_v1(
             &mut self.ready_by_direction[active.direction],
+            active.ready_indexed,
             &mut self.in_flight_by_direction[active.direction],
             active.id,
         );
@@ -9695,8 +9723,34 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 continue;
             };
             if xgmi_submission_is_ready_v1(active, &self.submissions, active.direction) {
-                enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[active.direction], active.id);
+                self.index_ready_v1(active.direction, active.id, false);
             }
+        }
+    }
+
+    fn index_ready_v1(&mut self, direction: usize, id: u64, front: bool) {
+        index_xgmi_ready_id_v1(
+            &mut self.ready_by_direction[direction],
+            &mut self
+                .active
+                .get_mut(&id)
+                .expect("indexed XGMI owner")
+                .ready_indexed,
+            id,
+            front,
+        );
+    }
+
+    fn take_ready_membership_v1(&mut self, id: u64) {
+        if !core::mem::replace(
+            &mut self
+                .active
+                .get_mut(&id)
+                .expect("indexed XGMI owner")
+                .ready_indexed,
+            false,
+        ) {
+            std::process::abort();
         }
     }
 
@@ -9797,7 +9851,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }) {
             std::process::abort();
         }
-        for (active, request) in active_batch.into_iter().zip(requests).rev() {
+        for (mut active, request) in active_batch.into_iter().zip(requests).rev() {
             let (source, destination) = request.into_mappings();
             self.restore_mapped_copy_pair(
                 active.source,
@@ -9806,13 +9860,18 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 source,
                 destination,
             )?;
-            prepend_xgmi_ready_id_v1(&mut self.ready_by_direction[active.direction], active.id);
+            index_xgmi_ready_id_v1(
+                &mut self.ready_by_direction[active.direction],
+                &mut active.ready_indexed,
+                active.id,
+                true,
+            );
             self.active.insert(active.id, active);
         }
         Ok(())
     }
 
-    /// Publishes every currently ready submission for one direction in a
+    /// Publishes one ready FIFO prefix of at most 63 for one direction in a
     /// single native SDMA reservation and doorbell store. The maintained
     /// FIFO ready queue makes selection O(batch) and independent of total
     /// active work; the ordered in-flight index remains bounded to 63 tickets.
@@ -9863,7 +9922,8 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             let id = self.ready_by_direction[direction]
                 .pop_front()
                 .expect("non-empty XGMI ready queue");
-            let active = self
+            self.take_ready_membership_v1(id);
+            let mut active = self
                 .active
                 .remove(&id)
                 .expect("selected XGMI submission remains active");
@@ -9881,9 +9941,11 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                             Ok(XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure)
                         }
                         failure @ RuntimeBackendFailureV1::Terminal(_) => {
-                            enqueue_xgmi_ready_id_v1(
+                            index_xgmi_ready_id_v1(
                                 &mut self.ready_by_direction[active.direction],
+                                &mut active.ready_indexed,
                                 active.id,
+                                false,
                             );
                             self.active.insert(active.id, active);
                             Err(failure)
@@ -9905,9 +9967,11 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                             Ok(XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure)
                         }
                         failure @ RuntimeBackendFailureV1::Terminal(_) => {
-                            enqueue_xgmi_ready_id_v1(
+                            index_xgmi_ready_id_v1(
                                 &mut self.ready_by_direction[active.direction],
+                                &mut active.ready_indexed,
                                 active.id,
+                                false,
                             );
                             self.active.insert(active.id, active);
                             Err(failure)
@@ -10132,36 +10196,10 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             }
             return outcome;
         }
-        while let Some(dependency) = active.dependencies.get(active.dependency_cursor).copied() {
-            match self.poll_v1(dependency)? {
-                BackendPollV1::Succeeded => active.dependency_cursor += 1,
-                BackendPollV1::Pending => {
-                    self.active.insert(active.id, active);
-                    return Ok(BackendPollV1::Pending);
-                }
-                BackendPollV1::Failed { .. } => return Ok(self.finish_failed(active)),
-            }
-        }
-        let id = active.id;
-        let direction = active.direction;
-        enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[direction], id);
-        self.active.insert(id, active);
-        let _ = self.publish_ready_peer_batch(direction)?;
-        if let Some(record) = self.submissions.get(&id) {
-            return Ok(record.status);
-        }
-        let progress_id = indexed_xgmi_progress_id_v1(&self.in_flight_by_direction[direction], id);
-        if let Some(progress_id) = progress_id {
-            let published = self
-                .active
-                .remove(&progress_id)
-                .expect("selected published XGMI submission remains active");
-            let _ = self.progress_peer_copy(published)?;
-        }
-        Ok(self
-            .submissions
-            .get(&id)
-            .map_or(BackendPollV1::Pending, |record| record.status))
+        // Unpublished dependency progress belongs to the non-consuming scalar
+        // driver. Neither observation nor retry may enqueue this owner again.
+        self.active.insert(active.id, active);
+        Ok(BackendPollV1::Pending)
     }
 
     fn logical_resource_counts(&self) -> XgmiLogicalResourceCountsV1 {
@@ -11039,7 +11077,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             *count += 1;
         }
         self.dependency_depths.insert(id, dependency_depth);
-        let active = XgmiRuntimeSubmissionV1 {
+        let mut active = XgmiRuntimeSubmissionV1 {
             id,
             stream,
             direction,
@@ -11050,11 +11088,17 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             byte_len: source.byte_len as u32,
             dependencies: dependency_submissions,
             dependency_cursor: 0,
+            ready_indexed: false,
             ticket: None,
             sequence: None,
         };
         if xgmi_submission_is_ready_v1(&active, &self.submissions, direction) {
-            enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[direction], id);
+            index_xgmi_ready_id_v1(
+                &mut self.ready_by_direction[direction],
+                &mut active.ready_indexed,
+                id,
+                false,
+            );
         }
         self.active_by_direction[direction] = next_direction_active;
         // Publication is intentionally deferred to the first progress call.
@@ -22961,6 +23005,7 @@ mod tests {
             source_offset: 0,
             destination_offset: 0,
             byte_len: 8,
+            ready_indexed: dependencies.is_empty(),
             dependencies,
             dependency_cursor: 0,
             ticket: None,
@@ -23249,7 +23294,7 @@ mod tests {
         // Mirroring the marker in the hostile test backlog makes index-order
         // observable: an implementation that searches ready first removes it.
         assert_eq!(
-            remove_xgmi_progress_index_v1(&mut ready, &mut in_flight, COMPLETED),
+            remove_xgmi_progress_index_v1(&mut ready, false, &mut in_flight, COMPLETED),
             XgmiProgressIndexPhaseV1::InFlight
         );
         assert!(in_flight.is_empty());

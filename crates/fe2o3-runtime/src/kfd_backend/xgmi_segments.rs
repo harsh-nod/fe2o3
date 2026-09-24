@@ -621,6 +621,15 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             && sequence.cursor.completed() < sequence.cursor.count()
             && self.sequence_by_direction[active.direction] == Some(id)
             && self.active_by_direction[active.direction] == 1
+            && if admission.published {
+                self.in_flight_by_direction[active.direction] == [id]
+                    && self.ready_by_direction[active.direction].is_empty()
+                    && !active.ready_indexed
+            } else {
+                self.in_flight_by_direction[active.direction].is_empty()
+                    && self.ready_by_direction[active.direction] == [id]
+                    && active.ready_indexed
+            }
             && self.batch_custody_is_valid(&[id], admission).map_err(|_| {
                 Self::rejected(
                     KfdRuntimeBackendErrorKindV1::Capacity,
@@ -738,14 +747,19 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         let direction = self.active[&id].direction;
         remove_xgmi_progress_index_v1(
             &mut self.ready_by_direction[direction],
+            self.active[&id].ready_indexed,
             &mut self.in_flight_by_direction[direction],
             id,
         );
+        self.active
+            .get_mut(&id)
+            .expect("ordered XGMI owner")
+            .ready_indexed = false;
         match custody {
             Custody::Pair((source, destination)) => {
                 self.restore_batch_pair(id, source, destination, terminal);
                 if !terminal {
-                    enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[direction], id);
+                    self.index_ready_v1(direction, id, false);
                 }
             }
             Custody::Ticket(ticket) => {

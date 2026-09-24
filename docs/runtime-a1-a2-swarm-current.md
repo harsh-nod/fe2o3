@@ -1,5 +1,20 @@
 # Current Runtime Swarm Work Orders
 
+Latest scalar progress checkpoint (2026-09-23): the
+[bounded XGMI progress packet](evidence/dev-xgmi-scalar-progress-cpu-2026-09-23/README.md)
+adds one-action consumer/dependency progress with root-only completion,
+retained dependency validation and idempotent FIFO membership in the existing
+active record. A separate HashSet design was rejected after reproducing its
+restoration-capacity hazard. GNU and musl each pass 1,251 runtime tests with
+twenty hardware-only ignores; 46 doctests, formatting, strict all-target Clippy
+and 3,805 unchanged source inputs pass. Independent source review finds no
+healthy-path flag-transition defect; native rollback remains unqualified.
+The [contract](runtime-xgmi-scalar-progress-v1.md) preserves scalar poll/wait and
+nonwaiting flush. Next is exact Context producer/dependency retention and
+producer-first reconciliation, then consumer-driven native chains. Context
+pending-producer reads still reject. No native, formal-refinement, performance
+or A1/A2 acceptance is added; the broader lane checkpoints remain unchanged.
+
 Latest native correction (2026-09-23): the
 [scalar XGMI flush CPU packet](evidence/dev-xgmi-scalar-flush-cpu-2026-09-23/README.md)
 removes synchronous prefix draining and its unbounded backoff. Scalar flush now

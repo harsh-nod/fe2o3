@@ -86,6 +86,7 @@ fn ready_fixture(total: usize, requested: usize, opposite_ready: usize) -> Fixtu
     for id in (requested + opposite_ready + 1) as u64..=total as u64 {
         let mut blocked = record(id, id as usize & 1);
         blocked.dependencies.push(requested_ids[0]);
+        blocked.ready_indexed = false;
         assert!(active.insert(id, blocked).is_none());
     }
     Fixture {

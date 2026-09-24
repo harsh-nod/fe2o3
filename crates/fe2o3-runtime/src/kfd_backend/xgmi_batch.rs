@@ -132,6 +132,7 @@ fn admit_with_reservation(
             || in_flight[d].binary_search(id).is_ok() != record.ticket.is_some()
             || ready_index[d].binary_search(id).is_ok()
                 != xgmi_submission_is_ready_v1(record, completed, d)
+            || ready_index[d].binary_search(id).is_ok() != record.ready_indexed
         {
             return Err(AdmissionError::Corrupt);
         }
@@ -570,6 +571,21 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                         .count()
             })
             || self.active_stream_owners.len() != self.active.len()
+            || (0..2).any(|direction| {
+                // Aggregate admission checks FIFO uniqueness; ordered admission
+                // checks its exact singleton before entering this shared guard.
+                self.ready_by_direction[direction].len()
+                    != self
+                        .active
+                        .values()
+                        .filter(|record| record.direction == direction && record.ready_indexed)
+                        .count()
+                    || self.ready_by_direction[direction].iter().any(|id| {
+                        self.active.get(id).is_none_or(|record| {
+                            record.direction != direction || !record.ready_indexed
+                        })
+                    })
+            })
         {
             return Ok(false);
         }
@@ -763,6 +779,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 if self.ready_by_direction[direction].pop_front() != Some(*id) {
                     std::process::abort();
                 }
+                self.take_ready_membership_v1(*id);
             }
             for (index, id) in ids.iter().copied().enumerate() {
                 let active = &self.active[&id];
