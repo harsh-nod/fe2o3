@@ -113,14 +113,19 @@ launch.
 
 ## Qualification scope
 
-The private actual-source library-driver ladder has been authored but is **not
-claimed executed by this document**. It specifies 17 isolated children: 14 public
-driver invocations and three fresh promoted-source callbacks, 96 bounded CPU
-cases, three publications and ten exact refusals. Five refusals occur before
-frontend startup and are not counted as compiler sessions. It retains separate
-source/package metadata for original and generated files, validates a shared
-dependency closure, checks offset-view canaries and initialization, and preserves
-partial outputs and existing candidates.
+The actual-source public library-driver R1 gate completed with 17 isolated
+children: 14 public driver invocations and three fresh promoted-source callbacks,
+96 bounded CPU cases, three publications and ten exact refusals. Five refusals
+occur before frontend startup and are not counted as compiler sessions. It
+retains separate source/package metadata for original and generated files,
+validates a shared dependency closure, checks offset-view canaries and
+initialization, and preserves partial outputs and existing candidates.
+
+The extractor-binary R2 outer gate and independent retained-artifact review also
+completed separately from the library result. Fresh callback canonical hashes
+were observed live, not independently retained as new canonical files. The exact
+receipts, source-normal qualification and pending native boundaries are recorded
+in [the dated qualification note](ordered-composition-qualification-20260924.md).
 
 This workflow is a bounded source-to-helper-to-fresh-source slice. It does not
 close general authoring, arbitrary round trips, normal checked/protected
