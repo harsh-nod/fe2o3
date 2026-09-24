@@ -1,15 +1,16 @@
 # Actual Manifest Fill: Source-Proof Prerequisite
 
-Status: CPU and source-path validation passed; protected proof execution is
-still unvalidated. This change does not complete #272, produce a signed source
-capsule, establish safe GPU launch, or change curriculum qualification counts.
+Status: CPU, source-path, protected-runtime preflight and the three-child
+actual-source proof test passed. This does not complete #272, produce a signed
+source capsule, establish safe GPU launch, or change curriculum qualification counts.
 
 Primary integration passed the binding-aware CPU reference tests in both
 feature modes, the actual no-GPU quickstart, both default-source regressions,
 pre-proof ranked-output preparation for integer and float sources on gfx942 and
 gfx950, and the missing-runtime refusal regression. Eleven focused reference
-unit tests and three fill-harness unit tests also passed. These results do not
-stand in for the protected positive, wrong-store, and post-bind integration.
+unit tests and three fill-harness unit tests also passed. The protected positive,
+wrong-store and post-bind integration subsequently passed on the frozen compiler
+snapshot identified below; those are separate tests, not inferred from CPU runs.
 See the [integration checkpoint](native-worker-finalization-replay-20260924.md)
 for the complete validation scope and limitations.
 
@@ -106,7 +107,7 @@ Each child rederives preparation before and after execution. Compiler output
 must remain absent. Results retain exact diagnostics, current invocation,
 conditional observations and inert proof transport; these are test evidence,
 not artifact or launch authority. The parent preserves separate stdout/stderr
-logs. Successful test execution must be reported separately from this document.
+logs. The measured execution result and its scope are recorded below.
 
 ## Coordinated Commands
 
@@ -114,7 +115,8 @@ Use nightly `2026-04-03` and frozen matching source/tool/dependency inputs. Run
 these through the primary's existing serialized, source-stability build guard:
 one Cargo job, incremental disabled, 12 GiB virtual-memory ceiling, nice 10 and
 1200-second outer timeout. The integration checkpoint lists executed selectors
-and results; the protected preparation and three-child run remain unexecuted.
+and results. Protected-input preparation subsequently passed; the three-child
+result is a separate obligation, not implied by preparation or runtime preflight.
 Reproduction commands include:
 
 ```sh
@@ -192,9 +194,14 @@ FE2O3_TEST_MANIFEST_FILL_RESULTS_V1="$PROOF_RESULTS" \
 `PROOF_RESULTS` must not exist; its private parent must be writable by the
 chosen non-root UID. Use 2 CPUs, 12 GiB memory/swap ceiling, 128 PIDs, no network
 or GPU devices, read-only root/source/tool/dependencies/runtime, all capabilities
-dropped, no-new-privileges and default seccomp. Only private results and a
-bounded 64 MiB temporary filesystem are writable. The parent allows 300 seconds
-per sequential child; the production producer's per-effect proof timeout is
+dropped and no-new-privileges. The unchanged controller admission requires
+`Seccomp: 0` and `Seccomp_filters: 0`; the proof child then installs its reviewed
+filter. An ordinary Docker default-filter process cannot satisfy this admission.
+Do not disable an existing filter to make a refused controller pass. Use a
+reviewed isolated supervisor started from the host service manager, with private
+mount, PID, IPC, UTS, network and cgroup namespaces and a bounded, drained cgroup.
+Only private results and a bounded 64 MiB temporary filesystem are writable.
+The parent allows 300 seconds per sequential child; the production producer's per-effect proof timeout is
 unchanged. Do not use `seccomp-unconfined`, alter the shared runtime volume or
 count an isolation/setup failure as a semantic failure. A refused runtime lease
 requires a supported isolated runtime profile, not an authority bypass.
@@ -207,6 +214,75 @@ probes ran only `find` and bounded manifest reading. They did not hash the full
 closure, open the protected lease or execute Verus. Both disposable probe
 containers were automatically removed and their absence checked. No shared
 volume changes were made.
+
+## Protected Source Run, September 24
+
+Fresh backend and verifier test binaries and the fill preparation were built
+from `65cfbc1e30d180edc84eefc85e70359db4c9b3ce`, with source/tool stability
+checked for each completed build. The source content snapshot was
+`4f1acf92d4d4e7f78ada6a910e9c95a85a14fc9988e2fe0540a2b90de4e07b9b`.
+The backend binary SHA-256 was
+`84ca793abdd222e7d9f7e781c25cc2ad7c605e953e530fbc2c14225062d04b92`;
+the verifier binary was
+`9bb4396322686c10ed73c85097d950e0cd3d0565d6cbe7969145a94bb80f90b7`.
+Cargo's fresh artifact records selected both binaries. These measurements do
+not validate later compiler edits.
+
+On MI350 an external, test-only supervisor passed the installed-runtime shell
+audit and all three public-lease tests: retained closure admission, actual
+Verus execution, and semantic rejection of a false proof. Each selector ran
+exactly one test. The controller had all UID/GID slots set to 9661, no
+supplementary groups, no capability bits including the bounding set,
+no-new-privileges, and no pre-existing seccomp filter. No GPU was exposed.
+
+The private root contained copied, pinned interpreter files, not individual
+interpreter bind mounts: the retained loader's `NO_XDEV` check rejects those
+mounts. Source, prepared dependencies and nightly files were immutable private
+copies. The shared protected runtime was mounted read-only and left unchanged.
+The runner used 2 CPUs, 12 GiB memory, no additional swap, 128 tasks, and a
+1650-second service limit; its controller drained the owned cgroup on exit.
+
+Earlier attempts stopped on supervisor setup: implicit systemd slice loading,
+directory permissions under a private umask, a missing private `/dev/fd` link,
+and the loader file-mount boundary. Their logs were preserved and their exact
+private run directories removed after confirming termination. None counts as
+a failed semantic proof or a successful source proof.
+
+The locked 99-package base could not be rebuilt because required package
+versions were absent from refreshed repositories. No pins or host packages
+were changed. This run instead used a normalized snapshot of the existing
+immutable Ubuntu image, explicitly marked as an external diagnostic base, not
+the production qualification base. Runtime preflight alone grants no aggregate
+proof, artifact, launch authority, milestone completion or curriculum credit.
+
+The actual-source parent then passed in 44.26 seconds. All three fresh children
+observed one real production proof request. The original and conditional cases
+each imported one freshly signed receipt; the wrong-store case imported none
+and failed the generated Verus assertion `v1 == v2`. The changed kernel MIR and
+normalized obligation differed from the original, and the two successful
+executions produced distinct receipt bytes. The conditional observation retained
+one 4-byte global output, source/adjusted/physical argument zero, CPU raw
+argument one, `GlobalLaunch` address obligations, and nine pending production
+checks. The original still stopped at `FE2O3-OWN-002` after its successful effect
+proof. No compiler artifact or GPU launch was produced.
+
+The isolated service exited successfully and its cgroup reported `populated 0`.
+The preserved three-case JSON report SHA-256 is
+`d0a3405b330fa9d8a9be713e28b615ef17ac5788b8a650ee592ea2f5c45beb06`;
+the terminal state/log archive SHA-256 is
+`bfdf93e8a9723e0124743eb811fc0c4a92b51f2dbb24ed14b21e6fba267e9372`.
+The exact private run and base snapshot were removed after preserving those
+outputs and confirming drainage. This is the auxiliary `reference-proof`
+selection on the measured compiler, not default-manifest qualification or
+validation of subsequent conditional-continuation changes.
+
+Post-run remeasurement at `2026-09-24T09:25:16Z` confirmed the shared runtime's
+90 files and 101 inventory rows still matched all pins, with content SHA-256
+`96d398753025941971cf7d3acd47eb66d72bfaf89c90b14e5c45a648cc475abc`.
+The measured nightly files were also unchanged. The private staging, package
+cache, image export and supervisor bootstrap directories were removed; a
+separate SSH check confirmed their absence. No host package installation,
+shared-runtime modification or unrelated cleanup was performed.
 
 ## Exact Remaining Producer Work
 
