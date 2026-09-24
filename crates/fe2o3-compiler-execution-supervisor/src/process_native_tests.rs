@@ -472,34 +472,38 @@ fn funded_zero_work_and_zero_cost_scratch_refusals_do_not_reach_callback() {
         let drops = Cell::new(0);
         let calls = Cell::new(0);
         let mut work = Work::new(0);
-        let mut budget = Budget::new(&mut work, FLOOR);
-        budget.reserve_storage(FLOOR).unwrap();
-        let result = (|| -> Result<()> {
-            let guard = funded_owner(&mut budget, &drops);
-            guard
-                .funding
-                .budget
-                .with_prepaid_scope::<(), Error>(FLOOR, entry, entry, 1, |_| {
-                    calls.set(calls.get() + 1);
-                    Ok(())
-                })?;
-            Ok(())
-        })();
-        if entry == 0 {
-            assert!(matches!(result, Err(Error::Resource(Resource::Storage(e)))
+        {
+            let mut budget = Budget::new(&mut work, FLOOR);
+            budget.reserve_storage(FLOOR).unwrap();
+            let result = (|| -> Result<()> {
+                let guard = funded_owner(&mut budget, &drops);
+                guard.funding.budget.with_prepaid_scope::<(), Error>(
+                    FLOOR,
+                    entry,
+                    entry,
+                    1,
+                    |_| {
+                        calls.set(calls.get() + 1);
+                        Ok(())
+                    },
+                )?;
+                Ok(())
+            })();
+            if entry == 0 {
+                assert!(matches!(result, Err(Error::Resource(Resource::Storage(e)))
                 if e.actual() == FLOOR + 1 && e.limit() == FLOOR));
-            assert_eq!(budget.failed_storage(), Some(FLOOR + 1));
-        } else {
-            assert!(matches!(result, Err(Error::Resource(Resource::Work(e)))
+                assert_eq!(budget.failed_storage(), Some(FLOOR + 1));
+            } else {
+                assert!(matches!(result, Err(Error::Resource(Resource::Work(e)))
                 if e.actual() == 1 && e.limit() == 0));
-            assert_eq!(budget.failed_storage(), None);
+                assert_eq!(budget.failed_storage(), None);
+            }
+            assert_eq!(calls.get(), 0);
+            assert_eq!(drops.get(), 1);
+            assert_eq!(budget.work(), 0);
+            assert_eq!(budget.storage(), UNRELATED);
+            assert_eq!(budget.peak_storage(), FLOOR);
         }
-        assert_eq!(calls.get(), 0);
-        assert_eq!(drops.get(), 1);
-        assert_eq!(budget.work(), 0);
-        assert_eq!(budget.storage(), UNRELATED);
-        assert_eq!(budget.peak_storage(), FLOOR);
-        drop(budget);
         assert_eq!(work.failed_work(), (entry != 0).then_some(1));
     }
 }
@@ -511,41 +515,45 @@ fn funded_nested_work_refusal_keeps_accepted_prefix_and_skips_observation() {
     let observations = Cell::new(0);
     let limits = Wait::new(1, Wait::MAX_TIMEOUT).unwrap();
     let mut work = Work::new(5 + 7 + ENTRY);
-    let mut budget = Budget::new(&mut work, 100);
-    budget.charge_work(5).unwrap();
-    budget.reserve_storage(FLOOR).unwrap();
-    let result = (|| -> Result<()> {
-        let guard = funded_owner(&mut budget, &drops);
-        guard
-            .funding
-            .budget
-            .with_prepaid_scope::<(), Error>(FLOOR, 1, 7, OUTER_SCRATCH, |b| {
-                outer_calls.set(outer_calls.get() + 1);
-                b.with_prepaid_scope(
-                    FLOOR + OUTER_SCRATCH,
-                    ENTRY,
-                    limits.work(),
-                    INNER_SCRATCH,
-                    |_| {
-                        attempts(limits, limits.deadline()?, Boundary::Readiness, || {
-                            observations.set(observations.get() + 1);
-                            Ok(Some(()))
-                        })
-                    },
-                )
-            })?;
-        Ok(())
-    })();
-    assert!(matches!(result, Err(Error::Resource(Resource::Work(e)))
+    {
+        let mut budget = Budget::new(&mut work, 100);
+        budget.charge_work(5).unwrap();
+        budget.reserve_storage(FLOOR).unwrap();
+        let result = (|| -> Result<()> {
+            let guard = funded_owner(&mut budget, &drops);
+            guard.funding.budget.with_prepaid_scope::<(), Error>(
+                FLOOR,
+                1,
+                7,
+                OUTER_SCRATCH,
+                |b| {
+                    outer_calls.set(outer_calls.get() + 1);
+                    b.with_prepaid_scope(
+                        FLOOR + OUTER_SCRATCH,
+                        ENTRY,
+                        limits.work(),
+                        INNER_SCRATCH,
+                        |_| {
+                            attempts(limits, limits.deadline()?, Boundary::Readiness, || {
+                                observations.set(observations.get() + 1);
+                                Ok(Some(()))
+                            })
+                        },
+                    )
+                },
+            )?;
+            Ok(())
+        })();
+        assert!(matches!(result, Err(Error::Resource(Resource::Work(e)))
         if e.actual() == 5 + 7 + limits.work() && e.limit() == 5 + 7 + ENTRY));
-    assert_eq!(outer_calls.get(), 1);
-    assert_eq!(observations.get(), 0);
-    assert_eq!(drops.get(), 1);
-    assert_eq!(budget.storage(), UNRELATED);
-    assert_eq!(budget.peak_storage(), FLOOR + OUTER_SCRATCH);
-    assert_eq!(budget.failed_storage(), None);
-    assert_eq!(budget.work(), 5 + 7 + ENTRY);
-    drop(budget);
+        assert_eq!(outer_calls.get(), 1);
+        assert_eq!(observations.get(), 0);
+        assert_eq!(drops.get(), 1);
+        assert_eq!(budget.storage(), UNRELATED);
+        assert_eq!(budget.peak_storage(), FLOOR + OUTER_SCRATCH);
+        assert_eq!(budget.failed_storage(), None);
+        assert_eq!(budget.work(), 5 + 7 + ENTRY);
+    }
     assert_eq!(work.failed_work(), Some(5 + 7 + limits.work()));
 }
 
@@ -557,39 +565,43 @@ fn funded_nested_scratch_refusal_keeps_work_and_skips_observation() {
     let needed = FLOOR + OUTER_SCRATCH + INNER_SCRATCH;
     let required_work = 5 + 7 + limits.work();
     let mut work = Work::new(required_work);
-    let mut budget = Budget::new(&mut work, needed - 1);
-    budget.charge_work(5).unwrap();
-    budget.reserve_storage(FLOOR).unwrap();
-    let result = (|| -> Result<()> {
-        let guard = funded_owner(&mut budget, &drops);
-        guard
-            .funding
-            .budget
-            .with_prepaid_scope::<(), Error>(FLOOR, 1, 7, OUTER_SCRATCH, |b| {
-                b.with_prepaid_scope(
-                    FLOOR + OUTER_SCRATCH,
-                    ENTRY,
-                    limits.work(),
-                    INNER_SCRATCH,
-                    |_| {
-                        attempts(limits, limits.deadline()?, Boundary::Publication, || {
-                            observations.set(observations.get() + 1);
-                            Ok(Some(()))
-                        })
-                    },
-                )
-            })?;
-        Ok(())
-    })();
-    assert!(matches!(result, Err(Error::Resource(Resource::Storage(e)))
+    {
+        let mut budget = Budget::new(&mut work, needed - 1);
+        budget.charge_work(5).unwrap();
+        budget.reserve_storage(FLOOR).unwrap();
+        let result = (|| -> Result<()> {
+            let guard = funded_owner(&mut budget, &drops);
+            guard.funding.budget.with_prepaid_scope::<(), Error>(
+                FLOOR,
+                1,
+                7,
+                OUTER_SCRATCH,
+                |b| {
+                    b.with_prepaid_scope(
+                        FLOOR + OUTER_SCRATCH,
+                        ENTRY,
+                        limits.work(),
+                        INNER_SCRATCH,
+                        |_| {
+                            attempts(limits, limits.deadline()?, Boundary::Publication, || {
+                                observations.set(observations.get() + 1);
+                                Ok(Some(()))
+                            })
+                        },
+                    )
+                },
+            )?;
+            Ok(())
+        })();
+        assert!(matches!(result, Err(Error::Resource(Resource::Storage(e)))
         if e.actual() == needed && e.limit() == needed - 1));
-    assert_eq!(observations.get(), 0);
-    assert_eq!(drops.get(), 1);
-    assert_eq!(budget.storage(), UNRELATED);
-    assert_eq!(budget.peak_storage(), FLOOR + OUTER_SCRATCH);
-    assert_eq!(budget.failed_storage(), Some(needed));
-    assert_eq!(budget.work(), required_work);
-    drop(budget);
+        assert_eq!(observations.get(), 0);
+        assert_eq!(drops.get(), 1);
+        assert_eq!(budget.storage(), UNRELATED);
+        assert_eq!(budget.peak_storage(), FLOOR + OUTER_SCRATCH);
+        assert_eq!(budget.failed_storage(), Some(needed));
+        assert_eq!(budget.work(), required_work);
+    }
     assert_eq!(work.failed_work(), None);
 }
 
