@@ -809,9 +809,16 @@ enum ComputeDependencyRosterV1<'a> {
     Exact(&'a [BackendLaunchProducerV1]),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComputeInputAdmissionV1 {
+    Ready,
+    ExactProducers,
+}
+
 struct CollectedComputeDependenciesV1 {
     ordered_predecessor: Option<u64>,
     explicit_success_dependencies: Box<[u64]>,
+    input_admission: ComputeInputAdmissionV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5695,26 +5702,33 @@ impl KfdRuntimeBackendV1 {
         self.validate_semantic_launch_v1(launch.semantic_launch, launch.geometry)?;
         self.require_submission_capacity_v1()?;
         let ordered_predecessor = self.stream_submission_tails.get(&launch.stream).copied();
-        let explicit_success_dependencies = match dependencies {
-            ComputeDependencyRosterV1::Events(events) => {
-                self.collect_compute_dependencies_v1(events)?
-            }
-            ComputeDependencyRosterV1::Exact(dependencies) => {
-                self.collect_exact_compute_dependencies_v1(dependencies)?
-            }
+        let (explicit_success_dependencies, input_admission) = match dependencies {
+            ComputeDependencyRosterV1::Events(events) => (
+                self.collect_compute_dependencies_v1(events)?,
+                ComputeInputAdmissionV1::Ready,
+            ),
+            ComputeDependencyRosterV1::Exact(dependencies) => (
+                self.collect_exact_compute_dependencies_v1(dependencies)?,
+                ComputeInputAdmissionV1::ExactProducers,
+            ),
         };
         Ok(CollectedComputeDependenciesV1 {
             ordered_predecessor,
             explicit_success_dependencies,
+            input_admission,
         })
     }
 
     fn submit_collected_compute_v1(
         &mut self,
         launch: BackendLaunchV1<'_>,
-        ordered_predecessor: Option<u64>,
-        explicit_success_dependencies: Box<[u64]>,
+        collected: CollectedComputeDependenciesV1,
     ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let CollectedComputeDependenciesV1 {
+            ordered_predecessor,
+            explicit_success_dependencies,
+            input_admission,
+        } = collected;
         let dependency_depth = self
             .next_dependency_depth_v1(ordered_predecessor, &explicit_success_dependencies)
             .map_err(|error| {
@@ -5728,7 +5742,7 @@ impl KfdRuntimeBackendV1 {
                 };
                 Self::capacity(detail)
             })?;
-        self.validate_compute_launch_v1(&launch, &explicit_success_dependencies)?;
+        self.validate_compute_launch_v1(&launch, &explicit_success_dependencies, input_admission)?;
 
         let explicit_kernarg = try_copy_vec_v1(
             launch.explicit_kernarg,
@@ -6710,11 +6724,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             launch,
             ComputeDependencyRosterV1::Events(launch.dependencies),
         )?;
-        self.submit_collected_compute_v1(
-            launch,
-            collected.ordered_predecessor,
-            collected.explicit_success_dependencies,
-        )
+        self.submit_collected_compute_v1(launch, collected)
     }
 
     fn poll_v1(
@@ -7089,11 +7099,7 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdRuntimeBackendV1 {
             launch,
             ComputeDependencyRosterV1::Exact(request.dependencies),
         )?;
-        self.submit_collected_compute_v1(
-            launch,
-            collected.ordered_predecessor,
-            collected.explicit_success_dependencies,
-        )
+        self.submit_collected_compute_v1(launch, collected)
     }
 }
 
@@ -12202,11 +12208,8 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             "multi-device submission route allocation failed",
         )?;
         let id = self.next_id()?;
-        let result = self.children[stream.child].submit_collected_compute_v1(
-            child_launch,
-            collected.ordered_predecessor,
-            collected.explicit_success_dependencies,
-        );
+        let result =
+            self.children[stream.child].submit_collected_compute_v1(child_launch, collected);
         let local = self.latch(result)?;
         self.submissions.insert(
             id,
@@ -14064,8 +14067,14 @@ mod tests {
         byte_len: usize,
         steps: impl IntoIterator<Item = ScriptedSdmaStepV1>,
     ) -> (KfdRuntimeBackendV1, u64, [u64; 3]) {
+        scripted_persistent_backend_with_steps_v1::<3>(byte_len, steps)
+    }
+
+    fn scripted_persistent_backend_with_steps_v1<const N: usize>(
+        byte_len: usize,
+        steps: impl IntoIterator<Item = ScriptedSdmaStepV1>,
+    ) -> (KfdRuntimeBackendV1, u64, [u64; N]) {
         let driver = ScriptedSdmaDriverV1::new(steps);
-        let owners = std::array::from_fn(|_| driver.test_device_owner(byte_len));
         let mut backend = KfdRuntimeBackendV1::mock();
         let stream = backend.create_stream_v1(7).unwrap();
         let mut insert = |index: usize, owner| {
@@ -14103,9 +14112,9 @@ mod tests {
             );
             allocation
         };
-        let [owner_a, owner_b, owner_c] = owners;
-        let allocations = [insert(0, owner_a), insert(1, owner_b), insert(2, owner_c)];
-        backend.staged_context_bytes = u64::try_from(byte_len * 3).unwrap();
+        let allocations =
+            std::array::from_fn(|index| insert(index, driver.test_device_owner(byte_len)));
+        backend.staged_context_bytes = u64::try_from(byte_len * N).unwrap();
         backend.native_available = true;
         backend.sdma_enabled = true;
         backend.scripted_sdma = Some(driver);
@@ -14981,7 +14990,7 @@ mod tests {
                 .is_none()
         );
         backend
-            .validate_compute_launch_v1(&launch.borrowed(), &[])
+            .validate_compute_launch_v1(&launch.borrowed(), &[], ComputeInputAdmissionV1::Ready)
             .unwrap();
         for reuse_bound_recipe in [false, true] {
             let prepared = backend
@@ -15037,7 +15046,7 @@ mod tests {
                 };
             }
             assert!(matches!(
-                backend.validate_compute_launch_v1(&launch.borrowed(), &[]),
+                backend.validate_compute_launch_v1(&launch.borrowed(), &[], ComputeInputAdmissionV1::Ready),
                 Err(RuntimeBackendFailureV1::Rejected(error))
                     if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
                         && error.detail().contains("exact R/R/W admission")
@@ -15062,7 +15071,11 @@ mod tests {
             let allocation = launch.bindings[index].region.allocation;
             launch.bindings[index].region.allocation = u64::MAX;
             assert!(matches!(
-                backend.validate_compute_launch_v1(&launch.borrowed(), &[]),
+                backend.validate_compute_launch_v1(
+                    &launch.borrowed(),
+                    &[],
+                    ComputeInputAdmissionV1::Ready
+                ),
                 Err(RuntimeBackendFailureV1::Rejected(_))
             ));
             assert!(matches!(
@@ -15775,6 +15788,577 @@ mod tests {
         assert_eq!(driver.live_owner_count(), 0);
         assert_eq!(driver.unexpected_drops(), 0);
         backend.shutdown_native_v1().unwrap();
+    }
+
+    struct ScriptedActiveProducerFixtureV1 {
+        backend: KfdRuntimeBackendV1,
+        producer_stream: u64,
+        launch: OwnedComputeLaunchV1,
+        allocations: [u64; 4],
+        module: u64,
+        producer: u64,
+        event: u64,
+    }
+
+    impl ScriptedActiveProducerFixtureV1 {
+        fn new(cross_stream: bool) -> Self {
+            let byte_len = 64_usize;
+            let steps = (0..4).flat_map(|_| {
+                [
+                    ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
+                    ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+                ]
+            });
+            let (mut backend, producer_stream, allocations) =
+                scripted_persistent_backend_with_steps_v1::<4>(byte_len, steps);
+            let stream = if cross_stream {
+                backend.create_stream_v1(7).unwrap()
+            } else {
+                producer_stream
+            };
+            let module = backend
+                .load_module_v1(7, &synthetic_cov6::three_binding_module())
+                .unwrap();
+            let kernel = backend
+                .resolve_kernel_v1(module, "vecadd", [7; 32])
+                .unwrap();
+            let [a, b, c, d] = allocations;
+            let producer = submit_scripted_three_binding_v1(
+                &mut backend,
+                producer_stream,
+                kernel,
+                [a, b, c],
+                byte_len as u64,
+            );
+            assert_eq!(backend.active.as_ref().unwrap().id, producer);
+            for allocation in [a, b, c] {
+                assert!(matches!(backend.allocations[&allocation].sdma_storage,
+                    KfdRuntimeSdmaStorageV1::ComputeInFlight(owner) if owner == producer));
+            }
+            let event = backend.record_event_v1(producer_stream, producer).unwrap();
+            let mut explicit_kernarg = [0_u8; 32];
+            explicit_kernarg[24..].copy_from_slice(&(byte_len as u64 / 4).to_le_bytes());
+            let bindings = [c, b, d]
+                .into_iter()
+                .enumerate()
+                .map(|(index, allocation)| BackendBindingV1 {
+                    region: BackendMemoryRegionV1 {
+                        allocation,
+                        access: if index == 2 {
+                            RuntimeAccessV1::Write
+                        } else {
+                            RuntimeAccessV1::Read
+                        },
+                        byte_offset: 0,
+                        byte_len: byte_len as u64,
+                    },
+                    kernarg_byte_offset: (index * 8) as u32,
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let launch = OwnedComputeLaunchV1 {
+                stream,
+                kernel,
+                explicit_kernarg: explicit_kernarg.into(),
+                bindings,
+                geometry: crate::RuntimeLaunchGeometryV1 {
+                    grid: [64, 1, 1],
+                    workgroup: [64, 1, 1],
+                    dynamic_shared_bytes: 0,
+                },
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+            };
+            Self {
+                backend,
+                producer_stream,
+                launch,
+                allocations,
+                module,
+                producer,
+                event,
+            }
+        }
+
+        fn submit(&mut self) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+            self.backend
+                .submit_producer_aware_launch_v1(BackendProducerAwareLaunchV1 {
+                    stream: self.launch.stream,
+                    kernel: self.launch.kernel,
+                    explicit_kernarg: &self.launch.explicit_kernarg,
+                    bindings: &self.launch.bindings,
+                    dependencies: &[BackendLaunchProducerV1 {
+                        event: self.event,
+                        producer_submission: self.producer,
+                    }],
+                    geometry: self.launch.geometry,
+                })
+        }
+
+        fn finish(mut self, consumer: Option<u64>) {
+            if self.backend.events.contains_key(&self.event) {
+                self.backend.release_event_v1(self.event).unwrap();
+            }
+            assert_eq!(
+                self.backend
+                    .wait_v1(self.producer, Instant::now() + Duration::from_secs(1))
+                    .unwrap(),
+                BackendPollV1::Succeeded
+            );
+            if let Some(consumer) = consumer {
+                self.backend.release_submission_v1(consumer).unwrap();
+            }
+            self.backend.release_submission_v1(self.producer).unwrap();
+            assert!(self.backend.compute_dependency_retain_counts.is_empty());
+            assert!(self.backend.compute_module_retain_counts.is_empty());
+            assert!(self.backend.allocation_custody.is_empty());
+            assert_eq!(self.backend.compute_completion_reservations, 0);
+            assert_runtime_compute_pipeline_empty_v1(&self.backend);
+            self.backend.unload_module_v1(self.module).unwrap();
+            for allocation in self.allocations {
+                self.backend
+                    .allocations
+                    .get_mut(&allocation)
+                    .unwrap()
+                    .sdma_backed = false;
+                self.backend.release_allocation_v1(allocation).unwrap();
+            }
+            if self.launch.stream != self.producer_stream {
+                self.backend.destroy_stream_v1(self.launch.stream).unwrap();
+            }
+            self.backend
+                .destroy_stream_v1(self.producer_stream)
+                .unwrap();
+            let driver = self.backend.scripted_sdma.as_ref().unwrap();
+            assert!(driver.is_exhausted());
+            assert_eq!(driver.live_owner_count(), 0);
+            assert_eq!(driver.unexpected_drops(), 0);
+            self.backend.shutdown_native_v1().unwrap();
+        }
+    }
+
+    #[test]
+    fn producer_launch_active_three_binding_inputs_wait_without_materialization() {
+        for cross_stream in [false, true] {
+            let mut fixture = ScriptedActiveProducerFixtureV1::new(cross_stream);
+            let consumer = fixture.submit().unwrap();
+            assert_eq!(
+                fixture.backend.active.as_ref().unwrap().id,
+                fixture.producer
+            );
+            let pending = &fixture.backend.pending_compute[&consumer];
+            assert_eq!(&*pending.explicit_success_dependencies, &[fixture.producer]);
+            assert_eq!(pending.explicit_dependency_cursor, 0);
+            fixture.backend.release_event_v1(fixture.event).unwrap();
+            assert!(
+                matches!(fixture.backend.release_submission_v1(fixture.producer),
+                Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy)
+            );
+            assert_eq!(
+                fixture.backend.poll_v1(consumer).unwrap(),
+                BackendPollV1::Pending
+            );
+            assert_eq!(
+                fixture.backend.submissions[&fixture.producer].status,
+                BackendPollV1::Succeeded
+            );
+            fixture
+                .backend
+                .flush_stream_v1(fixture.launch.stream)
+                .unwrap();
+            assert_eq!(
+                fixture
+                    .backend
+                    .wait_v1(consumer, Instant::now() + Duration::from_secs(1))
+                    .unwrap(),
+                BackendPollV1::Succeeded
+            );
+            let performance = fixture.backend.last_launch_performance_v1().unwrap();
+            assert_eq!(
+                performance.data_path(),
+                KfdRuntimeLaunchDataPathV1::PersistentDeviceReused
+            );
+            assert_eq!(performance.user_data_materializations(), 0);
+            fixture.finish(Some(consumer));
+        }
+    }
+
+    #[test]
+    fn producer_launch_active_three_binding_cancellation_keeps_parent_owners() {
+        let mut fixture = ScriptedActiveProducerFixtureV1::new(true);
+        let consumer = fixture.submit().unwrap();
+        fixture.backend.release_event_v1(fixture.event).unwrap();
+        assert_eq!(
+            fixture.backend.cancel_v1(consumer).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
+        assert_eq!(
+            fixture.backend.active.as_ref().unwrap().id,
+            fixture.producer
+        );
+        assert!(
+            !fixture
+                .backend
+                .compute_dependency_retain_counts
+                .contains_key(&fixture.producer)
+        );
+        assert!(
+            !fixture
+                .backend
+                .allocation_custody
+                .contains_key(&fixture.allocations[3])
+        );
+        for allocation in fixture.allocations.into_iter().take(3) {
+            assert!(
+                matches!(fixture.backend.allocations[&allocation].sdma_storage,
+                KfdRuntimeSdmaStorageV1::ComputeInFlight(owner) if owner == fixture.producer)
+            );
+        }
+        fixture.finish(Some(consumer));
+    }
+
+    #[test]
+    fn producer_launch_active_three_binding_rejects_missing_or_foreign_authority() {
+        let mut fixture = ScriptedActiveProducerFixtureV1::new(true);
+        let launch = &fixture.launch;
+        for (dependencies, mode) in [
+            (vec![], ComputeInputAdmissionV1::ExactProducers),
+            (
+                vec![fixture.producer + 100],
+                ComputeInputAdmissionV1::ExactProducers,
+            ),
+            (vec![fixture.producer], ComputeInputAdmissionV1::Ready),
+        ] {
+            assert!(
+                matches!(fixture.backend.validate_compute_launch_v1(&launch.borrowed(), &dependencies, mode),
+                Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch)
+            );
+        }
+        for input in [fixture.allocations[2], fixture.allocations[1]] {
+            let custody = fixture.backend.allocation_custody.remove(&input).unwrap();
+            assert!(
+                fixture
+                    .backend
+                    .validate_compute_launch_v1(
+                        &launch.borrowed(),
+                        &[fixture.producer],
+                        ComputeInputAdmissionV1::ExactProducers
+                    )
+                    .is_err()
+            );
+            fixture.backend.allocation_custody.insert(input, custody);
+            fixture
+                .backend
+                .allocations
+                .get_mut(&input)
+                .unwrap()
+                .sdma_initialized = false;
+            assert!(
+                fixture
+                    .backend
+                    .validate_compute_launch_v1(
+                        &launch.borrowed(),
+                        &[fixture.producer],
+                        ComputeInputAdmissionV1::ExactProducers
+                    )
+                    .is_err()
+            );
+            fixture
+                .backend
+                .allocations
+                .get_mut(&input)
+                .unwrap()
+                .sdma_initialized = true;
+        }
+        let execution = fixture.backend.active.as_mut().unwrap().execution.take();
+        assert!(
+            fixture
+                .backend
+                .validate_compute_launch_v1(
+                    &launch.borrowed(),
+                    &[fixture.producer],
+                    ComputeInputAdmissionV1::ExactProducers
+                )
+                .is_err()
+        );
+        fixture.backend.active.as_mut().unwrap().execution = execution;
+        assert!(fixture.backend.pending_compute.is_empty());
+        fixture.finish(None);
+    }
+
+    #[test]
+    fn producer_launch_active_three_binding_requires_restored_ready_backing() {
+        let mut fixture = ScriptedActiveProducerFixtureV1::new(true);
+        let consumer = fixture.submit().unwrap();
+        assert_eq!(
+            fixture.backend.poll_v1(fixture.producer).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        fixture
+            .backend
+            .allocations
+            .get_mut(&fixture.allocations[2])
+            .unwrap()
+            .sdma_initialized = false;
+        assert_eq!(
+            fixture.backend.poll_v1(consumer).unwrap(),
+            BackendPollV1::Pending
+        );
+        assert!(
+            matches!(fixture.backend.flush_stream_v1(fixture.launch.stream),
+            Err(RuntimeBackendFailureV1::Quiescent(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Native)
+        );
+        assert_eq!(
+            fixture.backend.poll_v1(consumer).unwrap(),
+            BackendPollV1::Failed { code: -1 }
+        );
+        assert!(fixture.backend.active.is_none());
+        fixture
+            .backend
+            .allocations
+            .get_mut(&fixture.allocations[2])
+            .unwrap()
+            .sdma_initialized = true;
+        fixture.finish(Some(consumer));
+    }
+
+    #[test]
+    fn producer_launch_active_three_binding_public_rejections_preserve_custody() {
+        let mut fixture = ScriptedActiveProducerFixtureV1::new(true);
+        let next = fixture.backend.next_handle;
+        let ordinary = BackendLaunchV1 {
+            dependencies: &[fixture.event],
+            ..fixture.launch.borrowed()
+        };
+        assert!(matches!(fixture.backend.submit_v1(ordinary),
+            Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch));
+        assert_eq!(fixture.backend.next_handle, next);
+        for allocation in [fixture.allocations[2], fixture.allocations[1]] {
+            fixture
+                .backend
+                .allocations
+                .get_mut(&allocation)
+                .unwrap()
+                .sdma_storage = KfdRuntimeSdmaStorageV1::ComputeInFlight(fixture.producer + 100);
+            assert!(matches!(fixture.submit(),
+                Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch));
+            fixture
+                .backend
+                .allocations
+                .get_mut(&allocation)
+                .unwrap()
+                .sdma_storage = KfdRuntimeSdmaStorageV1::ComputeInFlight(fixture.producer);
+            assert_eq!(fixture.backend.next_handle, next);
+        }
+        fixture.launch.bindings[2].region.allocation = fixture.allocations[0];
+        assert!(matches!(fixture.submit(),
+            Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch));
+        fixture.launch.bindings[2].region.allocation = fixture.allocations[3];
+        for binding in &mut fixture.launch.bindings {
+            binding.region.byte_len -= 4;
+        }
+        assert!(matches!(fixture.submit(),
+            Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch));
+        for binding in &mut fixture.launch.bindings {
+            binding.region.byte_len += 4;
+        }
+        assert_eq!(fixture.backend.next_handle, next);
+        assert!(fixture.backend.pending_compute.is_empty());
+        assert!(fixture.backend.compute_dependency_retain_counts.is_empty());
+        assert_eq!(
+            fixture.backend.compute_module_retain_counts[&fixture.module],
+            1
+        );
+        assert_eq!(
+            fixture.backend.active.as_ref().unwrap().id,
+            fixture.producer
+        );
+        fixture.finish(None);
+    }
+
+    #[cfg(feature = "hardware-qualification")]
+    #[test]
+    fn producer_launch_active_three_binding_rechecks_final_authority() {
+        let mut fixture = ScriptedActiveProducerFixtureV1::new(true);
+        let admitted =
+            crate::qualification_gfx942_r57_n3_v1::admit_gfx942_r57_n3_qualification_v1().unwrap();
+        let observation = admitted.observation_v1();
+        // The exact native gate must reject this synthetic fixture's artifact.
+        fixture.backend.launch_gate = KfdRuntimeLaunchGateV1::ExactGfx942R57N3(admitted);
+        let destination = fixture.allocations[3];
+        let bytes = fixture.backend.allocations[&destination].bytes.clone();
+        let consumer = fixture.submit().unwrap();
+        assert_eq!(observation.authorization_calls_v1(), 0);
+        fixture.backend.release_event_v1(fixture.event).unwrap();
+        assert_eq!(
+            fixture.backend.poll_v1(consumer).unwrap(),
+            BackendPollV1::Pending
+        );
+        assert_eq!(observation.authorization_calls_v1(), 0);
+        assert!(
+            matches!(fixture.backend.flush_stream_v1(fixture.launch.stream),
+            Err(RuntimeBackendFailureV1::Quiescent(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Native)
+        );
+        assert_eq!(observation.authorization_calls_v1(), 1);
+        assert_eq!(
+            fixture.backend.poll_v1(consumer).unwrap(),
+            BackendPollV1::Failed { code: -1 }
+        );
+        assert!(fixture.backend.active.is_none());
+        assert!(fixture.backend.pending_compute.is_empty());
+        assert!(!fixture.backend.submissions[&consumer].profile_dispatch_published);
+        assert_eq!(fixture.backend.allocations[&destination].bytes, bytes);
+        assert!(matches!(
+            fixture.backend.allocations[&destination].sdma_storage,
+            KfdRuntimeSdmaStorageV1::H2dReady(_)
+        ));
+        assert_eq!(
+            fixture
+                .backend
+                .last_launch_performance_v1()
+                .unwrap()
+                .user_data_materializations(),
+            0
+        );
+        fixture.finish(Some(consumer));
+    }
+
+    #[test]
+    fn producer_launch_active_three_binding_parent_terminal_retains_both_rosters() {
+        let mut fixture = ScriptedActiveProducerFixtureV1::new(true);
+        let consumer = fixture.submit().unwrap();
+        fixture.backend.release_event_v1(fixture.event).unwrap();
+        fixture
+            .backend
+            .allocations
+            .get_mut(&fixture.allocations[0])
+            .unwrap()
+            .sdma_storage = KfdRuntimeSdmaStorageV1::ComputeInFlight(fixture.producer + 100);
+        assert!(matches!(
+            fixture.backend.poll_v1(consumer),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        assert!(fixture.backend.terminal);
+        assert!(matches!(
+            fixture.backend.terminal_sdma_custody,
+            Some(KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentInputs(_))
+        ));
+        assert_eq!(
+            &*fixture.backend.pending_compute[&consumer].explicit_success_dependencies,
+            &[fixture.producer]
+        );
+        assert_eq!(
+            fixture.backend.compute_dependency_retain_counts[&fixture.producer],
+            1
+        );
+        assert_eq!(
+            fixture.backend.compute_module_retain_counts[&fixture.module],
+            2
+        );
+        assert_eq!(fixture.backend.compute_completion_reservations, 2);
+        assert_eq!(
+            fixture.backend.pending_compute_streams[&fixture.launch.stream],
+            [consumer]
+        );
+        for (submission, stream, allocations) in [
+            (
+                fixture.producer,
+                fixture.producer_stream,
+                &fixture.allocations[..3],
+            ),
+            (
+                consumer,
+                fixture.launch.stream,
+                &[
+                    fixture.allocations[2],
+                    fixture.allocations[1],
+                    fixture.allocations[3],
+                ][..],
+            ),
+        ] {
+            for allocation in allocations {
+                assert!(fixture.backend.allocation_retains_exact_owner_v1(
+                    *allocation,
+                    RuntimeAllocationCustodyOwnerV1 {
+                        submission,
+                        stream,
+                        kind: RuntimeAllocationCustodyKindV1::Compute,
+                    }
+                ));
+            }
+        }
+        assert!(matches!(
+            fixture.backend.cancel_v1(consumer),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        let driver = fixture.backend.scripted_sdma.as_ref().unwrap();
+        assert_eq!(driver.live_owner_count(), 4);
+        assert_eq!(driver.unexpected_drops(), 0);
+        disarm_scripted_drop_after_inspection_v1(&mut fixture.backend);
+    }
+
+    #[test]
+    fn producer_launch_active_three_binding_failed_receipts_never_publish_child() {
+        for cross_stream in [false, true] {
+            for observe_only in [false, true] {
+                for quiescent in [false, true] {
+                    let mut fixture = ScriptedActiveProducerFixtureV1::new(cross_stream);
+                    let consumer = fixture.submit().unwrap();
+                    assert_eq!(
+                        fixture.backend.poll_v1(fixture.producer).unwrap(),
+                        BackendPollV1::Succeeded
+                    );
+                    // Inject completion-record outcomes only after real scripted
+                    // owner restoration. This is not a native fault witness.
+                    fixture
+                        .backend
+                        .submissions
+                        .get_mut(&fixture.producer)
+                        .unwrap()
+                        .status = BackendPollV1::Failed { code: -9 };
+                    if quiescent {
+                        fixture
+                            .backend
+                            .quiescent_sdma_submissions
+                            .insert(fixture.producer);
+                    }
+                    if observe_only {
+                        assert_eq!(
+                            fixture.backend.poll_v1(consumer).unwrap(),
+                            BackendPollV1::Failed { code: -1 }
+                        );
+                    } else {
+                        assert!(
+                            matches!(fixture.backend.flush_stream_v1(fixture.launch.stream),
+                            Err(RuntimeBackendFailureV1::Quiescent(error))
+                                if error.kind() == KfdRuntimeBackendErrorKindV1::Native)
+                        );
+                    }
+                    assert_eq!(
+                        fixture.backend.poll_v1(consumer).unwrap(),
+                        BackendPollV1::Failed { code: -1 }
+                    );
+                    assert!(!fixture.backend.submissions[&consumer].profile_dispatch_published);
+                    assert!(fixture.backend.active.is_none());
+                    assert!(fixture.backend.pending_compute.is_empty());
+                    assert!(fixture.backend.allocation_custody.is_empty());
+                    assert!(fixture.backend.compute_dependency_retain_counts.is_empty());
+                    assert!(fixture.backend.compute_module_retain_counts.is_empty());
+                    assert_eq!(fixture.backend.compute_completion_reservations, 0);
+                    fixture
+                        .backend
+                        .quiescent_sdma_submissions
+                        .remove(&fixture.producer);
+                    fixture
+                        .backend
+                        .submissions
+                        .get_mut(&fixture.producer)
+                        .unwrap()
+                        .status = BackendPollV1::Succeeded;
+                    fixture.finish(Some(consumer));
+                }
+            }
+        }
     }
 
     #[test]

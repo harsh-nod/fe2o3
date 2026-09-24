@@ -1,5 +1,23 @@
 # Current Runtime Swarm Work Orders
 
+Latest active-producer CPU qualification (2026-09-24): the
+[persistent input-admission packet](evidence/dev-active-producer-cpu-2026-09-24/README.md)
+passes all thirteen stages. GNU/musl each pass 35 focused and 1,400 runtime tests,
+with twenty hardware-only ignores; all 46 runtime doctests, default-feature
+checks, formatting, strict Clippy and 3,960 unchanged source inputs pass.
+Exact producer-aware consumers can retain active three-binding Read owners as
+deferred dependencies; destination readiness, complete owner rosters, restored
+input backing and final artifact authority remain required before publication.
+No new queue, pending registry, materialization fallback or unsafe implementation
+is added. Eight new tests cover success, cancellation, rejected custody/shapes,
+restoration failure, final-authority rejection, terminal retention and failed
+dependency receipts. The initial assertion failure and its diagnostic rerun
+remain recorded. Corrected replay and ten evidence-test groups pass; exact-owned
+cleanup removes 1,041,485,824 allocated bytes. Native queued/published producer
+witnesses, production refinement, generated graphs, aggregate memory and matched
+performance remain open. Native R125, Admission R118B C1/C2/C3, Resources R116/V3,
+A1/A2 and #182 acceptance are unchanged.
+
 Latest typed-launch CPU qualification (2026-09-24): the
 [producer-aware launch packet](evidence/dev-producer-aware-launch-cpu-2026-09-24/README.md)
 passes all seventeen stages. GNU/musl each pass 27 focused, 1,392 runtime,

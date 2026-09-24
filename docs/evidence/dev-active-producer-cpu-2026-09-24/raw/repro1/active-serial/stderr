@@ -1,0 +1,5 @@
+
+thread 'kfd_backend::tests::producer_launch_active_three_binding_rechecks_final_authority' (4020392) panicked at crates/fe2o3-runtime/src/kfd_backend.rs:16219:9:
+assertion failed: matches!(fixture.backend.allocations[&destination].sdma_storage,
+    KfdRuntimeSdmaStorageV1::Device(_))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

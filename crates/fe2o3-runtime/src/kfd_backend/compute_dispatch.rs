@@ -36,17 +36,17 @@ pub(super) fn three_binding_requires_persistent_admission_v1(
         })
 }
 
-pub(super) fn three_binding_persistent_compute_admission_v1(
+fn three_binding_persistent_compute_shape_v1(
     semantic_launch: KfdRuntimeSemanticLaunchV1,
     bindings: &[BackendBindingV1],
     stream_device: u64,
     allocations: &AllocationTableV1,
-) -> Option<ThreeBindingPersistentComputeAdmissionV1> {
+) -> bool {
     let [a, b, c] = bindings else {
-        return None;
+        return false;
     };
     if a.region.byte_len != b.region.byte_len || a.region.byte_len != c.region.byte_len {
-        return None;
+        return false;
     }
     if [a.region.access, b.region.access, c.region.access]
         != [
@@ -59,44 +59,68 @@ pub(super) fn three_binding_persistent_compute_admission_v1(
         || b.region.allocation == c.region.allocation
         || semantic_launch != KfdRuntimeSemanticLaunchV1::Ordinary
     {
-        return None;
+        return false;
     }
-    let admit = |index: usize, binding: &BackendBindingV1| {
-        let allocation = allocations.get(&binding.region.allocation)?;
-        let logical_bytes = u64::try_from(allocation.bytes.len()).ok()?;
-        let full_extent = allocation.device == stream_device
+    bindings.iter().all(|binding| {
+        let Some(allocation) = allocations.get(&binding.region.allocation) else {
+            return false;
+        };
+        let Ok(logical_bytes) = u64::try_from(allocation.bytes.len()) else {
+            return false;
+        };
+        allocation.device == stream_device
             && allocation.kind == RuntimeMemoryKindV1::DeviceLocal
             && allocation.sdma_backed
             && allocation.sdma_initialized
             && allocation.native_dirty.is_empty()
             && logical_bytes != 0
             && binding.region.byte_offset == 0
-            && binding.region.byte_len == logical_bytes;
-        if !full_extent {
-            return None;
+            && binding.region.byte_len == logical_bytes
+    })
+}
+
+fn three_binding_persistent_ready_source_v1(
+    allocation: &AllocationRecordV1,
+) -> Option<PersistentFullRangeComputeSourceV1> {
+    let logical_bytes = u64::try_from(allocation.bytes.len()).ok()?;
+    match &allocation.sdma_storage {
+        KfdRuntimeSdmaStorageV1::H2dReady(ready)
+            if !allocation.sdma_shadow_dirty
+                && allocation.content_sha256 == Some(ready.owner.authenticated_sha256())
+                && ready.owner.byte_len() == logical_bytes
+                && ready.owner.physical_byte_len() == logical_bytes =>
+        {
+            Some(PersistentFullRangeComputeSourceV1::AuthenticatedH2d)
         }
-        let source = match (&allocation.sdma_storage, index) {
-            (KfdRuntimeSdmaStorageV1::H2dReady(ready), 0..=2)
-                if !allocation.sdma_shadow_dirty
-                    && allocation.content_sha256 == Some(ready.owner.authenticated_sha256())
-                    && ready.owner.byte_len() == logical_bytes
-                    && ready.owner.physical_byte_len() == logical_bytes =>
-            {
-                PersistentFullRangeComputeSourceV1::AuthenticatedH2d
-            }
-            (KfdRuntimeSdmaStorageV1::PersistentReplay(input), 0..=2)
-                if input.is_fully_initialized() =>
-            {
-                PersistentFullRangeComputeSourceV1::RetainedControlReplay
-            }
-            #[cfg(test)]
-            (KfdRuntimeSdmaStorageV1::Device(_), 0..=2)
-                if allocation.scripted_three_binding_replay =>
-            {
-                PersistentFullRangeComputeSourceV1::RetainedControlReplay
-            }
-            _ => return None,
-        };
+        KfdRuntimeSdmaStorageV1::PersistentReplay(input) if input.is_fully_initialized() => {
+            Some(PersistentFullRangeComputeSourceV1::RetainedControlReplay)
+        }
+        #[cfg(test)]
+        KfdRuntimeSdmaStorageV1::Device(_) if allocation.scripted_three_binding_replay => {
+            Some(PersistentFullRangeComputeSourceV1::RetainedControlReplay)
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn three_binding_persistent_compute_admission_v1(
+    semantic_launch: KfdRuntimeSemanticLaunchV1,
+    bindings: &[BackendBindingV1],
+    stream_device: u64,
+    allocations: &AllocationTableV1,
+) -> Option<ThreeBindingPersistentComputeAdmissionV1> {
+    if !three_binding_persistent_compute_shape_v1(
+        semantic_launch,
+        bindings,
+        stream_device,
+        allocations,
+    ) {
+        return None;
+    }
+    let admit = |index: usize| {
+        let binding = &bindings[index];
+        let source =
+            three_binding_persistent_ready_source_v1(allocations.get(&binding.region.allocation)?)?;
         Some(PersistentFullRangeComputeAdmissionV1 {
             allocation: binding.region.allocation,
             access: binding.region.access,
@@ -104,7 +128,7 @@ pub(super) fn three_binding_persistent_compute_admission_v1(
         })
     };
     Some(ThreeBindingPersistentComputeAdmissionV1 {
-        bindings: [admit(0, a)?, admit(1, b)?, admit(2, c)?],
+        bindings: [admit(0)?, admit(1)?, admit(2)?],
     })
 }
 pub(super) fn persistent_control_is_reused_v1(
@@ -414,6 +438,7 @@ impl KfdRuntimeBackendV1 {
         &self,
         launch: &BackendLaunchV1<'_>,
         dependencies: &[u64],
+        input_admission: ComputeInputAdmissionV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if launch.explicit_kernarg.len() > MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1 {
             return Err(Self::capacity(
@@ -469,6 +494,8 @@ impl KfdRuntimeBackendV1 {
         ) && self
             .three_binding_persistent_admission_for_launch_v1(*launch)
             .is_none()
+            && (input_admission != ComputeInputAdmissionV1::ExactProducers
+                || !self.three_binding_producer_inputs_are_deferred_v1(*launch, dependencies))
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -490,6 +517,73 @@ impl KfdRuntimeBackendV1 {
             ));
         }
         Ok(())
+    }
+
+    fn three_binding_producer_inputs_are_deferred_v1(
+        &self,
+        launch: BackendLaunchV1<'_>,
+        dependencies: &[u64],
+    ) -> bool {
+        let Some(&device) = self.streams.get(&launch.stream) else {
+            return false;
+        };
+        if !three_binding_persistent_compute_shape_v1(
+            launch.semantic_launch,
+            launch.bindings,
+            device,
+            &self.allocations,
+        ) {
+            return false;
+        }
+        launch.bindings.iter().enumerate().all(|(index, binding)| {
+            let allocation = &self.allocations[&binding.region.allocation];
+            if three_binding_persistent_ready_source_v1(allocation).is_some() {
+                return true;
+            }
+            let KfdRuntimeSdmaStorageV1::ComputeInFlight(owner) = &allocation.sdma_storage else {
+                return false;
+            };
+            if index == 2 || !dependencies.contains(owner) {
+                return false;
+            }
+            let Some(active) = self.active_compute_submission_v1(*owner) else {
+                return false;
+            };
+            if active.id != *owner || self.streams.get(&active.stream) != Some(&device) {
+                return false;
+            }
+            let admissions = match active.execution.as_ref() {
+                Some(
+                    ActiveComputeExecutionV1::ThreeBindingPersistentPrepared { admissions, .. }
+                    | ActiveComputeExecutionV1::ThreeBindingPersistent { admissions, .. },
+                ) => admissions,
+                #[cfg(test)]
+                Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
+                    admissions,
+                    ..
+                }) => admissions,
+                _ => return false,
+            };
+            // These receipts establish eligibility to wait, never ready backing.
+            active.allocations.len() == admissions.len()
+                && active.allocations.contains(&binding.region.allocation)
+                && admissions.iter().all(|admission| {
+                    active.allocations.contains(&admission.allocation)
+                        && self.allocation_retains_exact_owner_v1(
+                            admission.allocation,
+                            RuntimeAllocationCustodyOwnerV1 {
+                                submission: *owner,
+                                stream: active.stream,
+                                kind: RuntimeAllocationCustodyKindV1::Compute,
+                            },
+                        )
+                })
+                && active.allocations.iter().all(|allocation| {
+                    admissions
+                        .iter()
+                        .any(|admission| admission.allocation == *allocation)
+                })
+        })
     }
 
     pub(super) fn finish_persistent_compute_poll_and_recycle_v1(
@@ -1783,12 +1877,22 @@ impl KfdRuntimeBackendV1 {
             // ordered predecessor therefore does not fail this launch unless
             // the same identity also appeared in the explicit dependency set.
         }
+        let three_binding_admission =
+            self.three_binding_persistent_admission_for_launch_v1(pending.launch.borrowed());
+        if three_binding_requires_persistent_admission_v1(
+            pending.launch.semantic_launch,
+            &pending.launch.bindings,
+            &self.allocations,
+        ) && three_binding_admission.is_none()
+        {
+            return Ok(
+                self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 })
+            );
+        }
         let persistent_selected = self
             .persistent_full_range_admission_for_launch_v1(pending.launch.borrowed())
             .is_some()
-            || self
-                .three_binding_persistent_admission_for_launch_v1(pending.launch.borrowed())
-                .is_some();
+            || three_binding_admission.is_some();
         if persistent_selected && self.has_live_generated_native_v1() {
             self.pending_compute.insert(pending.id, pending);
             return Ok(BackendPollV1::Pending);
@@ -2021,6 +2125,11 @@ impl KfdRuntimeBackendV1 {
         predecessor: u64,
     ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if !self.compute_pipeline.has_successor_capacity()
+            || three_binding_requires_persistent_admission_v1(
+                pending.launch.semantic_launch,
+                &pending.launch.bindings,
+                &self.allocations,
+            )
             || !early_pipeline_launch_is_admitted_v1(
                 pending.launch.semantic_launch,
                 &pending.launch.bindings,

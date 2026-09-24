@@ -714,11 +714,13 @@ The additive [producer-aware typed-launch integration](runtime-producer-aware-ty
 extends ordinary same-device launches and the existing async owner with exact
 event/producer pairs, mixed stable/pending input custody and producer-first
 logical reconciliation. This is not protected generated execution or new
-atomic/collective authority. The R57 persistent backend still rejects consumer
-admission after the producer takes shared backing into active-compute custody;
-queued-producer support must not be reported as active-producer support.
-New native witnesses and mixed-transaction/reconciliation correspondence remain
-required. This integration does not close G2, G6, G7 or A1/A2.
+atomic/collective authority. Its initial CPU packet covers queued-producer
+support, not active-producer support. The subsequent
+[active-producer extension](runtime-producer-aware-typed-launch-v1.md#deferred-active-inputs)
+admits exact active three-binding input owners as deferred dependencies while
+retaining genuine ready-backing and artifact checks before publication. New
+native queued/published witnesses and mixed-transaction/reconciliation
+correspondence remain required. Neither integration closes G2, G6, G7 or A1/A2.
 
 ### G1: API and ownership
 

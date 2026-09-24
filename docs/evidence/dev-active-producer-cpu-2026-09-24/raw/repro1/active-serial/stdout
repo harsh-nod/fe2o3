@@ -1,0 +1,8 @@
+
+running 8 tests
+test kfd_backend::tests::producer_launch_active_three_binding_cancellation_keeps_parent_owners ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_failed_receipts_never_publish_child ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_inputs_wait_without_materialization ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_parent_terminal_retains_both_rosters ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_public_rejections_preserve_custody ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_rechecks_final_authority ... 

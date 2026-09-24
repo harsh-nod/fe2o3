@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-active-producer-cpu-2026-09-24/qualify.py",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-active-producer-cpu-2026-09-24/raw/cpu2",
+    "--verify"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790288148761420220,
+  "group_absent": true,
+  "pid": 4131881,
+  "started_ns": 1790288148137207553,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "c16d388e1c97fd82aac38926e067f3e513859bf03e1eb50c3c733fd276514be5",
+  "timeout_seconds": 900
+}

@@ -91,17 +91,41 @@ passes all seventeen stages, including 27 new focused tests and the complete
 runtime ignores remain; the packet records its collector failure and subsequent
 non-deleting evidence recovery separately from the successful test campaign.
 
-The existing R57 three-binding persistent DeviceLocal admission still requires
-ready backing. A consumer submitted after its producer moves shared bindings
-into `ComputeInFlight` is rejected before pending acceptance. Queued-producer
-admission is not active-producer admission, and this packet does not remove
-that backend restriction. The next native work must qualify both separately
-without weakening artifact authority or materializing a consumer early.
+The initial CPU packet does not qualify active-producer admission. Its R57
+three-binding persistent DeviceLocal backend requires ready backing and rejects
+a consumer after the producer moves shared bindings into `ComputeInFlight`.
+The subsequent [active-producer extension](evidence/dev-active-producer-cpu-2026-09-24/README.md)
+adds the distinct deferred eligibility below. Both queued and native published
+producer cases still require separate hardware witnesses, without weakening
+artifact authority or materializing a consumer early.
 
 Existing journal acquire/release correspondence applies to its individual
 batch operations. It does not prove the new mixed Context transaction, original
 binding coverage, shared reconciliation walker, or async request carriage.
 Those composition proofs remain required; passing CPU tests cannot supply them.
+
+## Deferred Active Inputs
+
+The existing authenticated dependency collector carries a private admission mode
+to the shared compute preflight. Ordinary event-only launches retain their ready
+input requirement. Only exact producer-aware requests may defer readiness for
+the two Read bindings of the existing full-extent, distinct-allocation,
+initialized DeviceLocal R/R/W path; the destination must remain ready.
+
+A deferred allocation must name its actual active producer in the explicit
+success dependency roster. The producer must be on the same device with the
+existing three-binding prepared or published execution, matching allocation
+rosters, and exact retained compute owners. These facts establish permission to
+wait, not ready backing, publication authority or producer success. No separate
+pending registry or synthetic ready capability is constructed.
+
+After explicit dependencies and stream ordering settle, the backend recomputes
+the original ready admission before staging. A missing restored input settles
+the unpublished child as failed. Persistent candidates cannot take the ordinary
+early-successor path or fall back to user-data materialization. The existing
+artifact gate still authorizes the final snapshot before owner extraction.
+Unknown parent outcomes retain both parent and child custody and seal the
+backend; cancellation of an unpublished child does not release parent owners.
 
 ## Next Qualification
 
