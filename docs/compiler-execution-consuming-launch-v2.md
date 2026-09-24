@@ -80,15 +80,19 @@ RSS, kernel-memory, scheduler, mutex latency or wall-time guarantees.
 
 ## Remaining Production Work
 
-**Known launch prerequisite:** source review identified a conflict in the gated
-cross-process namespace observation. The exact profile requires a nondumpable
-child and an unprivileged supervisor, but opening `/proc/<child>/ns/*` requires
+**Known launch prerequisite:** the gated cross-process namespace observation
+conflicts with the locked profile. It requires a nondumpable child and an
+unprivileged supervisor, but opening `/proc/<child>/ns/*` requires
 ptrace-style access. Linux applies that check in its
 [namespace-link implementation](https://github.com/torvalds/linux/blob/master/fs/proc/namespaces.c).
-The expected permission refusal still needs a dedicated isolated reproduction
-and a reviewed observation mechanism that preserves the locked profile. Do not
-make the child dumpable, retain ptrace privileges or bypass the check to claim
-success. Existing self-process profile fixtures do not exercise this boundary.
+An isolated Ubuntu 24.04/Linux 6.8 diagnostic reproduced `EACCES` (13) with
+UID/GID 65533, securebits 239, empty capability sets, nondumpability and
+no-new-privileges. Parent and child self-observations succeeded and matched;
+the parent's child-namespace open failed. The child was reaped and isolation
+removed. This is an OS-boundary diagnostic, not a complete native launch test.
+A reviewed observation mechanism preserving the locked profile is still required.
+Do not make the child dumpable, retain ptrace privileges or bypass the check to
+claim success. Existing self-process profile fixtures do not exercise this boundary.
 
 The deployed issuer and service still use the previous family. Native inherited
 admission, readiness production, service/durable handlers, independent broker
