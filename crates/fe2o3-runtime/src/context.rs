@@ -22,6 +22,8 @@ mod peer_batch;
 pub use peer_batch::*;
 mod peer_custody;
 use peer_custody::{PreparedPeerSubmissionV1, ScalarPeerCopyRootV1};
+mod peer_directed;
+pub use peer_directed::*;
 mod peer_segments;
 pub use peer_segments::*;
 mod unpublished;

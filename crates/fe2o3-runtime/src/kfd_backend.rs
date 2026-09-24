@@ -95,6 +95,7 @@ mod directional_wait_diagnostic;
 mod drain_capture;
 mod xgmi_batch;
 mod xgmi_batch_diagnostic;
+mod xgmi_directed;
 mod xgmi_progress;
 mod xgmi_segments;
 mod xgmi_segments_diagnostic;
@@ -7684,6 +7685,7 @@ struct XgmiLogicalResourceCountsV1 {
     directional_active: usize,
     stream_owners: usize,
     allocation_owners: usize,
+    directed_roots: usize,
 }
 
 impl XgmiLogicalResourceCountsV1 {
@@ -7703,6 +7705,7 @@ impl XgmiLogicalResourceCountsV1 {
             && self.directional_active == 0
             && self.stream_owners == 0
             && self.allocation_owners == 0
+            && self.directed_roots == 0
     }
 }
 
@@ -7760,6 +7763,7 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     dependency_retain_counts: HashMap<u64, usize>,
     dependency_depths: HashMap<u64, usize>,
     dependency_waiters: HashMap<u64, Vec<u64>>,
+    directed_roots: HashMap<u64, xgmi_directed::Root>,
 }
 
 fn settle_xgmi_queue_retirement<Q, E>(
@@ -7877,6 +7881,7 @@ impl fmt::Debug for KfdNativeXgmiRuntimeBackendV1 {
                 &self.event_submission_retain_counts.len(),
             )
             .field("dependency_depths", &self.dependency_depths.len())
+            .field("directed_roots", &self.directed_roots.len())
             .field("terminal", &self.terminal)
             .finish_non_exhaustive()
     }
@@ -9308,6 +9313,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             dependency_retain_counts: HashMap::new(),
             dependency_depths: HashMap::new(),
             dependency_waiters: HashMap::new(),
+            directed_roots: HashMap::new(),
         })
     }
 
@@ -10219,6 +10225,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             directional_active: self.active_by_direction.iter().sum(),
             stream_owners: self.active_stream_owners.len(),
             allocation_owners: self.active_allocation_owners.len(),
+            directed_roots: self.directed_roots.len(),
         }
     }
 
@@ -10635,30 +10642,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         &mut self,
         submission: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
-        self.require_live()?;
-        if self.active.contains_key(&submission)
-            || self
-                .event_submission_retain_counts
-                .contains_key(&submission)
-            || self.dependency_retain_counts.contains_key(&submission)
-        {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Busy,
-                "XGMI submission remains retained",
-            ));
-        }
-        if !self.submissions.contains_key(&submission) {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::UnknownHandle,
-                "unknown XGMI submission",
-            ));
-        }
-        if !self.dependency_depths.contains_key(&submission) {
-            return Err(self.terminal_error("XGMI submission lost dependency-depth custody"));
-        }
-        self.submissions.remove(&submission);
-        self.dependency_depths.remove(&submission);
-        Ok(())
+        xgmi_directed::release_submission(self, submission)
     }
 
     fn record_event_v1(
@@ -11323,6 +11307,7 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
             || !self.dependency_retain_counts.is_empty()
             || !self.dependency_depths.is_empty()
             || !self.dependency_waiters.is_empty()
+            || !self.directed_roots.is_empty()
             || self.completion_reservations != 0
             || self.ready_by_direction.iter().any(|ids| !ids.is_empty())
             || self
@@ -23676,7 +23661,7 @@ mod tests {
         );
 
         assert!(XgmiLogicalResourceCountsV1::default().permits_shutdown());
-        for occupied in 0..15 {
+        for occupied in 0..16 {
             let mut resources = XgmiLogicalResourceCountsV1::default();
             match occupied {
                 0 => resources.streams = 1,
@@ -23694,6 +23679,7 @@ mod tests {
                 12 => resources.directional_active = 1,
                 13 => resources.stream_owners = 1,
                 14 => resources.allocation_owners = 1,
+                15 => resources.directed_roots = 1,
                 _ => unreachable!(),
             }
             assert!(!resources.permits_shutdown());

@@ -1,5 +1,19 @@
 # Current Runtime Swarm Work Orders
 
+Latest directed backend checkpoint (2026-09-23): the
+[directed scalar SPI packet](evidence/dev-directed-scalar-peer-cpu-2026-09-23/README.md)
+adds explicit success-gated native XGMI admission with exact device/region/stream
+and event-to-producer matching. Provisional roots precede shared admission;
+directed metadata survives completion until guarded release. Progress uses the
+existing one-action selector without changing FIFO readiness or legacy/Worker
+contracts. GNU and musl each pass 1,285 runtime tests with twenty hardware-only
+ignores; 46 doctests, formatting, strict all-target Clippy and 3,810 unchanged
+inputs pass. Two independent code reviews find no remaining correctness or
+custody findings. Context pending sources still reject: producer reservations,
+retained terminal observations, producer-first reconciliation and bounded async
+integration are next, followed by native chains. No native, formal-refinement,
+performance or A1/A2 acceptance is added; broader lane checkpoints are unchanged.
+
 Latest Context checkpoint (2026-09-23): the
 [scalar dependency-custody packet](evidence/dev-context-peer-custody-cpu-2026-09-23/README.md)
 retains exact scalar operation provenance and complete event-to-producer rosters
