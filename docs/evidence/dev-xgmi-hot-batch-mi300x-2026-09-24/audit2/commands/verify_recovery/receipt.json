@@ -1,0 +1,24 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-xgmi-hot-batch-mi300x-2026-09-24/verify_recovery.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790266467407002616,
+  "group_absent": true,
+  "pid": 606708,
+  "started_ns": 1790266465378291753,
+  "stderr_sha256": "b112370ae7461f2a79505704ecb5370f7c4747169ea3ee560ef62d3cbae48a91",
+  "stdin_sha256": null,
+  "stdout_sha256": "537607a0d5e1c9752b2057909f547d96d56d08c86825ccf578a2fc1496b43f76",
+  "timeout_seconds": 900
+}

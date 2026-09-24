@@ -1,0 +1,10 @@
+{
+  "exclusive_reservation": false,
+  "failures": [
+    "RuntimeError('native failed')",
+    "collection: RuntimeError('inventory failed')",
+    "remote receipts retained for recovery"
+  ],
+  "owned_cleanup": false,
+  "performance_acceptance": false
+}

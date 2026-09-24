@@ -63,3 +63,22 @@ each process/direction summary separately, check every buffer and explicit
 teardown, and remove only its owned resources. No new Verus proof, whole-runtime
 refinement, aggregate memory bound, A7 acceptance or HIP/HSA parity follows from
 these benchmark changes.
+
+## Currentness Cost Boundary
+
+Source inspection of the steady-state persistent-hot route shows that facade
+enqueues install deferred logical custody without discovering host topology.
+The aggregate wait already shares one opening and one closing full-host
+discovery across its complete directional roster, independent of depth. The
+full-currentness pair helper also shares each discovery between both endpoints.
+Thus deeper batches amortize fixed observation cost; removing an imagined
+per-enqueue discovery does not offer another optimization.
+
+The existing `peer_copy_segments` route is a separate wider completion unit:
+one immutable segment list, one source/destination pair and one final logical
+completion. It is an appropriate next amortization control. A distinct-buffer
+multi-wave plan would need its own bounded cursor/custody contract, retained
+roots, per-publication fences, no intermediate success and final full close.
+Neither design can silently reuse a previous batch's topology observation or
+change ordinary aggregate completion semantics. This is a source-inspection
+finding and proposed direction, not a new proof or performance result.

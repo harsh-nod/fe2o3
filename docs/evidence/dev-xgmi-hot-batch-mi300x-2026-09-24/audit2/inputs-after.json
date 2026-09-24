@@ -1,0 +1,16 @@
+{
+  "PROTOCOL.md": "419caf06d8e95ec20bc6de2b25b30fea2e29f40dd91750dd71b0a07c9e2f7930",
+  "README.md": "f52154aba4ac55cfffabe290f3098a5122776d45a9c363bf2310c708eeafcb58",
+  "artifacts.json": "b55032e43c3ed318c72840faccefee118968102bf7e5dac9ae9713b918af3b3d",
+  "audit.py": "9de9a61dd7672b5f90f6a4b44dcdf54872624c6436b61c743eb781b8e2db952d",
+  "campaign.py": "a6b2f42beb687b82bc9f8207acc034df6003c598eb7dc8308447024ef421f940",
+  "native.py": "e71091bc83cbe9c254650479e68c3e3110d3d6ca7561cdc4a8fbaed9ba564302",
+  "package.py": "c83d5a05fb8baf8904eb4a9f49c8d5f07906762aa7ea0cfc5c07ad9e51583466",
+  "qualify.py": "ff97caf0159dee991c6827a7913e02659f0821b326fbdbfafb384a3604ca5416",
+  "recover.py": "5142c6182deb5a7ac418c01c006dacb64a95984e2bcb31f5a311f9b75c5196c2",
+  "test_campaign.py": "62ec7edad69b4f05a864beca0ced516659c8c0f8b474bad5b0d828e72538c931",
+  "test_package.py": "fa5f3282ae77f1ea1daefae989f53a145292ddaa89cd186894305d65b03a2fd5",
+  "test_verify.py": "dd0ea3848e9ee6a61263ca9d6df75e809f35d7860084e21fd4311f3b29cbc229",
+  "verify.py": "9e146af4578d82ae148b664c264090977e8d7558665b41a6ec72f6011c74637e",
+  "verify_recovery.py": "10c5a6b5f0da284dc05dc00327c690d2697b8fc8b8935acb65360b40ba3c9caa"
+}

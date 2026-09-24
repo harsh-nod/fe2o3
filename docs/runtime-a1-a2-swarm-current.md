@@ -1,5 +1,18 @@
 # Current Runtime Swarm Work Orders
 
+Latest recovered native evidence (2026-09-24): the
+[matched hot-batch attempt](evidence/dev-xgmi-hot-batch-mi300x-2026-09-24/README.md)
+is rejected by its strict controller gate after SSH timeout and temporary DNS
+failure. The remote controller completed all eighteen depth-1/16/32 trials on
+GPUs 5/6; its 134 successful commands, 108 strict endpoint observations and
+eighteen parsed result records were recovered byte-exactly and replayed. All
+three executed ELFs are retained. Separate recovery inventory, collection,
+owned removal and path/process absence pass. The original failure remains
+immutable, the strict verifier still rejects it, and recovered timings are
+excluded from accepted comparisons. Local cleanup reclaims 424,591,360 bytes.
+Next is a fresh strict campaign, not a parity or A7 claim. All accepted lane
+checkpoints and A1/A2 remain unchanged.
+
 Latest benchmark qualification (2026-09-24): the
 [matched hot-batch CPU packet](evidence/dev-xgmi-hot-batch-cpu-2026-09-24/README.md)
 qualifies all-slot HIP/HSA persistent-hot callbacks, the bounded KFD hot-only

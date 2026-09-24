@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I -B - create '{\"binding_sha256\":\"04a1c00bd9298442e399562f06a5d073b0948c94603ea04ab8b6cb167e02faed\",\"commit\":\"8dc128357ecd55e1ba4f2866eb075899481f9aa0\",\"path\":\"/home/harsh/fe2o3-hot-batch-20260924.4d44a001c70784d1\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790265170722457026,
+  "group_absent": true,
+  "pid": 388932,
+  "started_ns": 1790265170151511900,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": "cdb15746e78eddd0b8d69c6261a66398a7cc37e124e49843691782bad22af4f8",
+  "stdout_sha256": "ff7cbf3d5306950834721a67f83d856c30ca84b243ae11b67643f6be2015f97f",
+  "timeout_seconds": 120
+}

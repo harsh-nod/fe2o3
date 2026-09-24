@@ -1,0 +1,17 @@
+[
+  {
+    "path": "/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/native1/source",
+    "allocated_bytes": 96522240,
+    "absent": true
+  },
+  {
+    "path": "/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/native1/target",
+    "allocated_bytes": 315248640,
+    "absent": true
+  },
+  {
+    "path": "/home/harsh/.codex-tmp/fe2o3-hot-batch-20260924-feYb12D3/native1/build-source.tar.gz",
+    "allocated_bytes": 12820480,
+    "absent": true
+  }
+]

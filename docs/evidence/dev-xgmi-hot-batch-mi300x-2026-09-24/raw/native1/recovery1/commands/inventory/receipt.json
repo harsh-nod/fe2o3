@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I -B - inventory '{\"binding_sha256\":\"04a1c00bd9298442e399562f06a5d073b0948c94603ea04ab8b6cb167e02faed\",\"commit\":\"8dc128357ecd55e1ba4f2866eb075899481f9aa0\",\"path\":\"/home/harsh/fe2o3-hot-batch-20260924.4d44a001c70784d1\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790266100676101260,
+  "group_absent": true,
+  "pid": 543005,
+  "started_ns": 1790266099545763765,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": "cdb15746e78eddd0b8d69c6261a66398a7cc37e124e49843691782bad22af4f8",
+  "stdout_sha256": "9d23f8b3f406d955adc800c196d4fa9149052261437b006d737f80ee601b0e8a",
+  "timeout_seconds": 120
+}

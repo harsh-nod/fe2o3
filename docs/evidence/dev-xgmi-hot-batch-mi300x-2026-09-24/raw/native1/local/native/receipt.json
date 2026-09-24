@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I -B -c 'import hashlib, json, sys\nfrom pathlib import Path\ndef unique(pairs):\n    result = {}\n    for key, value in pairs:\n        if key in result:\n            raise RuntimeError(\"duplicate key\")\n        result[key] = value\n    return result\nmarker = json.loads(sys.argv[1], object_pairs_hook=unique)\nowned = Path(marker[\"path\"])\ndef ordinary(name):\n    path = owned / name\n    if path.is_symlink() or not path.is_file():\n        raise RuntimeError(\"ordinary bootstrap input required\")\n    return path.read_bytes()\nbinding_bytes = ordinary(\"binding.json\")\nif hashlib.sha256(binding_bytes).hexdigest() != marker[\"binding_sha256\"]:\n    raise RuntimeError(\"bootstrap binding digest\")\nbinding = json.loads(binding_bytes, object_pairs_hook=unique)\nraw = ordinary(\"native.py\")\nif hashlib.sha256(raw).hexdigest() != binding[\"payload\"][\"native.py\"]:\n    raise RuntimeError(\"bootstrap native digest\")\nsys.argv = [str(owned / \"native.py\"), \"run\", sys.argv[1]]\nexec(compile(raw, sys.argv[0], \"exec\"), {\"__name__\": \"__main__\", \"__file__\": sys.argv[0]})\n' '{\"binding_sha256\":\"04a1c00bd9298442e399562f06a5d073b0948c94603ea04ab8b6cb167e02faed\",\"commit\":\"8dc128357ecd55e1ba4f2866eb075899481f9aa0\",\"path\":\"/home/harsh/fe2o3-hot-batch-20260924.4d44a001c70784d1\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": null,
+  "error": null,
+  "exit": 255,
+  "finished_ns": 1790265636289495128,
+  "group_absent": true,
+  "pid": 388952,
+  "started_ns": 1790265171597691124,
+  "stderr_sha256": "17ea79bdd62043951381519626abab674c9965c3a71790776fa65a6e3be0633c",
+  "stdin_sha256": null,
+  "stdout_sha256": "c257b84157a57410aec651c9642b566215a17ff5fa5ad1c329e4eb9cd069cba5",
+  "timeout_seconds": 19446
+}
