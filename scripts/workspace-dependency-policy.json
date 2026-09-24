@@ -166,7 +166,8 @@
       "from": "fe2o3-verifier",
       "to": "fe2o3-kernel-opt",
       "kinds": [
-        "normal"
+        "normal",
+        "dev"
       ]
     },
     {

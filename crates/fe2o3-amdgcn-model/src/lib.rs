@@ -13,6 +13,7 @@ mod descriptor_capability_projection_v1;
 mod descriptor_capability_projection_v3;
 mod descriptor_physical_abi_v3;
 mod device_math;
+mod gfx942_complete_body_emission_v1;
 mod gfx942_complete_body_v1;
 mod gfx950;
 mod lowering;
@@ -33,6 +34,7 @@ pub use descriptor_physical_abi_v3::{
     ReplayedDescriptorPhysicalAbiV3, check_canonical_v12_descriptor_physical_abi_v3,
 };
 pub use device_math::*;
+pub use gfx942_complete_body_emission_v1::*;
 pub use gfx942_complete_body_v1::*;
 pub use gfx950::*;
 pub use lowering::*;

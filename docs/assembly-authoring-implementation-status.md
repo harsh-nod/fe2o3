@@ -1,5 +1,34 @@
 # Assembly authoring implementation status
 
+## Concurrent-main integration — 2026-09-24
+
+The [merged-tree checks](evidence/complete-body-native-abi-20260923.md#integration-with-concurrent-main--2026-09-24)
+pass 1,600 IR/model/example tests and focused backend filters; the fresh
+generator matches all five retained native inputs exactly. Tutorial suites
+pass 77/12/54/23 tests. An exact missing test-only dependency allowance is
+corrected and policy checks pass with 11 checker tests.
+
+Strict model Clippy is not clean on the merged tree: 37 diagnostics remain
+in eight unchanged peer files; no allowance suppresses them. The earlier
+renderer-only strict pass below is historical, not a merged-tree lint claim.
+Accepted original exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Complete-body renderer and native ABI — 2026-09-23
+
+The [static native qualification](evidence/complete-body-native-abi-20260923.md)
+adds bounded LLVM/assembly rendering and an independent ABI/CFG fixture.
+The final model/example gate passes 344 tests (21 ignored) and strict Clippy.
+Five generated profiles pass all ten O0/O3 native compilations and 352 mutation
+checks, including actual selector byte-28-to-s22 provenance.
+
+An initial O3 refusal exposed optimization-specific hidden metadata rosters;
+the final checker requires exact per-level rosters without relaxing the six
+explicit slots. No GPU, authenticated whole-body source or protected finalizer
+is admitted by this diagnostic mechanism. The
+[walkthrough](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/complete-body-native-abi-v1.md)
+shows the representation and its limits. M2/M5 advance; accepted original exits
+remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Actual checked gfx950 artifact observations — 2026-09-23
 
 The [read-only companion qualification](evidence/gfx950-checked-artifact-20260923.md)

@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tomllib
 import unittest
 
 
@@ -159,10 +160,11 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
                 self.assertEqual(expected, violations)
                 self.assertEqual(1, stats["internal_dependencies"])
 
-    def test_final_f_verifier_exceptions_are_exact_and_normal_only(self) -> None:
+    def test_final_f_verifier_exceptions_are_exact_and_kind_scoped(self) -> None:
         reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
         edges = ["fe2o3-kernel-opt", "fe2o3-kernel-analysis", "fe2o3-amdgcn-model"]
-        cases = [("fe2o3-verifier", target, kind, kind is None)
+        cases = [("fe2o3-verifier", target, kind, kind is None or
+                  (target == "fe2o3-kernel-opt" and kind == "dev"))
                  for target in edges for kind in (None, "dev", "build")]
         cases += [("fe2o3-verifier", target, None, False) for target in (
             "rustc-codegen-fe2o3", "fe2o3-runtime", "fe2o3-kir-sim")]
@@ -179,6 +181,22 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
                     self.assertIn(f"{source} [", violations[0])
                     self.assertIn(f"-> {target} [", violations[0])
                     self.assertIn(f"({kind or 'normal'};", violations[0])
+
+    def test_verifier_optimizer_test_edge_matches_declared_manifest(self) -> None:
+        root = CHECKER_PATH.parents[1]
+        manifest = tomllib.loads(
+            (root / "crates/fe2o3-verifier/Cargo.toml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {"workspace": True, "features": ["test-support"]},
+            manifest["dev-dependencies"]["fe2o3-kernel-opt"],
+        )
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        edges = [row for row in reviewed["allowed_dependency_edges"]
+                 if row["from"] == "fe2o3-verifier" and
+                 row["to"] == "fe2o3-kernel-opt"]
+        self.assertEqual([{"from": "fe2o3-verifier", "to": "fe2o3-kernel-opt",
+                           "kinds": ["normal", "dev"]}], edges)
 
     def test_rejects_exception_that_does_not_cross_a_forbidden_direction(self) -> None:
         invalid = policy()
