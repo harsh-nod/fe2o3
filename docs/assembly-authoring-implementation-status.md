@@ -1,5 +1,46 @@
 # Assembly authoring implementation status
 
+## Ordered assembly composition and source promotion — 2026-09-24
+
+The [composition qualification report](ordered-composition-qualification-20260924.md)
+records actual rustc sessions for bounded ordered regions and direct scalar
+helpers, the public source-promotion action and CLI, and the ordinary finite-grid
+LLVM/handoff path. Promotion still requires fresh frontend validation; arbitrary
+assembly-to-Rust decompilation, physical register transport across calls and live
+execution are not established.
+
+After merging concurrent conditional-memory/native-publication work, the
+compiler regression passed: 243 Rust result groups (including repeated packages),
+the unsafe-source inventory, selected strict Clippy checks, 151 Python tests and
+the static one-stop fixture controls. The unchanged source census for that gate
+was `f89b5ad4e69343b6dcbfd7beb5e1d4a68d19fe376cc659cfdc275d70cf14f04f`;
+its 33,679-byte receipt has SHA-256
+`7f51184d963e3880179d7bc063c28aaf084bb59447f7a7fadae22fee6dbc57d6`.
+This is not a whole-workspace strict-lint or hardware qualification.
+
+The static native composition matrix remains incomplete: 13 of 14 cases joined
+exact authored instruction intervals; two calls to one helper at O0 exposed a
+duplicate-edge rejection. The failed gate is retained, and the call-site versus
+graph-edge correction still needs qualification. This progress does not close
+the original broad milestone exits: **M1/V1/V2/U1/U2/U3 (6/18)** remain accepted.
+
+## Actual packet-incapable gfx950 queue lifecycle — 2026-09-24
+
+The [empty-queue qualification](gfx950-debug-empty-queue-qualification-20260924.md)
+records one supervised native create/retire cycle, 190,296,064 bytes of queue
+backing, zero valid packet publications and zero doorbell stores. Local
+retirement and the zero-GPU-FD fence are joined to separate inner/outer
+pidfd, wait/reap/ECHILD, EOF, scope-emptiness and terminal-ACK cleanup evidence.
+No kill attempt or cleanup expiry was required.
+
+Fresh stopped-wave-debugger batch startup and two ordinary LLVM/LLD static
+one-stop artifacts also passed their separate gates. Neither is an actual GPU
+stop or capture; the empty-queue run dispatched no kernel. Attached-debugger
+acceptance, TTMP readback, sampler exclusion, physical-register/memory sampling
+and live execution remain unestablished by this result. No source/runtime
+authority or protected publication is created. V4 remains open; accepted
+original exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Actual native runtime-observer relation — 2026-09-24
 
 The [fresh fixed-host no-queue qualification](evidence/gfx950-native-runtime-observation-20260924.md)

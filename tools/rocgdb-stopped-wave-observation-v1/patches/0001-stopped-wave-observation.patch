@@ -1,0 +1,1131 @@
+--- a/gdb/amd-dbgapi-runtime-observation-hooks-v1.inc
++++ b/gdb/amd-dbgapi-runtime-observation-hooks-v1.inc
+@@ -12,10 +12,12 @@
+     {
+       while (const auto *row = runtime_observation.next ())
+         interps_notify_amd_runtime_observation_v1 (*row);
++      stopped_obs::flush_safe_point ();
+     }
+   catch (...)
+     {
+       runtime_observation.output_failed ();
++      stopped_obs::invalidate (stopped_obs::reason::output_failure);
+       throw;
+     }
+ }
+@@ -29,18 +31,92 @@
+ }
+ 
+ static void
+-invalidate_runtime_observation (runtime_obs::reason why) noexcept
++invalidate_runtime_observation (runtime_obs::reason why,
++                                std::int64_t status = 0) noexcept
+ {
+   if (runtime_observation.bound ())
+-    runtime_observation.invalidate (why);
++    runtime_observation.invalidate (why, status);
++  // The two schemas intentionally share the closed reason values 0..19.
++  stopped_obs::invalidate (static_cast<stopped_obs::reason> (why), status);
++}
++
++static_assert (static_cast<unsigned> (runtime_obs::reason::none)
++               == static_cast<unsigned> (stopped_obs::reason::none),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::foreign_owner)
++               == static_cast<unsigned> (stopped_obs::reason::foreign_owner),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::capacity)
++               == static_cast<unsigned> (stopped_obs::reason::capacity),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::query_failed)
++               == static_cast<unsigned> (stopped_obs::reason::query_failed),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::event_identity)
++               == static_cast<unsigned> (stopped_obs::reason::event_identity),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::handler_unwind)
++               == static_cast<unsigned> (stopped_obs::reason::handler_unwind),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::acknowledgement)
++               == static_cast<unsigned> (stopped_obs::reason::acknowledgement),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::preloaded_runtime)
++               == static_cast<unsigned> (stopped_obs::reason::preloaded_runtime),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::runtime_unloaded)
++               == static_cast<unsigned> (stopped_obs::reason::runtime_unloaded),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::runtime_restriction)
++               == static_cast<unsigned> (stopped_obs::reason::runtime_restriction),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::unsupported_event)
++               == static_cast<unsigned> (stopped_obs::reason::unsupported_event),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::callback_identity)
++               == static_cast<unsigned> (stopped_obs::reason::callback_identity),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::callback_nested)
++               == static_cast<unsigned> (stopped_obs::reason::callback_nested),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::detach)
++               == static_cast<unsigned> (stopped_obs::reason::detach),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::inferior_exit)
++               == static_cast<unsigned> (stopped_obs::reason::inferior_exit),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::inferior_exec)
++               == static_cast<unsigned> (stopped_obs::reason::inferior_exec),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::inferior_fork)
++               == static_cast<unsigned> (stopped_obs::reason::inferior_fork),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::object_removed)
++               == static_cast<unsigned> (stopped_obs::reason::object_removed),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::output_failure)
++               == static_cast<unsigned> (stopped_obs::reason::output_failure),
++               "closed shared reason mapping");
++static_assert (static_cast<unsigned> (runtime_obs::reason::setup_failure)
++               == static_cast<unsigned> (stopped_obs::reason::setup_failure),
++               "closed shared reason mapping");
++
++/* Preserve pre-bind semantics of the original direct ledger calls too. */
++static void
++invalidate_observation_event_v1 (runtime_obs::reason why,
++                                 std::int64_t status = 0) noexcept
++{
++  runtime_observation.invalidate (why, status);
++  stopped_obs::invalidate (static_cast<stopped_obs::reason> (why), status);
+ }
+ 
+ static void
+ check_runtime_observation_owner (amd_dbgapi_inferior_info &info)
+ {
++  stopped_obs::check_owner (info);
+   if (!runtime_observation.owns
+         (reinterpret_cast<std::uintptr_t> (&info), info.process_id.handle))
+-    runtime_observation.invalidate (runtime_obs::reason::foreign_owner);
++    invalidate_observation_event_v1 (runtime_obs::reason::foreign_owner);
+ }
+ 
+ struct native_event_ack_v1
+@@ -71,7 +147,7 @@
+         (event, AMD_DBGAPI_EVENT_INFO_KIND, sizeof (actual_kind), &actual_kind);
+     if (status != AMD_DBGAPI_STATUS_SUCCESS)
+       {
+-        runtime_observation.invalidate (runtime_obs::reason::query_failed,
++        invalidate_observation_event_v1 (runtime_obs::reason::query_failed,
+                                         status);
+         error (_("runtime observation event query failed (%s)"),
+                get_status_string (status));
+@@ -79,7 +155,7 @@
+     if (process != info.process_id || actual_kind != kind
+         || event == AMD_DBGAPI_EVENT_NONE)
+       {
+-        runtime_observation.invalidate (runtime_obs::reason::event_identity);
++        invalidate_observation_event_v1 (runtime_obs::reason::event_identity);
+         error (_("runtime observation event owner/kind differs"));
+       }
+   }
+@@ -92,13 +168,20 @@
+     runtime_observation.completed (type, m_event.handle,
+                                   static_cast<std::uint64_t> (m_kind),
+                                   runtime, status);
++    stopped_obs::completed
++      (type == runtime_obs::kind::runtime_complete
++         ? stopped_obs::kind::runtime_complete : stopped_obs::kind::code_objects_complete,
++       m_event.handle, static_cast<std::uint32_t> (m_kind), runtime, status);
+   }
+   std::int64_t finish ()
+   {
+     auto status = m_ack.finish ();
+     if (status != AMD_DBGAPI_STATUS_SUCCESS)
++      stopped_obs::invalidate (stopped_obs::reason::acknowledgement, status);
++    m_stop_scope.done ();
++    if (status != AMD_DBGAPI_STATUS_SUCCESS)
+       {
+-        runtime_observation.invalidate
++        invalidate_observation_event_v1
+           (runtime_obs::reason::acknowledgement, status);
+         warning (_("Failed to acknowledge amd-dbgapi event %" PRIu64),
+                  m_event.handle);
+@@ -109,6 +192,7 @@
+   amd_dbgapi_event_id_t m_event;
+   amd_dbgapi_event_kind_t m_kind;
+   runtime_obs::event_ack<native_event_ack_v1> m_ack;
++  stopped_obs::scope_guard m_stop_scope {stopped_obs::reason::handler_unwind};
+ };
+ 
+ class observed_native_scope_v1
+@@ -119,7 +203,9 @@
+   ~observed_native_scope_v1 () noexcept
+   {
+     if (!m_done)
+-      runtime_observation.invalidate (m_failure);
++      {
++        invalidate_observation_event_v1 (m_failure);
++      }
+   }
+   void done () noexcept { m_done = true; }
+ private:
+--- /dev/null
++++ b/gdb/amd-dbgapi-stopped-wave-observation-hooks-v1.inc
+@@ -0,0 +1,70 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   This file is part of GDB; GPL version 3 or (at your option) any later version.
++   Included once after the real amd_dbgapi_inferior_info definition. */
++namespace stopped_obs = amd_stopped_wave_observation_v1;
++static stopped_obs::ledger stopped_wave_observation;
++
++static_assert (AMD_DBGAPI_EVENT_KIND_WAVE_STOP == 1, "pinned native event");
++static_assert (AMD_DBGAPI_EVENT_KIND_CODE_OBJECT_LIST_UPDATED == 3, "pinned native event");
++static_assert (AMD_DBGAPI_EVENT_KIND_BREAKPOINT_RESUME == 4, "pinned native event");
++static_assert (AMD_DBGAPI_EVENT_KIND_RUNTIME == 5, "pinned native event");
++static_assert (AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS == 1, "pinned runtime");
++static_assert (AMD_DBGAPI_RUNTIME_STATE_UNLOADED == 2, "pinned runtime");
++static_assert (AMD_DBGAPI_WAVE_STATE_STOP == 3, "pinned stopped state");
++static_assert (AMD_DBGAPI_WAVE_STOP_REASON_DEBUG_TRAP == (1u << 10), "debugtrap only");
++static_assert (AMD_DBGAPI_OS_QUEUE_TYPE_HSA_AQL == 1, "AQL only");
++static_assert (AMD_DBGAPI_QUEUE_STATE_VALID == 1, "valid queue");
++static_assert (AMD_DBGAPI_BREAKPOINT_ACTION_RESUME == 1, "native callback");
++static_assert (AMD_DBGAPI_BREAKPOINT_ACTION_HALT == 2, "native callback");
++
++void
++stopped_obs::flush_safe_point ()
++{
++  try {
++    while (const auto *row = stopped_wave_observation.next ())
++      interps_notify_amd_stopped_wave_observation_v1 (*row);
++  } catch (...) {
++    stopped_wave_observation.invalidate (reason::output_failure);
++    throw;
++  }
++}
++void
++stopped_obs::invalidate (reason why, std::int64_t status) noexcept
++{
++  if (stopped_wave_observation.bound ())
++    stopped_wave_observation.invalidate (why, status);
++}
++void
++stopped_obs::change (reason why) noexcept
++{ stopped_wave_observation.change (why); }
++
++void
++stopped_obs::check_owner (amd_dbgapi_inferior_info &info)
++{
++  if (!stopped_wave_observation.owns
++      (reinterpret_cast<std::uintptr_t> (&info), info.process_id.handle))
++    stopped_wave_observation.invalidate (reason::foreign_owner);
++}
++void
++stopped_obs::bind (amd_dbgapi_inferior_info &info)
++{
++  if (info.inf == nullptr || info.inf->num <= 0 || info.inf->pid <= 0
++      || info.inf->pspace->cbfd != nullptr)
++    { stopped_wave_observation.invalidate (reason::unsupported_profile); return; }
++  stopped_wave_observation.bind (reinterpret_cast<std::uintptr_t> (&info),
++                                info.inf->num, info.inf->pid, info.process_id.handle);
++}
++void
++stopped_obs::attached ()
++{ stopped_wave_observation.attached (); }
++void
++stopped_obs::completed (kind type, std::uint64_t event, std::uint32_t native_kind,
++                        std::uint32_t runtime, std::int64_t status)
++{ stopped_wave_observation.completed (type, event, native_kind, runtime, status); }
++void
++stopped_obs::begin_callback (std::uint64_t breakpoint, std::uint64_t thread)
++{ stopped_wave_observation.begin_callback (breakpoint, thread); }
++void
++stopped_obs::end_callback (std::uint64_t event, std::uint32_t native_kind,
++                          std::uint64_t action, std::int64_t status)
++{ stopped_wave_observation.end_callback (event, native_kind, action, status); }
+--- /dev/null
++++ b/gdb/amd-dbgapi-stopped-wave-observation-v1.h
+@@ -0,0 +1,263 @@
++/* Same-client stopped-wave observation, never execution/read authority.
++   SPDX-License-Identifier: GPL-3.0-or-later
++   This file is part of GDB; GPL version 3 or (at your option) any later version.
++   Derived from the bounded ROCdbgapi observation design in
++   amd-dbgapi-runtime-observation-v1.h. The noqueue ledger remains unchanged. */
++#ifndef GDB_AMD_DBGAPI_STOPPED_WAVE_OBSERVATION_V1_H
++#define GDB_AMD_DBGAPI_STOPPED_WAVE_OBSERVATION_V1_H
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++
++struct thread_info;
++struct amd_dbgapi_inferior_info;
++
++namespace amd_stopped_wave_observation_v1
++{
++enum class kind : std::uint32_t {
++  attach_complete = 1, runtime_complete = 2, code_objects_complete = 3,
++  breakpoint_complete = 4, wave_stop_complete = 5, invalidated = 6
++};
++enum class reason : std::uint32_t {
++  none = 0, foreign_owner = 1, capacity = 2, query_failed = 3,
++  event_identity = 4, handler_unwind = 5, acknowledgement = 6,
++  preloaded_runtime = 7, runtime_unloaded = 8, runtime_restriction = 9,
++  unsupported_event = 10, callback_identity = 11, callback_nested = 12,
++  detach = 13, inferior_exit = 14, inferior_exec = 15, inferior_fork = 16,
++  object_removed = 17, output_failure = 18, setup_failure = 19,
++  resume_attempt = 20, thread_changed = 21, wave_identity = 22,
++  unsupported_profile = 23, stop_changed = 24, required_identity_unavailable = 25
++};
++
++/* Numeric observation only. OS queue and packet IDs may legitimately be zero.
++   No PC, device address, register value, memory bytes or authorization bit. */
++struct stop_identity {
++  std::uint64_t wave = 0, workgroup = 0, dispatch = 0, queue = 0;
++  std::uint64_t agent = 0, architecture = 0, os_queue = 0, packet = 0, os_agent = 0;
++  std::uint64_t private_bytes = 0, group_bytes = 0;
++  std::uint32_t state = 0, stop_reason = 0, lanes = 0, wave_index = 0;
++  std::array<std::uint32_t, 3> coordinate {};
++  std::array<std::uint32_t, 3> grid {};
++  std::array<std::uint32_t, 3> workgroup_size {};
++  std::uint32_t queue_type = 0, queue_state = 0, elf_machine = 0;
++};
++inline bool same_identity (const stop_identity &a,
++                           const stop_identity &b) noexcept
++{
++  return a.wave == b.wave && a.workgroup == b.workgroup
++    && a.dispatch == b.dispatch && a.queue == b.queue && a.agent == b.agent
++    && a.architecture == b.architecture && a.os_queue == b.os_queue
++    && a.packet == b.packet && a.os_agent == b.os_agent && a.private_bytes == b.private_bytes
++    && a.group_bytes == b.group_bytes && a.state == b.state
++    && a.stop_reason == b.stop_reason && a.lanes == b.lanes
++    && a.wave_index == b.wave_index && a.coordinate == b.coordinate
++    && a.grid == b.grid && a.workgroup_size == b.workgroup_size
++    && a.queue_type == b.queue_type && a.queue_state == b.queue_state
++    && a.elf_machine == b.elf_machine;
++}
++inline bool closed_profile (const stop_identity &s) noexcept
++{
++  return s.wave != 0 && s.workgroup != 0 && s.dispatch != 0 && s.queue != 0
++    && s.agent != 0 && s.architecture != 0 && s.os_agent != 0 && s.private_bytes == 0
++    && s.group_bytes == 0 && s.state == 3 && s.stop_reason == (1u << 10)
++    && s.lanes == 64 && s.wave_index == 0
++    && s.coordinate == std::array<std::uint32_t, 3> {0, 0, 0}
++    && s.grid == std::array<std::uint32_t, 3> {64, 1, 1}
++    && s.workgroup_size == std::array<std::uint32_t, 3> {64, 1, 1}
++    && s.queue_type == 1 && s.queue_state == 1 && s.elf_machine == 0x4f;
++}
++struct record {
++  static constexpr std::uint64_t generation = 1;
++  std::uint64_t sequence = 0, inferior = 0, pid = 0;
++  std::uint64_t process = 0, event = 0, callback = 0, breakpoint = 0;
++  std::uint64_t thread = 0, action = 0;
++  std::int64_t status = 0;
++  stop_identity stop {};
++  std::uint32_t event_kind = 0, runtime_state = 0, stop_generation = 0;
++  kind type = kind::invalidated;
++  reason invalidation = reason::none;
++};
++
++/* A single same-client lifetime. These methods accept inert numeric facts for
++   pure tests; production calls are exclusively the native hooks below. The
++   ledger has NO read capability, queue owner, serialization importer or token
++   constructor. A row is historical observation even before invalidation. */
++class ledger {
++public:
++  bool bind (std::uintptr_t owner, std::uint64_t inferior, std::uint64_t pid,
++             std::uint64_t process) noexcept
++  {
++    if (m_bound || owner == 0 || inferior == 0 || pid == 0 || process == 0)
++      { invalidate (reason::foreign_owner); return false; }
++    m_bound = true; m_owner = owner;
++    m_base.inferior = inferior; m_base.pid = pid; m_base.process = process;
++    return !m_invalid;
++  }
++  bool owns (std::uintptr_t owner, std::uint64_t process) const noexcept
++  { return m_bound && m_owner == owner && m_base.process == process; }
++  bool bound () const noexcept { return m_bound; }
++  bool invalid () const noexcept { return m_invalid; }
++  bool stop_started () const noexcept { return m_candidate || m_published; }
++  bool pending () const noexcept { return m_candidate && !m_invalid; }
++  const record &candidate () const noexcept { return m_pending; }
++  std::uint64_t process () const noexcept { return m_base.process; }
++  std::uint64_t pid () const noexcept { return m_base.pid; }
++  void attached () noexcept
++  {
++    if (!m_bound || !m_attaching) { invalidate (reason::foreign_owner); return; }
++    m_attaching = false;
++    record r; r.type = kind::attach_complete; push (r);
++  }
++  void completed (kind type, std::uint64_t event, std::uint32_t event_kind,
++                  std::uint32_t runtime, std::int64_t status) noexcept
++  {
++    if (m_invalid) return;
++    if (stop_started ()) { invalidate (reason::stop_changed); return; }
++    if (status != 0) { invalidate (reason::acknowledgement, status); return; }
++    if (event == 0 || (type == kind::runtime_complete && event_kind != 5)
++        || (type == kind::code_objects_complete && event_kind != 3)) {
++      invalidate (reason::event_identity); return;
++    }
++    if (type == kind::runtime_complete) {
++      if (m_attaching) { invalidate (reason::preloaded_runtime); return; }
++      if (runtime != 1) {
++        invalidate (runtime == 2 ? reason::runtime_unloaded : reason::runtime_restriction);
++        return;
++      }
++      if (m_runtime) { invalidate (reason::event_identity); return; }
++      m_runtime = true;
++    } else if (type != kind::code_objects_complete || !m_runtime) {
++      invalidate (reason::event_identity); return;
++    }
++    record r; r.type = type; r.event = event; r.event_kind = event_kind;
++    r.runtime_state = runtime; r.status = status; r.callback = m_callback;
++    push (r);
++  }
++  void begin_callback (std::uint64_t breakpoint, std::uint64_t thread) noexcept
++  {
++    if (m_invalid) return;
++    if (stop_started ()) { invalidate (reason::stop_changed); return; }
++    if (!m_runtime || m_callback != 0 || breakpoint == 0 || thread == 0)
++      { invalidate (reason::callback_nested); return; }
++    if (++m_callbacks > 64) { invalidate (reason::capacity); return; }
++    m_callback = m_callbacks; m_breakpoint = breakpoint; m_thread = thread;
++  }
++  void end_callback (std::uint64_t event, std::uint32_t event_kind,
++                     std::uint64_t action, std::int64_t status) noexcept
++  {
++    if (m_invalid) return;
++    if (m_callback == 0) { invalidate (reason::callback_identity); return; }
++    if (status != 0) { invalidate (reason::acknowledgement, status); return; }
++    if (!((event == 0 && event_kind == 0 && action == 1)
++          || (event != 0 && event_kind == 4 && action == 2))) {
++      invalidate (reason::callback_identity); return;
++    }
++    record r; r.type = kind::breakpoint_complete;
++    r.event = event; r.event_kind = event_kind; r.action = action;
++    r.callback = m_callback; r.breakpoint = m_breakpoint; r.thread = m_thread;
++    push (r); m_callback = 0; m_breakpoint = 0; m_thread = 0;
++  }
++  void stage (std::uint64_t event, std::uint32_t event_kind,
++              std::uint64_t thread, const stop_identity &stop,
++              std::int64_t acknowledged_status) noexcept
++  {
++    if (m_invalid) return;
++    if (stop_started ()) { invalidate (reason::stop_changed); return; }
++    if (!m_bound || m_attaching || !m_runtime || m_callback != 0
++        || event == 0 || thread == 0 || event_kind != 1) {
++      invalidate (reason::event_identity); return;
++    }
++    if (acknowledged_status != 0) { invalidate (reason::acknowledgement, acknowledged_status); return; }
++    if (!closed_profile (stop)) { invalidate (reason::unsupported_profile); return; }
++    if (!fresh_event (event)) { invalidate (reason::event_identity); return; }
++    m_pending = {};
++    m_pending.type = kind::wave_stop_complete; m_pending.event = event;
++    m_pending.event_kind = event_kind; m_pending.thread = thread;
++    m_pending.stop = stop; m_pending.stop_generation = 1;
++    m_candidate = true;
++  }
++  /* Called ONLY after complete MI *stopped output and a second actual native
++     identity query for the exact current stopped GDB GPU thread. */
++  void publish_normal_stop (std::uint64_t thread,
++                            const stop_identity &requeried) noexcept
++  {
++    if (m_invalid) return;
++    if (!m_candidate || m_published || thread == 0 || thread != m_pending.thread
++        || !same_identity (m_pending.stop, requeried)) {
++      invalidate (reason::stop_changed); return;
++    }
++    push (m_pending);
++    if (!m_invalid) { m_candidate = false; m_published = true; }
++  }
++  void change (reason why) noexcept
++  { if (stop_started ()) invalidate (why); }
++  void invalidate (reason why, std::int64_t status = 0) noexcept
++  {
++    if (m_invalid) return;
++    m_invalid = true;
++    record r; r.type = kind::invalidated; r.invalidation = why; r.status = status;
++    if (m_count < m_rows.size ()) { decorate (r); m_rows[m_count++] = r; }
++  }
++  const record *next () noexcept
++  { return m_sent < m_count ? &m_rows[m_sent++] : nullptr; }
++  std::size_t count () const noexcept { return m_count; }
++  const record &at (std::size_t i) const noexcept { return m_rows[i]; }
++private:
++  bool fresh_event (std::uint64_t event) const noexcept
++  {
++    for (std::size_t i = 0; i < m_count; ++i)
++      if (event != 0 && m_rows[i].event == event) return false;
++    return true;
++  }
++  void decorate (record &r) noexcept
++  {
++    r.sequence = m_count + 1;
++    r.inferior = m_base.inferior; r.pid = m_base.pid; r.process = m_base.process;
++  }
++  void push (record r) noexcept
++  {
++    if (m_invalid) return;
++    if (!m_bound) { invalidate (reason::foreign_owner); return; }
++    if (!fresh_event (r.event)) { invalidate (reason::event_identity); return; }
++    if (m_count >= m_rows.size () - 1) { invalidate (reason::capacity); return; }
++    decorate (r); m_rows[m_count++] = r;
++  }
++  std::array<record, 64> m_rows {};
++  record m_base {}, m_pending {};
++  std::uintptr_t m_owner = 0;
++  std::size_t m_count = 0, m_sent = 0;
++  std::uint64_t m_callback = 0, m_callbacks = 0, m_breakpoint = 0, m_thread = 0;
++  bool m_bound = false, m_attaching = true, m_runtime = false, m_invalid = false;
++  bool m_candidate = false, m_published = false;
++};
++static_assert (sizeof (record) <= 256, "fixed numeric observation row");
++static_assert (sizeof (ledger) <= 24 * 1024, "fixed complete producer lifetime");
++
++/* Native hook declarations, not commands. No function returns a live token. */
++void flush_safe_point ();
++void after_normal_stop (thread_info *);
++void invalidate (reason, std::int64_t status = 0) noexcept;
++void check_owner (amd_dbgapi_inferior_info &);
++void bind (amd_dbgapi_inferior_info &);
++void attached ();
++void completed (kind, std::uint64_t, std::uint32_t, std::uint32_t, std::int64_t);
++void begin_callback (std::uint64_t, std::uint64_t);
++void end_callback (std::uint64_t, std::uint32_t, std::uint64_t, std::int64_t);
++void change (reason) noexcept;
++
++/* Independent observation-unwind refusal. The existing R6 event_ack remains
++   the SOLE owner that calls amd_dbgapi_event_processed, exactly once. */
++class scope_guard {
++public:
++  explicit scope_guard (reason failure) noexcept : m_failure (failure) {}
++  scope_guard (const scope_guard &) = delete;
++  scope_guard &operator= (const scope_guard &) = delete;
++  ~scope_guard () noexcept { if (!m_done) invalidate (m_failure); }
++  void done () noexcept { m_done = true; }
++private:
++  reason m_failure;
++  bool m_done = false;
++};
++}
++#endif
+--- /dev/null
++++ b/gdb/amd-dbgapi-stopped-wave-query-v1.inc
+@@ -0,0 +1,193 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   This file is part of GDB; GPL version 3 or (at your option) any later version.
++   Included after the actual GPU-thread helpers. No polling or new AMD client. */
++
++struct stopped_wave_candidate_v1 {
++  std::uint64_t thread = 0;
++  stopped_obs::stop_identity identity {};
++};
++
++template<typename Get, typename Id, typename Query, typename Value>
++static void
++stopped_query_v1 (Get get, Id id, Query query, Value &value)
++{
++  const auto status = get (id, query, sizeof (value), &value);
++  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
++    stopped_obs::invalidate
++      (status == AMD_DBGAPI_STATUS_ERROR_NOT_AVAILABLE
++         ? stopped_obs::reason::required_identity_unavailable
++         : stopped_obs::reason::query_failed, status);
++    error (_("stopped-wave observation query failed (%s)"),
++           get_status_string (status));
++  }
++}
++static void
++stopped_join_v1 (bool equal)
++{
++  if (!equal) {
++    stopped_obs::invalidate (stopped_obs::reason::wave_identity);
++    error (_("stopped-wave observation native identity differs"));
++  }
++}
++
++/* Every returned field is queried on this same real library process. The
++   boolean equality helper above is a local assertion, NOT runtime evidence
++   accepted from any caller/DTO or an execution permission. */
++static stopped_wave_candidate_v1
++query_stopped_wave_v1 (amd_dbgapi_inferior_info &info, thread_info *thread)
++{
++  stopped_obs::check_owner (info);
++  stopped_join_v1 (!stopped_wave_observation.invalid () && info.inf != nullptr
++                  && thread != nullptr && thread->inf == info.inf
++                  && info.inf->pspace->cbfd == nullptr
++                  && info.inf->target_at (arch_stratum) == &the_amd_dbgapi_target
++                  && ptid_is_gpu (thread->ptid)
++                  && thread->ptid.pid () == info.inf->pid
++                  && static_cast<std::uint64_t> (info.inf->pid)
++                       == stopped_wave_observation.pid ()
++                  && info.process_id.handle == stopped_wave_observation.process ()
++                  && thread->global_num > 0);
++
++  const auto wave = get_amd_dbgapi_wave_id (thread->ptid);
++  stopped_wave_candidate_v1 result;
++  result.thread = thread->global_num;
++  auto &s = result.identity;
++  s.wave = wave.handle;
++  amd_dbgapi_process_id_t process {};
++  amd_dbgapi_workgroup_id_t workgroup {};
++  amd_dbgapi_dispatch_id_t dispatch {};
++  amd_dbgapi_queue_id_t queue {};
++  amd_dbgapi_agent_id_t agent {};
++  amd_dbgapi_architecture_id_t architecture {};
++  std::size_t lanes = 0;
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_STATE, s.state);
++  stopped_join_v1 (s.state == AMD_DBGAPI_WAVE_STATE_STOP);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_STOP_REASON, s.stop_reason);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_PROCESS, process);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_WORKGROUP, workgroup);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_DISPATCH, dispatch);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_QUEUE, queue);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_AGENT, agent);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_ARCHITECTURE, architecture);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_LANE_COUNT, lanes);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_WORKGROUP_COORD, s.coordinate);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_WAVE_NUMBER_IN_WORKGROUP, s.wave_index);
++  stopped_join_v1 (process == info.process_id && lanes == 64);
++  s.lanes = static_cast<std::uint32_t> (lanes);
++  s.workgroup = workgroup.handle; s.dispatch = dispatch.handle;
++  s.queue = queue.handle; s.agent = agent.handle; s.architecture = architecture.handle;
++
++  amd_dbgapi_process_id_t group_process {};
++  amd_dbgapi_queue_id_t group_queue {};
++  amd_dbgapi_dispatch_id_t group_dispatch {};
++  amd_dbgapi_agent_id_t group_agent {};
++  amd_dbgapi_architecture_id_t group_architecture {};
++  std::array<std::uint32_t, 3> group_coordinate {};
++  stopped_query_v1 (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_PROCESS, group_process);
++  stopped_query_v1 (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_QUEUE, group_queue);
++  stopped_query_v1 (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_DISPATCH, group_dispatch);
++  stopped_query_v1 (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_AGENT, group_agent);
++  stopped_query_v1 (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_ARCHITECTURE, group_architecture);
++  stopped_query_v1 (amd_dbgapi_workgroup_get_info, workgroup, AMD_DBGAPI_WORKGROUP_INFO_WORKGROUP_COORD, group_coordinate);
++  stopped_join_v1 (group_process == process && group_queue == queue && group_dispatch == dispatch
++                  && group_agent == agent && group_architecture == architecture
++                  && group_coordinate == s.coordinate);
++
++  amd_dbgapi_process_id_t dispatch_process {};
++  amd_dbgapi_queue_id_t dispatch_queue {};
++  amd_dbgapi_agent_id_t dispatch_agent {};
++  amd_dbgapi_architecture_id_t dispatch_architecture {};
++  std::array<std::uint16_t, 3> native_workgroup {};
++  std::uint32_t dimensions = 0;
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_PROCESS, dispatch_process);
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_QUEUE, dispatch_queue);
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_AGENT, dispatch_agent);
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_ARCHITECTURE, dispatch_architecture);
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_OS_QUEUE_PACKET_ID, s.packet);
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_GRID_DIMENSIONS, dimensions);
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_GRID_SIZES, s.grid);
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_WORKGROUP_SIZES, native_workgroup);
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_PRIVATE_SEGMENT_SIZE, s.private_bytes);
++  stopped_query_v1 (amd_dbgapi_dispatch_get_info, dispatch, AMD_DBGAPI_DISPATCH_INFO_GROUP_SEGMENT_SIZE, s.group_bytes);
++  stopped_join_v1 (dispatch_process == process && dispatch_queue == queue
++                  && dispatch_agent == agent && dispatch_architecture == architecture
++                  && dimensions == 1);
++  for (std::size_t i = 0; i < 3; ++i) s.workgroup_size[i] = native_workgroup[i];
++
++  amd_dbgapi_process_id_t queue_process {};
++  amd_dbgapi_agent_id_t queue_agent {};
++  amd_dbgapi_architecture_id_t queue_architecture {};
++  std::uint32_t queue_error = 0;
++  stopped_query_v1 (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_PROCESS, queue_process);
++  stopped_query_v1 (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_AGENT, queue_agent);
++  stopped_query_v1 (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_ARCHITECTURE, queue_architecture);
++  stopped_query_v1 (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_OS_ID, s.os_queue);
++  stopped_query_v1 (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_TYPE, s.queue_type);
++  stopped_query_v1 (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_STATE, s.queue_state);
++  stopped_query_v1 (amd_dbgapi_queue_get_info, queue, AMD_DBGAPI_QUEUE_INFO_ERROR_REASON, queue_error);
++  stopped_join_v1 (queue_process == process && queue_agent == agent
++                  && queue_architecture == architecture && queue_error == 0);
++
++  amd_dbgapi_process_id_t agent_process {};
++  amd_dbgapi_architecture_id_t agent_architecture {};
++  std::uint32_t agent_state = 0;
++  stopped_query_v1 (amd_dbgapi_agent_get_info, agent, AMD_DBGAPI_AGENT_INFO_PROCESS, agent_process);
++  stopped_query_v1 (amd_dbgapi_agent_get_info, agent, AMD_DBGAPI_AGENT_INFO_ARCHITECTURE, agent_architecture);
++  stopped_query_v1 (amd_dbgapi_agent_get_info, agent, AMD_DBGAPI_AGENT_INFO_OS_ID, s.os_agent);
++  stopped_query_v1 (amd_dbgapi_agent_get_info, agent, AMD_DBGAPI_AGENT_INFO_STATE, agent_state);
++  stopped_query_v1 (amd_dbgapi_architecture_get_info, architecture,
++                    AMD_DBGAPI_ARCHITECTURE_INFO_ELF_AMDGPU_MACHINE, s.elf_machine);
++  stopped_join_v1 (agent_process == process && agent_architecture == architecture
++                  && agent_state == AMD_DBGAPI_AGENT_STATE_SUPPORTED);
++  if (!stopped_obs::closed_profile (s)) {
++    stopped_obs::invalidate (stopped_obs::reason::unsupported_profile);
++    error (_("stopped-wave observation does not match the closed gfx950 profile"));
++  }
++  // End fence, independent of the initial state/stop-reason query.
++  std::uint32_t final_state = 0, final_reason = 0;
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_STATE, final_state);
++  stopped_query_v1 (amd_dbgapi_wave_get_info, wave, AMD_DBGAPI_WAVE_INFO_STOP_REASON, final_reason);
++  stopped_join_v1 (final_state == s.state && final_reason == s.stop_reason
++                  && info.inf->process_target ()->find_thread (thread->ptid) == thread);
++  return result;
++}
++
++static stopped_wave_candidate_v1
++query_stopped_wave_event_v1 (amd_dbgapi_inferior_info &info, amd_dbgapi_event_id_t event)
++{
++  amd_dbgapi_wave_id_t wave {};
++  stopped_query_v1 (amd_dbgapi_event_get_info, event, AMD_DBGAPI_EVENT_INFO_WAVE, wave);
++  const auto ptid = make_gpu_ptid (info.inf->pid, wave);
++  auto *thread = info.inf->process_target ()->find_thread (ptid);
++  auto result = query_stopped_wave_v1 (info, thread);
++  stopped_join_v1 (result.identity.wave == wave.handle);
++  return result;
++}
++
++void
++stopped_obs::after_normal_stop (thread_info *thread)
++{
++  if (stopped_wave_observation.invalid ()) { flush_safe_point (); return; }
++  if (!stopped_wave_observation.pending ()) {
++    stopped_wave_observation.change (reason::stop_changed);
++    flush_safe_point ();
++    return;
++  }
++  try {
++    stopped_join_v1 (thread != nullptr && thread->state == THREAD_STOPPED
++                    && !thread->executing () && !thread->resumed ()
++                    && thread == inferior_thread ()
++                    && thread->ptid == inferior_ptid
++                    && static_cast<std::uint64_t> (thread->global_num)
++                         == stopped_wave_observation.candidate ().thread);
++    auto *info = get_amd_dbgapi_inferior_info (thread->inf);
++    auto observed = query_stopped_wave_v1 (*info, thread);
++    stopped_wave_observation.publish_normal_stop (observed.thread, observed.identity);
++  } catch (...) {
++    stopped_obs::invalidate (reason::handler_unwind);
++    flush_safe_point ();
++    throw;
++  }
++  // Output exceptions are not caught to attempt another immediate drain.
++  flush_safe_point ();
++}
+--- a/gdb/amd-dbgapi-target.c
++++ b/gdb/amd-dbgapi-target.c
+@@ -40,6 +40,7 @@
+ #include "observable.h"
+ #include "interps.h"
+ #include "amd-dbgapi-runtime-observation-v1.h"
++#include "amd-dbgapi-stopped-wave-observation-v1.h"
+ #include "registry.h"
+ #include "solib.h"
+ #include "target.h"
+@@ -261,6 +262,7 @@
+     wave_info_map;
+ };
+ 
++#include "amd-dbgapi-stopped-wave-observation-hooks-v1.inc"
+ #include "amd-dbgapi-runtime-observation-hooks-v1.inc"
+ 
+ static amd_dbgapi_event_id_t process_event_queue
+@@ -888,6 +890,7 @@
+   check_runtime_observation_owner (*info);
+   runtime_observation.begin_callback (breakpoint_id.handle,
+                                       callback_thread->global_num);
++  stopped_obs::begin_callback (breakpoint_id.handle, callback_thread->global_num);
+   observed_native_scope_v1 callback_scope
+     (runtime_obs::reason::callback_identity);
+ 
+@@ -898,7 +901,7 @@
+ 
+   if (status != AMD_DBGAPI_STATUS_SUCCESS)
+     {
+-      runtime_observation.invalidate
++      invalidate_observation_event_v1
+         (runtime_obs::reason::callback_identity, status);
+       error (_("amd_dbgapi_report_breakpoint_hit failed for breakpoint %ld "
+                "at %s (%s)"),
+@@ -910,13 +913,14 @@
+   if (action == AMD_DBGAPI_BREAKPOINT_ACTION_RESUME)
+     {
+       runtime_observation.end_callback (0, 0, action, status);
++      stopped_obs::end_callback (0, 0, action, status);
+       callback_scope.done ();
+       flush_runtime_observation ();
+       return;
+     }
+   if (action != AMD_DBGAPI_BREAKPOINT_ACTION_HALT)
+     {
+-      runtime_observation.invalidate (runtime_obs::reason::callback_identity);
++      invalidate_observation_event_v1 (runtime_obs::reason::callback_identity);
+       error (_("unexpected amd-dbgapi breakpoint action"));
+     }
+ 
+@@ -931,7 +935,7 @@
+      events generated by reporting the breakpoint hit.  */
+   if (resume_event_id == AMD_DBGAPI_EVENT_NONE)
+     {
+-      runtime_observation.invalidate (runtime_obs::reason::callback_identity);
++      invalidate_observation_event_v1 (runtime_obs::reason::callback_identity);
+       error (_("missing expected AMD breakpoint resume event"));
+     }
+ 
+@@ -962,7 +966,7 @@
+       || resume_thread != reinterpret_cast<amd_dbgapi_client_thread_id_t>
+                             (callback_thread))
+     {
+-      runtime_observation.invalidate
++      invalidate_observation_event_v1
+         (runtime_obs::reason::callback_identity, status);
+       error (_("breakpoint resume event client thread differs"));
+     }
+@@ -970,6 +974,8 @@
+   runtime_observation.end_callback
+     (resume_event_id.handle, AMD_DBGAPI_EVENT_KIND_BREAKPOINT_RESUME,
+      action, ack_status);
++  stopped_obs::end_callback
++    (resume_event_id.handle, AMD_DBGAPI_EVENT_KIND_BREAKPOINT_RESUME, action, ack_status);
+   callback_scope.done ();
+   flush_runtime_observation ();
+ }
+@@ -1189,6 +1195,8 @@
+ 			       ULONGEST offset, ULONGEST requested_len,
+ 			       ULONGEST *xfered_len)
+ {
++  if (writebuf != nullptr)
++    stopped_obs::change (stopped_obs::reason::stop_changed);
+   std::optional<scoped_restore_current_thread> maybe_restore_thread;
+ 
+   if (!ptid_is_gpu (inferior_ptid))
+@@ -1300,7 +1308,7 @@
+ 	{
+ 	  if (insert_one_watchpoint (info, loc->address, loc->length) != 0)
+             {
+-              runtime_observation.invalidate (runtime_obs::reason::setup_failure);
++              invalidate_observation_event_v1 (runtime_obs::reason::setup_failure);
+ 	      warning (_("Failed to insert existing watchpoint after loading "
+ 		         "runtime."));
+             }
+@@ -1431,6 +1439,7 @@
+ void
+ amd_dbgapi_target::resume (ptid_t scope_ptid, int step, enum gdb_signal signo)
+ {
++  stopped_obs::change (stopped_obs::reason::resume_attempt);
+   amd_dbgapi_debug_printf ("scope_ptid = %s", scope_ptid.to_string ().c_str ());
+ 
+   /* The amd_dbgapi_exceptions_t matching SIGNO will only be used if the
+@@ -1712,7 +1721,7 @@
+ 						 &event_kind);
+       if (status != AMD_DBGAPI_STATUS_SUCCESS)
+         {
+-          runtime_observation.invalidate (runtime_obs::reason::query_failed, status);
++          invalidate_observation_event_v1 (runtime_obs::reason::query_failed, status);
+           error (_("next_pending_event failed (%s)"), get_status_string (status));
+         }
+ 
+@@ -1722,7 +1731,7 @@
+       observed_native_event_v1 mark_event_processed (*info, event_id, event_kind);
+       if (event_kind != AMD_DBGAPI_EVENT_KIND_RUNTIME)
+         {
+-          runtime_observation.invalidate (runtime_obs::reason::unsupported_event);
++          invalidate_observation_event_v1 (runtime_obs::reason::unsupported_event);
+           error (_("unexpected event before AMD runtime activation"));
+         }
+ 
+@@ -1779,7 +1788,7 @@
+       mark_event_processed.complete
+         (runtime_obs::kind::runtime_complete, runtime_state);
+       if (runtime_state != AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS)
+-        runtime_observation.invalidate
++        invalidate_observation_event_v1
+           (runtime_state == AMD_DBGAPI_RUNTIME_STATE_UNLOADED
+            ? runtime_obs::reason::runtime_unloaded
+            : runtime_obs::reason::runtime_restriction);
+@@ -1857,6 +1866,7 @@
+ static void
+ amd_dbgapi_thread_deleted (thread_info *tp)
+ {
++  stopped_obs::change (stopped_obs::reason::thread_changed);
+   if (tp->inf->target_at (arch_stratum) == &the_amd_dbgapi_target
+       && ptid_is_gpu (tp->ptid))
+     {
+@@ -1896,6 +1906,8 @@
+   return thread;
+ }
+ 
++#include "amd-dbgapi-stopped-wave-query-v1.inc"
++
+ /* Process an event that was just pulled out of the amd-dbgapi library.  */
+ 
+ static void
+@@ -1908,6 +1920,12 @@
+ 
+   gdb_assert (info.inf != nullptr);
+   std::uint64_t observed_runtime_state = 0;
++  if (stopped_wave_observation.stop_started ())
++    stopped_obs::invalidate (stopped_obs::reason::stop_changed);
++  if (event_kind != AMD_DBGAPI_EVENT_KIND_CODE_OBJECT_LIST_UPDATED
++      && event_kind != AMD_DBGAPI_EVENT_KIND_RUNTIME
++      && event_kind != AMD_DBGAPI_EVENT_KIND_WAVE_STOP)
++    stopped_obs::invalidate (stopped_obs::reason::unsupported_event);
+   if (event_kind != AMD_DBGAPI_EVENT_KIND_CODE_OBJECT_LIST_UPDATED
+       && event_kind != AMD_DBGAPI_EVENT_KIND_RUNTIME)
+     runtime_observation.invalidate (runtime_obs::reason::unsupported_event);
+@@ -2058,10 +2076,22 @@
+     {
+       mark_event_processed.complete (runtime_obs::kind::runtime_complete,
+                                      observed_runtime_state);
+-      runtime_observation.invalidate (runtime_obs::reason::runtime_unloaded);
++      invalidate_observation_event_v1 (runtime_obs::reason::runtime_unloaded);
+     }
+   else
+-    mark_event_processed.finish ();
++    {
++      // Stage only from the actual handled WAVE_STOP and its sole native ACK.
++      // This is not yet a GDB-visible current stop.
++      std::optional<stopped_wave_candidate_v1> observed;
++      if (event_kind == AMD_DBGAPI_EVENT_KIND_WAVE_STOP
++          && !stopped_wave_observation.invalid ())
++        observed = query_stopped_wave_event_v1 (info, event_id);
++      auto acknowledged_status = mark_event_processed.finish ();
++      if (observed)
++        stopped_wave_observation.stage
++          (event_id.handle, static_cast<std::uint32_t> (event_kind),
++           observed->thread, observed->identity, acknowledged_status);
++    }
+   flush_runtime_observation ();
+ }
+ 
+@@ -2115,7 +2145,7 @@
+     {
+       if (observation_drain_count++ == 32)
+         {
+-          runtime_observation.invalidate (runtime_obs::reason::capacity);
++          invalidate_observation_event_v1 (runtime_obs::reason::capacity);
+           error (_("bounded AMD observation event drain exhausted"));
+         }
+       amd_dbgapi_event_id_t event_id;
+@@ -2127,7 +2157,7 @@
+ 
+       if (status != AMD_DBGAPI_STATUS_SUCCESS)
+         {
+-          runtime_observation.invalidate (runtime_obs::reason::query_failed, status);
++          invalidate_observation_event_v1 (runtime_obs::reason::query_failed, status);
+           error (_("next_pending_event failed (%s)"), get_status_string (status));
+         }
+ 
+@@ -2469,6 +2499,7 @@
+       return;
+     }
+ 
++  stopped_obs::bind (*info);
+   runtime_observation.bind (reinterpret_cast<std::uintptr_t> (info),
+                             inf->num, inf->pid, info->process_id.handle);
+   runtime_observation_pspace = inf->pspace;
+@@ -2500,6 +2531,7 @@
+   add_file_handler (info->notifier, dbgapi_notifier_handler, info,
+ 		    "amd-dbgapi notifier");
+   runtime_observation.attached ();
++  stopped_obs::attached ();
+   attach_scope.done ();
+   flush_runtime_observation ();
+ }
+@@ -2625,6 +2657,7 @@
+ void
+ amd_dbgapi_target::store_registers (struct regcache *regcache, int regno)
+ {
++  stopped_obs::change (stopped_obs::reason::stop_changed);
+   if (!ptid_is_gpu (regcache->ptid ()))
+     {
+       beneath ()->store_registers (regcache, regno);
+@@ -4887,6 +4920,19 @@
+         invalidate_runtime_observation (runtime_obs::reason::object_removed);
+     }, "amd-runtime-observation-v1");
+ 
++  // Selection/ptid changes and proceed intent cannot preserve an observed stop.
++  gdb::observers::about_to_proceed.attach
++    ([] () { stopped_obs::change (stopped_obs::reason::resume_attempt); },
++     "amd-stopped-wave-observation-v1");
++  gdb::observers::user_selected_context_changed.attach
++    ([] (user_selected_what) {
++      stopped_obs::change (stopped_obs::reason::thread_changed);
++    }, "amd-stopped-wave-observation-v1");
++  gdb::observers::thread_ptid_changed.attach
++    ([] (process_stratum_target *, ptid_t, ptid_t) {
++      stopped_obs::change (stopped_obs::reason::thread_changed);
++    }, "amd-stopped-wave-observation-v1");
++
+   /* Install observers.  */
+   gdb::observers::breakpoint_created.attach (amd_dbgapi_target_breakpoint_fixup,
+ 					     "amd-dbgapi");
+--- a/gdb/interps.c
++++ b/gdb/interps.c
+@@ -599,3 +599,10 @@
+ {
+   interps_notify (&interp::on_amd_runtime_observation_v1, row);
+ }
++
++void
++interps_notify_amd_stopped_wave_observation_v1
++  (const amd_stopped_wave_observation_v1::record &row)
++{
++  interps_notify (&interp::on_amd_stopped_wave_observation_v1, row);
++}
+--- a/gdb/interps.h
++++ b/gdb/interps.h
+@@ -34,6 +34,7 @@
+ struct solib;
+ struct trace_state_variable;
+ namespace amd_runtime_observation_v1 { struct record; }
++namespace amd_stopped_wave_observation_v1 { struct record; }
+ 
+ typedef struct interp *(*interp_factory_func) (const char *name);
+ 
+@@ -57,6 +58,8 @@
+   /* Read-only native facts from the same AMD client, not acceptance. */
+   virtual void on_amd_runtime_observation_v1
+     (const amd_runtime_observation_v1::record &) {}
++  virtual void on_amd_stopped_wave_observation_v1
++    (const amd_stopped_wave_observation_v1::record &) {}
+ 
+   virtual void init (bool top_level)
+   {}
+@@ -388,4 +391,8 @@
+ extern void interps_notify_amd_runtime_observation_v1
+   (const amd_runtime_observation_v1::record &);
+ 
++
++extern void interps_notify_amd_stopped_wave_observation_v1
++  (const amd_stopped_wave_observation_v1::record &);
++
+ #endif /* GDB_INTERPS_H */
+--- /dev/null
++++ b/gdb/mi/amd-stopped-wave-observation-mi-v1.inc
+@@ -0,0 +1,60 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   This file is part of GDB; GPL version 3 or (at your option) any later version.
++   Distinct observation-only protocol. Never a register/memory sample or token. */
++void
++mi_interp::on_amd_stopped_wave_observation_v1
++  (const amd_stopped_wave_observation_v1::record &row)
++{
++  target_terminal::scoped_restore_terminal_state term_state;
++  target_terminal::ours_for_output ();
++  gdb_printf (event_channel, "amd-stopped-wave-observation-v1");
++  ui_out_redirect_pop redir (mi_uiout, event_channel);
++  mi_uiout->field_string ("schema", "fe2o3-gfx950-native-stopped-wave-observation-v1");
++  mi_uiout->field_string ("profile", "fe2o3.gfx950.same-client-stopped-wave-observation.v1");
++  mi_uiout->field_string ("queue-provenance", "unavailable");
++  mi_uiout->field_unsigned ("version", 1);
++  mi_uiout->field_unsigned ("sequence", row.sequence);
++  mi_uiout->field_unsigned ("generation", row.generation);
++  mi_uiout->field_unsigned ("inferior", row.inferior);
++  mi_uiout->field_unsigned ("pid", row.pid);
++  mi_uiout->field_unsigned ("process", row.process);
++  mi_uiout->field_unsigned ("event", row.event);
++  mi_uiout->field_unsigned ("event-kind", row.event_kind);
++  mi_uiout->field_unsigned ("runtime-state", row.runtime_state);
++  mi_uiout->field_unsigned ("callback", row.callback);
++  mi_uiout->field_unsigned ("breakpoint", row.breakpoint);
++  mi_uiout->field_unsigned ("thread", row.thread);
++  mi_uiout->field_unsigned ("action", row.action);
++  mi_uiout->field_signed ("status", row.status);
++  mi_uiout->field_unsigned ("type", static_cast<unsigned> (row.type));
++  mi_uiout->field_unsigned ("reason", static_cast<unsigned> (row.invalidation));
++  mi_uiout->field_unsigned ("stop-generation", row.stop_generation);
++  mi_uiout->field_unsigned ("wave", row.stop.wave);
++  mi_uiout->field_unsigned ("workgroup", row.stop.workgroup);
++  mi_uiout->field_unsigned ("dispatch", row.stop.dispatch);
++  mi_uiout->field_unsigned ("queue", row.stop.queue);
++  mi_uiout->field_unsigned ("agent", row.stop.agent);
++  mi_uiout->field_unsigned ("architecture", row.stop.architecture);
++  mi_uiout->field_unsigned ("os-queue", row.stop.os_queue);
++  mi_uiout->field_unsigned ("packet", row.stop.packet);
++  mi_uiout->field_unsigned ("os-agent", row.stop.os_agent);
++  mi_uiout->field_unsigned ("private-bytes", row.stop.private_bytes);
++  mi_uiout->field_unsigned ("group-bytes", row.stop.group_bytes);
++  mi_uiout->field_unsigned ("wave-state", row.stop.state);
++  mi_uiout->field_unsigned ("stop-reason", row.stop.stop_reason);
++  mi_uiout->field_unsigned ("lanes", row.stop.lanes);
++  mi_uiout->field_unsigned ("wave-index", row.stop.wave_index);
++  mi_uiout->field_unsigned ("group-x", row.stop.coordinate[0]);
++  mi_uiout->field_unsigned ("group-y", row.stop.coordinate[1]);
++  mi_uiout->field_unsigned ("group-z", row.stop.coordinate[2]);
++  mi_uiout->field_unsigned ("grid-x", row.stop.grid[0]);
++  mi_uiout->field_unsigned ("grid-y", row.stop.grid[1]);
++  mi_uiout->field_unsigned ("grid-z", row.stop.grid[2]);
++  mi_uiout->field_unsigned ("size-x", row.stop.workgroup_size[0]);
++  mi_uiout->field_unsigned ("size-y", row.stop.workgroup_size[1]);
++  mi_uiout->field_unsigned ("size-z", row.stop.workgroup_size[2]);
++  mi_uiout->field_unsigned ("queue-type", row.stop.queue_type);
++  mi_uiout->field_unsigned ("queue-state", row.stop.queue_state);
++  mi_uiout->field_unsigned ("elf-machine", row.stop.elf_machine);
++  gdb_flush (event_channel);
++}
+--- a/gdb/mi/mi-interp.c
++++ b/gdb/mi/mi-interp.c
+@@ -21,6 +21,7 @@
+ 
+ #include "mi-interp.h"
+ #include "amd-dbgapi-runtime-observation-v1.h"
++#include "amd-dbgapi-stopped-wave-observation-v1.h"
+ 
+ #include "arch-utils.h"
+ #include "exceptions.h"
+@@ -459,6 +460,8 @@
+ #if HAVE_AMD_DBGAPI
+   /* The complete *stopped record is flushed and mi_uiout rewound first. */
+   amd_runtime_observation_v1::flush_safe_point ();
++  amd_stopped_wave_observation_v1::after_normal_stop
++    (print_frame ? inferior_thread () : nullptr);
+ #endif
+ }
+ 
+@@ -997,3 +1000,5 @@
+   mi_uiout->field_unsigned ("reason", static_cast<unsigned> (row.invalidation));
+   gdb_flush (event_channel);
+ }
++
++#include "amd-stopped-wave-observation-mi-v1.inc"
+--- a/gdb/mi/mi-interp.h
++++ b/gdb/mi/mi-interp.h
+@@ -35,6 +35,8 @@
+ 
+   void on_amd_runtime_observation_v1
+     (const amd_runtime_observation_v1::record &) override;
++  void on_amd_stopped_wave_observation_v1
++    (const amd_stopped_wave_observation_v1::record &) override;
+   void init (bool top_level) override;
+   void resume () override;
+   void suspend () override;
+--- a/gdb/mi/mi-main.c
++++ b/gdb/mi/mi-main.c
+@@ -42,6 +42,7 @@
+ #include "regcache.h"
+ #include "frame.h"
+ #include "mi-main.h"
++#include "amd-dbgapi-stopped-wave-observation-v1.h"
+ #include "mi-interp.h"
+ #include "language.h"
+ #include "valprint.h"
+@@ -1966,6 +1967,13 @@
+ void
+ mi_execute_command (const char *cmd, int from_tty)
+ {
++#if HAVE_AMD_DBGAPI
++  /* Observation-only: every next command invalidates before dispatch, including
++     CLI-through-MI and Python execute_mi.  There is no read-command exception. */
++  amd_stopped_wave_observation_v1::change
++    (amd_stopped_wave_observation_v1::reason::stop_changed);
++#endif
++
+   std::string token;
+   std::unique_ptr<struct mi_parse> command;
+ 
+@@ -2030,6 +2038,13 @@
+ void
+ mi_execute_command (mi_parse *context)
+ {
++#if HAVE_AMD_DBGAPI
++  /* Observation-only: every next command invalidates before dispatch, including
++     CLI-through-MI and Python execute_mi.  There is no read-command exception. */
++  amd_stopped_wave_observation_v1::change
++    (amd_stopped_wave_observation_v1::reason::stop_changed);
++#endif
++
+   if (context->op != MI_COMMAND)
+     error (_("Command is not an MI command"));
+ 

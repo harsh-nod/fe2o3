@@ -390,6 +390,29 @@ pub(super) fn invocation_for_fixture_source(
     source_root: &Path,
     target_cpu: &str,
 ) -> (Vec<String>, String, String) {
+    invocation_for_fixture_source_with_dependencies(
+        (directory, directory),
+        fixture,
+        package_name,
+        crate_name,
+        feature,
+        source_root,
+        target_cpu,
+    )
+}
+
+/// Test-only fresh package binding with an independently pinned shared dependency build.
+/// Existing callers above keep the exact same directory for both roles.
+pub(super) fn invocation_for_fixture_source_with_dependencies(
+    directories: (&Path, &Path),
+    fixture: &Path,
+    package_name: &str,
+    crate_name: &str,
+    feature: Option<&str>,
+    source_root: &Path,
+    target_cpu: &str,
+) -> (Vec<String>, String, String) {
+    let (directory, dependency_directory) = directories;
     assert!(matches!(target_cpu, "gfx942" | "gfx950"));
     let fixture = fixture.canonicalize().unwrap();
     let manifest = fixture.join("Cargo.toml");
@@ -425,8 +448,8 @@ pub(super) fn invocation_for_fixture_source(
             .unwrap()
             .starts_with("nightly-2026-04-03-")
     );
-    let artifacts = read_bounded(&directory.join("dependencies.stdout"), CAP).unwrap();
-    let target = directory.join("dependencies");
+    let artifacts = read_bounded(&dependency_directory.join("dependencies.stdout"), CAP).unwrap();
+    let target = dependency_directory.join("dependencies");
     let device_manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -876,4 +899,103 @@ fn process_capture_enforces_output_and_time_bounds() {
             .expect("control must fail closed");
         assert!(error.contains(expected), "{error}");
     }
+}
+
+/// Test-only real CLI observation, including closed nonzero refusal exits.
+/// Uses the existing bounded runner; it does not widen production execution.
+pub(super) fn capture_cli_status_v1(
+    command: &mut Command,
+    directory: &Path,
+    name: &str,
+) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String> {
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        return Err("closed CLI capture name".into());
+    }
+    let started = Instant::now();
+    let captured = run_bounded(command, Duration::from_secs(300), CAP, None)?;
+    // Retain actual streams even if the following post-close deadline refuses.
+    publish_cli_stream_v1(
+        &directory.join(format!("{name}.stdout")),
+        &captured.stdout,
+        CAP,
+    )?;
+    publish_cli_stream_v1(
+        &directory.join(format!("{name}.stderr")),
+        &captured.stderr,
+        CAP,
+    )?;
+    if started.elapsed() >= Duration::from_secs(300) {
+        return Err("CLI observation exceeded deadline after close".into());
+    }
+    Ok((captured.status.code(), captured.stdout, captured.stderr))
+}
+
+// Streams, unlike compiler artifacts, may legitimately be empty. This helper
+// is test-only and keeps create-new, bounded, durable publication semantics.
+fn publish_cli_stream_v1(output: &Path, bytes: &[u8], maximum: usize) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    if bytes.len() > maximum {
+        return Err("composition CLI stream exceeded bound".into());
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(output)
+        .map_err(|e| format!("create-new CLI stream: {e}"))?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| format!("CLI stream write failed; partial output retained: {e}"))?;
+    let descriptor = file.metadata().map_err(|e| e.to_string())?;
+    let named = fs::symlink_metadata(output).map_err(|e| e.to_string())?;
+    if !descriptor.is_file()
+        || !named.is_file()
+        || descriptor.len() != bytes.len() as u64
+        || named.len() != descriptor.len()
+        || descriptor.dev() != named.dev()
+        || descriptor.ino() != named.ino()
+    {
+        return Err("CLI stream output identity changed".into());
+    }
+    Ok(())
+}
+
+#[test]
+fn composition_cli_streams_preserve_empty_bytes_without_weakening_artifact_publication() {
+    let directory = std::env::temp_dir().join(format!(
+        "fe2o3-cli-stream-control-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let empty = directory.join("empty");
+    let regular = directory.join("regular");
+    let link = directory.join("link");
+    let oversized = directory.join("oversized");
+    let artifact = directory.join("artifact");
+    publish_cli_stream_v1(&empty, b"", 3).unwrap();
+    publish_cli_stream_v1(&regular, b"abc", 3).unwrap();
+    assert_eq!(read_bounded(&empty, 0).unwrap(), b"");
+    assert_eq!(read_bounded(&regular, 3).unwrap(), b"abc");
+    assert!(publish_cli_stream_v1(&regular, b"new", 3).is_err());
+    assert_eq!(read_bounded(&regular, 3).unwrap(), b"abc");
+    std::os::unix::fs::symlink(&regular, &link).unwrap();
+    assert!(publish_cli_stream_v1(&link, b"", 3).is_err());
+    assert!(publish_cli_stream_v1(&oversized, b"abcd", 3).is_err());
+    assert!(!oversized.exists());
+    assert!(super::publish_new_inert_output(&artifact, b"", 3, "control").is_err());
+    assert!(!artifact.exists());
+    for path in [&link, &empty, &regular] {
+        fs::remove_file(path).unwrap();
+    }
+    fs::remove_dir(&directory).unwrap();
 }

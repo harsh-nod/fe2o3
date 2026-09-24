@@ -7,8 +7,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
         correspondence_owner: SemanticFunctionIdV1,
         semantic_function: SemanticFunctionIdV1,
-        defined_function_ids:
-            impl Into<EmissionReadOnlyV1<'a, BTreeMap<SemanticFunctionIdV1, FunctionId>>>,
+        defined_function_ids: impl Into<
+            EmissionReadOnlyV1<'a, BTreeMap<SemanticFunctionIdV1, FunctionId>>,
+        >,
         defined_function_signatures: impl Into<
             EmissionReadOnlyV1<'a, BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>>,
         >,
@@ -258,6 +259,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
         }
         Ok(Self {
+            ordered_composition: false,
             fixed_array_analysis: None,
             private_arrays: PrivateArrayFunctionRecorderV1::new(
                 private_array_work,

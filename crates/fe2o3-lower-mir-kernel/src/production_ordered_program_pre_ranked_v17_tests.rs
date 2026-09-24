@@ -1060,3 +1060,7 @@ fn ordered_program_source_maximum_is_exact_not_inferred_from_required_or_roster(
         assert_eq!(budget.work(), 24);
     }
 }
+
+// Reuse the existing inert semantic fixture; no duplicated test module.
+#[path = "production_ordered_composition_v1_tests.rs"]
+mod composition;

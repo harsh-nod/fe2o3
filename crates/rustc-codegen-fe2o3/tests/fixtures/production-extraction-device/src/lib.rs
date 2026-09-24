@@ -1,6 +1,34 @@
 #![no_std]
 
 #[cfg(any(
+    feature = "ordered-composition-root",
+    feature = "ordered-composition-helper",
+    feature = "ordered-composition-two-calls",
+    feature = "ordered-composition-root-helper",
+    feature = "ordered-composition-const-monos",
+    feature = "ordered-composition-scalar-helper",
+    feature = "ordered-composition-wrapping",
+    feature = "ordered-composition-nested",
+    feature = "ordered-composition-conditional",
+    feature = "ordered-composition-wrong-abi",
+    feature = "ordered-composition-foreign-marker",
+    feature = "ordered-composition-too-many",
+    feature = "ordered-composition-wrong-launch",
+    feature = "ordered-composition-dynamic-register",
+    feature = "ordered-composition-mixed-marker",
+))]
+mod ordered_composition_v1;
+
+#[cfg(any(
+    feature = "ordered-composition-publish-direct",
+    feature = "ordered-composition-publish-collision",
+    feature = "ordered-composition-publish-const",
+    feature = "ordered-composition-publish-local",
+    feature = "ordered-composition-publish-wrapper",
+))]
+mod ordered_composition_publish_v1;
+
+#[cfg(any(
     feature = "physical-lds-exchange-one-v22",
     feature = "physical-lds-exchange-registers-v22",
     feature = "physical-lds-exchange-wrong-launch-v22",
@@ -206,6 +234,26 @@ mod complete_body_v19;
 mod physical_entry_v20;
 
 #[cfg(not(any(
+    feature = "ordered-composition-publish-direct",
+    feature = "ordered-composition-publish-collision",
+    feature = "ordered-composition-publish-const",
+    feature = "ordered-composition-publish-local",
+    feature = "ordered-composition-publish-wrapper",
+    feature = "ordered-composition-root",
+    feature = "ordered-composition-helper",
+    feature = "ordered-composition-two-calls",
+    feature = "ordered-composition-root-helper",
+    feature = "ordered-composition-const-monos",
+    feature = "ordered-composition-scalar-helper",
+    feature = "ordered-composition-wrapping",
+    feature = "ordered-composition-nested",
+    feature = "ordered-composition-conditional",
+    feature = "ordered-composition-wrong-abi",
+    feature = "ordered-composition-foreign-marker",
+    feature = "ordered-composition-too-many",
+    feature = "ordered-composition-wrong-launch",
+    feature = "ordered-composition-dynamic-register",
+    feature = "ordered-composition-mixed-marker",
     feature = "physical-lds-exchange-one-v22",
     feature = "physical-lds-exchange-registers-v22",
     feature = "physical-lds-exchange-wrong-launch-v22",

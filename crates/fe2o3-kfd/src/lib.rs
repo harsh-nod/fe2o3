@@ -46,7 +46,15 @@ pub use engineering_gfx950::{
     target_endian = "little"
 ))]
 pub use engineering_gfx950::{
-    Gfx950DebugColdOwnerV1, Gfx950DebugColdPreparationFactsV1, Gfx950DebugMetadataNoQueueOwnerV1,
+    Gfx950DebugAllocationRetirementV1, Gfx950DebugColdOwnerV1, Gfx950DebugColdPreparationFactsV1,
+    Gfx950DebugEmptyQueueV1, Gfx950DebugExecutionContractV1,
+    Gfx950DebugExecutionPreparationErrorV1, Gfx950DebugExecutionPreparationV1,
+    Gfx950DebugLocalErrorV1, Gfx950DebugLocalFailureV1, Gfx950DebugLocalPhaseV1,
+    Gfx950DebugLocalReleaseCompleteV1, Gfx950DebugLocalStepV1, Gfx950DebugMetadataNoQueueOwnerV1,
+    Gfx950DebugNativeRequirementV1, Gfx950DebugNativeUnavailableV1, Gfx950DebugQueueGeometryV1,
+    Gfx950DebugQueueLifecycleErrorV1, Gfx950DebugQueueLifecycleEventV1,
+    Gfx950DebugQueueLifecyclePhaseV1, Gfx950DebugRuntimeEnableReturnedV1,
+    validate_gfx950_debug_queue_lifecycle_v1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

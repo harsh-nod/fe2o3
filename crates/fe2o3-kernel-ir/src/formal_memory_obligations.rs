@@ -15,6 +15,7 @@ use crate::{
 mod complete_body_v19;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
+mod ordered_composition_v1;
 mod physical_entry_v20;
 mod physical_global_copy_v21;
 mod physical_lds_exchange_v22;
@@ -24,6 +25,7 @@ mod receipt_v1;
 
 pub use complete_body_v19::derive_complete_body_memory_obligations_v19;
 pub use guarded_access_v1::FormalGuardedMemoryResourceErrorV1;
+pub use ordered_composition_v1::*;
 pub use physical_entry_v20::{
     PhysicalEntryKernargAbiRequirementV20, PhysicalEntryKernargReadV20,
     PhysicalEntryKernargSlotV20, PhysicalEntryMemoryErrorV20, PhysicalEntryMemoryObligationsV20,
@@ -789,7 +791,27 @@ fn derive_kernel_memory_obligations_with_v19_context(
     index_width: FormalIndexWidth,
     canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
+    derive_kernel_memory_obligations_with_composition_context(
+        verified,
+        kernel_id,
+        launch_extent,
+        index_width,
+        canonical_v19,
+        None,
+    )
+}
+
+fn derive_kernel_memory_obligations_with_composition_context(
+    verified: VerifiedKernelIrModuleV1<'_>,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+    composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
+) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
     let module = verified.module();
+    let ordered_composition =
+        composition.is_some_and(|owner| ordered_composition_v1::contains(owner, module, kernel_id));
     let complete_body_v19 = canonical_v19.is_some_and(|owner| {
         std::ptr::eq(module, owner.module())
             && complete_body_v19::contains_verified_complete_body(owner, kernel_id)
@@ -862,7 +884,8 @@ fn derive_kernel_memory_obligations_with_v19_context(
             let location = FunctionOperationLocation::new(block.id, operation_index);
             match &operation.kind {
                 OperationKind::Call { callee, .. }
-                    if !operation.has_complete_effect_summary()
+                    if !ordered_composition
+                        && !operation.has_complete_effect_summary()
                         && !effect_summaries
                             .function(callee)
                             .is_some_and(|summary| summary.is_complete_and_pure()) =>
@@ -1031,6 +1054,7 @@ fn derive_kernel_memory_obligations_with_v19_context(
                 OperationKind::Gfx942CompleteBodyDeclaration(_)
                 | OperationKind::Gfx942CompleteBodyStep(_)
                     if complete_body_v19 => {}
+                OperationKind::Gfx942OrderedProgram(_) if ordered_composition => {}
                 OperationKind::Execution(_)
                 | OperationKind::Gfx942OrderedRegion(_)
                 | OperationKind::Gfx942OrderedProgram(_)

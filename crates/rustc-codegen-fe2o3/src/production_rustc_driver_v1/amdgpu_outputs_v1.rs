@@ -56,6 +56,9 @@ pub(super) fn extract_amdgpu_llvm_in_active_session_v1(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
     )?;
+    if ordered_composition_normal_v1::selected()? {
+        return ordered_composition_normal_v1::extract_llvm(transaction, output, expected_target);
+    }
     if transaction.has_authenticated_physical_lds_exchange_v22() {
         return physical_lds_exchange_v22::extract_llvm(transaction, output, expected_target);
     }
@@ -134,6 +137,13 @@ pub(super) fn extract_amdgpu_compiler_handoff_in_active_session_v1(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         census,
     )?;
+    if ordered_composition_normal_v1::selected()? {
+        return ordered_composition_normal_v1::extract_handoff(
+            transaction,
+            output,
+            expected_target,
+        );
+    }
     if transaction.has_authenticated_physical_lds_exchange_v22() {
         return physical_lds_exchange_v22::extract_handoff(transaction, output, expected_target);
     }
@@ -178,6 +188,7 @@ fn extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
     expected_target: Option<&str>,
     census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
+    ordered_composition_normal_v1::refuse_semantic_v3()?;
     let invocation = inert_extraction_invocation_v3()?;
     let transaction = transaction_with_census_in_active_session_v1(
         tcx,

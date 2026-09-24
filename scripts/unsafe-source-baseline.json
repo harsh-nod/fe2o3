@@ -734,6 +734,9 @@
     "block": 8,
     "function": 5
   },
+  "crates/fe2o3-kfd/src/engineering_gfx950_debug_execution_v1.rs": {
+    "function": 1
+  },
   "crates/fe2o3-kfd/src/engineering_gfx950_debug_noqueue_v1.rs": {
     "function": 1
   },
@@ -781,11 +784,14 @@
     "function": 3
   },
   "crates/fe2o3-kfd/src/queue_linux.rs": {
-    "block": 45,
+    "block": 47,
     "extern_block": 1
   },
   "crates/fe2o3-kfd/src/queue_submit.rs": {
     "block": 7
+  },
+  "crates/fe2o3-kfd/src/runtime_debug_empty_transport_v1.rs": {
+    "block": 2
   },
   "crates/fe2o3-kfd/src/runtime_debug_metadata_storage_v1.rs": {
     "block": 3

@@ -39,9 +39,14 @@ use amdgpu_outputs_v1::{
 
 #[path = "production_rustc_driver_v1/complete_body_v19.rs"]
 mod complete_body_v19;
+mod ordered_composition_diagnostic_v1;
+mod ordered_composition_normal_v1;
 mod physical_entry_v20;
 mod physical_global_copy_v21;
 mod physical_lds_exchange_v22;
+pub use ordered_composition_diagnostic_v1::run_diagnostic_ordered_composition_extraction_driver_v1;
+#[cfg(target_os = "linux")]
+pub use ordered_composition_diagnostic_v1::run_ordered_composition_source_promotion_driver_v1;
 
 #[path = "production_rustc_driver_v1/ordered_region_diagnostic_export_v16.rs"]
 mod ordered_region_diagnostic_export_v16;
@@ -1054,3 +1059,6 @@ mod gfx942_physical_lds_exchange_qualification_v22_tests;
 
 #[cfg(all(test, target_os = "linux"))]
 mod gfx942_physical_lds_exchange_production_v22_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_ordered_composition_qualification_v1_tests;

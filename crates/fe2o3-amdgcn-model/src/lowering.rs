@@ -46,6 +46,9 @@ pub use ordered_region_v16::lower_canonical_v16_compiler_module_to_gfx942_xnack_
 #[path = "lowering/ordered_program_v17.rs"]
 mod ordered_program_v17;
 pub use ordered_program_v17::lower_canonical_v17_compiler_module_to_gfx942_xnack_minus_llvm_ir;
+#[path = "lowering/ordered_program_composition_v1.rs"]
+mod ordered_program_composition_v1;
+pub use ordered_program_composition_v1::*;
 
 include!("lowering_native_v12.rs");
 
@@ -1103,6 +1106,7 @@ fn lower_compiler_module_with_ordered_program_context_v17(
 enum OrderedModuleOwner<'a> {
     RegionV16(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16),
     ProgramV17(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17),
+    CompositionV1(&'a fe2o3_kernel_ir::VerifiedOrderedProgramCompositionV1),
 }
 
 fn lower_compiler_module_with_ordered_context(
@@ -1120,7 +1124,13 @@ fn lower_compiler_module_with_ordered_context(
             "compiler-module lowering requires at least one kernel entry",
         ));
     }
-    verify_module(module).map_err(LoweringErrors::verification)?;
+    // Composition holds the exact verified immutable canonical module already.
+    // Join before omitting only the redundant raw-module verification pass.
+    if let Some(OrderedModuleOwner::CompositionV1(owner)) = ordered_owner {
+        ordered_program_composition_v1::validate_owner_context(module, target, owner)?;
+    } else {
+        verify_module(module).map_err(LoweringErrors::verification)?;
+    }
     match ordered_owner {
         Some(OrderedModuleOwner::RegionV16(owner)) => {
             ordered_region_v16::validate_owner_context(module, target, owner)?;
@@ -1129,6 +1139,9 @@ fn lower_compiler_module_with_ordered_context(
         Some(OrderedModuleOwner::ProgramV17(owner)) => {
             ordered_program_v17::validate_owner_context(module, target, owner)?;
             v12_preflight::reject_unsupported_v17_module(owner)?;
+        }
+        Some(OrderedModuleOwner::CompositionV1(owner)) => {
+            v12_preflight::reject_unsupported_v17_module(owner.canonical())?;
         }
         None => reject_unsupported_v12_module(module)?,
     }
@@ -1380,6 +1393,10 @@ fn lower_compiler_module_with_ordered_context(
             matches!(ordered_owner, Some(OrderedModuleOwner::RegionV16(_)));
         lowerer.ordered_program_v17 =
             matches!(ordered_owner, Some(OrderedModuleOwner::ProgramV17(_)));
+        lowerer.ordered_composition_v1 = match ordered_owner {
+            Some(OrderedModuleOwner::CompositionV1(owner)) => Some(owner),
+            _ => None,
+        };
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
     }
@@ -1394,6 +1411,10 @@ fn lower_compiler_module_with_ordered_context(
             &call_symbols,
             target,
         )?;
+        lowerer.ordered_composition_v1 = match ordered_owner {
+            Some(OrderedModuleOwner::CompositionV1(owner)) => Some(owner),
+            _ => None,
+        };
         preflight_function(&mut lowerer)?;
         helper_lowerers.push(lowerer);
     }
@@ -2666,16 +2687,24 @@ fn emit_compiler_module(
     let readnone_attribute = has_readnone.then_some(kernels.len());
     let convergent_attribute = has_convergent.then_some(kernels.len() + usize::from(has_readnone));
 
-    let mut output = CapacityLimitedText::try_new(module, MAX_COMPILER_MODULE_TEXT_BYTES)?;
+    let composition = kernels
+        .iter()
+        .any(|lowerer| lowerer.ordered_composition_v1.is_some());
+    let mut output = if composition {
+        CapacityLimitedText::try_new_composition_v1(module)?
+    } else {
+        CapacityLimitedText::try_new(module, MAX_COMPILER_MODULE_TEXT_BYTES)?
+    };
     writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
     // Closed V16/V17 target paths emit directly for the pinned LLVM22 worker.
     // The older renderer intentionally retains the Rust/frontend layout. Select
     // the existing reviewed worker profile here, before any module text exists;
     // never edit captured LLVM or relax the worker's exact layout validation.
-    let data_layout = if kernels
-        .iter()
-        .any(|lowerer| lowerer.ordered_region_v16 || lowerer.ordered_program_v17)
-    {
+    let data_layout = if kernels.iter().any(|lowerer| {
+        lowerer.ordered_region_v16
+            || lowerer.ordered_program_v17
+            || lowerer.ordered_composition_v1.is_some()
+    }) {
         Some(fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1)
     } else {
         target.data_layout()
@@ -3330,7 +3359,13 @@ fn validate_capabilities(
                     && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAME => {}
             TargetCapability::Extension { namespace, name }
                 if target == LoweringTarget::Gfx942XnackMinusV1
-                    && matches!(ordered_owner, Some(OrderedModuleOwner::ProgramV17(_)))
+                    && matches!(
+                        ordered_owner,
+                        Some(
+                            OrderedModuleOwner::ProgramV17(_)
+                                | OrderedModuleOwner::CompositionV1(_)
+                        )
+                    )
                     && namespace
                         == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAMESPACE
                     && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAME => {}
@@ -3724,6 +3759,7 @@ struct FunctionLowerer<'a> {
     semantic_anchor_emission: SemanticAnchorEmissionV1,
     ordered_region_v16: bool,
     ordered_program_v17: bool,
+    ordered_composition_v1: Option<&'a fe2o3_kernel_ir::VerifiedOrderedProgramCompositionV1>,
 }
 
 #[derive(Clone, Copy)]
@@ -4074,6 +4110,7 @@ impl<'a> FunctionLowerer<'a> {
             semantic_anchor_emission,
             ordered_region_v16: false,
             ordered_program_v17: false,
+            ordered_composition_v1: None,
         })
     }
 
@@ -4106,6 +4143,7 @@ impl<'a> FunctionLowerer<'a> {
             semantic_anchor_emission,
             ordered_region_v16: false,
             ordered_program_v17: false,
+            ordered_composition_v1: None,
         })
     }
 
@@ -4133,6 +4171,7 @@ impl<'a> FunctionLowerer<'a> {
             semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
             ordered_region_v16: false,
             ordered_program_v17: false,
+            ordered_composition_v1: None,
         })
     }
 
@@ -4887,7 +4926,11 @@ impl<'a> FunctionLowerer<'a> {
                 self.validate_ordered_region_v16(operation, &location)?;
             }
             OperationKind::Gfx942OrderedProgram(_) => {
-                self.validate_ordered_program_v17(operation, &location)?;
+                if let Some(owner) = self.ordered_composition_v1 {
+                    self.validate_ordered_composition_v1(operation, &location, owner)?;
+                } else {
+                    self.validate_ordered_program_v17(operation, &location)?;
+                }
             }
             OperationKind::Gfx942CompleteBodyDeclaration(_)
             | OperationKind::Gfx942CompleteBodyStep(_) => {

@@ -22,6 +22,11 @@ use fe2o3_kernel_ir::{
 use std::collections::BTreeSet;
 use std::fmt;
 
+#[path = "kernel_ir_codegen_ordered_composition_v1.rs"]
+mod ordered_composition_v1;
+#[cfg(test)]
+pub(crate) use ordered_composition_v1::exact_ordered_composition_descriptor_extension_v1;
+pub(crate) use ordered_composition_v1::retain_verified_ordered_composition_compiler_module_text_v1;
 #[path = "kernel_ir_codegen_nominal_descriptor_v3.rs"]
 pub(crate) mod nominal_v3;
 #[path = "kernel_ir_codegen_physical_entry_v20.rs"]
@@ -131,6 +136,7 @@ pub(crate) enum CompilerModuleConstructionError {
     },
     DescriptorSourceAlreadyBound,
     CompleteBodyIdentityMismatch,
+    OrderedCompositionIdentityMismatchV1,
     PhysicalEntryIdentityMismatchV20,
     PhysicalGlobalCopyIdentityMismatchV21,
     PhysicalLdsExchangeIdentityMismatchV22,
@@ -152,6 +158,7 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::LimitExceeded { field, actual, max } => {
                 write!(formatter, "{field} count/size {actual} exceeds limit {max}")
             }
+            Self::OrderedCompositionIdentityMismatchV1 => formatter.write_str("ordered composition emission differs from the actual canonical owner"),
             Self::PhysicalLdsExchangeIdentityMismatchV22 => formatter.write_str("physical LDS-exchange compiler module does not match the retained canonical owner and frame"),
             Self::PhysicalGlobalCopyIdentityMismatchV21 => formatter.write_str(
                 "physical global-copy compiler module does not match the retained canonical owner",

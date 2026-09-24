@@ -19,8 +19,9 @@ impl SemanticFunctionLoweringV1<'_> {
         let function_index = self.semantic_function.index();
         let fail = |detail| unsupported(function_index, Some(block.index()), None, detail);
         self.require_call_argument_count(block, call, 8)?;
-        if self.function.role() != SemanticFunctionRoleV1::KernelRoot
-            || self.required_workgroup != Some([64, 1, 1])
+        if !self.ordered_composition
+            && (self.function.role() != SemanticFunctionRoleV1::KernelRoot
+                || self.required_workgroup != Some([64, 1, 1]))
         {
             return Err(fail(
                 "ordered program requires a direct root and required 64x1x1 workgroup",
