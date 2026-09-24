@@ -1,5 +1,18 @@
 # Assembly authoring implementation status
 
+## BF16 source inspection through normal compiler continuation — 2026-09-24
+
+The separate genuine two-session ladder now carries the original inspected
+BF16 compilation through ranked, formal and target checks into ordinary LLVM
+and the existing inert V2 worker handoff. Wrong launch still refuses before
+inspection. Four observation controls passed; runtime bounds/alias requirements
+remain retained, and the handoff grants no production publication or launch
+authority. See the [qualification record](source-transport-tiled-debugger-qualification-20260924.md#same-owner-bf16-normal-continuation).
+
+This does not yet establish numerical simulation, edited-tile promotion,
+machine equivalence or GPU execution. Broad accepted exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Source-role transport and disabled debugger packages — 2026-09-24
 
 The [new qualification record](source-transport-tiled-debugger-qualification-20260924.md)
@@ -17,7 +30,8 @@ Neither package has launched a target or captured physical registers/memory.
 The experimental tiled BF16 inspection now passes its genuine four-session
 core ladder, with 62 lowerer and 18 frontend controls. The separate shape
 ladder still refuses a source-spelled alias that optimization did not retain;
-normal continuation, numerical simulation and edited-tile promotion remain open.
+At that checkpoint normal continuation, numerical simulation and edited-tile
+promotion remained open; the separate normal continuation is recorded above.
 The latest merged regression passed 5,810 test executions plus inventory/build
 checks on its recorded snapshot, including the final unused-result correction.
 Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.

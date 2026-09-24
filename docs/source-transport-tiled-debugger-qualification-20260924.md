@@ -106,9 +106,38 @@ case: the Rust spelling did not produce an observed admitted SSA alias.
 Its receipt is 95,450 bytes, SHA-256
 `793d132c6e12ad75f5d835d948c1da3627c9aa3c32371ff321e6483ae78064d0`.
 This does not qualify alias, phi, loop or retained-memory coverage. The shape
-ladder, normal continuation, source promotion, fresh edited-source compilation,
+ladder, source-bound helper transport, source promotion, fresh edited-source compilation,
 numerical oracle, final-code/resource comparison and public tiled command remain
 unfinished. The core ladder alone does not complete U4.
+
+## Same-owner BF16 normal continuation
+
+The separate genuine two-session normal ladder now passes direct compilation
+and wrong-launch refusal. After inspecting the live pre-ranked region, it
+consumes the returned original compilation through ranked checks, target-neutral
+attachment, formal-memory admission, target lowering and the existing inert V2
+worker handoff. It checks the full original V12 identity at the target boundary;
+no JSON, copied graph or decoded handoff reconstructs a compiler source owner.
+
+The direct target retains twenty correspondence blocks, three formal allocations,
+nine formal accesses and eight ranked discharged bounds. One runtime bounds
+requirement and two runtime alias requirements remain. They are not claimed
+discharged by a host launch. The ordinary compiler LLVM is 52,795 bytes; the
+descriptor-bound worker LLVM is 61,355 bytes; the inert V2 handoff is 61,654
+bytes. Each is separately retained and read back. One expected MFMA intrinsic
+call is present in the ordinary LLVM. The worker handoff grants no compiler,
+worker or launch authority.
+
+Four pure observation controls and the completed two-session parent passed in
+`logs/phase28-resume-r14-compiler-tiled-normal-continuation-actual-r1/receipt.json`,
+180,348 bytes, SHA-256
+`ce2b72e8d05a6d5850e91bc39ee6912448cf78603d33dabe96cd892de3ad181e`.
+The source census for that gate is
+`1d72adaf5ee7ff6da050aa8e856ee5ce8480ecb41d8776aab1968dbd13884659`.
+The first phase uses its original ledger and ends at its established boundary;
+later stages retain their existing accounting. This is not a single
+compiler-wide meter. Source shape coverage, numerical simulation, tiled editing,
+final machine equivalence and GPU execution remain unqualified.
 
 ## Reproducible disabled debugger packages
 
@@ -172,7 +201,7 @@ is 127,890 bytes, SHA-256
 `e9528497b39d0d1420136d8aa511da2ff4e38404acb50defff7e8f2d0b74cfc6`.
 Its source census is
 `2371f34e1c4af91ba2cded8666c4edfe6b677c3b89f6a9bafbf635ef3e44c094`.
-This gate includes the unused-result correction and predates only these final
-record updates; it is
+This gate includes the unused-result correction and predates the separate
+normal-continuation test leaves and subsequent record updates; it is
 not retroactively relabeled as testing a later source tree. Counts overlap other
 gates; this is not whole-workspace strict lint or hardware qualification.

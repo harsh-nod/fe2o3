@@ -48,3 +48,6 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         (result, observed)
     }
 }
+
+#[path = "tiled_region_normal_v1_tests.rs"]
+mod normal;

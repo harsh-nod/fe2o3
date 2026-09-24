@@ -509,3 +509,6 @@ fn copied_empty_use_roster_is_all_unused_with_no_synthetic_rows() {
     assert!(rows.iter().flatten().all(Option::is_none));
     assert_eq!(counts.map(|count| count == 0), [true; 4]);
 }
+
+#[path = "gfx942_tiled_region_normal_v1_tests.rs"]
+pub(super) mod normal;

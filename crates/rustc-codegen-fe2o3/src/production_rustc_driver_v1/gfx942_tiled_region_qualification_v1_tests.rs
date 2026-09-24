@@ -143,6 +143,9 @@ struct BodyCallbacks<'a> {
     case: &'a str,
     calls: usize,
     result: Option<Value>,
+    normal: bool,
+    directory: &'a Path,
+    started: std::time::Instant,
 }
 impl Callbacks for BodyCallbacks<'_> {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
@@ -152,7 +155,13 @@ impl Callbacks for BodyCallbacks<'_> {
                 tcx,
                 crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
             ) {
-                Ok(transaction) => observation::observe(transaction, self.case).unwrap(),
+                Ok(transaction) => {
+                    if self.normal {
+                        observation::normal::observe(transaction, self.directory, self.started)
+                    } else {
+                        observation::observe(transaction, self.case).unwrap()
+                    }
+                }
                 Err(error) => {
                     json!({"stage":"actual_source_or_callback_refused","diagnostic":error,
                 "phase":Value::Null,"callback":Value::Null,"collection_refused":true})
@@ -165,11 +174,17 @@ impl Callbacks for BodyCallbacks<'_> {
 #[test]
 #[ignore = "actual pinned-rustc child; use the isolated source core or shape ladder"]
 fn actual_bf16_source_child() {
+    source_child(false);
+}
+fn source_child(normal: bool) {
     let started = std::time::Instant::now();
     let directory =
         PathBuf::from(std::env::var_os(CHILD_ENV).expect("actual preparation directory"));
     assert!(directory.is_absolute());
     let case = std::env::var(CASE_ENV).expect("closed actual source case");
+    if normal {
+        assert!(matches!(case.as_str(), "direct" | "wrong-launch"));
+    }
     let feature = feature_for_case(&case).unwrap();
     let actual = inputs::derive_record(&directory, feature);
     let retained: inputs::PreparedInvocation = serde_json::from_slice(
@@ -205,6 +220,9 @@ fn actual_bf16_source_child() {
         case: &case,
         calls: 0,
         result: None,
+        normal,
+        directory: &directory,
+        started,
     };
     timely(started.elapsed(), 300).unwrap();
     rustc_driver::run_compiler(&actual.args, &mut callbacks);
@@ -218,8 +236,17 @@ fn actual_bf16_source_child() {
         &json!({
         "case":case,"observation":observed,"accepted":false,"acceptance_requires_completed_parent":true}),
     );
-    observation::accept(&case, &observed).unwrap();
-    if let Some(bytes) = observed["snapshot"]["source_sha256"].as_array() {
+    if normal {
+        observation::normal::recheck_outputs(&directory, &case, &observed);
+    } else {
+        observation::accept(&case, &observed).unwrap();
+    }
+    let source_observation = if normal {
+        &observed["inspection"]
+    } else {
+        &observed
+    };
+    if let Some(bytes) = source_observation["snapshot"]["source_sha256"].as_array() {
         let actual_bytes = read_bounded(&fixture().join("src/lib.rs"), 65536).unwrap();
         assert_eq!(
             Value::Array(bytes.clone()),
@@ -235,19 +262,50 @@ fn actual_bf16_source_child() {
     assert_eq!(inputs::derive_record(&directory, feature), actual);
     timely(started.elapsed(), 300).unwrap();
     let frame = serde_json::to_string(&json!({
-        "schema":"fe2o3-test-tiled-region-source-observation-v1","case":case,"feature":feature,
+        "schema":if normal { observation::normal::SCHEMA } else { "fe2o3-test-tiled-region-source-observation-v1" },"case":case,"feature":feature,
         "invocation":actual,"observation":observed,"actual_rustc_callbacks":callbacks.calls,
-        "source_and_dependencies_unchanged":true,"pre_ranked_only":true,
-        "normal_ranked_formal_target_handoff_qualified":false,"numerical_cpu_qualified":false,
+        "source_and_dependencies_unchanged":true,"pre_ranked_only":!normal,
+        "normal_ranked_formal_target_handoff_qualified":normal && case=="direct","numerical_cpu_qualified":false,
         "grants_artifact_or_launch_authority":false,"hardware_observed":false,
     }))
     .unwrap();
     assert!(frame.len() <= 128 * 1024);
     timely(started.elapsed(), 300).unwrap();
-    println!("\n{PREFIX}{frame}");
+    let prefix = if normal {
+        observation::normal::PREFIX
+    } else {
+        PREFIX
+    };
+    println!("\n{prefix}{frame}");
     timely(started.elapsed(), 300).unwrap();
 }
 fn ladder(cases: &[&str], kind: &str) {
+    let normal = kind == observation::normal::GATE;
+    assert!(
+        normal
+            || matches!(
+                kind,
+                "core-four-sessions" | "shape-four-sessions-pending-measurement"
+            )
+    );
+    if normal {
+        assert_eq!(cases, ["direct", "wrong-launch"]);
+    }
+    let child_test = if normal {
+        observation::normal::CHILD
+    } else {
+        CHILD
+    };
+    let prefix = if normal {
+        observation::normal::PREFIX
+    } else {
+        PREFIX
+    };
+    let schema = if normal {
+        observation::normal::SCHEMA
+    } else {
+        "fe2o3-test-tiled-region-source-observation-v1"
+    };
     let started = std::time::Instant::now();
     let requested = PathBuf::from(std::env::var_os(OUTPUT_ENV).expect("fresh task-owned output"));
     let directory = create_output(&requested);
@@ -322,7 +380,7 @@ fn ladder(cases: &[&str], kind: &str) {
         let stdout = checked(
             sanitized(&mut child)
                 .current_dir(repository())
-                .args(["--exact", CHILD, "--ignored", "--nocapture"])
+                .args(["--exact", child_test, "--ignored", "--nocapture"])
                 .env(CHILD_ENV, &directory)
                 .env(CASE_ENV, case)
                 .env(CRATE_BINDING_ID_ENV_V1, &record.crate_binding)
@@ -342,7 +400,7 @@ fn ladder(cases: &[&str], kind: &str) {
         let stdout = std::str::from_utf8(&stdout).unwrap();
         let frames = stdout
             .lines()
-            .filter_map(|line| line.strip_prefix(PREFIX))
+            .filter_map(|line| line.strip_prefix(prefix))
             .collect::<Vec<_>>();
         assert_eq!(frames.len(), 1);
         assert_eq!(
@@ -353,10 +411,7 @@ fn ladder(cases: &[&str], kind: &str) {
             1
         );
         let observed: Value = serde_json::from_str(frames[0]).unwrap();
-        assert_eq!(
-            observed["schema"],
-            "fe2o3-test-tiled-region-source-observation-v1"
-        );
+        assert_eq!(observed["schema"], schema);
         assert_eq!(observed["case"], *case);
         assert_eq!(observed["feature"], feature);
         assert_eq!(
@@ -365,7 +420,19 @@ fn ladder(cases: &[&str], kind: &str) {
         );
         assert_eq!(observed["actual_rustc_callbacks"], 1);
         assert_eq!(observed["source_and_dependencies_unchanged"], true);
-        observation::accept(case, &observed["observation"]).unwrap();
+        if normal {
+            observation::normal::recheck_outputs(&directory, case, &observed["observation"]);
+            assert_eq!(observed["pre_ranked_only"], false);
+            assert_eq!(
+                observed["normal_ranked_formal_target_handoff_qualified"],
+                *case == "direct"
+            );
+            assert_eq!(observed["numerical_cpu_qualified"], false);
+            assert_eq!(observed["grants_artifact_or_launch_authority"], false);
+            assert_eq!(observed["hardware_observed"], false);
+        } else {
+            observation::accept(case, &observed["observation"]).unwrap();
+        }
         let raw: Value = serde_json::from_slice(
             &read_bounded(&directory.join(format!("{case}.observed.json")), 256 * 1024).unwrap(),
         )
@@ -384,11 +451,22 @@ fn ladder(cases: &[&str], kind: &str) {
     assert_eq!(observations.len(), cases.len());
     assert_eq!(inputs::current_sources(), sources);
     assert_eq!(inputs::dependency_snapshot(&directory).0, dependencies);
-    let report = json!({"schema":"fe2o3-test-tiled-region-source-ladder-v1","gate":kind,
+    if normal {
+        // Rehash earlier positive bytes after the refused child and every
+        // final input/dependency observation, before accepting the union.
+        for row in &observations {
+            observation::normal::recheck_outputs(
+                &directory,
+                row["case"].as_str().unwrap(),
+                &row["observation"],
+            );
+        }
+    }
+    let report = json!({"schema":if normal { "fe2o3-test-tiled-region-normal-ladder-v1" } else { "fe2o3-test-tiled-region-source-ladder-v1" },"gate":kind,
         "actual_rustc_sessions":observations.len(),"observations":observations,"source_files":sources,
-        "dependency_snapshot":dependencies,"fresh_dependency_builds":1,"pre_ranked_only":true,
+        "dependency_snapshot":dependencies,"fresh_dependency_builds":1,"pre_ranked_only":!normal,
         "all_required_shape_controls_complete":false,"numerical_cpu_qualified":false,
-        "normal_ranked_formal_target_handoff_qualified":false,"source_publication_attempted":false,
+        "normal_ranked_formal_target_handoff_qualified":normal,"source_publication_attempted":false,
         "native_execution_attempted":false,"grants_artifact_or_launch_authority":false,
         "cleanup_scope":"reused bounded direct-child/process-group helper, not whole-family supervision",
         "acceptance":"completed successful parent test required; this JSON is historical observation only"});
