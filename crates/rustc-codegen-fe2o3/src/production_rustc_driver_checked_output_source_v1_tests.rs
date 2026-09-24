@@ -5,6 +5,8 @@ use super::*;
 mod guarded_loop_read;
 #[path = "production_rustc_driver_nominal_abi_v3_tests.rs"]
 mod nominal_abi_v3;
+#[path = "production_rustc_driver_ordinary_source_cases_v1_tests.rs"]
+mod ordinary_source_cases;
 use crate::production_pipeline::checked_output_policy4_v1::snapshots;
 use fe2o3_kernel_ir::OperationKind;
 use fe2o3_rustc_invocation::{
@@ -12,6 +14,7 @@ use fe2o3_rustc_invocation::{
     classify_rustc_invocation_v2, derive_cargo_metadata_build_observation_v2,
     ordered_rustc_codegen_metadata_v1, portable_rustc_metadata_v1,
 };
+use ordinary_source_cases::OrdinarySourceCase;
 use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -402,35 +405,6 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
         OrdinarySourceCase::PrivateUnitHelper,
         OrdinarySourceCase::RetainedPrivateUnitHelper,
     ]);
-}
-
-enum OrdinarySourceCase {
-    GuardedLoopRead(guarded_loop_read::Case),
-    NominalPolicy4ErasedControl,
-    ConditionalDescriptorPair,
-    ReferenceFill,
-    ProofFill,
-    MaskedShift(masked_shift_source::Config),
-    ConstantShift(shift_source::Config),
-    ScalarBorrowPolicy5,
-    RetainedScalarBorrowPolicy5,
-    ScalarBorrowPolicy5Barrier,
-    NumericCast(numeric_cast_source::Config),
-    F32Exp,
-    RetainedF32Exp,
-    SaturatingInteger(saturating_source::Config),
-    Fill,
-    UnannotatedFill,
-    Vecadd,
-    WrappedFill,
-    RetainedWrappedFill,
-    SharedUnitHelper,
-    PrivateUnitHelper,
-    RetainedPrivateUnitHelper,
-    F32Negate,
-    F32Divide,
-    RetainedF32Negate,
-    RetainedF32Divide,
 }
 
 fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {

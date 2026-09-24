@@ -74,8 +74,11 @@ The four initial library suites used the pre-reconciliation snapshot. Main
 commit `ed69ea8c845a5d13adbaceedf1b6b3321217d6ed` was then fast-forwarded without
 overwriting this batch. The source/CLI checks, legacy regressions, doctests,
 downstream checks and policies ran on the combined tree. Native integration was
-rerun after the comment-only lint correction: all 15 cases passed again. Final
-documentation edits followed the frozen build/test runs.
+rerun after the comment-only lint correction: all 15 cases passed again. The
+hygiene gate subsequently required moving the ordinary source-case enum into
+its own test module. That mechanical move changed no variants, selectors or
+assertions; `cargo check --locked --offline -p rustc-codegen-fe2o3 --tests`
+passed afterward. Final documentation edits followed the frozen build/test runs.
 
 The final native matrix's measured source snapshot was
 `f2d0601d320e418c2a49f12b595bd51b8569cc0b877ea0d9c8113522fb4013de`.
