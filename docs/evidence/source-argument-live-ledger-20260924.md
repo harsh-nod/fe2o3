@@ -4,6 +4,10 @@ This checkpoint advances #272 without completing a milestone or adding any
 qualification to the 47-kernel production-to-safe-GPU-launch matrix. It follows
 [live read replay and native issuer entry](live-read-native-entry-20260924.md).
 
+The subsequent [source-bound conditional bounds checkpoint](source-bound-conditional-bounds-20260924.md)
+integrates this relation into the aggregate and fixed analysis pipeline. The
+remaining-work section below describes the state of this earlier checkpoint.
+
 ## Scope
 
 The existing complete argument-correspondence checker, structural traversal,

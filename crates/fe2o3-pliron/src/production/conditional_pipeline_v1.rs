@@ -291,22 +291,32 @@ impl ProductionConditionalRankedAnalysisV1 {
 /// This is not an independently proved theorem or a lowering/launch capability.
 /// Construction, source/CPU joins and physical-address premises remain separate.
 ///
-/// ```compile_fail
-/// use fe2o3_pliron::{ProductionConditionalPipelineAnalysisV1, ProductionRankedKernelLoweringInputV1};
-/// fn promote(value: ProductionConditionalPipelineAnalysisV1) -> ProductionRankedKernelLoweringInputV1 {
-///     value.into()
+/// ```no_run
+/// use fe2o3_pliron::ProductionConditionalRankedAnalysisV1;
+/// fn inspect(pending: ProductionConditionalRankedAnalysisV1) {
+///     let checked = pending.check_pipeline_v1().unwrap();
+///     let _: &ProductionConditionalRankedAnalysisV1 = checked.pending_analysis();
 /// }
 /// ```
 ///
-/// ```compile_fail
-/// use fe2o3_pliron::ProductionConditionalPipelineAnalysisV1;
-/// fn duplicate(value: ProductionConditionalPipelineAnalysisV1) { let _ = value.clone(); }
+/// ```compile_fail,E0277
+/// use fe2o3_pliron::{ProductionConditionalRankedAnalysisV1, ProductionRankedKernelLoweringInputV1};
+/// fn promote(pending: ProductionConditionalRankedAnalysisV1) -> ProductionRankedKernelLoweringInputV1 {
+///     pending.check_pipeline_v1().unwrap().into()
+/// }
 /// ```
 ///
-/// ```compile_fail
-/// use fe2o3_pliron::{ProductionConditionalPipelineAnalysisV1, ProductionConditionalRankedAnalysisV1};
-/// fn recover(value: ProductionConditionalPipelineAnalysisV1) -> ProductionConditionalRankedAnalysisV1 {
-///     value.pending
+/// ```compile_fail,E0599
+/// use fe2o3_pliron::ProductionConditionalRankedAnalysisV1;
+/// fn duplicate(pending: ProductionConditionalRankedAnalysisV1) {
+///     let _ = pending.check_pipeline_v1().unwrap().clone();
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// use fe2o3_pliron::ProductionConditionalRankedAnalysisV1;
+/// fn recover(pending: ProductionConditionalRankedAnalysisV1) -> ProductionConditionalRankedAnalysisV1 {
+///     pending.check_pipeline_v1().unwrap().pending
 /// }
 /// ```
 pub struct ProductionConditionalPipelineAnalysisV1 {
