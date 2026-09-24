@@ -126,8 +126,10 @@ ready XGMI directional set and publishes it in one allocation-disjoint batch of
 at most 63. It rejects a larger or non-disjoint ready set before native publication,
 or a nonempty ready set with a busy publication window without waiting. An empty ready set succeeds
 without observing completion. Earlier scalar prefix-draining behavior violated the
-nonwaiting SPI contract and has been removed; separately bounded progress
-through larger backlogs remains an integration requirement. Ordinary poll and wait
+nonwaiting SPI contract and has been removed. The explicit
+[directed scalar progress](runtime-directed-context-peer-v1.md) path can now
+publish one bounded allocation-disjoint prefix or observe an in-flight batch;
+it does not drain an unbounded backlog in one call. Ordinary poll and wait
 observe completion without publishing deferred work. The separate opt-in
 [`wait_peer_copy_batch`](runtime-xgmi-peer-batch-v1.md) operation can publish and
 observe an exact complete ready directional roster, or retry its exact in-flight
@@ -690,6 +692,19 @@ tests pass on each GNU/musl target with twenty hardware-only ignores, plus all
 not a global per-stream quantum, early-event graph API, native/fault acceptance,
 formal refinement or matched performance. All gates below remain independently
 required; this packet does not establish parity.
+
+Subsequent checkpoints add the
+[native directed diamond](evidence/dev-xgmi-directed-owner-native-mi300x-2026-09-24/README.md),
+[early async event receipts](runtime-async-operation-events-v1.md) and
+[endpoint backing budgets](runtime-xgmi-backing-budgets-v1.md). The diamond
+qualifies its exact four-copy, pending-input workload and ordinary cleanup on
+two MI300X GPUs, not faults, performance or unified multi-device compute.
+Early events separate dependency admission from final observation; an event
+receipt is not completion or retry authority. Backing budgets are CPU-qualified
+with 1,552 KFD and 1,365 runtime tests per GNU/musl target, twenty hardware-only
+runtime ignores, 73 doctests and static checks. Their native pressure/retry and
+teardown campaign remains required. Aggregate memory, generated execution,
+production-code proof correspondence and complete parity gates remain open.
 
 ### G1: API and ownership
 

@@ -95,6 +95,8 @@ mod directional_wait_diagnostic;
 mod drain_capture;
 mod xgmi_batch;
 mod xgmi_batch_diagnostic;
+mod xgmi_budget;
+pub use xgmi_budget::{KfdNativeXgmiBackingBudgetV1, KfdNativeXgmiBackingUsageV1};
 mod xgmi_directed;
 mod xgmi_progress;
 mod xgmi_segments;
@@ -9139,6 +9141,20 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         first_unique_id: u64,
         second_unique_id: u64,
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        Self::open_default_with_backing_budgets_v1(
+            first_unique_id,
+            second_unique_id,
+            [KfdNativeXgmiBackingBudgetV1::default(); 2],
+        )
+    }
+
+    /// Opens two exact endpoints with independent immutable backing budgets.
+    /// Array order is the argument order, never topology or numeric-ID order.
+    pub fn open_default_with_backing_budgets_v1(
+        first_unique_id: u64,
+        second_unique_id: u64,
+        budgets: [KfdNativeXgmiBackingBudgetV1; 2],
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
         if admit_xgmi_unique_id_pair_v1(first_unique_id, second_unique_id).is_err() {
             return Err(KfdRuntimeBackendErrorV1::new(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -9170,7 +9186,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         };
         let first = bind(first_unique_id)?;
         let second = bind(second_unique_id)?;
-        Self::from_checked_pair(first, second)
+        Self::from_checked_pair_with_backing_budgets_v1(first, second, budgets)
     }
 
     /// Builds the copy-only owner from two already-admitted devices.
@@ -9181,6 +9197,20 @@ impl KfdNativeXgmiRuntimeBackendV1 {
     pub fn from_checked_pair(
         first: CheckedGfx942XnackMinusDevice,
         second: CheckedGfx942XnackMinusDevice,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        Self::from_checked_pair_with_backing_budgets_v1(
+            first,
+            second,
+            [KfdNativeXgmiBackingBudgetV1::default(); 2],
+        )
+    }
+
+    /// Builds the copy-only owner with budgets fixed before either endpoint's
+    /// first allocation. Failure after acquiring the first VM is fail-stop.
+    pub fn from_checked_pair_with_backing_budgets_v1(
+        first: CheckedGfx942XnackMinusDevice,
+        second: CheckedGfx942XnackMinusDevice,
+        budgets: [KfdNativeXgmiBackingBudgetV1; 2],
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
         let first_observation = first.observation();
         let second_observation = second.observation();
@@ -9247,25 +9277,21 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 capabilities,
             },
         ];
-        let first = first.acquire_shared_gtt_memory_session().map_err(|error| {
+        let sessions = xgmi_budget::acquire_sessions([first, second], budgets, |device, budget| {
+            device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
+                budget.device,
+                budget.host_visible,
+            )
+        })
+        .map_err(|error| {
             KfdRuntimeBackendErrorV1::new(
                 KfdRuntimeBackendErrorKindV1::Native,
                 format!("first XGMI VM acquisition: {error}"),
             )
         })?;
-        let second = match second.acquire_shared_gtt_memory_session() {
-            Ok(session) => session,
-            Err(_) => {
-                // Acquiring the first process VM consumed its checked device,
-                // and this profile has no inverse transition that can return
-                // that authority. Returning would abandon native custody
-                // through an inert Drop, so this post-mutation failure stops.
-                std::process::abort();
-            }
-        };
         Ok(Self {
             descriptions,
-            sessions: [first, second],
+            sessions,
             routes: [forward, reverse],
             queues: [None, None],
             queue_creation_roots: [
@@ -10353,9 +10379,14 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             )
         })?;
         let id = self.next_id()?;
-        let lease = self.sessions[index]
-            .allocate_gfx942_xgmi_device_memory(byte_len, alignment)
-            .map_err(|error| self.terminal_error(format!("native XGMI allocation: {error}")))?;
+        let lease = xgmi_budget::allocate(
+            &mut self.terminal,
+            || {
+                self.sessions[index]
+                    .allocate_gfx942_xgmi_device_memory_classified_v1(byte_len, alignment)
+            },
+            fe2o3_kfd::Gfx942XgmiAllocationFailureV1::disposition,
+        )?;
         self.allocations.insert(
             id,
             XgmiRuntimeAllocationV1 {

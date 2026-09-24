@@ -10,6 +10,9 @@ mod dispatch_retention;
 mod pair_currentness;
 mod queue_cleanup;
 mod transitions;
+mod xgmi_allocation;
+
+pub use xgmi_allocation::{Gfx942XgmiAllocationDispositionV1, Gfx942XgmiAllocationFailureV1};
 
 #[cfg(test)]
 pub(crate) use pair_currentness::with_terminal_pair as test_xgmi_pair_terminal;
@@ -5136,12 +5139,26 @@ impl SharedGttMemorySessionV1 {
         requested_bytes: u64,
         alignment: u64,
     ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
-        self.engine.allocate_device_memory_with_flags(
+        self.allocate_gfx942_xgmi_device_memory_classified_v1(requested_bytes, alignment)
+            .map_err(Gfx942XgmiAllocationFailureV1::into_error)
+    }
+
+    /// Like `allocate_gfx942_xgmi_device_memory`, preserving exact pre-native
+    /// capacity rejection separately from failures that supply no retry authority.
+    /// This does not classify queue creation, mapping or later initialization.
+    pub fn allocate_gfx942_xgmi_device_memory_classified_v1(
+        &mut self,
+        requested_bytes: u64,
+        alignment: u64,
+    ) -> Result<
+        Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        Gfx942XgmiAllocationFailureV1,
+    > {
+        self.engine.allocate_xgmi_device_memory_classified_v1(
             self.model_device.model_key(),
             self.vm,
             requested_bytes,
             alignment,
-            KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
         )
     }
 
@@ -6869,6 +6886,7 @@ mod tests {
     pub(super) mod queue_construction;
     mod sdma_single;
     mod transitions;
+    mod xgmi_backing;
     use super::*;
     use core::cell::Cell;
     use fe2o3_kfd_uapi::KfdIoctlAllocMemoryOfGpuArgs;
@@ -6924,6 +6942,7 @@ mod tests {
         next_handle: u64,
         flags: Vec<u32>,
         fail_operation: Option<&'static str>,
+        capacity_error_operation: Option<&'static str>,
         panic_operation: Option<&'static str>,
         fixed_va: Option<u64>,
         map_progress: u32,
@@ -6974,6 +6993,7 @@ mod tests {
                 next_handle: 1,
                 flags: Vec::new(),
                 fail_operation: None,
+                capacity_error_operation: None,
                 panic_operation: None,
                 fixed_va: None,
                 map_progress: 1,
@@ -7019,6 +7039,11 @@ mod tests {
         }
 
         fn check(&self, operation: &'static str) -> Result<(), MemorySessionError> {
+            if self.capacity_error_operation == Some(operation) {
+                return Err(MemorySessionError::DeviceBackingCredits(
+                    fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity,
+                ));
+            }
             if let Some((at, selected, panic)) = self.cleanup_fault
                 && at == self.cleanup_calls.len()
                 && selected == operation

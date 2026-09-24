@@ -1,5 +1,20 @@
 # Current Runtime Swarm Work Orders
 
+Latest resource integration (2026-09-24): the
+[XGMI backing-budget CPU packet](evidence/dev-xgmi-backing-budgets-cpu-2026-09-24/README.md)
+connects argument-ordered endpoint limits and inert usage snapshots to the
+original native accounts. Only typed, healthy, pre-native allocation capacity
+rejections return retryable Capacity; native uncertainty and queue-creation
+pressure retain terminal custody. Sixteen new regressions pass. Full GNU and
+musl each pass 1,552 KFD and 1,365 runtime tests, with twenty runtime hardware
+ignores; 73 doctests, formatting, strict Clippy and 3,910 unchanged inputs pass.
+The four-thread campaign prospectively extends the full-library bounds after
+two retained timeouts; neither failed campaign is promoted to acceptance.
+The owned build cache is removed, retaining logs. A fresh asymmetric-budget
+native pressure/retry/copy/shutdown witness is next. Aggregate memory,
+generated execution, formal correspondence and matched performance remain open.
+Native R125, Admission R118B, Resources R116/V3 and A1/A2 acceptance are unchanged.
+
 Latest async API qualification (2026-09-24): the
 [early-event CPU packet](evidence/dev-async-operation-events-cpu-2026-09-24/README.md)
 adds separate dependency-event and final-observation futures for frozen typed

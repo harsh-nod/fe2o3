@@ -1,0 +1,4 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [optimized] target(s) in 5m 16s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-xgmi-backing-20260924-7pyLIPnO/target/debug/deps/fe2o3_kfd-20f33d25beafa458)

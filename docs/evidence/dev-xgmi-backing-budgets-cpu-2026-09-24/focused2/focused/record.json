@@ -1,0 +1,21 @@
+{
+  "command": [
+    "cargo",
+    "--locked",
+    "test",
+    "-p",
+    "fe2o3-kfd",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "xgmi_",
+    "--",
+    "--test-threads=4"
+  ],
+  "started_ns": 1790246953147239164,
+  "process_group": 1949656,
+  "group_absent": true,
+  "finished_ns": 1790246955495851472,
+  "status": 0
+}

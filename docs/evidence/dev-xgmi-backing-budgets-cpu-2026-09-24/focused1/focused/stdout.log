@@ -1,0 +1,79 @@
+
+running 63 tests
+test sdma::tests::creation_guards_cover_the_first_memory_operation_and_xgmi_route_scope ... ok
+test sdma::tests::xgmi_batch_wait::malformed_ticket_rosters_are_rejected_without_consuming_records ... ok
+test sdma::tests::xgmi_batch_wait::expired_absolute_deadline_completes_an_all_ready_roster ... ok
+test sdma::tests::xgmi_batch_wait::expired_absolute_deadline_retains_a_ready_prefix_then_retry_completes ... ok
+test sdma::tests::xgmi_batch_wait::relative_zero_deadline_keeps_the_existing_one_scan_semantics ... ok
+test sdma::tests::xgmi_batch_wait::completion_observation_panic_preserves_every_mapping_and_payload ... ok
+test sdma::tests::xgmi_batch_wait::unexpected_completion_poisons_the_owner_and_retains_every_mapping ... ok
+test sdma::tests::xgmi_creation_failure_marks_terminal_without_requiring_queue_roster ... ok
+test sdma::tests::xgmi_post_completion_currentness_failure_retains_both_mappings ... ok
+test sdma::tests::xgmi_single_wait::legacy_zero_duration_still_observes_a_ready_completion ... ok
+test sdma::tests::xgmi_single_wait::malformed_scalar_ticket_is_rejected_before_any_observation_or_retirement ... ok
+test sdma::tests::xgmi_single_wait::closing_failure_preserves_completed_pair_or_retained_ticket ... ok
+test sdma::tests::xgmi_single_wait::scalar_absolute_wait_preserves_the_callers_exact_deadline ... ok
+test sdma::tests::xgmi_destroy_borrows_queue_until_native_destroy_succeeds ... ok
+test sdma::tests::xgmi_single_wait::ready_scalar_wait_at_expiry_returns_only_its_exact_mapping_pair ... ok
+test sdma::tests::xgmi_single_wait::scalar_invalid_completion_and_observation_panic_retain_the_exact_owners ... ok
+test sdma::tests::xgmi_single_wait::timeout_retains_both_owners_then_retry_reuses_the_same_ticket ... ok
+test sdma::tests::xgmi_timeout_failure_retains_the_exact_ticket ... ok
+test sdma::tests::xgmi_single_wait::scalar_and_singleton_batch_match_completion_and_retained_custody ... ok
+test sdma::tests::xgmi_single_wait::singleton_wait_uses_scalar_storage_and_keeps_the_currentness_driver ... ok
+test sdma::xgmi_diagnostic::tests::enabled_timer_preserves_results_and_phase_order ... ok
+test sdma::xgmi_diagnostic::tests::disabled_timer_runs_each_operation_once_without_recording ... ok
+test sdma::xgmi_diagnostic::tests::unwinding_operation_is_never_retried_or_replaced ... ok
+test shared_memory::tests::xgmi_backing::xgmi_backing_pressure_preserves_existing_owner_and_allows_release_retry ... ok
+test shared_memory::tests::xgmi_backing::xgmi_backing_allocation_unwind_preserves_payload_and_retained_debit ... ok
+test sdma::xgmi_diagnostic::tests::duplicate_or_unavailable_measurement_cannot_become_valid_again ... ok
+test shared_memory::tests::device_backing::n2_public_xgmi_pair_guard_encloses_native_and_peer_post_checks ... ok
+test shared_memory::tests::xgmi_backing::xgmi_backing_fixed_profile_capacity_is_pre_effect ... ok
+test shared_memory::tests::xgmi_backing::xgmi_backing_geometry_domain_and_identity_failures_are_not_capacity ... ok
+test shared_memory::tests::xgmi_backing::xgmi_backing_endpoint_pressure_does_not_charge_or_stall_peer ... ok
+test shared_memory::tests::xgmi_map_errno_at_full_prefix_never_grants_copy_authority ... ok
+test shared_memory::tests::xgmi_peer_post_unmap_failure_retains_unmapped_free_authority ... ok
+test shared_memory::tests::xgmi_mapping_retries_only_advanced_prefixes_and_retains_canonical_roster ... ok
+test shared_memory::tests::xgmi_peer_post_currentness_failure_retains_mapped_cleanup_authority ... ok
+test shared_memory::tests::xgmi_backing::xgmi_backing_failed_disposal_retains_charge_without_retry ... FAILED
+test shared_memory::tests::xgmi_unmap_overshoot_is_indeterminate_and_quarantined ... ok
+test shared_memory::tests::device_backing::n2_paired_xgmi_unwind_guards_either_account_and_peer_post_currentness ... ok
+test shared_memory::tests::xgmi_backing::xgmi_backing_capacity_shaped_currentness_and_native_failures_never_retry ... ok
+test shared_memory::tests::xgmi_unmap_regressed_prefix_is_indeterminate_and_quarantined ... ok
+test sdma::xgmi_retirement::tests::public_operation_families_guard_before_effectful_route_validation ... ok
+test shared_memory::tests::device_backing::n2_internal_xgmi_partial_prefix_unwind_closes_spare_capacity ... ok
+test shared_memory::tests::device_backing::n2_paired_xgmi_recoverable_prefix_errors_preserve_exact_owners ... ok
+test shared_memory::tests::xgmi_unmap_errno_at_full_prefix_quarantines_without_release ... ok
+test sdma::xgmi_creation::tests::vacant_root_is_small_inline_and_diagnostic_only ... ok
+test shared_memory::tests::xgmi_backing::xgmi_backing_peer_mapping_keeps_single_home_charge ... ok
+test sdma::xgmi_creation::tests::diagnostic_formatting_and_drop_leave_confirmed_custody_in_the_root ... ok
+test sdma::xgmi_retirement::tests::all_five_pending_classes_reject_before_preparation_or_route_validation ... ok
+test sdma::xgmi_retirement::tests::success_retires_both_route_directions_and_clears_only_after_closing ... ok
+test sdma::xgmi_creation::tests::preflight_errors_and_panics_leave_vacant_reusable_roots ... ok
+test sdma::xgmi_retirement::tests::every_effectful_callback_error_and_panic_retains_exact_custody_and_prefix ... ok
+test sdma::xgmi_retirement::tests::all_terminalizers_run_and_original_panic_wins_over_hostile_secondaries ... ok
+test sdma::xgmi_retirement::tests::mutated_destroy_arguments_and_raw_outcomes_remain_rooted ... ok
+test sdma::xgmi_retirement::tests::malformed_or_poisoned_owners_terminalize_without_native_teardown ... ok
+test sdma::xgmi_retirement::tests::incomplete_resource_success_cannot_vacate_root_or_reach_closing ... ok
+test topology::tests::directional_xgmi_routes_bind_exact_links_engines_and_generation ... ok
+test sdma::xgmi_retirement::tests::invalid_engine_and_inactive_doorbell_are_not_masked_by_pending ... ok
+test sdma::xgmi_retirement::tests::preparation_errors_and_panics_leave_live_owner_unchanged_and_retryable ... ok
+test sdma::xgmi_retirement::tests::real_resource_cleanup_errors_and_panics_retain_every_native_prefix ... ok
+test sdma::xgmi_creation::tests::native_prefix_errors_and_panics_preserve_exact_attempt_and_doorbell ... ok
+test sdma::xgmi_creation::tests::route_key_opaque_and_confirmed_failures_retain_custody ... ok
+test sdma::xgmi_creation::tests::independent_terminalizers_preserve_original_panic_and_forget_secondary_payloads ... ok
+test sdma::xgmi_creation::tests::occupied_root_drop_aborts_without_native_cleanup ... ok
+test sdma::xgmi_retirement::tests::occupied_root_drop_aborts_even_after_complete_cleanup_or_during_unwind ... ok
+
+failures:
+
+---- shared_memory::tests::xgmi_backing::xgmi_backing_failed_disposal_retains_charge_without_retry stdout ----
+
+thread 'shared_memory::tests::xgmi_backing::xgmi_backing_failed_disposal_retains_charge_without_retry' (1505440) panicked at crates/fe2o3-kfd/src/shared_memory/tests/xgmi_backing.rs:255:9:
+assertion failed: engine.release_device_memory(lease).is_err()
+
+
+failures:
+    shared_memory::tests::xgmi_backing::xgmi_backing_failed_disposal_retains_charge_without_retry
+
+test result: FAILED. 62 passed; 1 failed; 0 ignored; 0 measured; 1488 filtered out; finished in 1.24s
+

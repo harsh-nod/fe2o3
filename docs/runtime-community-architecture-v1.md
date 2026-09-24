@@ -123,21 +123,26 @@ reported as `TooLate` until it is drained. Compute and copy can overlap only
 when their allocation sets are disjoint. The separate XGMI facade retains a
 successful exact-roster mapping for reuse across copies until host access or
 allocation release requires an explicit unmap. For each direction it selects
-submissions through a deterministic FIFO readiness queue, publishes at most 63 in one
-native reservation and doorbell store, and retains every mapping through exact
-completion. Polling a submission beyond the current batch may observe a
-published ticket in front of it, so caller-driven observation cannot
-indefinitely ignore the batch that must drain first. Neither poll nor wait
-publishes deferred work. The additive in-process `flush_stream` operation
-snapshots the complete dependency-ready directional set and publishes it in FIFO
-prefixes of at most 63. It synchronously completes each non-final prefix before
-publishing the next, then returns with the final prefix outstanding so subsequent
-host work can overlap DMA. First-prefix allocation failure rejects before
-mutation; a recoverable later-prefix failure is quiescent because prior prefixes
-have completed and the remaining custody is retryable. Flush creates no
-background thread. Frozen Runtime Worker V1 has no flush request; negotiated
+submissions through a deterministic FIFO readiness queue and retains every
+mapping through exact completion. Bounded scalar progress can publish an
+allocation-disjoint ready prefix of at most 63, or observe an in-flight batch;
+it does not synchronously drain an unbounded backlog. Scalar `flush_stream`
+admits one complete ready set of at most 63 before publication and never waits
+for completion. Larger sets or shared mapping rosters reject without partial
+publication. The [scalar progress](runtime-xgmi-scalar-progress-v1.md) and
+[shared-source](runtime-xgmi-shared-source-v1.md) contracts supersede the earlier
+synchronous prefix-draining policy. Flush creates no background thread.
+Frozen Runtime Worker V1 has no flush request; negotiated
 Runtime Worker V4 and V5 expose the operational SPI profile with request-timeout
 and caller-drain-deadline bounds.
+
+The XGMI owner accepts optional immutable
+[per-endpoint backing budgets](runtime-xgmi-backing-budgets-v1.md), reusing the
+original sessions' padded device and coherent GTT accounts. Only an exact
+pre-native allocation capacity rejection is recoverable. Queue-creation pressure
+retains its existing terminal custody because ring/control work may precede
+completion-buffer allocation. Inert usage snapshots remain readable after
+terminal failure; these accounts do not establish total process memory bounds.
 
 The feature-gated gfx942 qualification lane is intentionally outside production
 authority. It re-hashes and loader-validates one repository-owned COV6 object,
@@ -327,10 +332,10 @@ ambiguity.
   dependency roster). Prepublication cancellation may remove an arbitrary
   ready entry in O(ready). Allocation-overlap admission inspects only the two
   selected owner rosters, each bounded to 256, with directed provenance validation.
-  A poll focused beyond the published batch may observe its earliest published
-  predecessor but does not publish deferred work. Explicit flush remains the
-  publication mechanism and synchronously drains fixed-size prefixes when the
-  entry snapshot exceeds one native batch.
+  Ordinary poll/wait do not publish deferred work. Bounded directed scalar
+  progress may publish one allocation-disjoint prefix or observe one in-flight
+  batch. Explicit scalar flush publishes one complete ready set without waiting,
+  rejecting oversized sets or shared mapping rosters before publication.
 - KFD device, VM, allocation, mapping, and queue lifecycle transitions use the
   full contracted topology/aperture currentness composite. Active mapped-memory
   and queue operations use the retained process, reset-event, descriptor, UAPI,

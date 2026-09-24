@@ -1,0 +1,19 @@
+{
+  "command": [
+    "cargo",
+    "--locked",
+    "test",
+    "-p",
+    "fe2o3-kfd",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib"
+  ],
+  "started_ns": 1790244421373753967,
+  "process_group": 1516552,
+  "exception": "TimeoutExpired",
+  "group_absent": true,
+  "finished_ns": 1790245623677187314,
+  "status": -9
+}
