@@ -4,6 +4,12 @@
 compile_error!("fe2o3-compiler-execution-issuer requires Linux x86-64");
 
 mod launch_inputs_v2;
+
+// CLOEXEC does not prevent a concurrent fork from briefly retaining a test pipe.
+// Keep immediate-EOF assertions and this crate's fork/exec window disjoint.
+#[cfg(test)]
+static TEST_FORK_FD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub use launch_inputs_v2::{
     CompilerExecutionIssuerLaunchInputErrorV2, CompilerExecutionIssuerLaunchInputStorageV2,
     CompilerExecutionIssuerLaunchInputsV2,
@@ -446,6 +452,7 @@ mod tests {
 
     #[test]
     fn nonblocking_pipe_publishes_one_exact_readiness_record() {
+        let _fork_guard = TEST_FORK_FD_LOCK.lock().unwrap();
         let (reader, writer) = pipe(libc::O_CLOEXEC | libc::O_NONBLOCK);
         let writer = admit_readiness_writer(writer).unwrap();
         let expected = readiness();
