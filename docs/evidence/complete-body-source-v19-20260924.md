@@ -388,3 +388,25 @@ The original accepted exits remain M1/V1/V2/U1/U2/U3 (6/18).
 M2/M5/V3 advance, but the remaining author-owned entry ABI, memory/synchronization,
 target coverage, physical hardware, protected finalization and curriculum
 requirements are not narrowed or declared complete.
+
+### Source-size policy correction
+
+The first publication policy gate refused the driver module's increase from
+1,187 to 1,209 lines (limit 1,200). That failed receipt is retained:
+r7-compiler-v19-publication-policy-r1, 12,529 bytes /
+d732e03962ec43512eaf3d9b5dd868af2597c97f90430e9adb4129a015e9bf3a.
+
+The three unchanged live-session LLVM/handoff output functions were extracted
+into amdgpu_outputs_v1.rs (196 lines); the callback driver is now 1,023 lines.
+No target checks, output rules, complete-body dispatch or protected-V3 refusal
+were removed. The backend library passed again (1,945 passed, 129 ignored),
+then fresh ordinary LLVM/handoff commands passed both positive source kernels
+and the exact wrong-launch refusal. The four positive output hashes match the
+previous public run.
+
+That gate froze HEAD a6820d41ad5326b6a3019626ef83372ef5b7d2b2 plus 7,219 files /
+107,714,241 bytes, SHA-256
+a2c95ea4d6465c86f7bb284c8d93468c8530130773bfa29ca1846de1a25aa238.
+Its receipt is r7-compiler-v19-output-module-regression-r1, 24,591 bytes /
+feef60ffe821accfca348cf14eefe82c539b7077549139fe6373402b0dd45024.
+This note was appended afterward.
