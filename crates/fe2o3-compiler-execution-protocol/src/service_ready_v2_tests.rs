@@ -103,49 +103,50 @@ fn independent_wire_round_trip_pid_boundaries_and_explicit_retention() {
     );
 
     for pid in [1, PID, u32::MAX] {
-        let before = budget.work();
-        let (ready, charge) = Ready::new(pid, &manifest, &policy, &mut budget).unwrap();
-        assert_eq!(budget.storage(), input_floor);
-        assert_eq!(budget.work(), before + WORK);
-        assert_eq!(charge.additional_storage(), ready.retained_storage());
-        assert_eq!(ready.retained_storage(), size_of::<(Ready, Storage)>());
-        budget.reserve_storage(charge.additional_storage()).unwrap();
-        assert_eq!(ready.issuer_pid(), pid);
-        assert_eq!(ready.launch_manifest_identity(), manifest.identity());
-        assert_eq!(ready.policy_identity(), policy.identity());
-        assert_eq!(
-            ready.canonical_bytes(),
-            &wire(
-                pid,
-                manifest.identity().as_bytes(),
-                policy.identity().as_bytes()
-            )
-        );
-        assert_eq!(ready.identity().as_bytes(), &ready.canonical_bytes()[88..]);
-        assert!(
-            ready
-                .matches_launch(pid, &manifest, &policy, &mut budget)
-                .unwrap()
-        );
-        assert!(
-            !ready
-                .matches_launch(0, &manifest, &policy, &mut budget)
-                .unwrap()
-        );
+        let retained = {
+            let before = budget.work();
+            let (ready, charge) = Ready::new(pid, &manifest, &policy, &mut budget).unwrap();
+            assert_eq!(budget.storage(), input_floor);
+            assert_eq!(budget.work(), before + WORK);
+            assert_eq!(charge.additional_storage(), ready.retained_storage());
+            assert_eq!(ready.retained_storage(), size_of::<(Ready, Storage)>());
+            budget.reserve_storage(charge.additional_storage()).unwrap();
+            assert_eq!(ready.issuer_pid(), pid);
+            assert_eq!(ready.launch_manifest_identity(), manifest.identity());
+            assert_eq!(ready.policy_identity(), policy.identity());
+            assert_eq!(
+                ready.canonical_bytes(),
+                &wire(
+                    pid,
+                    manifest.identity().as_bytes(),
+                    policy.identity().as_bytes()
+                )
+            );
+            assert_eq!(ready.identity().as_bytes(), &ready.canonical_bytes()[88..]);
+            assert!(
+                ready
+                    .matches_launch(pid, &manifest, &policy, &mut budget)
+                    .unwrap()
+            );
+            assert!(
+                !ready
+                    .matches_launch(0, &manifest, &policy, &mut budget)
+                    .unwrap()
+            );
 
-        let floor = budget.storage();
-        let (decoded, charge) = Ready::decode(ready.canonical_bytes(), &mut budget).unwrap();
-        assert_eq!(budget.storage(), floor);
-        assert_eq!(decoded, ready);
-        assert_eq!(charge.additional_storage(), decoded.retained_storage());
-        budget.reserve_storage(charge.additional_storage()).unwrap();
-        assert!(
-            decoded
-                .matches_launch(pid, &manifest, &policy, &mut budget)
-                .unwrap()
-        );
-        let retained = decoded.retained_storage() + ready.retained_storage();
-        drop((decoded, ready));
+            let floor = budget.storage();
+            let (decoded, charge) = Ready::decode(ready.canonical_bytes(), &mut budget).unwrap();
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(decoded, ready);
+            assert_eq!(charge.additional_storage(), decoded.retained_storage());
+            budget.reserve_storage(charge.additional_storage()).unwrap();
+            assert!(
+                decoded
+                    .matches_launch(pid, &manifest, &policy, &mut budget)
+                    .unwrap()
+            );
+            decoded.retained_storage() + ready.retained_storage()
+        };
         budget.release_storage(retained).unwrap();
         assert_eq!(budget.storage(), input_floor);
     }
@@ -496,23 +497,24 @@ fn exhausted_work_cannot_be_reset_by_repeated_decode_and_storage_is_explicit() {
     {
         let mut budget = Budget::new(&mut work, BYTES + RETAINED + STORAGE);
         budget.reserve_storage(BYTES).unwrap();
-        let (first, charge) = Ready::decode(&bytes, &mut budget).unwrap();
-        assert_eq!(budget.storage(), BYTES);
-        budget.reserve_storage(charge.additional_storage()).unwrap();
-        let (second, charge) = Ready::decode(&bytes, &mut budget).unwrap();
-        assert_eq!(budget.storage(), BYTES + first.retained_storage());
-        budget.reserve_storage(charge.additional_storage()).unwrap();
-        assert_eq!(budget.storage(), BYTES + 2 * RETAINED);
-        for _ in 0..3 {
-            assert!(matches!(
-                Ready::decode(&bytes, &mut budget),
-                Err(ReadyError::Resource(Resource::Work(_)))
-            ));
-            assert_eq!(budget.work(), 2 * WORK);
+        let retained = {
+            let (first, charge) = Ready::decode(&bytes, &mut budget).unwrap();
+            assert_eq!(budget.storage(), BYTES);
+            budget.reserve_storage(charge.additional_storage()).unwrap();
+            let (second, charge) = Ready::decode(&bytes, &mut budget).unwrap();
+            assert_eq!(budget.storage(), BYTES + first.retained_storage());
+            budget.reserve_storage(charge.additional_storage()).unwrap();
             assert_eq!(budget.storage(), BYTES + 2 * RETAINED);
-        }
-        let retained = first.retained_storage() + second.retained_storage();
-        drop((first, second));
+            for _ in 0..3 {
+                assert!(matches!(
+                    Ready::decode(&bytes, &mut budget),
+                    Err(ReadyError::Resource(Resource::Work(_)))
+                ));
+                assert_eq!(budget.work(), 2 * WORK);
+                assert_eq!(budget.storage(), BYTES + 2 * RETAINED);
+            }
+            first.retained_storage() + second.retained_storage()
+        };
         budget.release_storage(retained).unwrap();
         assert_eq!(budget.storage(), BYTES);
         assert_eq!(budget.peak_storage(), BYTES + RETAINED + STORAGE);
