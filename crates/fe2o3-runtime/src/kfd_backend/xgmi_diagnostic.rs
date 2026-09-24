@@ -503,7 +503,7 @@ mod tests {
             .split("    fn progress_peer_copy(")
             .nth(1)
             .unwrap()
-            .split("    fn drain_published_direction_for_flush(")
+            .split("    fn logical_resource_counts(")
             .next()
             .unwrap();
         let begin = poll.find("recorder.begin(").unwrap();

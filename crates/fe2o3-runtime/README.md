@@ -263,14 +263,13 @@ direction are selected by a deterministic FIFO readiness queue and published in 
 native reservation and doorbell store, capped at 63 so the 64-slot ring retains
 one empty slot. Polling or waiting for work beyond the current batch may observe
 a published predecessor, providing bounded caller-driven completion observation
-without claiming background progress. `flush_stream` snapshots the
-dependency-ready directional set at entry and publishes it in FIFO prefixes of
-at most 63. When more than one prefix is needed, flush synchronously drains each
-earlier prefix before publishing the next; the final prefix remains outstanding
-so host work after the flush can overlap DMA. A first-prefix allocation or
-admission failure rejects before native mutation. A recoverable later-prefix
-failure is quiescent because every earlier published prefix has completed, and
-the remaining ready custody can be retried. Poll and wait observe
+without claiming background progress. Scalar `flush_stream` snapshots the
+dependency-ready directional set at entry and publishes it in one batch of at
+most 63. A larger ready set rejects before native publication, as does a nonempty
+ready set with a busy publication window. An empty ready set succeeds without
+observing completion. Flush never drains an earlier scalar batch or waits for its
+completion. Bounded progress through a larger ready backlog requires a separate
+operation and is not provided by this flush contract. Poll and wait observe
 already-published completion and terminal dependencies but never publish
 deferred copies. Flush creates no background thread. It exposes no
 compute, same-device copy, memory

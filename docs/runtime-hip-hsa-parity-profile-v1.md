@@ -120,12 +120,13 @@ selection is O(log batch), independent of the total active set. It remains
 separate from the single-device compute owner; there is no unified native
 multi-device compute backend.
 
-The additive in-process `flush_stream` extension snapshots the complete ready
-XGMI directional set and publishes it in FIFO prefixes of at most 63. It
-synchronously completes every non-final prefix, then returns with the final
-prefix published so later host work can overlap DMA. First-prefix allocation
-failure is a prepublication rejection; recoverable failure after a completed
-prefix is quiescent and preserves retryable custody. Ordinary poll and wait
+The additive in-process scalar `flush_stream` extension snapshots the complete
+ready XGMI directional set and publishes it in one batch of at most 63. It
+rejects a larger ready set before native publication, or a nonempty ready set
+with a busy publication window without waiting. An empty ready set succeeds
+without observing completion. Earlier scalar prefix-draining behavior violated the
+nonwaiting SPI contract and has been removed; separately bounded progress
+through larger backlogs remains an integration requirement. Ordinary poll and wait
 observe completion without publishing deferred work. The separate opt-in
 [`wait_peer_copy_batch`](runtime-xgmi-peer-batch-v1.md) operation can publish and
 observe an exact complete ready directional roster, or retry its exact in-flight

@@ -385,7 +385,7 @@ mod enabled {
         );
         assert!(
             flush.find("xgmi_segments_diagnostic").unwrap()
-                < flush.find("classify_xgmi_flush_v1(").unwrap()
+                < flush.find("publish_xgmi_flush_v1(").unwrap()
         );
         let cancel = backend
             .split("impl RuntimeCancellationBackendV1 for KfdNativeXgmiRuntimeBackendV1 {")

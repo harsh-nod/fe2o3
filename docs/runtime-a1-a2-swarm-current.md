@@ -1,5 +1,16 @@
 # Current Runtime Swarm Work Orders
 
+Latest native correction (2026-09-23): the
+[scalar XGMI flush CPU packet](evidence/dev-xgmi-scalar-flush-cpu-2026-09-23/README.md)
+removes synchronous prefix draining and its unbounded backoff. Scalar flush now
+publishes one complete ready set of at most 63, rejects larger sets before
+publication, and never waits for a scalar batch to complete. GNU and musl each
+pass 1,224 runtime tests with twenty hardware-only ignores; 46 doctests,
+formatting, strict all-target Clippy and unchanged-input checks pass. This is a
+CPU-tested contract correction, not formal correspondence or native evidence.
+Larger-backlog bounded progress and pending-producer integration remain next;
+the accepted lane checkpoints and A1/A2 status are unchanged.
+
 Latest proof checkpoint (2026-09-23): the
 [constructor-origin owner lifecycle packet](evidence/dev-owner-lifecycle-2026-09-23/README.md)
 completes its signed-source 62-command campaign: both 1,240-obligation positives,

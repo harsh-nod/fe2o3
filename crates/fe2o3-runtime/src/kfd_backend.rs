@@ -5621,17 +5621,6 @@ fn apply_wait_backoff_v1(attempts: u32, sleep: &mut Duration, deadline: Instant)
     true
 }
 
-fn apply_unbounded_wait_backoff_v1(attempts: u32, sleep: &mut Duration) {
-    if attempts < WAIT_SPINS_V1 {
-        core::hint::spin_loop();
-    } else if attempts < WAIT_SPINS_V1 + WAIT_YIELDS_V1 {
-        std::thread::yield_now();
-    } else {
-        std::thread::sleep(*sleep);
-        *sleep = sleep.saturating_mul(2).min(WAIT_MAX_SLEEP_V1);
-    }
-}
-
 fn profile_host_timing_v1(performance: KfdRuntimeLaunchPerformanceV1) -> KfdProfileHostTimingV1 {
     KfdProfileHostTimingV1 {
         preparation_ns: duration_nanoseconds_v1(performance.preparation),
@@ -7442,58 +7431,32 @@ const fn classify_xgmi_flush_v1(
         XgmiFlushAdmissionV1::NoReadyWork
     } else if in_flight {
         XgmiFlushAdmissionV1::InFlight
-    } else if limit == 0 {
+    } else if ready > limit {
         XgmiFlushAdmissionV1::Capacity
     } else {
-        XgmiFlushAdmissionV1::Publish {
-            ready: if ready < limit { ready } else { limit },
-        }
+        XgmiFlushAdmissionV1::Publish { ready }
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct XgmiFlushPrefixProgressV1 {
-    remaining_at_entry: usize,
-    completed_prefixes: usize,
-}
-
-impl XgmiFlushPrefixProgressV1 {
-    const fn new(ready_at_entry: usize) -> Self {
-        Self {
-            remaining_at_entry: ready_at_entry,
-            completed_prefixes: 0,
-        }
-    }
-
-    const fn next_batch_len(self) -> usize {
-        if self.remaining_at_entry < GFX942_SDMA_MAX_IN_FLIGHT_V1 {
-            self.remaining_at_entry
-        } else {
-            GFX942_SDMA_MAX_IN_FLIGHT_V1
-        }
-    }
-
-    fn note_published(&mut self, published: usize) {
-        assert!(published != 0 && published <= self.remaining_at_entry);
-        self.remaining_at_entry -= published;
-    }
-
-    fn note_completed_prefix(&mut self) {
-        self.completed_prefixes = self
-            .completed_prefixes
-            .checked_add(1)
-            .expect("bounded XGMI flush prefix count");
-    }
-
-    fn classify_publication_failure(
-        self,
-        failure: RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
-    ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
-        if self.completed_prefixes == 0 {
-            failure
-        } else {
-            KfdRuntimeBackendV1::after_possible_host_mutation(failure)
-        }
+fn publish_xgmi_flush_v1(
+    ready: usize,
+    in_flight: bool,
+    publish: impl FnOnce() -> Result<
+        XgmiBatchPublicationOutcomeV1,
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    >,
+) -> Result<XgmiBatchPublicationOutcomeV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    match classify_xgmi_flush_v1(ready, in_flight, GFX942_SDMA_MAX_IN_FLIGHT_V1) {
+        XgmiFlushAdmissionV1::NoReadyWork => Ok(XgmiBatchPublicationOutcomeV1::NoReadyWork),
+        XgmiFlushAdmissionV1::InFlight => Err(KfdNativeXgmiRuntimeBackendV1::rejected(
+            KfdRuntimeBackendErrorKindV1::Busy,
+            "native XGMI direction already has a published batch",
+        )),
+        XgmiFlushAdmissionV1::Capacity => Err(KfdNativeXgmiRuntimeBackendV1::rejected(
+            KfdRuntimeBackendErrorKindV1::Capacity,
+            "native XGMI ready flush exceeds ring admission",
+        )),
+        XgmiFlushAdmissionV1::Publish { .. } => publish(),
     }
 }
 
@@ -10201,37 +10164,6 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             .map_or(BackendPollV1::Pending, |record| record.status))
     }
 
-    fn drain_published_direction_for_flush(
-        &mut self,
-        direction: usize,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let mut attempts = 0_u32;
-        let mut sleep = WAIT_INITIAL_SLEEP_V1;
-        while let Some(submission) = self.in_flight_by_direction[direction].first().copied() {
-            let active = self
-                .active
-                .remove(&submission)
-                .expect("indexed in-flight XGMI submission remains active");
-            match self.progress_peer_copy(active)? {
-                BackendPollV1::Succeeded => {
-                    attempts = 0;
-                    sleep = WAIT_INITIAL_SLEEP_V1;
-                }
-                BackendPollV1::Pending => {
-                    attempts = attempts.saturating_add(1);
-                    apply_unbounded_wait_backoff_v1(attempts, &mut sleep);
-                }
-                BackendPollV1::Failed { .. } => {
-                    return Err(Self::quiescent_error(
-                        KfdRuntimeBackendErrorKindV1::Native,
-                        "published XGMI prefix completed with failure",
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn logical_resource_counts(&self) -> XgmiLogicalResourceCountsV1 {
         XgmiLogicalResourceCountsV1 {
             streams: self.streams.len(),
@@ -11251,53 +11183,22 @@ impl RuntimeFlushBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         }
 
         let ready_at_entry = self.ready_by_direction[direction].len();
-        match classify_xgmi_flush_v1(
+        match publish_xgmi_flush_v1(
             ready_at_entry,
             !self.in_flight_by_direction[direction].is_empty(),
-            GFX942_SDMA_MAX_IN_FLIGHT_V1,
-        ) {
-            XgmiFlushAdmissionV1::NoReadyWork => return Ok(()),
-            XgmiFlushAdmissionV1::InFlight => {
-                return Err(Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::Busy,
-                    "native XGMI direction already has a published batch",
-                ));
+            || self.publish_ready_peer_batch(direction),
+        )? {
+            XgmiBatchPublicationOutcomeV1::NoReadyWork if ready_at_entry == 0 => Ok(()),
+            XgmiBatchPublicationOutcomeV1::Published => Ok(()),
+            XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure => {
+                Err(Self::quiescent_error(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    "native XGMI flush recovered a prepublication failure",
+                ))
             }
-            XgmiFlushAdmissionV1::Capacity => {
-                return Err(Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::Capacity,
-                    "native XGMI ready flush exceeds ring admission",
-                ));
-            }
-            XgmiFlushAdmissionV1::Publish { .. } => {}
-        }
-        let mut progress = XgmiFlushPrefixProgressV1::new(ready_at_entry);
-        loop {
-            let published = progress.next_batch_len();
-            let outcome = self
-                .publish_ready_peer_batch(direction)
-                .map_err(|failure| progress.classify_publication_failure(failure))?;
-            match outcome {
-                XgmiBatchPublicationOutcomeV1::Published => {}
-                XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure => {
-                    return Err(Self::quiescent_error(
-                        KfdRuntimeBackendErrorKindV1::Native,
-                        "native XGMI flush recovered a prepublication failure",
-                    ));
-                }
-                XgmiBatchPublicationOutcomeV1::NoReadyWork
-                | XgmiBatchPublicationOutcomeV1::AlreadyInFlight => {
-                    return Err(self.terminal_error(
-                        "native XGMI flush admission changed without concurrent access",
-                    ));
-                }
-            }
-            progress.note_published(published);
-            if progress.remaining_at_entry == 0 {
-                return Ok(());
-            }
-            self.drain_published_direction_for_flush(direction)?;
-            progress.note_completed_prefix();
+            XgmiBatchPublicationOutcomeV1::NoReadyWork
+            | XgmiBatchPublicationOutcomeV1::AlreadyInFlight => Err(self
+                .terminal_error("native XGMI flush admission changed without concurrent access")),
         }
     }
 }
@@ -23413,54 +23314,8 @@ mod tests {
         };
         assert_eq!(
             classify_xgmi_flush_v1(active.len(), false, GFX942_SDMA_MAX_IN_FLIGHT_V1),
-            XgmiFlushAdmissionV1::Publish {
-                ready: GFX942_SDMA_MAX_IN_FLIGHT_V1,
-            }
+            XgmiFlushAdmissionV1::Capacity
         );
-        let mut prefix_progress = XgmiFlushPrefixProgressV1::new(active.len());
-        let mut bounded_prefixes = Vec::new();
-        while prefix_progress.remaining_at_entry != 0 {
-            let published = prefix_progress.next_batch_len();
-            bounded_prefixes.push(published);
-            prefix_progress.note_published(published);
-            if prefix_progress.remaining_at_entry != 0 {
-                prefix_progress.note_completed_prefix();
-            }
-        }
-        assert_eq!(bounded_prefixes, [GFX942_SDMA_MAX_IN_FLIGHT_V1, 1]);
-
-        let mut second_prefix_failure =
-            XgmiFlushPrefixProgressV1::new(GFX942_SDMA_MAX_IN_FLIGHT_V1 + 1);
-        second_prefix_failure.note_published(GFX942_SDMA_MAX_IN_FLIGHT_V1);
-        second_prefix_failure.note_completed_prefix();
-        let retained_state = second_prefix_failure;
-        assert!(matches!(
-            second_prefix_failure.classify_publication_failure(
-                RuntimeBackendFailureV1::Rejected(KfdRuntimeBackendErrorV1::new(
-                    KfdRuntimeBackendErrorKindV1::Capacity,
-                    "injected second-prefix allocation failure",
-                ))
-            ),
-            RuntimeBackendFailureV1::Quiescent(error)
-                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
-                    && error.detail() == "injected second-prefix allocation failure"
-        ));
-        assert_eq!(
-            retained_state,
-            XgmiFlushPrefixProgressV1 {
-                remaining_at_entry: 1,
-                completed_prefixes: 1,
-            }
-        );
-        assert!(matches!(
-            XgmiFlushPrefixProgressV1::new(1).classify_publication_failure(
-                RuntimeBackendFailureV1::Rejected(KfdRuntimeBackendErrorV1::new(
-                    KfdRuntimeBackendErrorKindV1::Capacity,
-                    "injected first-prefix allocation failure",
-                ))
-            ),
-            RuntimeBackendFailureV1::Rejected(_)
-        ));
         let mut after: Vec<_> = active.keys().copied().collect();
         after.sort_unstable();
         assert_eq!(after, before);
@@ -23486,6 +23341,110 @@ mod tests {
                 .unwrap(),
             (1..=GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn native_xgmi_flush_never_enters_publication_when_the_ready_set_cannot_fit() {
+        for ready in [GFX942_SDMA_MAX_IN_FLIGHT_V1 + 1, 4096, usize::MAX] {
+            let mut publication_calls = 0;
+            let result = publish_xgmi_flush_v1(ready, false, || {
+                publication_calls += 1;
+                Ok(XgmiBatchPublicationOutcomeV1::Published)
+            });
+            assert!(matches!(
+                result,
+                Err(RuntimeBackendFailureV1::Rejected(error))
+                    if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
+            ));
+            assert_eq!(publication_calls, 0);
+        }
+        for ready in [1, GFX942_SDMA_MAX_IN_FLIGHT_V1, usize::MAX] {
+            let result = publish_xgmi_flush_v1(ready, true, || {
+                panic!("flush must not enter a busy native publication window")
+            });
+            assert!(matches!(
+                result,
+                Err(RuntimeBackendFailureV1::Rejected(error))
+                    if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+            ));
+        }
+        for in_flight in [false, true] {
+            assert_eq!(
+                publish_xgmi_flush_v1(0, in_flight, || {
+                    panic!("empty flush must not publish or wait for in-flight work")
+                })
+                .unwrap(),
+                XgmiBatchPublicationOutcomeV1::NoReadyWork
+            );
+        }
+    }
+
+    #[test]
+    fn native_xgmi_flush_publishes_one_complete_window_and_preserves_failures() {
+        for ready in 1..=GFX942_SDMA_MAX_IN_FLIGHT_V1 {
+            let mut publication_calls = 0;
+            assert_eq!(
+                publish_xgmi_flush_v1(ready, false, || {
+                    publication_calls += 1;
+                    Ok(XgmiBatchPublicationOutcomeV1::Published)
+                })
+                .unwrap(),
+                XgmiBatchPublicationOutcomeV1::Published
+            );
+            assert_eq!(publication_calls, 1);
+        }
+        for class in 0..3 {
+            let mut publication_calls = 0;
+            let result = publish_xgmi_flush_v1(GFX942_SDMA_MAX_IN_FLIGHT_V1, false, || {
+                publication_calls += 1;
+                let error = KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    "injected native publication failure",
+                );
+                Err(match class {
+                    0 => RuntimeBackendFailureV1::Rejected(error),
+                    1 => RuntimeBackendFailureV1::Quiescent(error),
+                    _ => RuntimeBackendFailureV1::Terminal(error),
+                })
+            });
+            let error = match (class, result) {
+                (0, Err(RuntimeBackendFailureV1::Rejected(error)))
+                | (1, Err(RuntimeBackendFailureV1::Quiescent(error)))
+                | (2, Err(RuntimeBackendFailureV1::Terminal(error))) => error,
+                other => panic!("flush changed the native failure class: {other:?}"),
+            };
+            assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Native);
+            assert_eq!(error.detail(), "injected native publication failure");
+            assert_eq!(publication_calls, 1);
+        }
+    }
+
+    #[test]
+    fn native_xgmi_scalar_flush_has_no_completion_or_backoff_path() {
+        let source = include_str!("kfd_backend.rs");
+        let flush = source
+            .split("impl RuntimeFlushBackendV1 for KfdNativeXgmiRuntimeBackendV1 {")
+            .nth(1)
+            .unwrap()
+            .split("impl RuntimeCancellationBackendV1 for KfdNativeXgmiRuntimeBackendV1 {")
+            .next()
+            .unwrap();
+        let scalar = flush.split("let ready_at_entry =").nth(1).unwrap();
+        assert_eq!(scalar.matches("publish_xgmi_flush_v1(").count(), 1);
+        assert_eq!(scalar.matches("self.publish_ready_peer_batch(").count(), 1);
+        for forbidden in [
+            "loop {",
+            "while ",
+            "progress_peer_copy(",
+            "wait",
+            "sleep",
+            "backoff",
+        ] {
+            assert!(
+                !scalar.contains(forbidden),
+                "unexpected scalar flush path: {forbidden}"
+            );
+        }
     }
 
     #[test]
