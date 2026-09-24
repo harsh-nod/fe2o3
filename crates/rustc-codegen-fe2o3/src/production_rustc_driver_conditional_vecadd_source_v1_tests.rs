@@ -6,6 +6,7 @@ use crate::production_ranked_projection_v1::{
     ProductionRankedProjectionErrorV1 as Projection,
     ProductionRankedVerificationErrorV1 as Verification,
     conditional_output_observation_v1_tests as prepared,
+    conditional_retention_observation_v1 as retention,
 };
 use crate::production_reference_effect_join_v2::{
     ProductionReferenceEffectJoinErrorV2 as Join, source_proof_freshness_v1 as proof,
@@ -200,7 +201,7 @@ fn fresh_proof(observation: &proof::Observation, expected: usize) {
 impl Callbacks for VecaddCallbacks {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.calls += 1;
-        self.result = Some((|| {
+        let (result, retention) = retention::observe(|| {
             let transaction = transaction_in_active_session_v1(
                 tcx,
                 crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
@@ -369,7 +370,20 @@ impl Callbacks for VecaddCallbacks {
                 qualification_credit: false,
                 grants_artifact_or_launch_authority: false,
             })
-        })());
+        });
+        self.result = Some(result.map(|mut report| {
+            if self.case == Case::Annotated && self.stage == Stage::Consuming {
+                retention::check(&retention, &report.detail["conditional_formula"]);
+                report.detail["conditional_formula"]["proof_retained_after_callback"] = true.into();
+                report.detail["retained_proof_events"] = serde_json::to_value(retention).unwrap();
+            } else {
+                assert!(
+                    retention.events.is_empty(),
+                    "unexpected retained proof phase"
+                );
+            }
+            report
+        }));
         Compilation::Stop
     }
 }

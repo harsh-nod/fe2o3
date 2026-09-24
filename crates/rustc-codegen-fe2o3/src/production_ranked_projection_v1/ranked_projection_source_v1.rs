@@ -1,6 +1,7 @@
 //! Private borrowed inputs for the existing source-ranked projector.
 
 use fe2o3_kernel_ir::{
+    CanonicalKernelIrOwnedVerificationResourceBudgetV1 as OwnedBudget,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource, CanonicalKernelIrWorkBudgetV1,
     VerifiedCanonicalKernelIrModuleV12,
@@ -94,19 +95,28 @@ pub(super) fn resource(error: Resource) -> Error {
     Error::CanonicalAssertions(CanonicalAssertionErrorV1::Resource(error))
 }
 
+pub(super) fn projection_source_ledger_v1(
+    source: &RankedProjectionSourceV1<'_>,
+) -> Result<Box<OwnedBudget>, Error> {
+    let work_limit = usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
+        .map_err(|_| resource(Resource::Arithmetic))?;
+    // Initialize the actual persistent account before any projection callback.
+    // Boxing is storage custody, not a persistent address-based authority token.
+    let mut ledger = Box::new(OwnedBudget::new(
+        CanonicalKernelIrWorkBudgetV1::new(work_limit),
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+    ));
+    ledger.with_budget(|budget| {
+        budget
+            .reserve_storage(source.minimum_storage)
+            .map_err(resource)
+    })?;
+    Ok(ledger)
+}
+
 pub(super) fn with_projection_source_budget_v1<T>(
     source: &RankedProjectionSourceV1<'_>,
     body: impl FnOnce(&mut Budget<'_>) -> Result<T, Error>,
 ) -> Result<T, Error> {
-    let work_limit = usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
-        .map_err(|_| resource(Resource::Arithmetic))?;
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
-    let mut budget = Budget::new(
-        &mut work,
-        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
-    );
-    budget
-        .reserve_storage(source.minimum_storage)
-        .map_err(resource)?;
-    body(&mut budget)
+    projection_source_ledger_v1(source)?.with_budget(body)
 }

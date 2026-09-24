@@ -90,7 +90,8 @@ pub use compiler_refined_forwarding_output_v1::{
 };
 pub use conditional_ranked_formulas_v1::{
     ProductionConditionalFormulaErrorV1, ProductionConditionalFormulaExecutionV1,
-    ProductionConditionalFormulaReportV1, with_conditional_ranked_formula_execution_v1,
+    ProductionConditionalFormulaReportV1, RetainedProductionConditionalFormulaV1,
+    execute_and_retain_conditional_ranked_formula_v1, with_conditional_ranked_formula_execution_v1,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a

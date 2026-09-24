@@ -7,6 +7,7 @@ fn unit_local_backend_stage_candidates_v1(
     let ProductionRankedSemanticProgramV1 {
         materialized,
         roots,
+        phase: _phase,
     } = program;
     let roots = roots
         .into_vec()

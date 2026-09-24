@@ -5,6 +5,7 @@ use super::super::gfx942_inline_value_qualification_v30_tests::{
 };
 use super::*;
 use crate::production_ranked_projection_v1::conditional_bound_observation_v1_tests as conditional;
+use crate::production_ranked_projection_v1::conditional_retention_observation_v1 as retention;
 use crate::production_reference_effect_join_v2::source_proof_freshness_v1 as proof;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::Write;
@@ -372,7 +373,7 @@ impl Callbacks for CallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.calls += 1;
         assert_eq!(self.calls, 1);
-        self.result = Some((|| {
+        let (result, retained) = retention::observe(|| {
             let transaction = transaction_in_active_session_v1(
                 tcx,
                 crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
@@ -437,8 +438,8 @@ impl Callbacks for CallbacksV1 {
                         ] {
                             assert_ne!(identity.as_bytes(), &[0; 32]);
                         }
-                        // The receipt is callback-scoped. Only an inert report
-                        // escapes; its presence cannot satisfy the finalizer.
+                        // The retained receipt still cannot satisfy the finalizer.
+                        // Its actual replay is checked after target consumption.
                         conditional_formula = Some(serde_json::json!({
                             "statement": report.statement_identity().as_bytes(),
                             "generated_source": report.generated_source_identity().as_bytes(),
@@ -487,7 +488,21 @@ impl Callbacks for CallbacksV1 {
                     conditional_formula,
                 })
             }
-        })());
+        });
+        self.result = Some(result.map(|mut outcome| {
+            if self.case == Case::Original {
+                let formula = outcome.conditional_formula.as_mut().unwrap();
+                retention::check(&retained, formula);
+                formula["proof_retained_after_callback"] = true.into();
+                formula["retained_proof_events"] = serde_json::to_value(retained).unwrap();
+            } else {
+                assert!(
+                    retained.events.is_empty(),
+                    "unexpected retained proof phase"
+                );
+            }
+            outcome
+        }));
         Compilation::Stop
     }
 }
@@ -634,7 +649,7 @@ fn actual_manifest_fill_protected_effect_and_mutation() {
             assert!(report["conditional_formula"].is_object());
             assert_eq!(
                 report["conditional_formula"]["proof_retained_after_callback"],
-                false
+                true
             );
             assert!(
                 report["diagnostic"]

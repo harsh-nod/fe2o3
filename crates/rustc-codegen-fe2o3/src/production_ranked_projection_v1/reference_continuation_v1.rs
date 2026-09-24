@@ -45,7 +45,7 @@ impl ProjectedReferenceRootsV1 {
                         let root = finish_root(root, references, source, budget)?;
                         let storage = match &root.verification {
                             Verification::Conditional(root) => {
-                                root.input().retained_storage_v1().map_err(resource)?
+                                root.retained_storage_v1().map_err(resource)?
                             }
                             Verification::Ordinary { .. } => 0,
                             Verification::Pending(_) => {

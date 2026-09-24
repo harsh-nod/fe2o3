@@ -21,6 +21,7 @@
                 let ProductionRankedSemanticProgramV1 {
                     materialized,
                     roots,
+                    phase: _phase,
                 } = program;
                 let root = roots.into_vec().into_iter().next().unwrap();
                 let receipt = materialized_ranked_fixture_receipt_v1(materialized, root);
@@ -43,6 +44,7 @@
         let ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
+            phase: _phase,
         } = inclusive;
         let mut root = roots.into_vec().into_iter().next().unwrap();
         root.executable_effect_sources = root
@@ -65,6 +67,7 @@
         let ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
+            phase: _phase,
         } = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive, 255);
         let mut root = roots.into_vec().into_iter().next().unwrap();
         root.executable_effect_sources
@@ -80,6 +83,7 @@
         let ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
+            phase: _phase,
         } = neutral_ranked_program_v1();
         let mut root = roots
             .into_vec()

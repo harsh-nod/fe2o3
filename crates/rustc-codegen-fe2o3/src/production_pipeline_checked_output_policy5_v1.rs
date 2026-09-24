@@ -200,7 +200,7 @@ impl RankedVerifiedProductionCompilation {
     pub(crate) fn lower_checked_output_policy5_v1(
         self,
     ) -> Result<CheckedOutputTargetProductionCompilation, ProductionPipelineError> {
-        let Self { ranked, bindings } = self;
+        let Self { ranked, bindings } = self.replay_conditional_for_target_v1()?;
         let profile = bindings.rustc_target.profile();
         let mut work = Work::new(
             usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)

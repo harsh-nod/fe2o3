@@ -30,8 +30,13 @@ use crate::{
 
 #[path = "conditional_ranked_memory_source_v1.rs"]
 mod memory;
+#[path = "conditional_ranked_formula_retention_v1.rs"]
+mod retention;
 #[path = "conditional_ranked_formula_source_v1.rs"]
 mod source;
+pub use retention::{
+    RetainedProductionConditionalFormulaV1, execute_and_retain_conditional_ranked_formula_v1,
+};
 
 // Distinct from the old expression-only statement, including byte layout and
 // the deliberately shared (not ISA-proved) IEEE operator interpretation.
@@ -142,16 +147,27 @@ pub fn with_conditional_ranked_formula_execution_v1<R>(
         &mut Budget<'_>,
     ) -> R,
 ) -> Result<R, Error> {
-    let input = request.pliron_input();
-    current(input, budget)?;
+    with_scratch(budget, retention::RETAINED_STORAGE, |budget| {
+        let retained = execute_formula(runtime, request, budget, timeout_seconds)?;
+        let result = consume(&retained.execution, budget);
+        current(request.pliron_input(), budget)?;
+        Ok(result)
+    })
+}
+
+// The borrowed and retained wrappers share this exact preparation, execution,
+// import and policy check. Neither wrapper accepts caller-generated proof text.
+fn execute_formula(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    request: &ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+    budget: &mut Budget<'_>,
+    timeout_seconds: u32,
+) -> Result<RetainedProductionConditionalFormulaV1, Error> {
+    current(request.pliron_input(), budget)?;
     // Replay text, the fixed-capacity writer and its boxed copy can coexist.
     // The legacy generator's intermediate graph and execution domains remain
     // separately bounded; returned text/symbols and this owner are prepaid here.
-    let scratch = 3 * SOURCE_LIMIT
-        + crate::functional_refinement_receipt_v2::MAX_FUNCTIONAL_REFINEMENT_FORMULA_NODES_V2
-            * std::mem::size_of::<u32>()
-        + std::mem::size_of::<ProductionConditionalFormulaExecutionV1>();
-    with_scratch(budget, scratch, |budget| {
+    with_scratch(budget, retention::PREPARATION_STORAGE, |budget| {
         let prepared = prepare(request, budget)?;
         let (retained, policy) = execute_and_import_generated_mir_pliron_composition_locally_v1(
             runtime,
@@ -169,7 +185,8 @@ pub fn with_conditional_ranked_formula_execution_v1<R>(
         {
             return Err(Error::Subject("imported conditional formula receipt"));
         }
-        current(input, budget)?;
+        let accepted_policy = retention::accepted_policy(&retained, &policy)?;
+        current(request.pliron_input(), budget)?;
         let execution = ProductionConditionalFormulaExecutionV1 {
             report: ProductionConditionalFormulaReportV1 {
                 statement: prepared.binding.normalized_obligation_effect_ir_hash(),
@@ -180,9 +197,11 @@ pub fn with_conditional_ranked_formula_execution_v1<R>(
             },
             retained,
         };
-        let result = consume(&execution, budget);
-        current(input, budget)?;
-        Ok(result)
+        Ok(retention::retain_checked(
+            execution,
+            accepted_policy,
+            request,
+        ))
     })
 }
 
@@ -372,19 +391,20 @@ fn resolve_memory_load(
             return Err(Error::Subject("conditional memory load occurrence"));
         }
         let parameter = read.canonical().parameter();
-        let mut origin = None;
-        for argument in request.arguments() {
-            budget.charge_work(1)?;
-            if argument.canonical_parameter() == parameter {
-                if origin.is_some() {
-                    return Err(Error::Subject("duplicate memory source argument"));
-                }
-                origin = Some(u64::from(argument.adjusted_argument()) + 1);
-            }
+        // Request construction already rejoins the complete occurrence roster
+        // to these checked coordinates, including equal repeated argument rows.
+        let argument = read.source();
+        budget.charge_work(1)?;
+        if argument.canonical_parameter() != parameter {
+            return Err(Error::Subject("conditional memory source parameter"));
         }
-        if origin != Some(load.allocation_origin) {
-            return Err(Error::Subject("conditional memory allocation origin"));
-        }
+        require_memory_load_origins(
+            request.pliron_input().kernel().blocks(),
+            load,
+            argument.source_argument(),
+            argument.adjusted_argument(),
+            budget,
+        )?;
         found = Some(memory::MemoryLoad {
             parameter,
             width: read.canonical().element_bytes(),
@@ -392,6 +412,56 @@ fn resolve_memory_load(
     }
     found.ok_or(Error::Subject("unbound conditional memory load"))
 }
+
+// Both ordinals come from the matched source-checked read, whose full argument
+// row is rejoined by request construction. Recipe views use source ordinals;
+// the effect DAG (including its CPU expression) uses adjusted ordinals.
+// Equality of the two ordinal spaces is not an ABI invariant.
+fn require_memory_load_origins(
+    blocks: &[fe2o3_pliron::ProductionRankedBlockV1],
+    load: &fe2o3_pliron::ProductionSemanticLoadV2,
+    source_argument: u32,
+    adjusted_argument: u32,
+    budget: &mut Budget<'_>,
+) -> Result<(), Error> {
+    use fe2o3_pliron::{ProductionRankedOperationV1 as Op, ProductionRankedValueV1 as Value};
+    budget.charge_work(3)?;
+    if load.allocation_origin != u64::from(adjusted_argument) + 1 {
+        return Err(Error::Subject("conditional memory expression origin"));
+    }
+    let mut found = false;
+    for block in blocks {
+        budget.charge_work(1)?;
+        for operation in block.operations() {
+            budget.charge_work(4)?;
+            if let Op::View {
+                result,
+                allocation_origin,
+                ..
+            }
+            | Op::ViewInSpace {
+                result,
+                allocation_origin,
+                ..
+            } = operation
+                && Value::Local(*result) == load.view
+            {
+                if found || *allocation_origin != u64::from(source_argument) + 1 {
+                    return Err(Error::Subject("conditional memory recipe origin"));
+                }
+                found = true;
+            }
+        }
+    }
+    if !found {
+        return Err(Error::Subject("missing conditional memory recipe view"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "conditional_ranked_load_origins_v1_tests.rs"]
+mod load_origin_tests;
 
 fn obligation_identity(commitments: [DigestV1; 6]) -> DigestV1 {
     let mut hash = Sha256::new();

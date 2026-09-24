@@ -857,7 +857,14 @@ impl ProductionRankedRootProgramV1 {
 pub(crate) struct ProductionRankedSemanticProgramV1 {
     materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     roots: Box<[ProductionRankedRootProgramV1]>,
+    // Must outlive the retained roots. No budget can be supplied by a consumer.
+    phase: retained_phase_v1::RetainedProjectionPhaseV1,
 }
+
+#[path = "production_ranked_projection_v1/retained_phase_v1.rs"]
+mod retained_phase_v1;
+#[cfg(test)]
+pub(crate) use retained_phase_v1::observation as conditional_retention_observation_v1;
 
 /// Domain-separated identity of the exact roster in canonical `KernelId`
 /// order. Typed/source order is retained separately by the receipt, and
@@ -1093,7 +1100,13 @@ impl AuthenticatedRankedVerificationV5 {
 
 #[derive(Debug)]
 pub(crate) enum ProductionRankedVerificationErrorV1 {
-    ConditionalFinalizerRequired { root: u32 },
+    ConditionalFinalizerRequired {
+        root: u32,
+    },
+    ConditionalReplay(
+        crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2,
+    ),
+    ConditionalResource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     RosterMetadata(&'static str),
     RosterIdentity,
     SemanticOwner(ProductionSemanticMirErrorV1),
@@ -1114,6 +1127,13 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
                 formatter,
                 "FE2O3-COND-FINALIZER-001: root {root} retains explicit runtime premises; conditional finalizer required, ordinary V5 attachment forbidden"
             ),
+            Self::ConditionalReplay(error) => write!(
+                formatter,
+                "conditional target source/receipt replay: {error}"
+            ),
+            Self::ConditionalResource(error) => {
+                write!(formatter, "conditional original-phase resources: {error}")
+            }
             Self::RosterMetadata(detail) => {
                 write!(formatter, "ranked roster custody rejected {detail}")
             }
@@ -1156,6 +1176,8 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::ConditionalFinalizerRequired { .. } => None,
+            Self::ConditionalReplay(error) => Some(error),
+            Self::ConditionalResource(error) => Some(error),
             Self::RosterMetadata(_) | Self::RosterIdentity => None,
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
@@ -1680,9 +1702,23 @@ impl ProductionRankedSemanticProgramV1 {
         ProductionRankedSemanticProjectionRosterReceiptV1,
         ProductionRankedVerificationErrorV1,
     > {
+        if let Some(root) = self
+            .roots
+            .iter()
+            .find(|root| root.verification.ordinary().is_none())
+        {
+            return Err(
+                ProductionRankedVerificationErrorV1::ConditionalFinalizerRequired {
+                    root: root.semantic_root.index(),
+                },
+            );
+        }
+        // Locals drop in reverse declaration order, including early refusals.
+        let _phase = self.phase;
         let Self {
             materialized,
             roots,
+            ..
         } = self;
         materialized
             .semantic_ssa()
@@ -3124,15 +3160,21 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     crate::production_reference_effect_join_v2::prepared_observation_v1::observe_source(
         &materialized,
     );
-    let roots = {
+    let (roots, phase) = {
         let source = RankedProjectionSourceV1::from_materialized_checked(&materialized)?;
-        with_projection_source_budget_v1(&source, |budget| {
+        let mut ledger = ranked_projection_source_v1::projection_source_ledger_v1(&source)?;
+        let roots = ledger.with_budget(|budget| {
             project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
-        })?
+        })?;
+        (
+            roots,
+            retained_phase_v1::RetainedProjectionPhaseV1::new(ledger),
+        )
     };
     Ok(ProductionRankedSemanticProgramV1 {
         materialized,
         roots,
+        phase,
     })
 }
 

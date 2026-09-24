@@ -21,6 +21,7 @@ mod legacy_scope_tests {
         let ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
+            phase: _phase,
         } = program;
         let mut root = roots.into_vec().into_iter().next().unwrap();
         assert!(
@@ -683,6 +684,7 @@ mod legacy_scope_tests {
         let ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
+            phase: _phase,
         } = program;
         let root = roots.into_vec().into_iter().next().unwrap();
         assert!(
@@ -739,6 +741,7 @@ mod legacy_scope_tests {
             let ProductionRankedSemanticProgramV1 {
                 materialized,
                 roots,
+                phase: _phase,
             } = program;
             let mut root = roots.into_vec().into_iter().next().unwrap();
             assert_private_write_row_v1(&materialized, &root, 1);
@@ -1170,6 +1173,7 @@ mod legacy_scope_tests {
         let ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
+            phase: _phase,
         } = program;
         let mut root = roots.into_vec().into_iter().next().unwrap();
         assert!(
@@ -1874,6 +1878,7 @@ mod legacy_scope_tests {
         let ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
+            phase: _phase,
         } = program;
         let root = roots.into_vec().into_iter().next().unwrap();
         assert!(
@@ -1984,6 +1989,57 @@ mod legacy_scope_tests {
                 ),
                 "unsupported projected RHS must fail at the later private destination, after its canonical read"
             );
+        }
+    }
+
+    #[test]
+    fn ordinary_roster_early_refusal_releases_original_phase_once() {
+        use crate::production_ranked_projection_v1::conditional_retention_observation_v1::{
+            Event, observe,
+        };
+        for substitute_identity in [false, true] {
+            let (result, observation) = observe(|| {
+                let mut program = actual_backend_two_private_initializer_roots_v1();
+                if substitute_identity {
+                    program.roots[1].kernel_binding[0] ^= 1;
+                } else {
+                    program.roots[1].semantic_root = program.roots[0].semantic_root;
+                }
+                program.into_verified_roster_receipt()
+            });
+            let expected = if substitute_identity {
+                "substituted ranked root identity metadata"
+            } else {
+                "a reordered, duplicate, or substituted semantic root"
+            };
+            assert!(
+                matches!(result, Err(ProductionRankedVerificationErrorV1::RosterMetadata(reason))
+                if reason == expected)
+            );
+            // Observe the real error path's accounting, not a synthetic owner.
+            // This does not measure source/root destructor order: those owners
+            // expose no liveness handle to this crate.
+            let [
+                Event::PhaseRetained(initial),
+                Event::PhaseDropped {
+                    before,
+                    after,
+                    poisoned: false,
+                },
+            ] = observation.events.as_slice()
+            else {
+                panic!(
+                    "unexpected ordinary refusal events: {:?}",
+                    observation.events
+                );
+            };
+            assert!(initial.storage > 0);
+            assert_eq!(initial, before);
+            assert_eq!(after.storage, 0);
+            assert_eq!(after.work, before.work);
+            assert_eq!(after.peak_storage, before.peak_storage);
+            assert_eq!(after.failed_work, before.failed_work);
+            assert_eq!(after.failed_storage, before.failed_storage);
         }
     }
 

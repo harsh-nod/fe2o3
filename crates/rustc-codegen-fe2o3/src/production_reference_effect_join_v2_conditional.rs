@@ -12,6 +12,8 @@ use fe2o3_lower_mir_kernel::{
 use fe2o3_pliron::{ProductionConditionalOwnershipSiteV1 as Site, ProductionPlironSessionV1};
 
 type Error = ProductionReferenceEffectJoinErrorV2;
+#[cfg(test)]
+use crate::production_ranked_projection_v1::conditional_retention_observation_v1 as observation;
 
 pub(crate) struct ReferenceSourceV1<'a> {
     pub(crate) root: u32,
@@ -24,12 +26,12 @@ pub(crate) struct ReferenceSourceV1<'a> {
 
 /// Distinct from ordinary clean evidence. The arena, source rows, protected
 /// runtime and signed effect receipts remain in the original transaction.
-/// The aggregate execution report is inert; its receipt was callback-scoped.
+/// The aggregate receipt is retained, not reconstructed from an inert report.
 pub(crate) struct ConditionalReferenceRootV1 {
     input: ProductionConditionalRootInputV1,
     _runtime: FunctionalRefinementVerusRuntimeLeaseV1,
     _receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
-    _report: fe2o3_verifier::ProductionConditionalFormulaReportV1,
+    proof: fe2o3_verifier::RetainedProductionConditionalFormulaV1,
     _cpu_bounds_require_host: Option<u32>,
 }
 
@@ -92,7 +94,85 @@ impl ConditionalReferenceRootV1 {
 
     #[cfg(test)]
     pub(crate) fn report(&self) -> fe2o3_verifier::ProductionConditionalFormulaReportV1 {
-        self._report
+        self.proof.report()
+    }
+
+    pub(crate) fn retained_storage_v1(&self) -> Result<usize, Resource> {
+        self.input
+            .retained_storage_v1()?
+            .checked_add(self.proof.retained_storage_v1())
+            .ok_or(Resource::Arithmetic)
+    }
+
+    /// Only the private projection owner calls this with its original ledger.
+    /// Moving the arena through the existing continuation replays source and
+    /// every fixed-pipeline check; the receipt alone cannot substitute for them.
+    pub(crate) fn replay_for_target_v1(
+        self,
+        source: &ProductionPreRankedKirOwnerV1,
+        reference: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self, Error> {
+        let Self {
+            input,
+            proof,
+            _runtime,
+            _receipts,
+            _cpu_bounds_require_host,
+        } = self;
+        let root = input.semantic_root;
+        let transferred = input.retained_storage_v1().map_err(failure)?;
+        let floor = budget.storage();
+        let account = budget.work_ledger_identity_v1();
+        let replay = fe2o3_lower_mir_kernel::with_conditional_root_request_v1(
+            source,
+            input,
+            budget,
+            |request, budget| {
+                conditional_source_v1::replay_source_bound_cpu_formula_v1(
+                    &proof,
+                    request,
+                    reference,
+                    root,
+                    budget,
+                    |_execution, _budget| {
+                        #[cfg(test)]
+                        observation::replay_callback(root, request, _execution, _budget);
+                    },
+                )
+            },
+        );
+        // The lower continuation reserves the returned arena itself. Transfer
+        // its prior reservation, retaining the new one, not both charges.
+        if budget.work_ledger_identity_v1() != account || budget.storage() < floor {
+            return Err(failure(Resource::Accounting));
+        }
+        match replay {
+            Ok((result, input)) => {
+                let expected = floor
+                    .checked_add(transferred)
+                    .ok_or_else(|| failure(Resource::Arithmetic))?;
+                if budget.storage() != expected {
+                    return Err(failure(Resource::Accounting));
+                }
+                budget.release_storage(transferred).map_err(failure)?;
+                result?;
+                #[cfg(test)]
+                observation::replay_accepted(root, &proof, budget);
+                Ok(Self {
+                    input,
+                    proof,
+                    _runtime,
+                    _receipts,
+                    _cpu_bounds_require_host,
+                })
+            }
+            Err(error) => {
+                // Lowering destroyed the arena. Its prior charge remains until
+                // the enclosing original phase destroys the rest of the roster.
+                Err(failure(error))
+            }
+        }
     }
 }
 
@@ -161,20 +241,14 @@ pub(crate) fn continue_reference_v1<'a>(
         input,
         budget,
         |request, budget| {
-            conditional_source_v1::with_source_bound_cpu_formula_v1(
-                &runtime,
-                request,
-                references,
-                root,
-                budget,
-                timeout,
-                |execution, _budget| execution.report(),
+            conditional_source_v1::retain_source_bound_cpu_formula_v1(
+                &runtime, request, references, root, budget, timeout,
             )
         },
     )
     .map_err(failure)?;
-    let report = match result {
-        Ok(report) => report,
+    let proof = match result {
+        Ok(proof) => proof,
         Err(error) => {
             let retained = input.retained_storage_v1().map_err(failure)?;
             // The arena and its source buffers must die before their charge.
@@ -190,6 +264,8 @@ pub(crate) fn continue_reference_v1<'a>(
             return Err(error);
         }
     };
+    #[cfg(test)]
+    observation::retained(root, &proof, budget);
     // Source rows stay with the conditional arena; the ordinary projection
     // fields remain empty, so no later V5 validator can accidentally use them.
     let source = ReferenceSourceV1 {
@@ -205,7 +281,7 @@ pub(crate) fn continue_reference_v1<'a>(
             input,
             _runtime: runtime,
             _receipts: signed_receipts,
-            _report: report,
+            proof,
             _cpu_bounds_require_host: pending_cpu_bounds,
         }),
         source,

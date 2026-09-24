@@ -249,7 +249,7 @@ impl RankedVerifiedProductionCompilation {
         self,
         budget: &mut Budget<'_>,
     ) -> Result<AdmittedPolicy4StageV1, ProductionPipelineError> {
-        let Self { ranked, bindings } = self;
+        let Self { ranked, bindings } = self.replay_conditional_for_target_v1()?;
         let profile = bindings.rustc_target.profile();
         let retained = ranked
             .materialized()

@@ -20,6 +20,7 @@ fn source255_genuine_generated_only_memory_passes_shared_attribution() {
         let ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
+            phase: _phase,
         } = actual_generated_program(case);
         assert_eq!(roots.len(), 1);
         let root = roots.into_vec().into_iter().next().unwrap();
@@ -50,6 +51,7 @@ fn source255_generated_overlap_candidate_is_rejected_as_unused_ordinary_attribut
         let ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
+            phase: _phase,
         } = actual_generated_program(case);
         assert_eq!(roots.len(), 1);
         let mut root = roots.into_vec().into_iter().next().unwrap();

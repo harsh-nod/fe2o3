@@ -45,25 +45,67 @@ struct SourceBoundCpuCorrespondenceV1<'a> {
     binding: &'a Binding,
 }
 
-/// The CPU join and imported formula receipt coexist only in the callback.
-/// An inert report may escape; neither borrowed authority can escape with it.
-pub(crate) fn with_source_bound_cpu_formula_v1<R>(
+pub(crate) fn retain_source_bound_cpu_formula_v1(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     request: &Request<'_>,
     references: &AuthenticatedReferenceEffectBindingsV1,
     semantic_root: u32,
     budget: &mut Budget<'_>,
     timeout_seconds: u32,
+) -> Result<fe2o3_verifier::RetainedProductionConditionalFormulaV1, Error> {
+    with_cpu_correspondence(request, references, semantic_root, budget, |cpu, budget| {
+        cpu.require_subjects(budget)?;
+        fe2o3_verifier::execute_and_retain_conditional_ranked_formula_v1(
+            runtime,
+            cpu.request,
+            budget,
+            timeout_seconds,
+        )
+        .map_err(|error| Error::ProofExecution(error.to_string()))
+    })
+}
+
+pub(crate) fn replay_source_bound_cpu_formula_v1<R>(
+    retained: &fe2o3_verifier::RetainedProductionConditionalFormulaV1,
+    request: &Request<'_>,
+    binding: &Binding,
+    semantic_root: u32,
+    budget: &mut Budget<'_>,
     consume: impl for<'proof> FnOnce(
         &'proof fe2o3_verifier::ProductionConditionalFormulaExecutionV1,
         &mut Budget<'_>,
     ) -> R,
+) -> Result<R, Error> {
+    with_cpu_binding(request, binding, semantic_root, budget, |cpu, budget| {
+        cpu.require_subjects(budget)?;
+        retained
+            .with_replayed_request_v1(cpu.request, budget, consume)
+            .map_err(|error| Error::ProofExecution(error.to_string()))
+    })
+}
+
+fn with_cpu_correspondence<R>(
+    request: &Request<'_>,
+    references: &AuthenticatedReferenceEffectBindingsV1,
+    semantic_root: u32,
+    budget: &mut Budget<'_>,
+    consume: impl FnOnce(&SourceBoundCpuCorrespondenceV1<'_>, &mut Budget<'_>) -> Result<R, Error>,
 ) -> Result<R, Error> {
     let [binding] = references.as_slice() else {
         return Err(reject(
             "conditional CPU join requires one authenticated binding",
         ));
     };
+    with_cpu_binding(request, binding, semantic_root, budget, consume)
+}
+
+fn with_cpu_binding<R>(
+    request: &Request<'_>,
+    binding: &Binding,
+    semantic_root: u32,
+    budget: &mut Budget<'_>,
+    consume: impl FnOnce(&SourceBoundCpuCorrespondenceV1<'_>, &mut Budget<'_>) -> Result<R, Error>,
+) -> Result<R, Error> {
     check_source_identity(request, binding, semantic_root, budget)?;
     // This bridge uses the existing MIR resolver and the caller's original meter.
     binding
@@ -71,35 +113,18 @@ pub(crate) fn with_source_bound_cpu_formula_v1<R>(
             check_outputs(request, binding, &replay.writes, budget)?;
             read_premises_v1::check_source_bound_reads_v1(request, binding, replay, budget)?;
             let cpu = SourceBoundCpuCorrespondenceV1 { request, binding };
-            cpu.with_formula_execution(runtime, budget, timeout_seconds, consume)
+            consume(&cpu, budget)
         })
         .map_err(|error| Error::ProofExecution(error.to_string()))?
 }
 
 impl SourceBoundCpuCorrespondenceV1<'_> {
-    fn with_formula_execution<R>(
-        &self,
-        runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
-        budget: &mut Budget<'_>,
-        timeout_seconds: u32,
-        consume: impl for<'proof> FnOnce(
-            &'proof fe2o3_verifier::ProductionConditionalFormulaExecutionV1,
-            &mut Budget<'_>,
-        ) -> R,
-    ) -> Result<R, Error> {
+    fn require_subjects(&self, budget: &mut Budget<'_>) -> Result<(), Error> {
         charge(budget, 256)?;
         require(
             self.request.pliron_input().reference_subjects() == subjects(self.binding)?,
             "CPU subjects changed after correspondence",
-        )?;
-        fe2o3_verifier::with_conditional_ranked_formula_execution_v1(
-            runtime,
-            self.request,
-            budget,
-            timeout_seconds,
-            consume,
         )
-        .map_err(|error| Error::ProofExecution(error.to_string()))
     }
 }
 
@@ -413,10 +438,15 @@ fn check_read_bindings(
             selected.ok_or_else(|| reject("conditional CPU load lacks checked source read"))?;
         let row = argument(request, read.canonical().parameter(), budget)?;
         require(
-            load.view == read.view()
-                && load.indices.as_ref() == [read.index()]
-                && load.allocation_origin == u64::from(row.adjusted_argument()) + 1,
+            load.view == read.view() && load.indices.as_ref() == [read.index()],
             "conditional CPU read origin/index substitution",
+        )?;
+        require_read_origins(
+            request.pliron_input().kernel().blocks(),
+            load,
+            row.source_argument(),
+            row.adjusted_argument(),
+            budget,
         )?;
         let relations = binding
             .signature_preimage
@@ -433,6 +463,52 @@ fn check_read_bindings(
         )
     })
 }
+
+// The source/adjusted pair must come from the selected authenticated request
+// argument. Do not apply the recipe's source ordinal to CPU/effect expressions.
+fn require_read_origins(
+    blocks: &[fe2o3_pliron::ProductionRankedBlockV1],
+    load: &ProductionSemanticLoadV2,
+    source_argument: u32,
+    adjusted_argument: u32,
+    budget: &mut Budget<'_>,
+) -> Result<(), Error> {
+    charge(budget, 3)?;
+    require(
+        load.allocation_origin == u64::from(adjusted_argument) + 1,
+        "conditional CPU read expression origin substitution",
+    )?;
+    let mut found = false;
+    for block in blocks {
+        charge(budget, 1)?;
+        for operation in block.operations() {
+            charge(budget, 4)?;
+            if let Op::View {
+                result,
+                allocation_origin,
+                ..
+            }
+            | Op::ViewInSpace {
+                result,
+                allocation_origin,
+                ..
+            } = operation
+                && Value::Local(*result) == load.view
+            {
+                require(
+                    !found && *allocation_origin == u64::from(source_argument) + 1,
+                    "conditional CPU read recipe origin substitution",
+                )?;
+                found = true;
+            }
+        }
+    }
+    require(found, "conditional CPU read missing recipe view")
+}
+
+#[cfg(test)]
+#[path = "production_conditional_read_origins_v1_tests.rs"]
+mod read_origin_tests;
 
 fn visit_loads(
     expression: &Expr,

@@ -3910,10 +3910,22 @@ impl MaterializedNeutralProductionCompilation {
 }
 
 impl RankedVerifiedProductionCompilation {
+    fn replay_conditional_for_target_v1(self) -> Result<Self, ProductionPipelineError> {
+        let Self { ranked, bindings } = self;
+        let ranked = if ranked.has_conditional_roots_v1() {
+            ranked
+                .replay_conditional_roots_v1(&bindings.reference_effect_bindings)
+                .map_err(ProductionPipelineError::RankedVerification)?
+        } else {
+            ranked
+        };
+        Ok(Self { ranked, bindings })
+    }
+
     fn attach_target_neutral_checks(
         self,
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
-        let Self { ranked, bindings } = self;
+        let Self { ranked, bindings } = self.replay_conditional_for_target_v1()?;
         let roster_receipt = ranked
             .into_verified_roster_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
