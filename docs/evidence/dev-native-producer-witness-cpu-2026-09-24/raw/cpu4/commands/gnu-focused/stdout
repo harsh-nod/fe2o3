@@ -1,0 +1,42 @@
+
+running 37 tests
+test async_engine::tests::owned_tests::snapshot_tests::producer_launch::producer_launch_event_failure_keeps_the_single_accepted_operation ... ok
+test async_engine::tests::owned_tests::snapshot_tests::producer_launch::producer_launch_queue_and_reply_rejections_refund_snapshot_credit ... ok
+test async_engine::tests::owned_tests::snapshot_tests::producer_launch::producer_launch_owner_revalidates_journal_and_stream_before_native_entry ... ok
+test async_engine::tests::owned_tests::snapshot_tests::producer_launch::producer_launch_snapshot_credit_survives_observer_loss_and_local_cancellation ... ok
+test async_engine::tests::owned_tests::snapshot_tests::producer_launch::producer_launch_snapshots_freeze_once_and_keep_original_driver_lifecycle ... ok
+test async_engine::tests::owned_tests::snapshot_tests::producer_launch::producer_launch_async_read_only_join_retains_two_pending_inputs_and_one_stable_input ... ok
+test context::tests::producer_launch_tests::producer_launch_combined_capacity_and_late_request_rejection_are_pre_issue ... ok
+test context::tests::producer_launch_tests::producer_launch_admission_requires_live_exact_nonaliased_profile_producers ... ok
+test context::tests::producer_launch_tests::producer_launch_coverage_uses_every_original_alias_and_writable_interval_union ... ok
+test context::tests::producer_launch_tests::producer_launch_discarded_observer_keeps_inputs_until_consumer_stream_quiesces ... ok
+test context::tests::producer_launch_tests::producer_launch_cancellation_keeps_or_releases_the_complete_mixed_roster ... ok
+test context::tests::producer_launch_tests::producer_launch_initial_failures_preserve_diagnostics_and_uncertain_mixed_roots ... ok
+test context::tests::producer_launch_tests::producer_launch_invalid_handles_retain_new_roots_and_every_mixed_input ... ok
+test context::tests::producer_launch_tests::producer_launch_mixed_inputs_preserve_native_ranges_and_whole_allocation_custody ... ok
+test context::tests::producer_launch_tests::producer_launch_all_completion_ingresses_share_bounded_producer_first_reconciliation ... ok
+test context::tests::producer_launch_tests::producer_launch_mixed_release_prevalidates_both_complete_rosters ... ok
+test context::tests::producer_launch_tests::producer_launch_public_event_release_and_fanout_keep_exact_producer_custody ... ok
+test context::tests::producer_launch_tests::producer_launch_resolved_reservation_survives_writer_slot_reuse ... ok
+test context::tests::producer_launch_tests::producer_launch_writerless_consumer_does_not_need_a_free_writer_slot ... ok
+test context::tests::producer_launch_tests::producer_launch_non_success_observations_release_only_quiescent_mixed_inputs ... ok
+test context::tests::producer_launch_tests::producer_launch_retained_consumer_success_cannot_override_producer_results ... ok
+test context::tests::producer_launch_tests::producer_launch_root_flag_dependency_and_late_marker_loss_seal_before_observation ... ok
+test kfd_backend::producer_launch_tests::accepted_pending_launch_retains_exact_producer_and_launch_custody ... ok
+test kfd_backend::producer_launch_tests::exact_single_device_dependencies_reject_alias_mismatch_and_failure ... ok
+test kfd_backend::producer_launch_tests::producer_aware_single_device_rejection_precedes_launch_custody ... ok
+test kfd_backend::retained_release_tests::producer_launch::native_runtime_producer_launch_published_chain ... ignored, requires an explicitly selected isolated gfx942 GPU and external pre/postflight
+test kfd_backend::retained_release_tests::producer_launch::native_runtime_producer_launch_queued_chain ... ignored, requires an explicitly selected isolated gfx942 GPU and external pre/postflight
+test kfd_backend::producer_launch_tests::routed_exact_dependency_requires_native_same_child_identity ... ok
+test kfd_backend::producer_launch_tests::accepted_routed_producer_launch_retains_and_refunds_only_its_child ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_cancellation_keeps_parent_owners ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_parent_terminal_retains_both_rosters ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_public_rejections_preserve_custody ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_inputs_wait_without_materialization ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_rejects_missing_or_foreign_authority ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_requires_restored_ready_backing ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_failed_receipts_never_publish_child ... ok
+test kfd_backend::tests::producer_launch_active_three_binding_rechecks_final_authority ... ok
+
+test result: ok. 35 passed; 0 failed; 2 ignored; 0 measured; 1385 filtered out; finished in 0.15s
+

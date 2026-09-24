@@ -1,0 +1,13 @@
+test_alias_rejected_by_controller_entry (__main__.ReplayTests.test_alias_rejected_by_controller_entry) ... ok
+test_baseline_pin_checked_before_parse (__main__.ReplayTests.test_baseline_pin_checked_before_parse) ... ok
+test_cleanup_rejects_an_unaccounted_attempt_or_private_tree (__main__.ReplayTests.test_cleanup_rejects_an_unaccounted_attempt_or_private_tree) ... ok
+test_command_controls (__main__.ReplayTests.test_command_controls) ... ok
+test_current_source_positive (__main__.ReplayTests.test_current_source_positive) ... ok
+test_hardware_tests_cannot_be_omitted_duplicated_or_promoted (__main__.ReplayTests.test_hardware_tests_cannot_be_omitted_duplicated_or_promoted) ... ok
+test_missing_extra_and_aliased_artifacts (__main__.ReplayTests.test_missing_extra_and_aliased_artifacts) ... ok
+test_source_scope_is_exact (__main__.ReplayTests.test_source_scope_is_exact) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 8.297s
+
+OK

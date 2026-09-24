@@ -1,0 +1,36 @@
+{
+  "command": [
+    "cargo",
+    "--offline",
+    "--locked",
+    "check",
+    "-p",
+    "fe2o3-runtime",
+    "--all-targets"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/.codex-tmp/fe2o3-native-producer-20260924-BSu4wHKM/target",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "USER": "harsh"
+  },
+  "error": "RuntimeError: interrupted by signal 15",
+  "exit": -15,
+  "finished_ns": 1790288903124560010,
+  "group_absent": true,
+  "pid": 68416,
+  "started_ns": 1790288874623416579,
+  "stderr_sha256": "8cc866b0e9fbd5bff23db6523c883ebfdb0dd450a4f3e0cff03e5cbed5d31b9b",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 1800
+}

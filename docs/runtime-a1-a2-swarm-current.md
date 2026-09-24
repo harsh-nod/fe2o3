@@ -1,5 +1,19 @@
 # Current Runtime Swarm Work Orders
 
+Latest native producer witness CPU qualification (2026-09-24): the
+[two-case preparation packet](evidence/dev-native-producer-witness-cpu-2026-09-24/README.md)
+passes all thirteen corrected stages. GNU/musl each pass 1,400 runtime tests,
+with 22 hardware-only ignores, and 35 focused passes; 46 GNU runtime doctests,
+default-feature checks, strict all-target Clippy, formatting and 3,961 unchanged
+source inputs pass. The only source delta is three test paths. New ignored
+witnesses use the unchanged R57 authority for queued and already-published
+producers, released public events, consumer-first observation and complete
+A/B/C/D oracles. Review corrected logical/physical completion confusion and
+premature completion-map indexing; unsuccessful attempts are retained. Native
+execution is not established by this CPU packet. The next gate is a signed,
+source-bound native campaign. Production refinement, generated graphs, aggregate
+memory and matched performance remain open; A1/A2 and broader acceptance are unchanged.
+
 Latest active-producer CPU qualification (2026-09-24): the
 [persistent input-admission packet](evidence/dev-active-producer-cpu-2026-09-24/README.md)
 passes all thirteen stages. GNU/musl each pass 35 focused and 1,400 runtime tests,

@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-native-producer-witness-cpu-2026-09-24/qualify.py",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-native-producer-witness-cpu-2026-09-24/raw/cpu4",
+    "--verify"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790289539623966662,
+  "group_absent": true,
+  "pid": 189449,
+  "started_ns": 1790289539102466794,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "a83b0c419fe2f5bdeb80bc7d1c940e88ee82f36e019262bb284e61c2ca283fab",
+  "timeout_seconds": 900
+}

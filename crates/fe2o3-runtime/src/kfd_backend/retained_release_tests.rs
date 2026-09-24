@@ -10,6 +10,8 @@ mod cold_allocation;
 mod copy_accounting;
 #[cfg(all(test, feature = "hardware-qualification"))]
 pub(super) mod primary_envelope;
+#[cfg(feature = "hardware-qualification")]
+mod producer_launch;
 
 thread_local! { static SELECTION: Cell<Option<bool>> = const { Cell::new(None) }; }
 thread_local! { static PRIMARY_TEARDOWN_CAPACITY: Cell<bool> = const { Cell::new(false) }; }

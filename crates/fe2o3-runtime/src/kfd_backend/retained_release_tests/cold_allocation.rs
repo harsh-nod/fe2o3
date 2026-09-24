@@ -6,7 +6,10 @@ use crate::{RuntimeContextV1, RuntimeErrorV1, RuntimeResourceKindV1, RuntimeReso
 const PAGE_BYTES: u64 = 4096;
 const HOST_BUDGET_BYTES: u64 = 16 * 1024 * 1024;
 
-fn cold_probe_device(selector: Option<&str>, isolation: Option<&str>) -> Result<u64, &'static str> {
+pub(super) fn cold_probe_device(
+    selector: Option<&str>,
+    isolation: Option<&str>,
+) -> Result<u64, &'static str> {
     if isolation != Some("1") {
         return Err("FE2O3_TEST_NATIVE_ISOLATED=1 acknowledgement required");
     }

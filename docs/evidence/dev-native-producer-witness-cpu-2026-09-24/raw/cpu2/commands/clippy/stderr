@@ -1,0 +1,25 @@
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Checking fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+error[E0277]: the trait bound `Array<u8, UInt<UInt<UInt<UInt<..., ...>, ...>, ...>, ...>>: LowerHex` is not satisfied
+   --> crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/producer_launch.rs:265:38
+    |
+265 |         digests.push(format!("{:x}", Sha256::digest(&observed)));
+    |                               ----   ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::LowerHex` is not implemented for `Array<u8, UInt<UInt<UInt<UInt<UInt<..., ...>, ...>, ...>, ...>, ...>>`
+    |                               |
+    |                               required by this formatting parameter
+    |
+    = help: the following other types implement trait `std::fmt::LowerHex`:
+              &T
+              &mut T
+              i128
+              i16
+              i32
+              i64
+              i8
+              isize
+            and 144 others
+    = note: the full name for the type has been written to '/home/harsh/.codex-tmp/fe2o3-native-producer-20260924-BSu4wHKM/target/debug/deps/fe2o3_runtime-4d122d455a23e854.long-type-5432941703566367235.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `fe2o3-runtime` (lib test) due to 1 previous error

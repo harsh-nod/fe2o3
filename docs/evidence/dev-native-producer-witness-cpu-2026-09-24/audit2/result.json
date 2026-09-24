@@ -1,0 +1,9 @@
+{
+  "cleanup": true,
+  "failed_attempts_retained": [
+    "cpu1",
+    "cpu2",
+    "cpu3"
+  ],
+  "replay": "pass"
+}
