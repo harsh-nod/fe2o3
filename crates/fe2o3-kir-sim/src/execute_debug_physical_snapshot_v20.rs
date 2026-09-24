@@ -42,11 +42,16 @@ fn sort_work(length: usize, budget: &mut Budget<'_>) -> Result<(), Resource> {
     // Conservative quadratic comparison allowance, charged before sorting.
     budget.charge_work(length.checked_mul(length).ok_or(Resource::Arithmetic)?)
 }
-fn project(value: &RuntimeValue) -> Result<SimulationDebugValueV1, Failure> {
+fn project(value: &RuntimeValue, profile: Profile) -> Result<SimulationDebugValueV1, Failure> {
     match value {
-        RuntimeValue::PhysicalEntry(value) => PhysicalEntryDebugSymbolicV20::from_runtime(value)
-            .map(SimulationDebugValueV1::PhysicalEntrySymbolicV20)
-            .ok_or(Failure::Unavailable),
+        RuntimeValue::PhysicalEntry(value) => match profile {
+            Profile::EntryV20 => PhysicalEntryDebugSymbolicV20::from_runtime(value)
+                .map(PhysicalDebugSymbolicV1::from_entry),
+            Profile::GlobalCopyV21 => PhysicalGlobalCopyDebugSymbolicV21::from_runtime(value)
+                .map(PhysicalDebugSymbolicV1::from_global_copy),
+        }
+        .map(SimulationDebugValueV1::PhysicalSymbolicV1)
+        .ok_or(Failure::Unavailable),
         _ => debug_value(value).ok_or(Failure::Unavailable),
     }
 }
@@ -57,6 +62,7 @@ pub(super) fn capture(
     memory: &Memory,
     limits: SimulationDebugCaptureLimitsV1,
     phase: SimulationDebugCheckpointPhaseV1,
+    profile: Profile,
     budget: &mut Budget<'_>,
 ) -> Result<SimulationDebugRecordKindV1, Failure> {
     let floor = budget.storage();
@@ -119,7 +125,7 @@ pub(super) fn capture(
             for (id, value) in &ordered {
                 bindings.push(SimulationDebugBindingV1 {
                     value: **id,
-                    observed: project(value)?,
+                    observed: project(value, profile)?,
                 });
             }
             let scratch_bytes = bytes(&ordered)?;

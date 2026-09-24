@@ -691,3 +691,58 @@ reversible publication transaction. A terminal library forward-step is a no-op
 without navigation cost; CLI command parsing/query/serialization is prepaid even
 for terminal no-ops. A truncated capture does not claim a completed cursor.
 No new canonical, source or debugger wire IDs are allocated by this adapter.
+
+## Physical-global-copy V21 CPU observations
+
+The separate Linux-only route is:
+
+```sh
+fe2o3-debug sim --diagnostic-kir-v21 canonical-v21.bin --request request.json --protocol jsonl --wave-width 64
+```
+
+It requires the exact V21 canonical owner and the existing
+`fe2o3-simulation-request-v1` request, with two arguments in order: readonly
+`u32` input and writable `u32` output. Inline buffers or valid shared-buffer
+views use the existing request grammar; both allocations are observed. The
+closed tooling launch is at most 128 invocations in [64,1,1] workgroups. The
+unguarded full-EXEC global read still requires every launched input lane to be
+readable and initialized even when output is empty. Short/uninitialized input,
+incorrect access, or input/output on the same backing are refused by the real
+CPU engine before a CLI session is exposed; disjoint ranges of one backing do
+not bypass the profile's same-backing refusal.
+
+For source-produced bytes, use the normal
+[source diagnostic command](../../../docs/physical-global-copy-source-v21.md)
+and retain its `diagnostic/canonical-v21.bin` unchanged. This CLI admits
+serialized canonical structure, not that producer's source custody or host ABI
+conditions. There is no snapshot, transcript, source-map, register-map or
+runtime-observation importer on this route. V20 and V21 selectors cannot be
+combined and neither route guesses another version after refusal.
+
+The V21 adapter uses the same immutable-session JSONL V1 projections, limits,
+prepaid command budget and transactional navigation as the V20 adapter. It
+retains the original cumulative ledger through secure input reads, typed owner,
+independent CPU view, engine capture and protocol workspace. Configuration
+identity includes the canonical identity/length, exact request SHA-256/length,
+and fixed limits, under a distinct V21 domain; value pages have a distinct V21
+domain as well. Stale revisions, cursor configurations and page tokens refuse
+without moving the cursor. Requests have an 8 KiB frame limit, replies 64 KiB,
+SSA pages 64 rows and memory reads 256 bytes. The 4,096 command ceiling does not
+override cumulative work exhaustion. These are logical payload/work bounds,
+not whole-process RSS guarantees.
+
+Pending global-load bindings are present as `Unavailable/NotRepresented`.
+Only the existing engine's actual VM wait changes that same SSA binding to
+captured scalar bits. Symbolic pointer/carry halves remain nonnumeric. Both
+readonly input and writable output are available as allocation-relative
+checkpoint observations; reverse navigation selects prior snapshots without
+re-execution. A logical Wave64 mask is not physical EXEC or a hardware register
+sample. Source-variable maps, physical register maps/capture, hardware waves,
+native execution, GPU performance, breakpoints, persistent replay and resumable
+execution remain unavailable. The source-authoring register names do not
+create debugger register authority.
+
+No canonical or debugger schema version changes are made by this route.
+Existing V20 configuration/page domains and response bytes remain unchanged.
+These implementation and test descriptions are not successful-run evidence;
+actual-source CLI qualification is [recorded separately](../../../docs/physical-global-copy-cpu-debug-qualification-20260924.md).

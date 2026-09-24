@@ -149,8 +149,9 @@ pub enum SimulationDebugCollectionV1<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SimulationDebugValueV1 {
-    /// Exact CPU-only symbolic snapshot; numerical physical bits are unavailable.
-    PhysicalEntrySymbolicV20(crate::PhysicalEntryDebugSymbolicV20),
+    /// Exact inline symbolic CPU state with a private closed profile/kind tag.
+    /// Neither pointer halves nor pending reads have a numerical projection.
+    PhysicalSymbolicV1(crate::PhysicalDebugSymbolicV1),
     Scalar(ScalarBitsV1),
     Pointer {
         allocation: u64,

@@ -1,5 +1,6 @@
 //! Move-only cursor over actual budget-owned V20 CPU checkpoints.
 //! Navigation selects prior observations; it cannot restore/resume an Engine.
+use crate::physical_cursor_v1::Cursor;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrOwnedVerificationResourceBudgetV1, VerifiedCanonicalKernelIrModuleV20,
 };
@@ -22,7 +23,7 @@ pub enum PhysicalEntryDebugNavigationV20 {
 /// No constructor accepts records, hashes, a caller transcript, or source metadata.
 pub struct PhysicalEntryDebugSessionV20 {
     capture: PhysicalEntryDebugCaptureV20,
-    cursor: Option<usize>,
+    cursor: Cursor,
 }
 impl PhysicalEntryDebugSessionV20 {
     pub fn capture(
@@ -34,7 +35,7 @@ impl PhysicalEntryDebugSessionV20 {
     ) -> Self {
         Self {
             capture: module.capture_physical_entry_debug_v20(owner, request, options, ledger),
-            cursor: None,
+            cursor: Cursor::default(),
         }
     }
     pub fn usage(&self) -> PhysicalEntryDebugUsageV20 {
@@ -58,7 +59,7 @@ impl PhysicalEntryDebugSessionV20 {
         self.capture.len()
     }
     pub fn cursor(&self) -> Option<usize> {
-        self.cursor
+        self.cursor.index()
     }
     pub fn record(&self, index: usize) -> Option<PhysicalEntryDebugRecordRefV20<'_>> {
         self.capture.record(index)
@@ -71,59 +72,19 @@ impl PhysicalEntryDebugSessionV20 {
     }
     /// Select the position before the first observation, without resuming execution.
     pub fn rewind(&mut self) -> PhysicalEntryDebugNavigationV20 {
-        if self.capture.error().is_some()
-            || self.capture.outcome() == PhysicalEntryDebugOutcomeV20::PreflightRefused
-            || self.capture.charge_navigation(1).is_err()
-        {
-            return PhysicalEntryDebugNavigationV20::Unavailable;
-        }
-        self.cursor = None;
-        PhysicalEntryDebugNavigationV20::Beginning
+        self.cursor.rewind(&mut self.capture)
     }
     pub fn current(&self) -> Option<PhysicalEntryDebugRecordRefV20<'_>> {
-        self.capture.record(self.cursor?)
+        self.capture.record(self.cursor.index()?)
     }
     pub fn seek(&mut self, index: usize) -> PhysicalEntryDebugNavigationV20 {
-        if self.capture.charge_navigation(1).is_err()
-            || self.capture.error().is_some()
-            || index > self.capture.len()
-        {
-            return PhysicalEntryDebugNavigationV20::Unavailable;
-        }
-        if let Some(record) = self.capture.record(index) {
-            let ordinal = record.ordinal();
-            self.cursor = Some(index);
-            return PhysicalEntryDebugNavigationV20::Record { index, ordinal };
-        }
-        if self.capture.stop().is_some() {
-            return PhysicalEntryDebugNavigationV20::Incomplete;
-        }
-        if self.capture.outcome() != PhysicalEntryDebugOutcomeV20::Completed {
-            return PhysicalEntryDebugNavigationV20::Unavailable;
-        }
-        self.cursor = Some(index);
-        PhysicalEntryDebugNavigationV20::End
+        self.cursor.seek(&mut self.capture, index)
     }
     pub fn step_forward(&mut self) -> PhysicalEntryDebugNavigationV20 {
-        match self.cursor.map_or(Some(0), |n| n.checked_add(1)) {
-            Some(n) if n <= self.capture.len() => self.seek(n),
-            _ => PhysicalEntryDebugNavigationV20::End,
-        }
+        self.cursor.forward(&mut self.capture)
     }
     pub fn step_reverse(&mut self) -> PhysicalEntryDebugNavigationV20 {
-        if self.capture.error().is_some()
-            || self.capture.outcome() == PhysicalEntryDebugOutcomeV20::PreflightRefused
-        {
-            return PhysicalEntryDebugNavigationV20::Unavailable;
-        }
-        if let Some(previous) = self.cursor.and_then(|n| n.checked_sub(1)) {
-            return self.seek(previous);
-        }
-        if self.capture.charge_navigation(1).is_err() {
-            return PhysicalEntryDebugNavigationV20::Unavailable;
-        }
-        self.cursor = None;
-        PhysicalEntryDebugNavigationV20::Beginning
+        self.cursor.reverse(&mut self.capture)
     }
     /// Explicitly destroy all retained records before returning the original ledger.
     pub fn into_budget(self) -> CanonicalKernelIrOwnedVerificationResourceBudgetV1 {

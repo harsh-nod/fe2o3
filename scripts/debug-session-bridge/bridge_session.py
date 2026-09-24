@@ -39,8 +39,10 @@ class BridgeError(Exception):
         self.code, self.outcome, self.closed = code, outcome, closed
         super().__init__(code)
 
-    def envelope(self):
-        return {"schema": RESPONSE_SCHEMA, "status": "error", "code": self.code,
+    def envelope(self, schema=RESPONSE_SCHEMA):
+        if schema not in (RESPONSE_SCHEMA, "fe2o3-physical-cpu-bridge-v20"):
+            raise ValueError("closed local bridge schema")
+        return {"schema": schema, "status": "error", "code": self.code,
                 "outcome": self.outcome, "closed": self.closed}
 
 
@@ -74,7 +76,8 @@ def projected_session(view):
 
 class CPUProcess:
     """One owned process; no shell, no browser argv/env, one request at a time."""
-    def __init__(self):
+    def __init__(self, clock=None):
+        self.clock = clock if clock is not None else lambda: time.monotonic()
         self.child = None
         self.framer = LineFramer()
         self.stderr_bytes = 0
@@ -113,11 +116,11 @@ class CPUProcess:
                 replies.append(response)
 
             while not replies:
-                if time.monotonic() >= deadline:
+                if self.clock() >= deadline:
                     raise ProtocolError("backend deadline; outcome unknown")
                 if self.child.poll() is not None:
                     raise ProtocolError("unexpected backend exit")
-                for key, _events in selector.select(min(0.1, max(0, deadline - time.monotonic()))):
+                for key, _events in selector.select(min(0.1, max(0, deadline - self.clock()))):
                     if key.data == "peer":
                         # A half-close/abort or unsolicited pipelined bytes is not a new command.
                         raise ProtocolError("caller transport lost; outcome unknown")
@@ -150,6 +153,9 @@ class CPUProcess:
                         self.framer.feed(chunk, receive)
             if self.framer.partial:
                 raise ProtocolError("trailing incomplete unsolicited response")
+            # Read/framing can finish after select began within the deadline.
+            if self.clock() >= deadline:
+                raise ProtocolError("backend deadline; outcome unknown")
             return replies[0]
         finally:
             selector.close()
@@ -170,6 +176,12 @@ class CPUProcess:
 
 class BridgeSession:
     """V1 correlation plus separately versioned, bridge-local checkpoint queries."""
+    request_schema = REQUEST_SCHEMA
+    response_schema = RESPONSE_SCHEMA
+
+    def new_protocol(self):
+        return ObservedQuerySession() if self.runtime_observations == "v1" else LiveQuerySession()
+
     def __init__(self, argv, inputs, process_factory=CPUProcess, clock=time.monotonic,
                  runtime_observations=None):
         if runtime_observations is not None and runtime_observations != "v1":
@@ -226,7 +238,7 @@ class BridgeSession:
     def handle_request(self, request, peer=None):
         self.last_dispatched = False
         self.expire()
-        if type(request) is not dict or request.get("schema") != REQUEST_SCHEMA:
+        if type(request) is not dict or request.get("schema") != self.request_schema:
             raise self.error("invalid_request")
         action = request.get("action")
         if action == "connect":
@@ -239,7 +251,7 @@ class BridgeSession:
                 raise self.error("stale_session")
             if not self.close():
                 raise self.error("cleanup_failed")
-            return {"schema": RESPONSE_SCHEMA, "status": "disconnected",
+            return {"schema": self.response_schema, "status": "disconnected",
                     "connection_id": connection_id, "closed": True}
         if action != "command":
             raise self.error("invalid_request")
@@ -284,7 +296,7 @@ class BridgeSession:
         self.connection_id = connection_id
         self.bridge_session = secrets.token_hex(32)
         self.used_connections.add(connection_id)
-        self.protocol = ObservedQuerySession() if self.runtime_observations == "v1" else LiveQuerySession()
+        self.protocol = self.new_protocol()
         self.started = self.clock()
         self.poisoned = False
         self.process = self.process_factory()
@@ -303,12 +315,14 @@ class BridgeSession:
             self.last_dispatched = True
             deadline = min(self.started + SESSION_SECONDS, self.clock() + REQUEST_SECONDS)
             response = self.process.exchange(request, deadline, peer)
+            if self.clock() >= deadline:
+                raise ProtocolError("backend deadline; outcome unknown")
             self.inputs.check()
             self.protocol.accept(response)
             encoded = encode(response)
             if len(encoded) > MAX_INNER_BYTES:
                 raise ProtocolError("re-encoded response byte cap")
-            result = {"schema": RESPONSE_SCHEMA, "status": "ok",
+            result = {"schema": self.response_schema, "status": "ok",
                     "connection_id": self.connection_id, "bridge_session": self.bridge_session,
                     "sequence": str(self.protocol.sent - 1),
                     "session": projected_session(self.protocol.view),
@@ -316,6 +330,10 @@ class BridgeSession:
             if request.get("schema") == TARGET_REQUEST and (
                     len(encoded) + 1 > TARGET_BYTES or len(encode(result)) > TARGET_BYTES):
                 raise ProtocolError("target inner or outer response byte cap")
+            # Include custody checks, protocol acceptance and projection in the
+            # existing deadline. A late accepted child reply is never retryable.
+            if self.clock() >= deadline:
+                raise ProtocolError("backend deadline; outcome unknown")
             return result
         except Exception:
             self.close()

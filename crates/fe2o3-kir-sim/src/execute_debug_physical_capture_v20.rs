@@ -9,6 +9,47 @@ use fe2o3_kernel_ir::{
 #[path = "execute_debug_physical_snapshot_v20.rs"]
 mod snapshot;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Profile {
+    EntryV20,
+    GlobalCopyV21,
+}
+impl Profile {
+    pub(super) fn matches(self, admitted: &AdmittedSimulationModuleV1) -> bool {
+        match self {
+            Self::EntryV20 => admitted.uses_physical_entry_v20(),
+            Self::GlobalCopyV21 => admitted.uses_physical_global_copy_v21(),
+        }
+    }
+}
+/// Only genuine typed immutable canonical owners can enter the common capture.
+/// This is private CPU observation plumbing, never a hashes-to-owner constructor.
+#[derive(Clone, Copy)]
+pub(super) enum CanonicalOwner<'a> {
+    Entry(&'a VerifiedCanonicalKernelIrModuleV20),
+    GlobalCopy(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV21),
+}
+impl CanonicalOwner<'_> {
+    fn profile(self) -> Profile {
+        match self {
+            Self::Entry(_) => Profile::EntryV20,
+            Self::GlobalCopy(_) => Profile::GlobalCopyV21,
+        }
+    }
+    fn identity(self) -> SimulationKernelIrIdentityV1 {
+        match self {
+            Self::Entry(o) => (*o.identity()).into(),
+            Self::GlobalCopy(o) => (*o.identity()).into(),
+        }
+    }
+    fn bytes_len(self) -> usize {
+        match self {
+            Self::Entry(o) => o.canonical_bytes().len(),
+            Self::GlobalCopy(o) => o.canonical_bytes().len(),
+        }
+    }
+}
+
 pub const MAX_PHYSICAL_ENTRY_DEBUG_RECORDS_V20: usize = 16_384;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,18 +178,23 @@ pub(super) struct State {
     ledger: OwnedBudget,
     floor: usize,
     limit: usize,
+    profile: Profile,
     stop: Option<PhysicalEntryDebugCaptureStopV20>,
 }
 impl State {
-    fn new(ledger: OwnedBudget, limit: usize) -> Self {
+    fn new(ledger: OwnedBudget, limit: usize, profile: Profile) -> Self {
         let floor = ledger.storage();
         Self {
             records: Vec::new(),
             ledger,
             floor,
             limit,
+            profile,
             stop: None,
         }
+    }
+    pub(super) fn matches(&self, admitted: &AdmittedSimulationModuleV1) -> bool {
+        self.profile.matches(admitted)
     }
     fn initialize(&mut self) -> Result<(), PhysicalEntryDebugCaptureErrorV20> {
         self.ledger.with_budget(|budget| {
@@ -177,7 +223,7 @@ impl State {
             return None;
         }
         let result = self.ledger.with_budget(|budget| {
-            snapshot::capture(frames, indices, memory, limits, phase, budget)
+            snapshot::capture(frames, indices, memory, limits, phase, self.profile, budget)
         });
         match result {
             Ok(kind) => Some(kind),
@@ -238,8 +284,24 @@ impl AdmittedSimulationModuleV1 {
         options: PhysicalEntryDebugOptionsV20,
         ledger: OwnedBudget,
     ) -> PhysicalEntryDebugCaptureV20 {
+        self.capture_physical_debug_owned(
+            CanonicalOwner::Entry(canonical),
+            request,
+            options,
+            ledger,
+        )
+    }
+
+    pub(super) fn capture_physical_debug_owned(
+        &self,
+        canonical: CanonicalOwner<'_>,
+        request: &SimulationRequestV1,
+        options: PhysicalEntryDebugOptionsV20,
+        ledger: OwnedBudget,
+    ) -> PhysicalEntryDebugCaptureV20 {
+        let profile = canonical.profile();
         let mut capture = PhysicalEntryDebugCaptureV20 {
-            state: State::new(ledger, options.records),
+            state: State::new(ledger, options.records, profile),
             identity: self.identity,
             outcome: PhysicalEntryDebugOutcomeV20::NotStarted,
             error: None,
@@ -253,15 +315,12 @@ impl AdmittedSimulationModuleV1 {
             capture.error = Some(PhysicalEntryDebugCaptureErrorV20::Resource(error));
             return capture;
         }
-        if self.identity.wire_version() != 20
-            || self.identity.digest() != canonical.identity().digest()
-            || self.identity.canonical_length() != canonical.identity().canonical_length()
-        {
+        if self.identity != canonical.identity() {
             capture.error = Some(PhysicalEntryDebugCaptureErrorV20::OwnerMismatch);
             return capture;
         }
         // Admission's immutable module and identity cannot be replaced by callers.
-        if !self.uses_physical_entry_v20() {
+        if !profile.matches(self) {
             capture.error = Some(PhysicalEntryDebugCaptureErrorV20::NotPhysicalEntry);
             return capture;
         }
@@ -273,7 +332,7 @@ impl AdmittedSimulationModuleV1 {
                 .arguments
                 .len()
                 .checked_add(request.shared_buffers.len())
-                .and_then(|n| n.checked_add(canonical.canonical_bytes().len()))
+                .and_then(|n| n.checked_add(canonical.bytes_len()))
                 .ok_or(Resource::Arithmetic)?;
             budget.charge_work(scan)?;
             let bytes = crate::preflight::conservative_preflight_input_bytes(
@@ -341,7 +400,7 @@ impl AdmittedSimulationModuleV1 {
         }
         let mut events = NoopSimulationEventSinkV1;
         let mut debug = NoopSimulationDebugSinkV1;
-        let result = execute_with_physical_debug_v20(
+        let result = execute_with_physical_debug(
             self,
             request,
             ExecutionConfiguration {

@@ -113,7 +113,7 @@ pub use schedule::{
 
 // Typed budget-owned physical CPU observations; no serialized schema extension.
 pub use execute::{
-    MAX_PHYSICAL_ENTRY_DEBUG_RECORDS_V20, PhysicalEntryDebugBindingRefV20,
+    MAX_PHYSICAL_ENTRY_DEBUG_RECORDS_V20, PhysicalDebugSymbolicV1, PhysicalEntryDebugBindingRefV20,
     PhysicalEntryDebugCaptureErrorV20, PhysicalEntryDebugCaptureStopV20,
     PhysicalEntryDebugCaptureV20, PhysicalEntryDebugOptionsV20, PhysicalEntryDebugOutcomeV20,
     PhysicalEntryDebugRecordRefV20, PhysicalEntryDebugSymbolicKindV20,
@@ -130,4 +130,14 @@ mod physical_entry_budgeted_v20;
 pub use physical_entry_budgeted_v20::{
     PHYSICAL_ENTRY_ADMISSION_WORK_V20, PhysicalEntrySimulationAdmissionErrorV20,
     PhysicalEntrySimulationStorageV20,
+};
+
+// Separate exact-owner global-copy CPU observations. Legacy V21 debug routes stay closed.
+pub use execute::{
+    MAX_PHYSICAL_GLOBAL_COPY_DEBUG_RECORDS_V21, PhysicalGlobalCopyDebugBindingRefV21,
+    PhysicalGlobalCopyDebugCaptureErrorV21, PhysicalGlobalCopyDebugCaptureStopV21,
+    PhysicalGlobalCopyDebugCaptureV21, PhysicalGlobalCopyDebugOptionsV21,
+    PhysicalGlobalCopyDebugOutcomeV21, PhysicalGlobalCopyDebugRecordRefV21,
+    PhysicalGlobalCopyDebugSymbolicKindV21, PhysicalGlobalCopyDebugSymbolicV21,
+    PhysicalGlobalCopyDebugUsageV21,
 };

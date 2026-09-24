@@ -1,4 +1,5 @@
-//! Closed typed V20 diagnostic CLI. No source, runtime, native or deployment authority.
+//! Typed CPU diagnostic adapter. V20 remains the concrete default; V21 is explicit.
+//! No source, runtime, native or deployment authority.
 use super::*;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned,
@@ -7,11 +8,18 @@ use fe2o3_kernel_ir::{
 use fe2o3_kir_debugger::{
     PhysicalEntryDebugNavigationV20 as Navigation, PhysicalEntryDebugSessionV20 as Session,
 };
-use fe2o3_kir_sim::{
-    PhysicalEntryDebugOptionsV20, PhysicalEntryDebugOutcomeV20,
-    PhysicalEntryDebugRecordRefV20 as Record,
-};
+#[cfg(test)]
+use fe2o3_kir_sim::PhysicalEntryDebugRecordRefV20 as Record;
+use fe2o3_kir_sim::{PhysicalEntryDebugOptionsV20, PhysicalEntryDebugOutcomeV20};
 use fe2o3_kir_sim_cli::{PhysicalEntryDebugInputV20 as Input, load_physical_entry_debug_input_v20};
+#[path = "diagnostic_physical_profile.rs"]
+mod profile;
+#[path = "diagnostic_physical_session_view.rs"]
+mod session_view;
+#[path = "diagnostic_kir_v21.rs"]
+mod v21;
+use profile::{Code, Profile};
+use session_view::{BindingView, RecordView, SessionView};
 #[path = "diagnostic_kir_v20_protocol.rs"]
 mod protocol;
 #[path = "diagnostic_kir_v20_views.rs"]
@@ -38,13 +46,13 @@ const _: () = assert!(std::mem::size_of::<ValuePathV1>() <= CELL);
 fn protocol_limits() -> ProtocolLimitsV1 {
     ProtocolLimitsV1::new(LINE, RESPONSE, 64, 64, PAGE).expect("fixed V20 protocol limits")
 }
-struct Backend {
-    session: Session,
+struct Backend<S: SessionView = Session> {
+    session: S,
     configuration: OpaqueIdentityV1,
     revision: u64,
     terminated: bool,
 }
-impl Backend {
+impl<S: SessionView> Backend<S> {
     fn sequence(&self) -> u64 {
         self.session.cursor().map_or(0, |n| n as u64 + 1)
     }
@@ -125,25 +133,35 @@ impl Backend {
                 capability,
                 reason,
                 state_changed: false,
-                detail: "diagnostic physical-entry V20 exposes bounded CPU observations only"
-                    .into(),
+                detail: S::PROFILE.unavailable_detail().into(),
             },
         }
     }
 }
 fn configuration(input: &Input) -> Result<OpaqueIdentityV1, &'static str> {
+    configuration_for(
+        Profile::EntryV20,
+        input.canonical().identity().digest(),
+        input.canonical().identity().canonical_length(),
+        input.request_digest(),
+        input.request_bytes(),
+        input.limits(),
+    )
+}
+fn configuration_for(
+    profile: Profile,
+    canonical_digest: &[u8; 32],
+    canonical_length: u64,
+    request_digest: &[u8; 32],
+    request_bytes: usize,
+    limits: fe2o3_kir_sim::SimulationLimitsV1,
+) -> Result<OpaqueIdentityV1, &'static str> {
     let mut hash = Sha256::new();
-    hash.update(b"fe2o3-debug-physical-entry-v20-cpu-config-v1\0");
-    hash.update(input.canonical().identity().digest());
-    hash.update(
-        input
-            .canonical()
-            .identity()
-            .canonical_length()
-            .to_le_bytes(),
-    );
-    hash.update(input.request_digest());
-    hash.update((input.request_bytes() as u64).to_le_bytes());
+    hash.update(profile.configuration_domain());
+    hash.update(canonical_digest);
+    hash.update(canonical_length.to_le_bytes());
+    hash.update(request_digest);
+    hash.update((request_bytes as u64).to_le_bytes());
     for n in [
         LINE, RESPONSE, PAGE, COMMANDS, WORK, STORAGE, RECORDS, QUERY_WORK, CELL, SCRATCH, 1, 768,
         8, 16384,
@@ -151,7 +169,7 @@ fn configuration(input: &Input) -> Result<OpaqueIdentityV1, &'static str> {
         hash.update((n as u64).to_le_bytes());
     }
     // Fixed CPU tooling limits have their own closed configuration domain.
-    let l = input.limits();
+    let l = limits;
     for n in [
         l.max_canonical_bytes,
         l.max_reachable_functions,
@@ -175,7 +193,8 @@ fn configuration(input: &Input) -> Result<OpaqueIdentityV1, &'static str> {
     ] {
         hash.update(n.to_le_bytes());
     }
-    OpaqueIdentityV1::new(hash.finalize().into()).map_err(|_| "kir_v20_debug_configuration_invalid")
+    OpaqueIdentityV1::new(hash.finalize().into())
+        .map_err(|_| profile.code(Code::ConfigurationInvalid))
 }
 fn capture(input: &Input, ledger: Owned) -> Result<Backend, &'static str> {
     let configuration = configuration(input)?;
@@ -206,8 +225,14 @@ fn capture(input: &Input, ledger: Owned) -> Result<Backend, &'static str> {
     })
 }
 fn parse(arguments: Vec<OsString>) -> Result<(PathBuf, PathBuf), &'static str> {
+    parse_profile(arguments, Profile::EntryV20)
+}
+fn parse_profile(
+    arguments: Vec<OsString>,
+    profile: Profile,
+) -> Result<(PathBuf, PathBuf), &'static str> {
     if arguments.len() > 9 || arguments.first().is_none_or(|s| s != "sim") {
-        return Err("kir_v20_debug_arguments");
+        return Err(profile.code(Code::Arguments));
     }
     let mut kir = None;
     let mut request = None;
@@ -215,8 +240,8 @@ fn parse(arguments: Vec<OsString>) -> Result<(PathBuf, PathBuf), &'static str> {
     let mut protocol = false;
     let mut values = arguments.into_iter().skip(1);
     while let Some(option) = values.next() {
-        let value = values.next().ok_or("kir_v20_debug_arguments")?;
-        if option == "--diagnostic-kir-v20" && kir.is_none() {
+        let value = values.next().ok_or(profile.code(Code::Arguments))?;
+        if option == profile.selector() && kir.is_none() {
             kir = Some(PathBuf::from(value));
         } else if option == "--request" && request.is_none() {
             request = Some(PathBuf::from(value));
@@ -225,12 +250,12 @@ fn parse(arguments: Vec<OsString>) -> Result<(PathBuf, PathBuf), &'static str> {
         } else if option == "--wave-width" && !wave && value == "64" {
             wave = true;
         } else {
-            return Err("kir_v20_debug_option_unavailable");
+            return Err(profile.code(Code::OptionUnavailable));
         }
     }
     Ok((
-        kir.ok_or("kir_v20_debug_arguments")?,
-        request.ok_or("kir_v20_debug_arguments")?,
+        kir.ok_or(profile.code(Code::Arguments))?,
+        request.ok_or(profile.code(Code::Arguments))?,
     ))
 }
 pub(super) fn run(arguments: Vec<OsString>) -> ExitCode {
@@ -251,14 +276,8 @@ pub(super) fn run(arguments: Vec<OsString>) -> ExitCode {
             .with_budget(|b| b.reserve_storage(receipt.retained_storage()))
             .map_err(|_| "kir_v20_debug_input_storage")?;
         let mut backend = capture(&input, ledger)?;
-        let stdin = io::stdin();
-        let stdout = io::stdout();
-        let mut reader = BufReader::with_capacity(4096, stdin.lock());
-        let mut writer = BufWriter::with_capacity(4096, stdout.lock());
-        let result = protocol::run(&mut backend, &mut reader, &mut writer, protocol_limits());
-        // Workspace and typed inputs remain owned until all IO/response buffers drop.
-        drop(reader);
-        drop(writer);
+        let result = serve(&mut backend);
+        // Typed inputs remain owned until all IO/response buffers have dropped.
         drop(input);
         let mut ledger = backend.session.into_budget();
         ledger
@@ -277,6 +296,16 @@ pub(super) fn run(arguments: Vec<OsString>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+fn serve<S: SessionView>(backend: &mut Backend<S>) -> Result<(), &'static str> {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut reader = BufReader::with_capacity(4096, stdin.lock());
+    let mut writer = BufWriter::with_capacity(4096, stdout.lock());
+    protocol::run(backend, &mut reader, &mut writer, protocol_limits())
+}
+pub(super) fn run_v21(arguments: Vec<OsString>) -> ExitCode {
+    v21::run(arguments)
 }
 #[cfg(test)]
 #[path = "diagnostic_kir_v20_tests.rs"]

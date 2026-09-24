@@ -47,7 +47,7 @@ pub(super) fn capabilities() -> Vec<CapabilityViewV1> {
     })
     .collect()
 }
-fn scope(record: Record<'_>) -> ExecutionScopeV1 {
+fn scope<R: RecordView>(record: R) -> ExecutionScopeV1 {
     let invocation = record.invocation();
     ExecutionScopeV1::Lane {
         workgroup: invocation.workgroup.map(|n| n as u32),
@@ -59,11 +59,11 @@ fn scope(record: Record<'_>) -> ExecutionScopeV1 {
         interpretation: WaveInterpretationV1::LogicalVisualization,
     }
 }
-pub(super) fn same_scope(record: Record<'_>, selector: ExecutionScopeSelectorV1) -> bool {
+pub(super) fn same_scope<R: RecordView>(record: R, selector: ExecutionScopeSelectorV1) -> bool {
     matches!((scope(record),selector),(ExecutionScopeV1::Lane {workgroup:a,wave:b,lane:c,..},
  ExecutionScopeSelectorV1::Lane {workgroup:x,wave:y,lane:z}) if(a,b,c)==(x,y,z))
 }
-pub(super) fn anchor(record: Record<'_>, view: SessionViewV1) -> DebugSnapshotAnchorV1 {
+pub(super) fn anchor<R: RecordView>(record: R, view: SessionViewV1) -> DebugSnapshotAnchorV1 {
     let site = record.site();
     DebugSnapshotAnchorV1 {
         cursor: view.cursor,
@@ -105,8 +105,8 @@ pub(super) fn stop(sequence: u64, total: usize) -> StopViewV1 {
         exact: true,
     }
 }
-pub(super) fn snapshot(
-    backend: &Backend,
+pub(super) fn snapshot<S: SessionView>(
+    backend: &Backend<S>,
     sequence: u64,
     view: SessionViewV1,
 ) -> SnapshotAvailabilityV1 {
@@ -127,7 +127,7 @@ pub(super) fn snapshot(
         }),
     }
 }
-fn value(record: Record<'_>, index: usize) -> Option<DebugValueV1> {
+fn value<R: RecordView>(record: R, index: usize) -> Option<DebugValueV1> {
     let binding = record.binding(0, index)?;
     let availability = if let Some(scalar) = binding.scalar() {
         let (value_type, width) = protocol_scalar_type(scalar);
@@ -138,7 +138,7 @@ fn value(record: Record<'_>, index: usize) -> Option<DebugValueV1> {
             },
             provenance: ValueProvenanceV1::SimulatedObservation,
         }
-    } else if binding.symbolic_kind().is_some() {
+    } else if binding.is_symbolic() {
         // Keep the actual binding, but never serialize invented pointer/carry bits.
         ValueAvailabilityV1::Unavailable {
             reason: ValueUnavailableReasonV1::NotRepresented,
@@ -178,8 +178,8 @@ fn value(record: Record<'_>, index: usize) -> Option<DebugValueV1> {
         availability,
     })
 }
-pub(super) fn values(
-    backend: &Backend,
+pub(super) fn values<S: SessionView>(
+    backend: &Backend<S>,
     id: u64,
     scope: ExecutionScopeSelectorV1,
     frame: Option<u64>,
@@ -216,7 +216,7 @@ pub(super) fn values(
         );
     }
     let mut hash = Sha256::new();
-    hash.update(b"fe2o3-debug-physical-v20-ssa-page-v1\0");
+    hash.update(S::PROFILE.page_domain());
     hash.update(backend.configuration.as_bytes());
     hash.update(backend.sequence().to_le_bytes());
     hash.update(backend.revision.to_le_bytes());
@@ -251,8 +251,8 @@ pub(super) fn values(
         backend.view(),
     )
 }
-pub(super) fn memory(
-    backend: &Backend,
+pub(super) fn memory<S: SessionView>(
+    backend: &Backend<S>,
     id: u64,
     allocation: AllocationIdentityV1,
     offset: u64,

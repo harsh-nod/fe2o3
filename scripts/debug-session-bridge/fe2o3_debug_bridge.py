@@ -10,6 +10,8 @@ import time
 from bridge_http import origin, read_request, response_bytes, write_response
 from bridge_inputs import CustodyError, InputPins, MIB, TokenFile
 from bridge_session import BridgeError, BridgeSession
+from bridge_physical_v20 import (CANONICAL_BYTES, REQUEST_BYTES, KIND as PHYSICAL_KIND,
+                                 PhysicalBridgeSessionV20, launch_arguments_v20)
 from fe2o3_debug_console import KINDS, launch_arguments
 
 SERVICE_SECONDS = 1800
@@ -34,13 +36,13 @@ def serve_peer(peer, controller, token, host, allowed_origin):
             wire = response_bytes(result, allowed_origin)
     except BridgeError as error:
         error.closed = controller.closed
-        wire = response_bytes(error.envelope(), allowed_origin)
+        wire = response_bytes(error.envelope(controller.response_schema), allowed_origin)
     except (CustodyError, OSError):
         # An unauthenticated peer reset must not kill another authenticated session.
         if controller.last_dispatched:
             controller.poison()
         outcome = "unknown" if controller.last_dispatched else "not_sent"
-        wire = response_bytes(BridgeError("backend_failed", outcome, controller.closed).envelope(),
+        wire = response_bytes(BridgeError("backend_failed", outcome, controller.closed).envelope(controller.response_schema),
                               allowed_origin)
     try:
         write_response(peer, wire)
@@ -81,6 +83,8 @@ def run_service(controller, token, port, allowed_origin):
 
 def observed_launch_arguments(args):
     """Only the local owner selects the additive CLI profile; no browser argv."""
+    if getattr(args, "kind", None) == PHYSICAL_KIND:
+        return launch_arguments_v20(args)
     command = launch_arguments(args)
     profile = getattr(args, "runtime_observations", None)
     if profile is not None:
@@ -95,7 +99,7 @@ def arguments(argv=None):
     parser.add_argument("--binary", required=True)
     parser.add_argument("--binary-bytes", required=True, type=int)
     parser.add_argument("--binary-sha256", required=True)
-    parser.add_argument("--kind", choices=KINDS, required=True)
+    parser.add_argument("--kind", choices=(*KINDS, PHYSICAL_KIND), required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--input-bytes", required=True, type=int)
     parser.add_argument("--input-sha256", required=True)
@@ -131,10 +135,12 @@ def main(argv=None):
             raise ValueError("Linux local CPU profile required")
         command = observed_launch_arguments(args)  # Existing closed CLI/path owner plus explicit opt-in.
         token = TokenFile(args.token_file)
+        physical = args.kind == PHYSICAL_KIND
         inputs = InputPins(((args.binary, args.binary_bytes, args.binary_sha256, 512 * MIB, True),
-                            (args.input, args.input_bytes, args.input_sha256, 64 * MIB, False),
-                            (args.request, args.request_bytes, args.request_sha256, MIB, False)))
-        controller = BridgeSession(command, inputs, runtime_observations=args.runtime_observations)
+                            (args.input, args.input_bytes, args.input_sha256, CANONICAL_BYTES if physical else 64 * MIB, False),
+                            (args.request, args.request_bytes, args.request_sha256, REQUEST_BYTES if physical else MIB, False)))
+        owner = PhysicalBridgeSessionV20 if physical else BridgeSession
+        controller = owner(command, inputs, runtime_observations=args.runtime_observations)
         signal.signal(signal.SIGTERM, interrupted)
         return run_service(controller, token, args.port, args.origin)
     except KeyboardInterrupt:

@@ -944,3 +944,10 @@ pub use linux::physical_entry_debug_v20::{
     PhysicalEntryDebugInputErrorV20, PhysicalEntryDebugInputStorageV20, PhysicalEntryDebugInputV20,
     load_physical_entry_debug_input_v20,
 };
+
+#[cfg(target_os = "linux")]
+pub use linux::physical_global_copy_debug_v21::{
+    MAX_PHYSICAL_GLOBAL_COPY_DEBUG_KIR_BYTES_V21, MAX_PHYSICAL_GLOBAL_COPY_DEBUG_REQUEST_BYTES_V21,
+    PhysicalGlobalCopyDebugInputErrorV21, PhysicalGlobalCopyDebugInputStorageV21,
+    PhysicalGlobalCopyDebugInputV21, load_physical_global_copy_debug_input_v21,
+};

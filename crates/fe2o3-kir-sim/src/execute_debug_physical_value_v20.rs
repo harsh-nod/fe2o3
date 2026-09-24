@@ -26,6 +26,9 @@ pub struct PhysicalEntryDebugSymbolicV20 {
     kind: PhysicalEntryDebugSymbolicKindV20,
 }
 impl PhysicalEntryDebugSymbolicV20 {
+    pub(super) fn into_parts(self) -> (Value, PhysicalEntryDebugSymbolicKindV20) {
+        (self.value, self.kind)
+    }
     pub(super) fn from_runtime(value: &Value) -> Option<Self> {
         use PhysicalEntryDebugSymbolicKindV20 as K;
         // A closed classification, intentionally not a catch-all over future
@@ -219,7 +222,7 @@ impl<'a> PhysicalEntryDebugRecordRefV20<'a> {
 /// Present symbolic bindings remain distinct from absent/out-of-scope bindings.
 #[derive(Clone, Copy)]
 pub struct PhysicalEntryDebugBindingRefV20<'a> {
-    binding: &'a SimulationDebugBindingV1,
+    pub(super) binding: &'a SimulationDebugBindingV1,
 }
 impl PhysicalEntryDebugBindingRefV20<'_> {
     pub fn value(self) -> ValueId {
@@ -233,7 +236,7 @@ impl PhysicalEntryDebugBindingRefV20<'_> {
     }
     pub fn symbolic_kind(self) -> Option<PhysicalEntryDebugSymbolicKindV20> {
         match &self.binding.observed {
-            SimulationDebugValueV1::PhysicalEntrySymbolicV20(value) => Some(value.kind()),
+            SimulationDebugValueV1::PhysicalSymbolicV1(value) => value.entry_kind(),
             _ => None,
         }
     }

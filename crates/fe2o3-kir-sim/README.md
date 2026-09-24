@@ -438,3 +438,20 @@ Each debug record also names the semantic schedule and zero-based runnable
 decision that produced it. This is ordering provenance only; neither a record,
 replay, seeded variation, nor conflict-free observation establishes GPU
 scheduling, timing, performance, performance prediction, or race freedom.
+
+## Opaque physical CPU value storage
+
+The raw Rust debug enum now has one neutral
+`SimulationDebugValueV1::PhysicalSymbolicV1(PhysicalDebugSymbolicV1)` alternative.
+This replaces the raw Rust pattern spellings `PhysicalEntrySymbolicV20` and
+`PhysicalGlobalCopySymbolicV21`; clients matching that public Rust observation
+enum must update their exhaustive patterns. It is not a serialized wire change.
+Typed V20/V21 record and binding APIs, V20 kind methods, JSONL schema, configuration
+identity and numeric-unavailable behavior are unchanged.
+
+The opaque payload retains one complete inline Engine value with a closed
+profile/kind tag. V20 and V21 typed kind projections refuse the other profile,
+including shared pointer/offset/carry families. Pending bits and device-address
+bits are not exposed. No boxing, unsafe reinterpretation, payload truncation or
+increased memory budget is used. Exact legacy value/Binding layout controls stay
+mandatory; successful measurement and qualification are recorded separately.

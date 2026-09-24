@@ -98,7 +98,7 @@ use fe2o3_kir_sim_cli::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --diagnostic-kir-v19 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--runtime-observations v1] [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug sim --diagnostic-kir-v20 PATH --request PATH [--protocol jsonl] [--wave-width 64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5 | capture-rocgdb-kfd-resources-v1) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --diagnostic-kir-v19 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--runtime-observations v1] [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug sim --diagnostic-kir-v20 PATH --request PATH [--protocol jsonl] [--wave-width 64]\n       fe2o3-debug sim --diagnostic-kir-v21 PATH --request PATH [--protocol jsonl] [--wave-width 64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5 | capture-rocgdb-kfd-resources-v1) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 #[cfg(target_os = "linux")]
 const MAX_SEALED_DEBUG_INPUT_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -1632,7 +1632,7 @@ fn value_for_binding(
 
 fn availability_for_observed(observed: &SimulationDebugValueV1) -> ValueAvailabilityV1 {
     match observed {
-        SimulationDebugValueV1::PhysicalEntrySymbolicV20(_) => ValueAvailabilityV1::Unavailable {
+        SimulationDebugValueV1::PhysicalSymbolicV1(_) => ValueAvailabilityV1::Unavailable {
             reason: ValueUnavailableReasonV1::NotRepresented,
         },
         SimulationDebugValueV1::Scalar(value) => {
@@ -2083,6 +2083,23 @@ pub fn main() -> ExitCode {
                 "platform",
                 "kir_v20_debug_platform_unavailable",
                 "typed physical-entry CPU debugger requires Linux",
+            );
+            return ExitCode::FAILURE;
+        }
+    }
+    if arguments.first().is_some_and(|v| v == "sim")
+        && arguments.iter().any(|v| v == "--diagnostic-kir-v21")
+    {
+        #[cfg(target_os = "linux")]
+        {
+            return diagnostic_kir_v20::run_v21(arguments);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            write_bootstrap_error(
+                "platform",
+                "kir_v21_debug_platform_unavailable",
+                "typed physical-global-copy CPU debugger requires Linux",
             );
             return ExitCode::FAILURE;
         }

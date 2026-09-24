@@ -17,14 +17,19 @@ impl Prepared {
         }
     }
 }
-fn control(backend: &Backend, id: u64, op: DebugOperationNameV1, sequence: u64) -> Prepared {
+fn control<S: SessionView>(
+    backend: &Backend<S>,
+    id: u64,
+    op: DebugOperationNameV1,
+    sequence: u64,
+) -> Prepared {
     let total = backend.session.records_len() as u64;
     if sequence > total + 1 {
         return Prepared::plain(backend.error(
             Some(id),
             Some(op),
             DebugErrorCodeV1::InvalidCursor,
-            "kir_v20_debug_cursor_out_of_range",
+            S::PROFILE.code(Code::CursorOutOfRange),
         ));
     }
     if sequence == total + 1
@@ -43,7 +48,7 @@ fn control(backend: &Backend, id: u64, op: DebugOperationNameV1, sequence: u64) 
             Some(id),
             Some(op),
             DebugErrorCodeV1::ResourceLimit,
-            "kir_v20_debug_revision_limit",
+            S::PROFILE.code(Code::RevisionLimit),
         ));
     };
     let session = backend.view_at(sequence, revision, false);
@@ -57,7 +62,7 @@ fn control(backend: &Backend, id: u64, op: DebugOperationNameV1, sequence: u64) 
         update: Some(Update::Cursor { sequence, revision }),
     }
 }
-fn prepare(backend: &Backend, request: DebugRequestV1) -> Prepared {
+fn prepare<S: SessionView>(backend: &Backend<S>, request: DebugRequestV1) -> Prepared {
     let id = request.request_id();
     let op = request.operation();
     if request.expected_revision() != backend.revision {
@@ -65,7 +70,7 @@ fn prepare(backend: &Backend, request: DebugRequestV1) -> Prepared {
             Some(id),
             Some(op),
             DebugErrorCodeV1::StaleRevision,
-            "kir_v20_debug_stale_revision",
+            S::PROFILE.code(Code::StaleRevision),
         ));
     }
     if backend.terminated {
@@ -73,7 +78,7 @@ fn prepare(backend: &Backend, request: DebugRequestV1) -> Prepared {
             Some(id),
             Some(op),
             DebugErrorCodeV1::InvalidState,
-            "kir_v20_debug_terminated",
+            S::PROFILE.code(Code::Terminated),
         ));
     }
     let result = match request {
@@ -128,7 +133,7 @@ fn prepare(backend: &Backend, request: DebugRequestV1) -> Prepared {
                     Some(id),
                     Some(op),
                     DebugErrorCodeV1::InvalidCursor,
-                    "kir_v20_debug_foreign_or_stale_cursor",
+                    S::PROFILE.code(Code::ForeignOrStaleCursor),
                 )
             } else {
                 return control(backend, id, op, cursor.event_sequence);
@@ -153,7 +158,7 @@ fn prepare(backend: &Backend, request: DebugRequestV1) -> Prepared {
                     Some(id),
                     Some(op),
                     DebugErrorCodeV1::ResourceLimit,
-                    "kir_v20_debug_revision_limit",
+                    S::PROFILE.code(Code::RevisionLimit),
                 ));
             };
             return Prepared {
@@ -206,11 +211,14 @@ fn prepare(backend: &Backend, request: DebugRequestV1) -> Prepared {
     };
     Prepared::plain(result)
 }
-fn encode(response: &DebugResponseV1, limits: ProtocolLimitsV1) -> Result<Vec<u8>, &'static str> {
-    encode_response_line_v1(response, limits).map_err(|_| "kir_v20_debug_response_encoding")
+fn encode<S: SessionView>(
+    response: &DebugResponseV1,
+    limits: ProtocolLimitsV1,
+) -> Result<Vec<u8>, &'static str> {
+    encode_response_line_v1(response, limits).map_err(|_| S::PROFILE.code(Code::ResponseEncoding))
 }
-pub(super) fn respond<W: Write>(
-    backend: &mut Backend,
+pub(super) fn respond<S: SessionView, W: Write>(
+    backend: &mut Backend<S>,
     request: DebugRequestV1,
     writer: &mut W,
     limits: ProtocolLimitsV1,
@@ -218,7 +226,7 @@ pub(super) fn respond<W: Write>(
     let id = request.request_id();
     let op = request.operation();
     let prepared = prepare(backend, request);
-    let mut bytes = match encode(&prepared.response, limits) {
+    let mut bytes = match encode::<S>(&prepared.response, limits) {
         Ok(bytes) => bytes,
         Err(_) => {
             // No cursor/revision changed; refuse before applying any prepared update.
@@ -226,12 +234,12 @@ pub(super) fn respond<W: Write>(
                 Some(id),
                 Some(op),
                 DebugErrorCodeV1::ResponseTooLarge,
-                "kir_v20_debug_response_too_large",
+                S::PROFILE.code(Code::ResponseTooLarge),
             );
-            let fallback = encode(&error, limits)?;
+            let fallback = encode::<S>(&error, limits)?;
             return writer
                 .write_all(&fallback)
-                .map_err(|_| "kir_v20_debug_output_failed");
+                .map_err(|_| S::PROFILE.code(Code::OutputFailed));
         }
     };
     if let Some(update) = prepared.update {
@@ -247,11 +255,11 @@ pub(super) fn respond<W: Write>(
                         Some(id),
                         Some(op),
                         DebugErrorCodeV1::ResourceLimit,
-                        "kir_v20_debug_navigation_unavailable",
+                        S::PROFILE.code(Code::NavigationUnavailable),
                     );
                     // Drop the rejected positive response before allocating its error replacement.
                     drop(bytes);
-                    bytes = encode(&error, limits)?;
+                    bytes = encode::<S>(&error, limits)?;
                 } else {
                     backend.revision = revision;
                 }
@@ -266,10 +274,10 @@ pub(super) fn respond<W: Write>(
     // target-side effects. No claim of reversible external stream publication.
     writer
         .write_all(&bytes)
-        .map_err(|_| "kir_v20_debug_output_failed")
+        .map_err(|_| S::PROFILE.code(Code::OutputFailed))
 }
-pub(super) fn run<R: BufRead, W: Write>(
-    backend: &mut Backend,
+pub(super) fn run<S: SessionView, R: BufRead, W: Write>(
+    backend: &mut Backend<S>,
     reader: &mut R,
     writer: &mut W,
     limits: ProtocolLimitsV1,
@@ -282,17 +290,19 @@ pub(super) fn run<R: BufRead, W: Write>(
                 None,
                 None,
                 DebugErrorCodeV1::ResourceLimit,
-                "kir_v20_debug_query_work_limit",
+                S::PROFILE.code(Code::QueryWorkLimit),
             );
             writer
-                .write_all(&encode(&response, limits)?)
-                .map_err(|_| "kir_v20_debug_output_failed")?;
-            return Err("kir_v20_debug_query_work_limit");
+                .write_all(&encode::<S>(&response, limits)?)
+                .map_err(|_| S::PROFILE.code(Code::OutputFailed))?;
+            return Err(S::PROFILE.code(Code::QueryWorkLimit));
         }
         let request = match read_request_line_v1(reader, limits) {
             Ok(Some(request)) => request,
             Ok(None) => {
-                writer.flush().map_err(|_| "kir_v20_debug_output_failed")?;
+                writer
+                    .flush()
+                    .map_err(|_| S::PROFILE.code(Code::OutputFailed))?;
                 return Ok(());
             }
             Err(_) => {
@@ -300,16 +310,18 @@ pub(super) fn run<R: BufRead, W: Write>(
                     None,
                     None,
                     DebugErrorCodeV1::InvalidRequest,
-                    "kir_v20_debug_unsupported_or_invalid_request",
+                    S::PROFILE.code(Code::UnsupportedOrInvalidRequest),
                 );
                 writer
-                    .write_all(&encode(&response, limits)?)
-                    .map_err(|_| "kir_v20_debug_output_failed")?;
-                return Err("kir_v20_debug_protocol_refused");
+                    .write_all(&encode::<S>(&response, limits)?)
+                    .map_err(|_| S::PROFILE.code(Code::OutputFailed))?;
+                return Err(S::PROFILE.code(Code::ProtocolRefused));
             }
         };
         respond(backend, request, writer, limits)?;
-        writer.flush().map_err(|_| "kir_v20_debug_output_failed")?;
+        writer
+            .flush()
+            .map_err(|_| S::PROFILE.code(Code::OutputFailed))?;
         if backend.terminated {
             return Ok(());
         }
@@ -318,10 +330,10 @@ pub(super) fn run<R: BufRead, W: Write>(
         None,
         None,
         DebugErrorCodeV1::ResourceLimit,
-        "kir_v20_debug_command_limit",
+        S::PROFILE.code(Code::CommandLimit),
     );
     writer
-        .write_all(&encode(&response, limits)?)
-        .map_err(|_| "kir_v20_debug_output_failed")?;
-    Err("kir_v20_debug_command_limit")
+        .write_all(&encode::<S>(&response, limits)?)
+        .map_err(|_| S::PROFILE.code(Code::OutputFailed))?;
+    Err(S::PROFILE.code(Code::CommandLimit))
 }

@@ -1,0 +1,38 @@
+{
+  "source": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/physical-entry-cpu-debug-viewer-v20-r1/files/examples/physical-entry-debug-v20/one-selector0.responses.jsonl",
+  "source_bytes": 132575,
+  "source_sha256": "4090b19ca681c06d63387b367503f2f382cc6aad906c1ee2ce642dbcee322bbf",
+  "rows": [
+    {
+      "path": "scripts/debug-session-bridge/fixtures/physical-v20/capabilities.json",
+      "original_response_line_1based": 1,
+      "bytes": 1927,
+      "sha256": "a3b8c7aa03a44b6e4e14998dd2be32020a56246ec33fbbf81854f271fb49051d"
+    },
+    {
+      "path": "scripts/debug-session-bridge/fixtures/physical-v20/checkpoint.json",
+      "original_response_line_1based": 81,
+      "bytes": 1249,
+      "sha256": "1a6db990da53f6f5a57c2a2cf7491cb454b3458b6383087295f3cf55edc59dff"
+    },
+    {
+      "path": "scripts/debug-session-bridge/fixtures/physical-v20/values.json",
+      "original_response_line_1based": 87,
+      "bytes": 9582,
+      "sha256": "42103d070db8d6e2b3f1b001372c6f8142488f9d98a916f55e808e58358899e2"
+    },
+    {
+      "path": "scripts/debug-session-bridge/fixtures/physical-v20/memory.json",
+      "original_response_line_1based": 86,
+      "bytes": 1295,
+      "sha256": "a1f374a1293302baa408505ff06a002d53d11196f6d3e417d495013d1c0b15cc"
+    },
+    {
+      "path": "scripts/debug-session-bridge/fixtures/physical-v20/completed.json",
+      "original_response_line_1based": 97,
+      "bytes": 686,
+      "sha256": "d467288588aff1c81e12b046d398cdda4016549a8b244d672ed8a713c827fbdd"
+    }
+  ],
+  "qualification": "Retained actual V20 CLI responses only. Test correlation/revision rebasing is synthetic and does not qualify a live bridge or source authority."
+}
