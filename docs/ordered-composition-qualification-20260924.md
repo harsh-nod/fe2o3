@@ -36,7 +36,44 @@ seven original finite normal fixtures. No normal/native qualification is
 transferred automatically to a generated candidate. See
 [the source-promotion workflow](ordered-composition-source-promotion-v1.md).
 
-## Native work remains incomplete
+## Fresh ordinary static matrix — completed
+
+After the repeated-call correction, a new observer was built from the integrated
+worker and passed its real machine-effect controls plus 40 resource controls.
+The fresh normal-source R7 gate passed the same 36-session ladder on the merged
+source tree. Root and an independent reviewer joined all source/artifact streams;
+the independent audit rehashed 700 files, including 459 dependency files.
+
+The new native R7 matrix passed all **14/14** ordinary LLVM/LLD/MC cases. Each
+passed 18 metadata mutation refusals and eleven decoded-observation mutations:
+252 and 154 respectively. The previously incomplete two-calls/O0 case now reports
+two actual decoded direct-call sites with one unique helper graph edge. The fix
+retains bounded site counts, cycle/depth checks and combined effect/trace
+reconciliation; effect-only direct-call evidence requires a complete trace.
+
+Root joined all fourteen child exit/stream records, unchanged observation files
+and HSACO hashes. Completed outer source/tools/input snapshots matched. Neither
+this static matrix nor its mutation controls prove native helper argument/result
+transport, root functional equivalence, dynamic execution order, host buffer
+validity, GPU behavior or protected authority. Newly published edited candidates
+still require their own normal/native ladder; these are the seven original
+finite source profiles, not that later ladder.
+
+| Fresh gate | Receipt SHA-256 | Report SHA-256 |
+| --- | --- | --- |
+| Normal-source R7 | `5cbd40515467b3648420bc30fa1b52ab36508678fdc0bf7a39bd002e5f276daa` | `c8e17d4b530e6a742bdda90fe1251bd217b4631afcdfe952fef8d7d505810d6a` |
+| Repeated-call observer build R1 | `122d9633f498e134a47cfd630a5eaba27f787434ece647fc52404e38f83457d6` | — |
+| Native matrix R7 / outer actual-R4 | `7b0c6f2fd5f9039adb8d417ae656e245ee2dd6a214bb42e90b9bf6f12400f329` | `19d99e0aa43d76e07946c46c947eeb08c01bc200c6e1c3058e07763262e848a8` |
+
+The completed matrix is `phase28-ordered-composition-native-r7/report.json`;
+its outer receipt is
+`logs/phase28-resume-r13-compiler-composition-native-actual-r4/receipt.json`.
+The 107,768,560-byte observer has SHA-256
+`7aef9c384dcb75becb25f935c0ba596caf733a46b3360f911b43354a9e3faea3`.
+Its build-source census and later matrix-source census are intentionally distinct:
+only pure Rust lint-test corrections intervened, not C++ or source-profile inputs.
+
+## Historical native failures — preserved
 
 The first ordinary-worker root/O0 attempt produced a retained HSACO but failed
 the observer's metadata relation. Read-only diagnosis found two observer errors:
@@ -66,11 +103,11 @@ re-decode instruction semantics.
 The overall native gate **failed with exit 2**, as required for an incomplete
 case. Its final root source/tools/input census did not run. Retained partial
 observations and the driver's final rechecks are not a successful outer receipt.
-The remaining analyzer work must represent bounded call-site multiplicity and
-reconcile evidence consumers, call-graph cycles/depth and resource propagation;
-simply deleting its duplicate-edge refusal is not sufficient.
+The required successor work was bounded call-site multiplicity plus reconciled
+evidence consumers, call-graph cycles/depth and resource propagation. The fresh
+gate above qualifies that correction; the historical failure remains unchanged.
 
-Even the thirteen interval observations do not prove complete native helper
+Even the fresh fourteen interval observations do not prove complete native helper
 argument/result transport, dynamic execution order, root algorithm equivalence,
 GPU execution, host buffer validity or protected finalization. Scratch/spill and
 dynamic-stack fields are observations, not zero promises.

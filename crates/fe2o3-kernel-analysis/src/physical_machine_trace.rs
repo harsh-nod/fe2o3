@@ -12,6 +12,9 @@
 use crate::{
     PhysicalMachineEffectEvidenceV1, PhysicalMachineEffectKindV1, PhysicalMachineEffectRequestV1,
 };
+#[path = "physical_machine_trace_calls_v1.rs"]
+mod direct_calls;
+
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::{error::Error, fmt};
@@ -554,6 +557,13 @@ fn decode_instruction(
         (6, 1..) => PhysicalMachineMemoryAccessV1::WorkgroupReadWrite { byte_width },
         _ => return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidMemoryAccess),
     };
+    // The native analyzer supports exactly these two direct-call spellings.
+    // Physical returns use S_SETPC_B64 or S_ENDPGM, never either call opcode.
+    if matches!(opcode.as_str(), "S_CALL_B64_vi" | "S_SWAPPC_B64_vi")
+        != (branch_kind == PhysicalMachineBranchKindV1::DirectCall)
+    {
+        return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidDirectCall);
+    }
     validate_instruction_shape(branch_kind, flags, memory_access)?;
     Ok(PhysicalMachineInstructionTraceV1 {
         function_symbol,
@@ -722,7 +732,7 @@ fn validate_trace(
             &instructions_by_function[symbol],
         )?;
     }
-    validate_direct_calls(effects, &functions, &instructions_by_function)?;
+    direct_calls::validate(request, effects, &functions, &instructions_by_function)?;
     validate_effect_correspondence(request, effects, &functions, &instructions_by_function)
 }
 
@@ -866,45 +876,6 @@ fn validate_function_trace(
     }
     if reachable.len() != blocks.len() {
         return Err(PhysicalMachineTraceEvidenceErrorV1::UnreachableBlock);
-    }
-    Ok(())
-}
-
-fn validate_direct_calls<'a>(
-    effects: &PhysicalMachineEffectEvidenceV1,
-    functions: &BTreeMap<&'a str, &'a crate::PhysicalMachineFunctionEvidenceV1>,
-    instructions: &BTreeMap<&str, Vec<&PhysicalMachineInstructionTraceV1>>,
-) -> Result<(), PhysicalMachineTraceEvidenceErrorV1> {
-    let by_offset = functions
-        .values()
-        .map(|function| (function.code_offset(), function.symbol()))
-        .collect::<BTreeMap<_, _>>();
-    if by_offset.len() != functions.len() {
-        return Err(PhysicalMachineTraceEvidenceErrorV1::AmbiguousFunctionAddress);
-    }
-    for function in effects.functions() {
-        let mut callees = BTreeSet::new();
-        for instruction in &instructions[function.symbol()] {
-            if instruction.branch_kind != PhysicalMachineBranchKindV1::DirectCall {
-                continue;
-            }
-            let branch_target = instruction
-                .branch_target
-                .ok_or(PhysicalMachineTraceEvidenceErrorV1::InvalidDirectCall)?;
-            let callee = by_offset
-                .get(&branch_target)
-                .ok_or(PhysicalMachineTraceEvidenceErrorV1::InvalidDirectCall)?;
-            callees.insert(*callee);
-        }
-        if callees
-            != function
-                .direct_callees()
-                .iter()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>()
-        {
-            return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidDirectCall);
-        }
     }
     Ok(())
 }
@@ -1189,6 +1160,8 @@ pub enum PhysicalMachineTraceEvidenceErrorV1 {
     UnreachableBlock,
     AmbiguousFunctionAddress,
     InvalidDirectCall,
+    DirectCallSiteCount,
+    DirectCallBudget,
     EffectTraceMismatch,
 }
 
@@ -1247,6 +1220,12 @@ impl fmt::Display for PhysicalMachineTraceEvidenceErrorV1 {
                 formatter.write_str("machine function address is ambiguous")
             }
             Self::InvalidDirectCall => formatter.write_str("machine direct call is invalid"),
+            Self::DirectCallSiteCount => {
+                formatter.write_str("machine direct call-site count exceeds bound")
+            }
+            Self::DirectCallBudget => {
+                formatter.write_str("machine direct call sites exceed request budget")
+            }
             Self::EffectTraceMismatch => {
                 formatter.write_str("machine instruction trace and effect evidence differ")
             }

@@ -298,6 +298,21 @@ impl ProcessGlobalKfdDebugReservationV1 {
         Ok(())
     }
 
+    /// Distinct actual completed-dispatch witness; never an EmptyQueue witness.
+    #[cfg(target_endian = "little")]
+    pub(crate) fn finish_local_one_stop_teardown(
+        witness: &mut crate::engineering_gfx950::DebugOneStopTeardownWitnessV1,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        let reservation = witness.reservation_mut();
+        reservation.0.check_process(std::process::id())?;
+        lock_runtime_gate_v1(reservation.0.gate).finish_local_debug_teardown_v1(
+            reservation.0.opener_pid,
+            reservation.0.reservation_id,
+        )?;
+        reservation.0.finished = true;
+        Ok(())
+    }
+
     /// Call before the first SET_TRAP_HANDLER or other external publication.
     /// This marks possible exposure, not successful runtime enable.
     pub(crate) fn begin_external_transition(&mut self) -> Result<(), LinuxDoorbellErrorV1> {

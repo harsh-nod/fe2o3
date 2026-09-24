@@ -735,9 +735,15 @@
     "function": 5
   },
   "crates/fe2o3-kfd/src/engineering_gfx950_debug_execution_v1.rs": {
-    "function": 1
+    "function": 2
   },
   "crates/fe2o3-kfd/src/engineering_gfx950_debug_noqueue_v1.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-kfd/src/engineering_gfx950_debug_one_stop_checkpoint_v1.rs": {
+    "attribute": 1
+  },
+  "crates/fe2o3-kfd/src/engineering_gfx950_debug_one_stop_owner_v1.rs": {
     "function": 1
   },
   "crates/fe2o3-kfd/src/engineering_gfx950_dispatch_timestamps.rs": {

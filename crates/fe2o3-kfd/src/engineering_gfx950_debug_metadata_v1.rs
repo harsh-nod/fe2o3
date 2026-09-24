@@ -129,6 +129,11 @@ impl OwnedPreparedDebugMetadataV1 {
         self.storage.empty_local_trap_cleared()
     }
 
+    /// Only the new actual one-stop target's checkpoint borrows this observation.
+    pub(super) fn one_stop_active_root_observation(&self) -> Result<u64, MetadataErrorV1> {
+        self.storage.one_stop_active_root_observation()
+    }
+
     pub(super) fn facts(&self) -> PreparedMetadataFactsV1 {
         debug_assert!(self.storage.is_prepared());
         self.facts

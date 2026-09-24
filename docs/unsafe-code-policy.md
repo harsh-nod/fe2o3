@@ -300,6 +300,57 @@ ABI and compile-fail controls supplement review; the source-inventory gate
 and feature tests remain required. This reconciliation changes no runtime
 implementation or existing plain/noqueue/gfx942 behavior.
 
+### Fixed One-Stop Debug Target
+
+The separately reviewed one-stop sibling adds two consuming unsafe functions:
+`Gfx950DebugExecutionPreparationV1::prepare_fixed_one_stop` and
+`Gfx950DebugOneStopPreparedV1::publish_at_owned_checkpoint_once`.
+The first retains the original isolated disposable-process, no-foreign-runtime,
+no-injection and exclusive native-actor obligations for the entire lifetime,
+including failure and process teardown. The second additionally requires the
+actual SAME native debugger client to join this exact owned process, source
+checkpoint, executable, object, queue, packet and metadata before the first
+publication effect. Actual attach-before-runtime, LoadedSuccess, a sole
+successful event_processed acknowledgment, reviewed trap/CWSR/TTMP setup,
+sampling exclusion and an exact one-shot pre-resume gate are caller obligations.
+The client and supervisor must retain control through the unique debug stop,
+separately qualified completion-only resume and bounded local retirement.
+A JSON record, source digest, runtime-enable return or breakpoint hit cannot
+prove those conditions. The source checkpoint itself does not enforce them.
+
+One new unsafe attribute, `#[unsafe(no_mangle)]`, gives the host-only
+`fe2o3_gfx950_one_stop_prepublication_checkpoint_v1` rendezvous its fixed,
+unique symbol. The safe marker merely passes a borrowed record pointer to
+`black_box`; it never dereferences a caller pointer, reads an acceptance
+flag or grants native authority. The record stays in the original private Box;
+all object addresses, packet bytes, signal BASE and separate VALUE+8 come from
+actual retained owners. ABI/symbol collision and native debugger interaction
+remain reviewed external boundaries, not properties established by the marker.
+
+There are no new raw-memory or ioctl blocks in this donor. It reuses the existing
+bounded memory/AQL/native primitives under retained custody, with INVALID body
+before the single release header and one doorbell store. Completion comes from
+the actual initialized signal and queue frontiers, not a report. Every failure
+or unwind retains uncertain resources; all nine allocations retire before the
+distinct same-owner terminal witness, and owned descriptors close last.
+The original deadline is rechecked after descriptor Drop; late refusal preserves
+the fact that those descriptors closed without attempting to close them again.
+
+The exact inventory delta is two functions (one preexisting plus one new) in
+`engineering_gfx950_debug_execution_v1.rs`, one function in
+`engineering_gfx950_debug_one_stop_owner_v1.rs`, and one attribute in
+`engineering_gfx950_debug_one_stop_checkpoint_v1.rs`.
+No other inventory allowance changes. Comments and compile-fail doc examples
+are excluded by the actual tokenizer; the checkpoint attribute is included.
+
+This policy review does not qualify one-stop queue publication, a debug stop,
+same-client acknowledgment or physical sampling. Earlier packet-incapable
+EmptyQueue qualification and static fixture/startup results do not transfer
+to this new owner or any future debugger build. Run the source-inventory,
+engineering library, doctest and strict Clippy gates before any separately
+reviewed native qualification. No native invocation was performed for this
+inventory reconciliation.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

@@ -175,9 +175,10 @@ fn integer_boundary_comparison_replay_has_exact_work_and_preserves_storage_floor
             let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
             let mut budget = Budget::new(&mut work, floor + LIMIT);
             budget.reserve_storage(floor).unwrap();
-            let (checked, _) =
-                check_canonical_kir_transition_v1(a, b, rows.candidate(), &mut budget).unwrap();
-            drop(checked);
+            {
+                let (_checked, _) =
+                    check_canonical_kir_transition_v1(a, b, rows.candidate(), &mut budget).unwrap();
+            }
             let required = budget.work();
             let peak = budget.peak_storage();
             assert_eq!(budget.storage(), floor);

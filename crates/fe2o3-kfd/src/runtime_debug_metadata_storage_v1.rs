@@ -135,6 +135,26 @@ impl MetadataStorageV1 {
         })
     }
 
+    /// Crate-private diagnostic observation for the same retained one-stop
+    /// owner only. A root address is not attach, runtime-ACK or dispatch authority.
+    pub(super) fn one_stop_active_root_observation(&self) -> Result<u64, MetadataErrorV1> {
+        if self.opener_pid != std::process::id() {
+            return Err(MetadataErrorV1::ProcessChanged);
+        }
+        if self.phase != Phase::ActivePresent || self.record.len() != 1 {
+            return Err(MetadataErrorV1::Transition);
+        }
+        let item = &self.record[0];
+        if item.root.version != abi::REQUIRED_ROCR_DEBUG_VERSION_V11
+            || item.root.state != abi::RT_CONSISTENT_V1
+            || item.root.map != (&item.link as *const _ as usize as u64)
+            || item.link.name != item.uri.as_ptr() as usize as u64
+        {
+            return Err(MetadataErrorV1::Identity);
+        }
+        Ok(&item.root as *const _ as usize as u64)
+    }
+
     pub(super) fn retained_elf(&self) -> &[u8] {
         &self.original_elf
     }

@@ -36,6 +36,11 @@ pub use execution::{
 #[path = "engineering_gfx950_debug_empty_local_v1.rs"]
 mod empty_queue;
 pub(crate) use empty_queue::DebugLocalTeardownWitnessV1;
+pub(crate) use empty_queue::one_stop::DebugOneStopTeardownWitnessV1;
+pub use empty_queue::one_stop::{
+    Gfx950DebugOneStopFailureV1, Gfx950DebugOneStopInFlightV1, Gfx950DebugOneStopLocalCompleteV1,
+    Gfx950DebugOneStopPhaseV1, Gfx950DebugOneStopPreparedV1, Gfx950DebugOneStopStepV1,
+};
 pub use empty_queue::{
     Gfx950DebugAllocationRetirementV1, Gfx950DebugEmptyQueueV1, Gfx950DebugLocalErrorV1,
     Gfx950DebugLocalFailureV1, Gfx950DebugLocalPhaseV1, Gfx950DebugLocalReleaseCompleteV1,

@@ -74,8 +74,9 @@ impl PhysicalMachineAnalysisEvidenceV1 {
         let trace_bytes = input.take(trace_len)?;
         input.finish()?;
 
-        let effects = PhysicalMachineEffectEvidenceV1::decode_canonical_for(request, effect_bytes)
-            .map_err(PhysicalMachineAnalysisEvidenceErrorV1::Effects)?;
+        let effects =
+            PhysicalMachineEffectEvidenceV1::decode_for_analysis_bundle(request, effect_bytes)
+                .map_err(PhysicalMachineAnalysisEvidenceErrorV1::Effects)?;
         let trace =
             PhysicalMachineTraceEvidenceV1::decode_canonical_for(request, &effects, trace_bytes)
                 .map_err(PhysicalMachineAnalysisEvidenceErrorV1::Trace)?;

@@ -33,6 +33,8 @@ struct PhysicalMachineEffectBudget {
   uint32_t GlobalReads = 0;
   uint32_t GlobalWrites = 0;
   uint32_t Returns = 0;
+  // Static DirectCall instruction sites across unique reachable functions;
+  // not unique adjacency and not dynamic execution/inlining expansion.
   uint32_t DirectCalls = 0;
 };
 
@@ -71,6 +73,8 @@ struct PhysicalMachineFunctionEvidence {
   std::string Symbol;
   uint64_t CodeOffset = 0;
   uint64_t CodeSize = 0;
+  // Sorted unique adjacency only. Call-site identity and multiplicity live
+  // in Instructions (DirectCall, FunctionSymbol, InstructionOffset, target).
   std::vector<std::string> DirectCallees;
 };
 

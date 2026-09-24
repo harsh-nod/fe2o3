@@ -87,6 +87,52 @@ pub(super) fn release_after_local_empty_teardown(
     Ok(facts)
 }
 
+/// Only the actual nine-allocation completed-dispatch terminal object opens
+/// retention. Keep its Box alive across descriptor Drop and the final deadline
+/// check, so a late observation reports refusal plus truthful teardown facts.
+pub(super) fn release_after_local_one_stop_teardown(
+    mut witness: super::empty_queue::one_stop::DebugOneStopTeardownWitnessV1,
+) -> Result<
+    super::Gfx950DebugColdPreparationFactsV1,
+    (
+        super::empty_queue::one_stop::DebugOneStopTeardownWitnessV1,
+        super::empty_queue::Gfx950DebugLocalErrorV1,
+    ),
+> {
+    if let Err(error) = witness.check_terminal() {
+        return Err((witness, error));
+    }
+    if let Err(error) =
+        crate::queue_linux::ProcessGlobalKfdDebugReservationV1::finish_local_one_stop_teardown(
+            &mut witness,
+        )
+    {
+        return Err((
+            witness,
+            super::empty_queue::Gfx950DebugLocalErrorV1::Native(format!("{error:?}")),
+        ));
+    }
+    if let Err(error) = witness.check_terminal() {
+        return Err((witness, error));
+    }
+    let facts = witness.cold_mut_after_terminal().facts;
+    let retired = witness
+        .cold_mut_after_terminal()
+        .resources
+        .value
+        .take()
+        .expect("one-stop terminal retained custody");
+    // All actual native resources have been retired. Descriptor ownership closes
+    // LAST, and no outer OpenedKfd/device alias is introduced by this API.
+    drop(retired);
+    witness.mark_descriptors_closed();
+    if let Err(error) = witness.check_terminal() {
+        return Err((witness, error));
+    }
+    drop(witness); // finished reservation; no native Drop or retry
+    Ok(facts)
+}
+
 #[cfg(test)]
 #[path = "runtime_debug_cold_retention_v1_tests.rs"]
 mod tests;

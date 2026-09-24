@@ -43,7 +43,9 @@ pub use debug_cold::{
     Gfx950DebugExecutionPreparationErrorV1, Gfx950DebugExecutionPreparationV1,
     Gfx950DebugLocalErrorV1, Gfx950DebugLocalFailureV1, Gfx950DebugLocalPhaseV1,
     Gfx950DebugLocalReleaseCompleteV1, Gfx950DebugLocalStepV1, Gfx950DebugMetadataNoQueueOwnerV1,
-    Gfx950DebugNativeRequirementV1, Gfx950DebugNativeUnavailableV1, Gfx950DebugQueueGeometryV1,
+    Gfx950DebugNativeRequirementV1, Gfx950DebugNativeUnavailableV1, Gfx950DebugOneStopFailureV1,
+    Gfx950DebugOneStopInFlightV1, Gfx950DebugOneStopLocalCompleteV1, Gfx950DebugOneStopPhaseV1,
+    Gfx950DebugOneStopPreparedV1, Gfx950DebugOneStopStepV1, Gfx950DebugQueueGeometryV1,
     Gfx950DebugQueueLifecycleErrorV1, Gfx950DebugQueueLifecycleEventV1,
     Gfx950DebugQueueLifecyclePhaseV1, Gfx950DebugRuntimeEnableReturnedV1,
     validate_gfx950_debug_queue_lifecycle_v1,
@@ -61,7 +63,7 @@ pub use peer::{
 };
 
 #[cfg(target_endian = "little")]
-pub(crate) use debug_cold::DebugLocalTeardownWitnessV1;
+pub(crate) use debug_cold::{DebugLocalTeardownWitnessV1, DebugOneStopTeardownWitnessV1};
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_KERNELS: usize = 256;
