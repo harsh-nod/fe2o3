@@ -1,6 +1,6 @@
 # fe2o3-compiler-lineage
 
-This crate owns a canonical, bounded **inert content format**. It records one
+This crate owns canonical, bounded **inert content formats**. The V3 base records one
 caller-selected Rust compilation invocation beside fifteen caller-supplied
 semantic compilation transcripts through a compact final compiler-module
 commitment. The capsule does not duplicate exact final LLVM bytes; the nested
@@ -20,7 +20,7 @@ typed stage owners, authenticate that construction, bind this inert capsule to
 the exact outer module handoff, and expose a distinct move-only admitted type.
 The outer handoff and producer authentication are deliberately absent here.
 
-The decoder is strict: it accepts only version 3, zero flags and reserved bits,
+The V3 decoder is strict: it accepts only version 3, zero flags and reserved bits,
 one exact total length, canonical V3 rustc invocation bytes, a canonical AMD
 target spelling matching that invocation, nonempty bounded receipt preimages,
 matching per-receipt inert content identities, and a matching terminal inert
@@ -41,10 +41,36 @@ Resource limits are part of the wire contract:
 - rustc invocation: the bound exported by `fe2o3-rustc-invocation`;
 - target spelling: at most 128 bytes.
 
-Lengths are checked before inert receipt allocation. A successful decode may retain
-up to the exported decoder-owned allocation bound because it keeps both stage
-preimages and a complete canonical encoding. These bounds limit, but do not
+Lengths are checked before inert receipt allocation. Shared decoding retains
+stage preimages as ranges in one canonical backing, with separately decoded
+invocation metadata. The caller pays the entire backing capacity, including any
+bytes outside its selected range. These bounds limit, but do not
 eliminate CPU and memory denial-of-service risk when decoding untrusted input.
+
+## Native Capsule V4
+
+`InertProductionSemanticCapsuleV4` wraps one unchanged V3 base plus a mandatory
+`F2NRF1` carrier containing unchanged F2RFO1 output and F2NSRC1 source packet.
+The complete V4 capsule is still at most **160 MiB**, including both members and
+framing. The carrier's independent 64 MiB output and 4 MiB source limits do not
+increase that ceiling or the legacy receipt limits.
+
+The fixed 48-byte header is `F2O3ISV4`, version4 (`u16`), policy1 (`u16`), header
+length48 (`u32`), total/base/carrier lengths (`u64` each), and eight zero reserved
+bytes. All integers are little-endian. Exact base and carrier bytes follow, then
+`SHA256("FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V4\0" || LE64(preimage length) ||
+preimage)`. Layout/seal/read helpers reuse the carrier's bounded framing engine,
+permit direct encoding in one allocation, prepay byte visits, and never retry
+another version. Seal callback refusal or panic, including captured-value
+destruction, precedes mutation.
+
+Owned/shared-range decoding retains the base, its receipts and carrier in one
+allocation. Native base MIR cannot exceed the complete source packet's length;
+this is a necessary size check, **not** proof that their MIR or semantics agree.
+Stage contents remain inert and may be unrelated. These content decoders are
+unmetered like V3; production must prepay their work/working set and independently
+recover source/F evidence with all cross-field joins. Typed production custody,
+protected publication and launch integration remain outstanding.
 
 ## Native Neutral Graph Framing
 

@@ -26,6 +26,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "compiler_module_handoff_resources.rs"]
+pub(crate) mod resources;
+use resources::Resources;
+#[path = "compiler_module_handoff_currentness.rs"]
+mod currentness;
+#[path = "compiler_module_handoff_v4.rs"]
+pub(crate) mod native_v4;
+#[path = "compiler_execution_receipt_transport.rs"]
+mod receipt_transport;
+
 const PARENT_PREFIX: &str = ".fe2o3-compiler-module-handoff-v1-";
 const SLOT_PREFIX: &str = "attempt-";
 pub(crate) const PAYLOAD_ENTRY: &str = "module";
@@ -59,8 +69,7 @@ static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 ///
 /// This mirrors `fe2o3_compiler_ffi::MAX_COMPILER_MODULE_HANDOFF_BYTES_V1`: a 64 MiB module,
 /// 512 KiB envelope, 128-byte target, and 83 bytes of canonical framing. This lower-level
-/// filesystem crate deliberately does not depend on `fe2o3-compiler-ffi`; integration must keep
-/// the two V1 constants equal.
+/// historical V1 wire ceiling remains frozen; tests keep the two constants equal.
 pub const MAX_COMPILER_MODULE_HANDOFF_BYTES: usize = (64 * 1024 * 1024) + (512 * 1024) + 128 + 83;
 
 /// Closed attempt-local transport slot for one production compiler module handoff.
@@ -426,6 +435,7 @@ pub fn publish_simulation_kernel_ir_handoff_v1(
         (),
         canonical_kir,
         &mut NoFaults,
+        &mut Resources::Legacy,
     )
     .map(|published| SimulationKernelIrHandoffReceiptV1 {
         attempt: published.attempt,
@@ -448,6 +458,7 @@ pub fn consume_simulation_kernel_ir_handoff_v1(
         SimulationKernelIrHandoffSlotV1::CanonicalKirV6,
         (),
         &mut NoFaults,
+        &mut Resources::Legacy,
     )
     .map(|consumed| ConsumedSimulationKernelIrHandoffV1 {
         attempt: consumed.attempt,
@@ -530,6 +541,8 @@ trait HandoffSchema: Sized {
     type Binding: Copy + Eq;
     type Payload;
 
+    const METERED: bool = false;
+
     const PARENT_PREFIX: &'static str;
     const SLOT_PREFIX: &'static str;
     const RECORD_MAGIC: &'static [u8];
@@ -556,6 +569,7 @@ trait HandoffSchema: Sized {
     fn decode_payload(
         binding: Self::Binding,
         bytes: Vec<u8>,
+        _resources: &mut Resources<'_, '_>,
     ) -> Result<Self::Payload, HandoffEngineError>;
     fn derive_identity(
         producer: [u8; 32],
@@ -617,6 +631,7 @@ impl HandoffSchema for HandoffV1Schema {
     fn decode_payload(
         _binding: Self::Binding,
         bytes: Vec<u8>,
+        _resources: &mut Resources<'_, '_>,
     ) -> Result<Self::Payload, HandoffEngineError> {
         Ok(Arc::from(bytes))
     }
@@ -679,6 +694,7 @@ impl HandoffSchema for SimulationKernelIrHandoffSchemaV1 {
     fn decode_payload(
         _binding: Self::Binding,
         bytes: Vec<u8>,
+        _resources: &mut Resources<'_, '_>,
     ) -> Result<Self::Payload, HandoffEngineError> {
         Ok(Arc::from(bytes))
     }
@@ -694,6 +710,7 @@ impl HandoffSchema for SimulationKernelIrHandoffSchemaV1 {
     }
 }
 
+#[derive(Debug)]
 enum HandoffEngineError {
     Common(CompilerModuleHandoffErrorV1),
     WrongBinding,
@@ -701,6 +718,9 @@ enum HandoffEngineError {
     WorkingSetBudgetExceeded { required: usize, maximum: usize },
     PayloadAllocationFailed { requested: usize },
     InvalidCanonicalV3(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3),
+    InvalidCanonicalV4(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV4),
+    Resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
+    Busy,
 }
 
 impl From<CompilerModuleHandoffErrorV1> for HandoffEngineError {
@@ -747,6 +767,12 @@ impl HandoffEngineError {
                 Path::new(""),
                 format!("V1 handoff unexpectedly required V3 decoding: {error}"),
             ),
+            Self::InvalidCanonicalV4(error) => invalid_slot(
+                Path::new(""),
+                format!("legacy handoff unexpectedly required V4 decoding: {error:?}"),
+            ),
+            Self::Resource(error) => invalid_slot(Path::new(""), error.to_string()),
+            Self::Busy => invalid_slot(Path::new(""), "handoff currentness lock is held"),
         }
     }
 }
@@ -960,6 +986,7 @@ fn publish_in_slot_with_hooks(
         (),
         handoff_bytes,
         hooks,
+        &mut Resources::Legacy,
     )
     .map(|published| CompilerModuleHandoffReceiptV1 {
         attempt: published.attempt,
@@ -978,7 +1005,11 @@ fn publish_in_slot_engine<S: HandoffSchema>(
     binding: S::Binding,
     handoff_bytes: &[u8],
     hooks: &mut impl HandoffHooks,
+    resources: &mut Resources<'_, '_>,
 ) -> Result<PublishedHandoff<S>, HandoffEngineError> {
+    resources.require::<S>()?;
+    resources.reserve(4 * S::RECORD_BYTES + std::mem::size_of::<Sha256>())?;
+    resources.work(16 * S::RECORD_BYTES)?;
     validate_handoff_size::<S>(handoff_bytes.len())?;
     let output = PinnedOutput::open(output_dir)?;
     let _lock = output.lock()?;
@@ -1000,7 +1031,7 @@ fn publish_in_slot_engine<S: HandoffSchema>(
         &format!("{}{}", S::SLOT_PREFIX, hex(&slot_id)),
         hooks,
     )?;
-    recover_slot::<S>(&slot)?;
+    recover_slot::<S>(&slot, resources)?;
     if entry_exists(&slot, CONSUMED_ENTRY)? {
         read_bound_record::<S>(
             &slot,
@@ -1016,8 +1047,13 @@ fn publish_in_slot_engine<S: HandoffSchema>(
     if entry_exists(&slot, READY_ENTRY)? {
         let committed =
             read_bound_record::<S>(&slot, READY_ENTRY, producer_id, slot_id, attempt, binding)?;
-        let committed_bytes =
-            read_payload::<S>(&slot, &committed, S::MAX_DECODE_WORKING_SET_BYTES)?;
+        let committed_bytes = read_payload::<S>(
+            &slot,
+            &committed,
+            S::MAX_DECODE_WORKING_SET_BYTES,
+            resources,
+        )?;
+        resources.work(handoff_bytes.len().min(committed_bytes.len()))?;
         return if committed_bytes == handoff_bytes {
             Err(CompilerModuleHandoffErrorV1::AlreadyPublished.into())
         } else {
@@ -1025,6 +1061,13 @@ fn publish_in_slot_engine<S: HandoffSchema>(
         };
     }
 
+    resources.work(
+        handoff_bytes
+            .len()
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(256))
+            .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?,
+    )?;
     let identity = S::derive_identity(producer_id, slot_id, attempt, binding, handoff_bytes);
     let (payload_temp, mut payload) = create_temp(&slot, "module")?;
     hooks.hit(FaultPoint::PayloadCreated)?;
@@ -1119,6 +1162,7 @@ fn consume_in_slot_with_hooks(
         handoff_slot,
         (),
         hooks,
+        &mut Resources::Legacy,
     )
     .map(|consumed| ConsumedCompilerModuleHandoffV1 {
         attempt: consumed.attempt,
@@ -1136,6 +1180,7 @@ fn consume_in_slot_engine<S: HandoffSchema>(
     handoff_slot: S::Slot,
     binding: S::Binding,
     hooks: &mut impl HandoffHooks,
+    resources: &mut Resources<'_, '_>,
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
     consume_in_slot_engine_with_working_set_limit::<S>(
         output_dir,
@@ -1145,6 +1190,7 @@ fn consume_in_slot_engine<S: HandoffSchema>(
         binding,
         S::MAX_DECODE_WORKING_SET_BYTES,
         hooks,
+        resources,
     )
 }
 
@@ -1156,7 +1202,9 @@ fn consume_in_slot_engine_with_working_set_limit<S: HandoffSchema>(
     binding: S::Binding,
     maximum_working_set_bytes: usize,
     hooks: &mut impl HandoffHooks,
+    resources: &mut Resources<'_, '_>,
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
+    resources.require::<S>()?;
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
     consume_in_slot_engine_locked::<S>(
@@ -1167,6 +1215,7 @@ fn consume_in_slot_engine_with_working_set_limit<S: HandoffSchema>(
         binding,
         maximum_working_set_bytes,
         hooks,
+        resources,
     )
 }
 
@@ -1178,7 +1227,11 @@ fn consume_in_slot_engine_locked<S: HandoffSchema>(
     binding: S::Binding,
     maximum_working_set_bytes: usize,
     hooks: &mut impl HandoffHooks,
+    resources: &mut Resources<'_, '_>,
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
+    resources.require::<S>()?;
+    resources.reserve(4 * S::RECORD_BYTES + std::mem::size_of::<Sha256>())?;
+    resources.work(16 * S::RECORD_BYTES)?;
     output.verify_path_identity()?;
     authorize_for_custody(output, producer, attempt, S::ATTEMPT_CUSTODY)?;
     let producer_id = producer_identity_for::<S>(producer);
@@ -1196,7 +1249,7 @@ fn consume_in_slot_engine_locked<S: HandoffSchema>(
         format!("{}{}", S::SLOT_PREFIX, hex(&slot_id)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-    recover_slot::<S>(&slot)?;
+    recover_slot::<S>(&slot, resources)?;
     if entry_exists(&slot, CONSUMED_ENTRY)? {
         read_bound_record::<S>(
             &slot,
@@ -1211,8 +1264,8 @@ fn consume_in_slot_engine_locked<S: HandoffSchema>(
     }
     let record =
         read_bound_record::<S>(&slot, READY_ENTRY, producer_id, slot_id, attempt, binding)?;
-    let bytes = read_payload::<S>(&slot, &record, maximum_working_set_bytes)?;
-    let payload = S::decode_payload(record.binding, bytes)?;
+    let bytes = read_payload::<S>(&slot, &record, maximum_working_set_bytes, resources)?;
+    let payload = S::decode_payload(record.binding, bytes, resources)?;
     hooks.hit(FaultPoint::PayloadValidated)?;
     slot.verify()?;
     renameat_with(
@@ -1555,7 +1608,11 @@ fn remove_all_slot_entries(slot: &PinnedDirectory) -> Result<(), CompilerModuleH
     Ok(())
 }
 
-fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffEngineError> {
+fn recover_slot<S: HandoffSchema>(
+    slot: &PinnedDirectory,
+    resources: &mut Resources<'_, '_>,
+) -> Result<(), HandoffEngineError> {
+    resources.require::<S>()?;
     let names = slot_entries(slot)?;
     for name in &names {
         let name_bytes = name.as_os_str().as_bytes();
@@ -1609,10 +1666,20 @@ fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffE
     if S::VALIDATE_RECORD_DURING_RECOVERY
         && let Some(entry) = committed_entry
     {
-        let record = read_private_file(slot, entry, S::RECORD_BYTES)?
-            .ok_or_else(|| invalid_slot(&slot.path.join(entry), "record disappeared"))?;
-        HandoffRecord::<S>::decode(&record)
-            .map_err(|reason| invalid_slot(&slot.path.join(entry), reason))?;
+        resources.scoped(|r| {
+            r.reserve(std::mem::size_of::<HandoffRecord<S>>() + std::mem::size_of::<Sha256>())?;
+            r.work(4 * S::RECORD_BYTES)?;
+            let record = if S::METERED {
+                let pinned = currentness::pin(slot, entry, S::RECORD_BYTES)?;
+                currentness::read_file(slot, entry, &pinned, S::RECORD_BYTES, S::RECORD_BYTES, r)?
+            } else {
+                read_private_file(slot, entry, S::RECORD_BYTES)?
+                    .ok_or_else(|| invalid_slot(&slot.path.join(entry), "record disappeared"))?
+            };
+            HandoffRecord::<S>::decode(&record)
+                .map_err(|reason| invalid_slot(&slot.path.join(entry), reason))?;
+            Ok(())
+        })?;
     }
     for name in residue {
         let name_bytes = name.as_os_str().as_bytes();
@@ -1703,7 +1770,16 @@ fn read_payload<S: HandoffSchema>(
     slot: &PinnedDirectory,
     record: &HandoffRecord<S>,
     maximum_working_set_bytes: usize,
+    resources: &mut Resources<'_, '_>,
 ) -> Result<Vec<u8>, HandoffEngineError> {
+    resources.require::<S>()?;
+    resources.work(
+        record
+            .length
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(257))
+            .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?,
+    )?;
     let fd = openat(
         &slot.fd,
         PAYLOAD_ENTRY,
@@ -1728,10 +1804,18 @@ fn read_payload<S: HandoffSchema>(
         .into());
     }
     validate_decode_working_set::<S>(record.length, maximum_working_set_bytes)?;
-    let mut bytes = try_allocate_payload_buffer(record.length)?;
-    Read::by_ref(&mut file)
-        .take(record.length as u64)
-        .read_to_end(&mut bytes)?;
+    let mut bytes = resources.buffer(record.length)?;
+    bytes.resize(record.length, 0);
+    file.read_exact(&mut bytes).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            HandoffEngineError::from(invalid_slot(
+                &slot.path.join(PAYLOAD_ENTRY),
+                "payload changed while its descriptor was read",
+            ))
+        } else {
+            error.into()
+        }
+    })?;
     let mut trailing = [0_u8; 1];
     let has_trailing_bytes = file.read(&mut trailing)? != 0;
     let after = fstat(&file).map_err(std::io::Error::from)?;
@@ -2389,6 +2473,7 @@ mod protected_v2 {
         fn decode_payload(
             _binding: Self::Binding,
             bytes: Vec<u8>,
+            _resources: &mut Resources<'_, '_>,
         ) -> Result<Self::Payload, HandoffEngineError> {
             Ok(Arc::from(bytes))
         }
@@ -2515,6 +2600,7 @@ mod protected_v2 {
             compiler_closure,
             handoff_bytes,
             hooks,
+            &mut Resources::Legacy,
         )
         .map(|published| CompilerModuleHandoffReceiptV2 {
             attempt: published.attempt,
@@ -2558,6 +2644,7 @@ mod protected_v2 {
             handoff_slot,
             compiler_closure,
             hooks,
+            &mut Resources::Legacy,
         )
         .map(|consumed| ConsumedCompilerModuleHandoffV2 {
             attempt: consumed.attempt,
@@ -2626,6 +2713,7 @@ mod protected_v2 {
                     reason: format!("V2 handoff unexpectedly required V3 decoding: {error}"),
                 }
             }
+            other => other.into_v1().into(),
         }
     }
 
@@ -3299,12 +3387,10 @@ pub(crate) mod semantic_v3 {
     // invocation, collection metadata, and fixed decoded owners. Large module and receipt payloads
     // are ranges in the canonical backing rather than additional complete buffers.
     const V3_DECODE_WORKING_SET_MULTIPLIER: usize = 1;
-    const V3_DECODE_FIXED_BYTES: usize = 3 * fe2o3_compiler_ffi::MAX_COMPILER_FFI_ENVELOPE_BYTES_V1
-        + 3 * fe2o3_compiler_ffi::MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1
-        + 8 * 1024 * 1024;
+    const V3_DECODE_FIXED_BYTES: usize =
+        fe2o3_compiler_ffi::INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V3;
     const MAX_V3_DECODE_WORKING_SET_BYTES: usize =
         MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 + V3_DECODE_FIXED_BYTES;
-    const STREAM_BUFFER_BYTES_V3: usize = 16 * 1024;
 
     /// Closed workload-neutral slot for one strict semantic V3 handoff.
     ///
@@ -3596,23 +3682,7 @@ pub(crate) mod semantic_v3 {
         binding: Arc<CompilerModuleHandoffCurrentnessBindingV3>,
     }
 
-    struct CompilerModuleHandoffCurrentnessBindingV3 {
-        output: PinnedOutput,
-        producer: ProducerIdentity,
-        producer_identity: [u8; 32],
-        parent: PinnedDirectory,
-        slot_directory: PinnedDirectory,
-        ready_file: PinnedHandoffFileV3,
-        payload_file: PinnedHandoffFileV3,
-        receipt: CompilerModuleHandoffReceiptV3,
-        slot_identity: [u8; 32],
-        committed_generation: u64,
-    }
-
-    struct PinnedHandoffFileV3 {
-        file: fs::File,
-        identity: FileIdentity,
-    }
+    type CompilerModuleHandoffCurrentnessBindingV3 = currentness::Current<HandoffV3Schema>;
 
     impl fmt::Debug for CompilerModuleHandoffCurrentnessLeaseV3 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -4238,28 +4308,8 @@ pub(crate) mod semantic_v3 {
             _lock,
         } = token;
         let receipt = binding.receipt;
-        binding.slot_directory.verify()?;
-        renameat_with(
-            &binding.slot_directory.fd,
-            READY_ENTRY,
-            &binding.slot_directory.fd,
-            CONSUMED_ENTRY,
-            RenameFlags::NOREPLACE,
-        )
-        .map_err(std::io::Error::from)?;
-        fsync(&binding.slot_directory.fd).map_err(std::io::Error::from)?;
-        binding.slot_directory.verify()?;
-        validate_renamed_pinned_handoff_file_v3(
-            &binding.slot_directory,
-            CONSUMED_ENTRY,
-            &binding.ready_file,
-        )?;
-        validate_pinned_handoff_file_v3(
-            &binding.slot_directory,
-            PAYLOAD_ENTRY,
-            &binding.payload_file,
-        )?;
-        cleanup_consumed_payload(&binding.slot_directory);
+        currentness::consume(&binding, &mut Resources::Legacy, &mut NoFaults)
+            .map_err(engine_error_v3)?;
 
         Ok(ConsumedCompilerModuleHandoffV3 {
             attempt: receipt.attempt(),
@@ -4269,11 +4319,7 @@ pub(crate) mod semantic_v3 {
         })
     }
 
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    struct HandoffBindingV3 {
-        sha256: [u8; 32],
-        byte_len: u64,
-    }
+    type HandoffBindingV3 = currentness::Binding;
 
     impl From<fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffIdentityV3> for HandoffBindingV3 {
         fn from(
@@ -4286,7 +4332,36 @@ pub(crate) mod semantic_v3 {
         }
     }
 
-    struct HandoffV3Schema;
+    pub(super) struct HandoffV3Schema;
+
+    impl currentness::Schema for HandoffV3Schema {
+        type Receipt = CompilerModuleHandoffReceiptV3;
+        const TRANSACTION_DOMAIN: &'static [u8] = TRANSACTION_IDENTITY_DOMAIN_V3;
+
+        fn receipt_fields(receipt: Self::Receipt) -> PublishedHandoff<Self> {
+            PublishedHandoff {
+                attempt: receipt.attempt,
+                slot: receipt.slot,
+                binding: receipt.handoff_identity.into(),
+                identity: receipt.transaction_identity.0,
+                length: receipt.length,
+            }
+        }
+
+        fn receipt(fields: PublishedHandoff<Self>, handoff: &Self::Payload) -> Self::Receipt {
+            CompilerModuleHandoffReceiptV3 {
+                attempt: fields.attempt,
+                slot: fields.slot,
+                handoff_identity: handoff.identity(),
+                transaction_identity: CompilerModuleHandoffTransactionIdentityV3(fields.identity),
+                length: fields.length,
+            }
+        }
+
+        fn payload_binding(handoff: &Self::Payload) -> currentness::Binding {
+            handoff.identity().into()
+        }
+    }
 
     impl HandoffSchema for HandoffV3Schema {
         type Slot = CompilerModuleHandoffSlotV3;
@@ -4341,6 +4416,7 @@ pub(crate) mod semantic_v3 {
         fn decode_payload(
             binding: Self::Binding,
             bytes: Vec<u8>,
+            _resources: &mut Resources<'_, '_>,
         ) -> Result<Self::Payload, HandoffEngineError> {
             let handoff =
                 fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3::decode_shared_vec(
@@ -4467,8 +4543,9 @@ pub(crate) mod semantic_v3 {
         if transaction_identity != record.identity {
             return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
         }
-        let handoff = HandoffV3Schema::decode_payload(record.binding, module_bytes)
-            .map_err(engine_error_v3)?;
+        let handoff =
+            HandoffV3Schema::decode_payload(record.binding, module_bytes, &mut Resources::Legacy)
+                .map_err(engine_error_v3)?;
         if handoff.identity() != expected_receipt.handoff_identity() {
             return Err(CompilerModuleHandoffErrorV3::HandoffIdentityMismatch);
         }
@@ -4492,17 +4569,82 @@ pub(crate) mod semantic_v3 {
         binding: HandoffBindingV3,
         payload_length: usize,
     ) -> Sha256 {
-        let mut digest = Sha256::new();
-        digest.update(TRANSACTION_IDENTITY_DOMAIN_V3);
-        digest.update(binding.sha256);
-        digest.update(binding.byte_len.to_le_bytes());
-        digest.update(slot);
-        digest.update(producer);
-        digest.update(attempt.generation().to_le_bytes());
-        digest.update(attempt.session().as_bytes());
-        digest.update(attempt.invocation().as_bytes());
-        digest.update((payload_length as u64).to_le_bytes());
-        digest
+        <HandoffV3Schema as currentness::Schema>::transaction_hasher(
+            producer,
+            slot,
+            attempt,
+            binding,
+            payload_length,
+        )
+    }
+
+    impl receipt_transport::Subject for crate::InertCompilerExecutionSubjectV1 {
+        type Schema = HandoffV3Schema;
+        type Postcheck = ();
+        const ENTRY: &'static str = COMPILER_EXECUTION_RECEIPT_ENTRY_V1;
+        const MAX_BYTES: usize = MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1;
+
+        fn coordinates(&self) -> receipt_transport::Coordinates<Self::Schema> {
+            receipt_transport::Coordinates {
+                attempt: self.attempt(),
+                slot: self.slot(),
+                outer: currentness::Binding {
+                    sha256: *self.outer_handoff().sha256(),
+                    byte_len: self.outer_handoff().byte_len(),
+                },
+                transaction: *self.transaction_identity().as_bytes(),
+            }
+        }
+        fn validate_payload(
+            &self,
+            _record: &HandoffRecord<Self::Schema>,
+            _bytes: Vec<u8>,
+            _resources: &mut Resources<'_, '_>,
+        ) -> receipt_transport::Result<()> {
+            // Preserve V1 path policy: native transaction bytes, not a full
+            // reconstructed subject. V1 current-token recovery checks that too.
+            Ok(())
+        }
+        fn prepare_postcheck(
+            &self,
+            _output: &PinnedOutput,
+            _producer: &ProducerIdentity,
+            _slot: &PinnedDirectory,
+            _resources: &mut Resources<'_, '_>,
+        ) -> receipt_transport::Result<()> {
+            Ok(())
+        }
+
+        fn postcheck(
+            &self,
+            output: &PinnedOutput,
+            producer: &ProducerIdentity,
+            slot: &PinnedDirectory,
+            _prepared: (),
+        ) -> receipt_transport::Result<()> {
+            receipt_transport::validate(
+                output,
+                producer,
+                self,
+                slot,
+                false,
+                false,
+                &mut Resources::Legacy,
+            )
+        }
+    }
+
+    impl From<receipt_transport::Failure> for CompilerExecutionReceiptTransportErrorV1 {
+        fn from(error: receipt_transport::Failure) -> Self {
+            use receipt_transport::Failure as E;
+            match error {
+                E::Handoff(e) => Self::Handoff(engine_error_v3(e)),
+                E::InvalidSize { actual, maximum } => Self::InvalidReceiptSize { actual, maximum },
+                E::NotPublished => Self::NotPublished,
+                E::Conflict => Self::ConflictingPublication,
+                E::Mismatch | E::Subject(_) => Self::SubjectBindingMismatch,
+            }
+        }
     }
 
     fn publish_compiler_execution_receipt_transport_inner_v1(
@@ -4512,56 +4654,17 @@ pub(crate) mod semantic_v3 {
         exact_receipt_bytes: &[u8],
     ) -> Result<CompilerExecutionReceiptTransportReceiptV1, CompilerExecutionReceiptTransportErrorV1>
     {
-        validate_compiler_execution_receipt_transport_size_v1(exact_receipt_bytes.len())?;
-        let output = PinnedOutput::open_existing(output_dir)?;
-        let _lock = output.lock()?;
-        let slot = open_subject_bound_slot_v1(&output, producer, subject, false, true)?;
-
-        if let Some(existing) = read_compiler_execution_receipt_bytes_v1(&slot)? {
-            if existing != exact_receipt_bytes {
-                return Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication);
-            }
-            fsync(&slot.fd).map_err(std::io::Error::from)?;
-            validate_subject_bound_slot_v1(&output, producer, subject, &slot, false, false)?;
-            return Ok(compiler_execution_receipt_transport_receipt_v1(
-                subject, &existing,
-            ));
-        }
-
-        let (temporary_name, mut temporary) =
-            create_temp(&slot, COMPILER_EXECUTION_RECEIPT_ENTRY_V1)?;
-        temporary.write_all(exact_receipt_bytes)?;
-        temporary.sync_all()?;
-        let temporary_stat = fstat(&temporary).map_err(std::io::Error::from)?;
-        if !is_private_file(&temporary_stat)
-            || usize::try_from(temporary_stat.st_size).ok() != Some(exact_receipt_bytes.len())
-        {
-            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
-        }
-        validate_subject_bound_slot_v1(&output, producer, subject, &slot, false, false)?;
-        match renameat_with(
-            &slot.fd,
-            &temporary_name,
-            &slot.fd,
-            COMPILER_EXECUTION_RECEIPT_ENTRY_V1,
-            RenameFlags::NOREPLACE,
-        ) {
-            Ok(()) => {}
-            Err(error) if error == rustix::io::Errno::EXIST => {
-                return Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication);
-            }
-            Err(error) => return Err(std::io::Error::from(error).into()),
-        }
-        fsync(&slot.fd).map_err(std::io::Error::from)?;
-        slot.verify()?;
-        let committed = read_compiler_execution_receipt_bytes_v1(&slot)?
-            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
-        if committed != exact_receipt_bytes {
-            return Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication);
-        }
-        validate_subject_bound_slot_v1(&output, producer, subject, &slot, false, false)?;
+        receipt_transport::publish(
+            output_dir,
+            producer,
+            subject,
+            exact_receipt_bytes,
+            &mut Resources::Legacy,
+            &mut NoFaults,
+        )?;
         Ok(compiler_execution_receipt_transport_receipt_v1(
-            subject, &committed,
+            subject,
+            exact_receipt_bytes,
         ))
     }
 
@@ -4573,12 +4676,8 @@ pub(crate) mod semantic_v3 {
         RecoveredCompilerExecutionReceiptTransportV1,
         CompilerExecutionReceiptTransportErrorV1,
     > {
-        let output = PinnedOutput::open_existing(output_dir)?;
-        let _lock = output.lock()?;
-        let slot = open_subject_bound_slot_v1(&output, producer, subject, true, true)?;
-        let exact_bytes = read_compiler_execution_receipt_bytes_v1(&slot)?
-            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
-        validate_subject_bound_slot_v1(&output, producer, subject, &slot, true, false)?;
+        let exact_bytes =
+            receipt_transport::recover(output_dir, producer, subject, &mut Resources::Legacy)?;
         let receipt = compiler_execution_receipt_transport_receipt_v1(subject, &exact_bytes);
         Ok(RecoveredCompilerExecutionReceiptTransportV1 {
             receipt,
@@ -4586,216 +4685,14 @@ pub(crate) mod semantic_v3 {
         })
     }
 
-    fn open_subject_bound_slot_v1(
-        output: &PinnedOutput,
-        producer: &ProducerIdentity,
-        subject: &crate::InertCompilerExecutionSubjectV1,
-        allow_consumed: bool,
-        validate_payload: bool,
-    ) -> Result<PinnedDirectory, CompilerExecutionReceiptTransportErrorV1> {
-        output.verify_path_identity()?;
-        authorize_compiler_execution_receipt_transport_v1(
-            output,
-            producer,
-            subject.attempt(),
-            allow_consumed,
-        )?;
-        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
-        let slot_identity = slot_identity_for::<HandoffV3Schema>(
-            producer_identity,
-            subject.attempt(),
-            subject.slot(),
-        );
-        let parent = open_private_directory(
-            &output.fd,
-            &output.display_path,
-            format!("{PARENT_PREFIX_V3}{}", hex(&producer_identity)),
-        )?
-        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, subject.attempt())
-            .map_err(engine_error_v3)?;
-        let slot = open_private_directory(
-            &parent.fd,
-            &parent.path,
-            format!("{SLOT_PREFIX_V3}{}", hex(&slot_identity)),
-        )?
-        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        recover_slot::<HandoffV3Schema>(&slot).map_err(engine_error_v3)?;
-        validate_subject_bound_slot_v1(
-            output,
-            producer,
-            subject,
-            &slot,
-            allow_consumed,
-            validate_payload,
-        )?;
-        parent.verify()?;
-        Ok(slot)
-    }
-
-    fn validate_subject_bound_slot_v1(
-        output: &PinnedOutput,
-        producer: &ProducerIdentity,
-        subject: &crate::InertCompilerExecutionSubjectV1,
-        slot: &PinnedDirectory,
-        allow_consumed: bool,
-        validate_payload: bool,
-    ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
-        output.verify_path_identity()?;
-        authorize_compiler_execution_receipt_transport_v1(
-            output,
-            producer,
-            subject.attempt(),
-            allow_consumed,
-        )?;
-        slot.verify()?;
-        let entries = slot_entries(slot)?;
-        let has_ready = entries.iter().any(|entry| entry == READY_ENTRY);
-        let has_consumed = entries.iter().any(|entry| entry == CONSUMED_ENTRY);
-        let record_entry = match (has_ready, has_consumed) {
-            (true, false) => READY_ENTRY,
-            (false, true) if allow_consumed => CONSUMED_ENTRY,
-            (false, true) => {
-                return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                    CompilerModuleHandoffErrorV3::AlreadyConsumed,
-                ));
-            }
-            (false, false) => {
-                return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                    CompilerModuleHandoffErrorV3::NotPublished,
-                ));
-            }
-            (true, true) => {
-                return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
-            }
-        };
-        let record_bytes = read_private_file(slot, record_entry, HandoffV3Schema::RECORD_BYTES)?
-            .ok_or(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
-        let record = HandoffRecord::<HandoffV3Schema>::decode(&record_bytes)
-            .map_err(|_| CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
-        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
-        let slot_identity = slot_identity_for::<HandoffV3Schema>(
-            producer_identity,
-            subject.attempt(),
-            subject.slot(),
-        );
-        let outer = subject.outer_handoff();
-        if record.producer != producer_identity
-            || record.slot != slot_identity
-            || record.attempt != subject.attempt()
-            || record.binding.sha256 != *outer.sha256()
-            || record.binding.byte_len != outer.byte_len()
-            || record.identity != *subject.transaction_identity().as_bytes()
-            || u64::try_from(record.length).ok() != Some(outer.byte_len())
-        {
-            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
-        }
-        if validate_payload && record_entry == READY_ENTRY {
-            let payload =
-                read_payload::<HandoffV3Schema>(slot, &record, MAX_V3_DECODE_WORKING_SET_BYTES)
-                    .map_err(engine_error_v3)?;
-            drop(payload);
-        }
-        output.verify_path_identity()?;
-        authorize_compiler_execution_receipt_transport_v1(
-            output,
-            producer,
-            subject.attempt(),
-            allow_consumed,
-        )?;
-        slot.verify()?;
-        Ok(())
-    }
-
-    fn authorize_compiler_execution_receipt_transport_v1(
-        output: &PinnedOutput,
-        producer: &ProducerIdentity,
-        attempt: BuildAttempt,
-        allow_consumed: bool,
-    ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
-        if !allow_consumed {
-            return authorize(output, producer, attempt).map_err(Into::into);
-        }
-        if attempt.session() == BuildSession::DIRECT {
-            return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                CompilerModuleHandoffErrorV3::Attempt {
-                    reason:
-                        "direct compiler attempts cannot own a compiler-execution receipt sidecar"
-                            .to_owned(),
-                },
-            ));
-        }
-        let attempts = read_attempt_registry(output)?;
-        let record = attempts
-            .record_exact(&producer.stable_source, attempt)
-            .map_err(|error| CompilerModuleHandoffErrorV3::Attempt {
-                reason: error.to_string(),
-            })?;
-        if record.crate_name != producer.crate_name {
-            return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                CompilerModuleHandoffErrorV3::Attempt {
-                    reason: "build attempt crate name does not match the receipt producer"
-                        .to_owned(),
-                },
-            ));
-        }
-        let recoverable = matches!(
-            (record.phase, record.backend_receipt),
-            (AttemptPhase::Building, None)
-                | (
-                    AttemptPhase::BackendClaimed | AttemptPhase::Completed,
-                    Some(_)
-                )
-        );
-        if !recoverable {
-            return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
-                CompilerModuleHandoffErrorV3::Attempt {
-                    reason: "build attempt is not in a receipt-sidecar recovery phase".to_owned(),
-                },
-            ));
-        }
-        Ok(())
-    }
-
     fn read_compiler_execution_receipt_bytes_v1(
         slot: &PinnedDirectory,
     ) -> Result<Option<Vec<u8>>, CompilerExecutionReceiptTransportErrorV1> {
-        let stat = match statat(
-            &slot.fd,
-            COMPILER_EXECUTION_RECEIPT_ENTRY_V1,
-            AtFlags::SYMLINK_NOFOLLOW,
-        ) {
-            Ok(stat) => stat,
-            Err(error) if error == rustix::io::Errno::NOENT => return Ok(None),
-            Err(error) => return Err(std::io::Error::from(error).into()),
-        };
-        if !is_private_file(&stat) {
-            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
-        }
-        let length = usize::try_from(stat.st_size).map_err(|_| {
-            CompilerExecutionReceiptTransportErrorV1::InvalidReceiptSize {
-                actual: usize::MAX,
-                maximum: MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1,
-            }
-        })?;
-        validate_compiler_execution_receipt_transport_size_v1(length)?;
-        let exact = read_private_file(slot, COMPILER_EXECUTION_RECEIPT_ENTRY_V1, length)?
-            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
-        Ok(Some(exact))
-    }
-
-    fn validate_compiler_execution_receipt_transport_size_v1(
-        length: usize,
-    ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
-        if length == 0 || length > MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1 {
-            return Err(
-                CompilerExecutionReceiptTransportErrorV1::InvalidReceiptSize {
-                    actual: length,
-                    maximum: MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1,
-                },
-            );
-        }
-        Ok(())
+        receipt_transport::read::<crate::InertCompilerExecutionSubjectV1>(
+            slot,
+            &mut Resources::Legacy,
+        )
+        .map_err(Into::into)
     }
 
     fn compiler_execution_receipt_transport_receipt_v1(
@@ -4823,123 +4720,14 @@ pub(crate) mod semantic_v3 {
         attempt: BuildAttempt,
         slot: CompilerModuleHandoffSlotV3,
     ) -> Result<CompilerModuleHandoffReceiptV3, CompilerModuleHandoffErrorV3> {
-        let output = PinnedOutput::open_existing(output_dir)?;
-        let _lock = output.lock()?;
-        output.verify_path_identity()?;
-        authorize(&output, producer, attempt)?;
-
-        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
-        let slot_identity = slot_identity_for::<HandoffV3Schema>(producer_identity, attempt, slot);
-        let parent = open_private_directory(
-            &output.fd,
-            &output.display_path,
-            format!("{PARENT_PREFIX_V3}{}", hex(&producer_identity)),
-        )?
-        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, attempt)
-            .map_err(engine_error_v3)?;
-        let slot_directory = open_private_directory(
-            &parent.fd,
-            &parent.path,
-            format!("{SLOT_PREFIX_V3}{}", hex(&slot_identity)),
-        )?
-        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        recover_slot::<HandoffV3Schema>(&slot_directory).map_err(engine_error_v3)?;
-        require_current_slot_shape_v3(&slot_directory)?;
-
-        let ready_file = open_pinned_handoff_file_v3(
-            &slot_directory,
-            READY_ENTRY,
-            HandoffV3Schema::RECORD_BYTES,
-        )?;
-        let record_bytes = read_pinned_handoff_file_v3(
-            &slot_directory,
-            READY_ENTRY,
-            &ready_file,
-            HandoffV3Schema::RECORD_BYTES,
-            HandoffV3Schema::RECORD_BYTES,
-        )?;
-        let record = HandoffRecord::<HandoffV3Schema>::decode(&record_bytes).map_err(|reason| {
-            CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot_directory.path.join(READY_ENTRY),
-                reason: reason.to_string(),
-            }
-        })?;
-        if record.producer != producer_identity
-            || record.attempt != attempt
-            || record.slot != slot_identity
-        {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot_directory.path.join(READY_ENTRY),
-                reason: "record binding does not match the requested producer, attempt, and slot"
-                    .to_string(),
-            });
-        }
-
-        let payload_file =
-            open_pinned_handoff_file_v3(&slot_directory, PAYLOAD_ENTRY, record.length)?;
-        if record.file != payload_file.identity {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot_directory.path.join(PAYLOAD_ENTRY),
-                reason: "payload metadata does not match the durable ready record".to_string(),
-            });
-        }
-        validate_decode_working_set::<HandoffV3Schema>(
-            record.length,
-            MAX_V3_DECODE_WORKING_SET_BYTES,
-        )
-        .map_err(engine_error_v3)?;
-        let payload_bytes = read_pinned_handoff_file_v3(
-            &slot_directory,
-            PAYLOAD_ENTRY,
-            &payload_file,
-            record.length,
-            MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
-        )?;
-        let transaction_identity = HandoffV3Schema::derive_identity(
-            record.producer,
-            record.slot,
-            record.attempt,
-            record.binding,
-            &payload_bytes,
-        );
-        if transaction_identity != record.identity {
-            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
-        }
-        let handoff = HandoffV3Schema::decode_payload(record.binding, payload_bytes)
-            .map_err(engine_error_v3)?;
-        let handoff_identity = handoff.identity();
-        if HandoffBindingV3::from(handoff_identity) != record.binding {
-            return Err(CompilerModuleHandoffErrorV3::HandoffIdentityMismatch);
-        }
-
-        authorize(&output, producer, attempt)?;
-        output.verify_path_identity()?;
-        parent.verify()?;
-        slot_directory.verify()?;
-        require_current_slot_shape_v3(&slot_directory)?;
-        let final_record_bytes = read_pinned_handoff_file_v3(
-            &slot_directory,
-            READY_ENTRY,
-            &ready_file,
-            HandoffV3Schema::RECORD_BYTES,
-            HandoffV3Schema::RECORD_BYTES,
-        )?;
-        if final_record_bytes != record_bytes {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot_directory.path.join(READY_ENTRY),
-                reason: "ready record changed while its exact payload was validated".to_string(),
-            });
-        }
-        validate_pinned_handoff_file_v3(&slot_directory, PAYLOAD_ENTRY, &payload_file)?;
-
-        Ok(CompilerModuleHandoffReceiptV3 {
+        currentness::recover::<HandoffV3Schema>(
+            output_dir,
+            producer,
             attempt,
             slot,
-            handoff_identity,
-            transaction_identity: CompilerModuleHandoffTransactionIdentityV3(transaction_identity),
-            length: record.length,
-        })
+            &mut Resources::Legacy,
+        )
+        .map_err(engine_error_v3)
     }
 
     fn mint_currentness_lease_v3(
@@ -4947,279 +4735,20 @@ pub(crate) mod semantic_v3 {
         producer: &ProducerIdentity,
         receipt: CompilerModuleHandoffReceiptV3,
     ) -> Result<CompilerModuleHandoffCurrentnessLeaseV3, CompilerModuleHandoffErrorV3> {
-        if usize::try_from(receipt.handoff_identity().byte_len()).ok() != Some(receipt.length()) {
-            return Err(CompilerModuleHandoffErrorV3::HandoffIdentityMismatch);
-        }
-
-        let output = PinnedOutput::open_existing(output_dir)?;
-        let _lock = output
-            .try_lock()?
-            .ok_or(CompilerModuleHandoffErrorV3::Busy)?;
-        output.verify_path_identity()?;
-        authorize(&output, producer, receipt.attempt())?;
-
-        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
-        let slot_identity = slot_identity_for::<HandoffV3Schema>(
-            producer_identity,
-            receipt.attempt(),
-            receipt.slot(),
-        );
-        let parent = open_private_directory(
-            &output.fd,
-            &output.display_path,
-            format!("{PARENT_PREFIX_V3}{}", hex(&producer_identity)),
-        )?
-        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, receipt.attempt())
-            .map_err(engine_error_v3)?;
-        let slot_directory = open_private_directory(
-            &parent.fd,
-            &parent.path,
-            format!("{SLOT_PREFIX_V3}{}", hex(&slot_identity)),
-        )?
-        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        recover_slot::<HandoffV3Schema>(&slot_directory).map_err(engine_error_v3)?;
-        require_current_slot_shape_v3(&slot_directory)?;
-
-        let ready_file = open_pinned_handoff_file_v3(
-            &slot_directory,
-            READY_ENTRY,
-            HandoffV3Schema::RECORD_BYTES,
-        )?;
-        let payload_file =
-            open_pinned_handoff_file_v3(&slot_directory, PAYLOAD_ENTRY, receipt.length())?;
-        let binding = Arc::new(CompilerModuleHandoffCurrentnessBindingV3 {
-            output,
-            producer: producer.clone(),
-            producer_identity,
-            parent,
-            slot_directory,
-            ready_file,
-            payload_file,
+        let binding = currentness::mint::<HandoffV3Schema>(
+            output_dir,
+            producer,
             receipt,
-            slot_identity,
-            committed_generation: receipt.attempt().generation(),
-        });
-        validate_current_payload_identity_locked(&binding)?;
-        Ok(CompilerModuleHandoffCurrentnessLeaseV3 { binding })
-    }
-
-    fn require_current_slot_shape_v3(
-        slot: &PinnedDirectory,
-    ) -> Result<(), CompilerModuleHandoffErrorV3> {
-        let entries = slot_entries(slot)?;
-        if entries.iter().any(|entry| entry == CONSUMED_ENTRY) {
-            return Err(CompilerModuleHandoffErrorV3::AlreadyConsumed);
-        }
-        let has_ready = entries.iter().any(|entry| entry == READY_ENTRY);
-        let has_payload = entries.iter().any(|entry| entry == PAYLOAD_ENTRY);
-        let has_receipt = entries
-            .iter()
-            .any(|entry| entry == COMPILER_EXECUTION_RECEIPT_ENTRY_V1);
-        if has_ready
-            && has_payload
-            && ((!has_receipt && entries.len() == 2) || (has_receipt && entries.len() == 3))
-        {
-            return Ok(());
-        }
-        if !has_ready {
-            return Err(CompilerModuleHandoffErrorV3::NotPublished);
-        }
-        Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-            path: slot.path.clone(),
-            reason: "current V3 slot must contain the ready record, payload, and optional exact compiler-execution receipt sidecar".to_string(),
-        })
-    }
-
-    fn open_pinned_handoff_file_v3(
-        slot: &PinnedDirectory,
-        entry: &str,
-        exact_length: usize,
-    ) -> Result<PinnedHandoffFileV3, CompilerModuleHandoffErrorV3> {
-        let fd = openat(
-            &slot.fd,
-            entry,
-            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
+            &mut Resources::Legacy,
         )
-        .map_err(|error| CompilerModuleHandoffErrorV3::InvalidSlot {
-            path: slot.path.join(entry),
-            reason: std::io::Error::from(error).to_string(),
-        })?;
-        let file = fs::File::from(fd);
-        let opened = fstat(&file).map_err(std::io::Error::from)?;
-        let named =
-            statat(&slot.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
-        if !same_private_file(&opened, &named, exact_length) {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot.path.join(entry),
-                reason: "file does not match its pinned private descriptor".to_string(),
-            });
-        }
-        Ok(PinnedHandoffFileV3 {
-            file,
-            identity: FileIdentity::from_stat(&opened),
-        })
-    }
-
-    fn validate_pinned_handoff_file_v3(
-        slot: &PinnedDirectory,
-        entry: &str,
-        pinned: &PinnedHandoffFileV3,
-    ) -> Result<(), CompilerModuleHandoffErrorV3> {
-        let opened = fstat(&pinned.file).map_err(std::io::Error::from)?;
-        let named = statat(&slot.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
-            CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot.path.join(entry),
-                reason: std::io::Error::from(error).to_string(),
-            }
-        })?;
-        if !pinned.identity.matches(&opened) || !pinned.identity.matches(&named) {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot.path.join(entry),
-                reason: "file no longer matches the publication lease".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    fn validate_renamed_pinned_handoff_file_v3(
-        slot: &PinnedDirectory,
-        entry: &str,
-        pinned: &PinnedHandoffFileV3,
-    ) -> Result<(), CompilerModuleHandoffErrorV3> {
-        let opened = fstat(&pinned.file).map_err(std::io::Error::from)?;
-        let named = statat(&slot.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
-            CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot.path.join(entry),
-                reason: std::io::Error::from(error).to_string(),
-            }
-        })?;
-        let length = usize::try_from(pinned.identity.length).map_err(|_| {
-            CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot.path.join(entry),
-                reason: "pinned record length is invalid".to_string(),
-            }
-        })?;
-        if pinned.identity.device != opened.st_dev
-            || pinned.identity.inode != opened.st_ino
-            || !same_private_file(&opened, &named, length)
-        {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot.path.join(entry),
-                reason: "consumed record is not the exact renamed ready record".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    fn read_pinned_handoff_file_v3(
-        slot: &PinnedDirectory,
-        entry: &str,
-        pinned: &PinnedHandoffFileV3,
-        exact_length: usize,
-        maximum: usize,
-    ) -> Result<Vec<u8>, CompilerModuleHandoffErrorV3> {
-        if exact_length == 0 || exact_length > maximum {
-            return Err(CompilerModuleHandoffErrorV3::InvalidHandoffSize {
-                actual: exact_length,
-                maximum,
-            });
-        }
-        validate_pinned_handoff_file_v3(slot, entry, pinned)?;
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(exact_length).map_err(|_| {
-            CompilerModuleHandoffErrorV3::PayloadAllocationFailed {
-                requested: exact_length,
-            }
-        })?;
-        bytes.resize(exact_length, 0);
-        pinned.file.read_exact_at(&mut bytes, 0)?;
-        let mut trailing = [0_u8; 1];
-        if pinned.file.read_at(&mut trailing, exact_length as u64)? != 0 {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: slot.path.join(entry),
-                reason: "pinned file grew beyond its committed length".to_string(),
-            });
-        }
-        validate_pinned_handoff_file_v3(slot, entry, pinned)?;
-        Ok(bytes)
-    }
-
-    fn read_current_record_locked(
-        binding: &CompilerModuleHandoffCurrentnessBindingV3,
-    ) -> Result<HandoffRecord<HandoffV3Schema>, CompilerModuleHandoffErrorV3> {
-        binding.output.verify_path_identity()?;
-        authorize(
-            &binding.output,
-            &binding.producer,
-            binding.receipt.attempt(),
-        )?;
-        if binding.committed_generation != binding.receipt.attempt().generation() {
-            return Err(CompilerModuleHandoffErrorV3::Attempt {
-                reason: "lease generation no longer matches its committed attempt".to_string(),
-            });
-        }
-        binding.parent.verify()?;
-        binding.slot_directory.verify()?;
-        require_current_slot_shape_v3(&binding.slot_directory)?;
-        validate_pinned_handoff_file_v3(&binding.slot_directory, READY_ENTRY, &binding.ready_file)?;
-        validate_pinned_handoff_file_v3(
-            &binding.slot_directory,
-            PAYLOAD_ENTRY,
-            &binding.payload_file,
-        )?;
-
-        let bytes = read_pinned_handoff_file_v3(
-            &binding.slot_directory,
-            READY_ENTRY,
-            &binding.ready_file,
-            HandoffV3Schema::RECORD_BYTES,
-            HandoffV3Schema::RECORD_BYTES,
-        )?;
-        let record = HandoffRecord::<HandoffV3Schema>::decode(&bytes).map_err(|reason| {
-            CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: binding.slot_directory.path.join(READY_ENTRY),
-                reason: reason.to_string(),
-            }
-        })?;
-        let receipt = binding.receipt;
-        if record.attempt != receipt.attempt()
-            || record.attempt.generation() != binding.committed_generation
-            || record.producer != binding.producer_identity
-            || record.slot != binding.slot_identity
-        {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: binding.slot_directory.path.join(READY_ENTRY),
-                reason: "record no longer matches the lease attempt, producer, slot, or generation"
-                    .to_string(),
-            });
-        }
-        if record.binding != HandoffBindingV3::from(receipt.handoff_identity()) {
-            return Err(CompilerModuleHandoffErrorV3::WrongHandoffIdentity);
-        }
-        if record.identity != *receipt.transaction_identity().as_bytes()
-            || record.length != receipt.length()
-        {
-            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
-        }
-        if record.file != binding.payload_file.identity {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: binding.slot_directory.path.join(PAYLOAD_ENTRY),
-                reason: "payload metadata no longer matches the committed record".to_string(),
-            });
-        }
-        Ok(record)
+        .map_err(engine_error_v3)?;
+        Ok(CompilerModuleHandoffCurrentnessLeaseV3 { binding })
     }
 
     fn validate_current_metadata_locked(
         binding: &CompilerModuleHandoffCurrentnessBindingV3,
     ) -> Result<(), CompilerModuleHandoffErrorV3> {
-        read_current_record_locked(binding)?;
-        binding.output.verify_path_identity()?;
-        binding.parent.verify()?;
-        binding.slot_directory.verify()?;
-        Ok(())
+        currentness::metadata(binding, &mut Resources::Legacy).map_err(engine_error_v3)
     }
 
     fn load_current_handoff_locked(
@@ -5228,96 +4757,7 @@ pub(crate) mod semantic_v3 {
         fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
         CompilerModuleHandoffErrorV3,
     > {
-        let record = read_current_record_locked(binding)?;
-        validate_decode_working_set::<HandoffV3Schema>(
-            record.length,
-            MAX_V3_DECODE_WORKING_SET_BYTES,
-        )
-        .map_err(engine_error_v3)?;
-        let bytes = read_pinned_handoff_file_v3(
-            &binding.slot_directory,
-            PAYLOAD_ENTRY,
-            &binding.payload_file,
-            record.length,
-            MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
-        )?;
-        let identity = HandoffV3Schema::derive_identity(
-            record.producer,
-            record.slot,
-            record.attempt,
-            record.binding,
-            &bytes,
-        );
-        if identity != record.identity
-            || identity != *binding.receipt.transaction_identity().as_bytes()
-        {
-            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
-        }
-        let handoff =
-            HandoffV3Schema::decode_payload(record.binding, bytes).map_err(engine_error_v3)?;
-        if handoff.identity() != binding.receipt.handoff_identity() {
-            return Err(CompilerModuleHandoffErrorV3::HandoffIdentityMismatch);
-        }
-        validate_current_metadata_locked(binding)?;
-        Ok(handoff)
-    }
-
-    fn validate_current_payload_identity_locked(
-        binding: &CompilerModuleHandoffCurrentnessBindingV3,
-    ) -> Result<(), CompilerModuleHandoffErrorV3> {
-        let record = read_current_record_locked(binding)?;
-        validate_pinned_handoff_file_v3(
-            &binding.slot_directory,
-            PAYLOAD_ENTRY,
-            &binding.payload_file,
-        )?;
-
-        let mut digest = transaction_identity_digest_v3(
-            record.producer,
-            record.slot,
-            record.attempt,
-            record.binding,
-            record.length,
-        );
-        let mut offset = 0_u64;
-        let mut remaining = record.length;
-        let mut buffer = [0_u8; STREAM_BUFFER_BYTES_V3];
-        while remaining != 0 {
-            let requested = remaining.min(buffer.len());
-            let read = binding
-                .payload_file
-                .file
-                .read_at(&mut buffer[..requested], offset)?;
-            if read == 0 {
-                return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                    path: binding.slot_directory.path.join(PAYLOAD_ENTRY),
-                    reason: "pinned payload ended before its committed length".to_string(),
-                });
-            }
-            digest.update(&buffer[..read]);
-            remaining -= read;
-            offset += read as u64;
-        }
-        let mut trailing = [0_u8; 1];
-        if binding.payload_file.file.read_at(&mut trailing, offset)? != 0 {
-            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
-                path: binding.slot_directory.path.join(PAYLOAD_ENTRY),
-                reason: "pinned payload grew beyond its committed length".to_string(),
-            });
-        }
-        validate_pinned_handoff_file_v3(
-            &binding.slot_directory,
-            PAYLOAD_ENTRY,
-            &binding.payload_file,
-        )?;
-
-        let identity: [u8; 32] = digest.finalize().into();
-        if identity != record.identity
-            || identity != *binding.receipt.transaction_identity().as_bytes()
-        {
-            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
-        }
-        validate_current_metadata_locked(binding)
+        currentness::load(binding, &mut Resources::Legacy).map_err(engine_error_v3)
     }
 
     fn publish_in_slot_v3(
@@ -5345,6 +4785,7 @@ pub(crate) mod semantic_v3 {
             handoff_identity.into(),
             bytes,
             hooks,
+            &mut Resources::Legacy,
         )
         .map(|published| CompilerModuleHandoffReceiptV3 {
             attempt: published.attempt,
@@ -5371,6 +4812,7 @@ pub(crate) mod semantic_v3 {
             slot,
             expected_handoff_identity.into(),
             hooks,
+            &mut Resources::Legacy,
         )
         .map(|consumed| ConsumedCompilerModuleHandoffV3 {
             attempt: consumed.attempt,
@@ -5397,11 +4839,13 @@ pub(crate) mod semantic_v3 {
             HandoffEngineError::InvalidCanonicalV3(error) => {
                 CompilerModuleHandoffErrorV3::NonCanonicalHandoff(error)
             }
+            HandoffEngineError::Busy => CompilerModuleHandoffErrorV3::Busy,
+            other => other.into_v1().into(),
         }
     }
 
     #[cfg(test)]
-    mod tests {
+    pub(in crate::compiler_module_handoff) mod tests {
         use super::*;
         use crate::{BuildInvocation, BuildSession, begin_build_attempt};
         use fe2o3_build_authority::CompilerClosureV2;
@@ -5645,7 +5089,9 @@ pub(crate) mod semantic_v3 {
             )
         }
 
-        fn outer(seed: u8) -> InertSemanticCompilerModuleHandoffV3 {
+        pub(in crate::compiler_module_handoff) fn outer(
+            seed: u8,
+        ) -> InertSemanticCompilerModuleHandoffV3 {
             let llvm = llvm_module(seed);
             let envelope = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
                 target(),
@@ -6752,10 +6198,11 @@ pub(crate) mod semantic_v3 {
             let allocation = bytes.as_ptr();
             let binding = HandoffBindingV3::from(expected.identity());
 
-            let decoded = match HandoffV3Schema::decode_payload(binding, bytes) {
-                Ok(decoded) => decoded,
-                Err(_) => panic!("canonical shared V3 fixture must decode"),
-            };
+            let decoded =
+                match HandoffV3Schema::decode_payload(binding, bytes, &mut Resources::Legacy) {
+                    Ok(decoded) => decoded,
+                    Err(_) => panic!("canonical shared V3 fixture must decode"),
+                };
 
             assert_eq!(decoded.canonical_bytes().as_ptr(), allocation);
             let outer_start = allocation as usize;
@@ -6802,6 +6249,7 @@ pub(crate) mod semantic_v3 {
                     handoff.identity().into(),
                     required - 1,
                     &mut NoFaults,
+                    &mut Resources::Legacy,
                 ),
                 Err(HandoffEngineError::WorkingSetBudgetExceeded {
                     required: actual,

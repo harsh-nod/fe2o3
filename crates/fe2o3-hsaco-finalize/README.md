@@ -1,8 +1,8 @@
 # fe2o3-hsaco-finalize
 
 `fe2o3-hsaco-finalize` performs bounded post-link finalization of an already embedded canonical
-`DeviceDescriptorTableV1` in an AMDHSA HSACO. The one normative ELF section is
-`.fe2o3.kd.v1`. It is an 8-byte-aligned, file-backed `SHT_PROGBITS` section with no ELF flags,
+descriptor table in an AMDHSA HSACO. The V1 API uses `.fe2o3.kd.v1`; the explicit nominal
+V3 API uses `.fe2o3.kd.v3`. Each is an 8-byte-aligned, file-backed `SHT_PROGBITS` section with no ELF flags,
 so it is neither allocated, writable, executable, nor compressed.
 
 The finalizer accepts at most `fe2o3_hsaco::MAX_HSACO_BYTES` and one descriptor table of at most
@@ -38,6 +38,37 @@ worker emits the object through pinned upstream LLVM target-machine APIs and lin
 in-process LLD library API. `cargo-fe2o3` invokes this post-link finalizer for descriptor-bearing
 COV6 output before publication. This is exact-profile plumbing, not general descriptor derivation
 or compiler-correctness evidence.
+
+## Nominal V3 continuation
+
+`finalize_unfinalized_nominal_hsaco_v3` requires exact zero-digest source bytes and retains
+the nominal V3 wire in a move-only artifact. `usize`/`u64` and `isize`/`i64` remain distinct
+even when their physical ABI is identical. V1 and V3 inspectors reject mixed sections and
+the other version; neither falls back or converts nominal wire into a V1 table.
+
+V3 shares the ELF placement and physical argument/launch checks with V1. It additionally
+checks the declared wavefront requirement. Its COV6 contract declares explicit size plus
+256 bytes; metadata and the hardware descriptor must agree on either an explicit-only
+physical layout with no hidden records, or the complete 256-byte hidden tail. This does
+not broaden V1's historical producer-specific reconciliation. Finalization changes only
+the 32-byte digest slot; verification hashes the normalized artifact without a second
+full-file copy. Raw reconstruction independently verifies both states.
+
+`finalize_protected_worker_nominal_hsaco_v3` consumes the existing strict Worker V3
+first-build evidence, reuses its lineage/symbol checks, and binds the embedded V3 table
+to the retained ABI receipt and export manifest. Worker protocol V3 and descriptor schema
+V3 are independent version numbers. The result retains the original transaction and
+final artifact, but grants no compiler, proof, publication, load, or launch authority.
+Publication recovery and generated host admission still consume V1; this continuation
+is not yet called by the normal production CLI or joined to nominal P4 source-proof custody.
+
+The V3 callbacks meter descriptor traversal, copying, and hashing work, with an explicit
+descriptor scratch declaration. They do not meter the inherited ELF/AMDHSA parser's heap,
+caller-owned artifact/evidence storage, or process RSS. The returned byte copy and parsed
+metadata are a separate bounded allocation domain, not a transfer of input credit.
+`artifact_byte_capacity` observes only the returned byte-buffer capacity, not a full
+owner storage receipt. Tests include hand-authored ELF
+and fixture-worker transactions; neither is protected proof or GPU qualification.
 
 ## Multi-input native link plans
 

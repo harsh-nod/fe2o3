@@ -2,24 +2,16 @@
 
 use std::{error::Error, fmt};
 
-use sha2::{Digest, Sha256};
-
 use crate::{
     CompilerExecutionExternalAnchorServiceIdentityErrorV1,
     CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerPolicyIdentityV1,
-    CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionIssuerPolicyV1, launch_manifest_codec as codec,
 };
 
 const SHA256_BYTES: usize = 32;
-const HEADER_BYTES: usize = 24;
-const PREIMAGE_BYTES: usize = HEADER_BYTES + 16 + 8 + SHA256_BYTES;
-const MAGIC: [u8; 8] = *b"F2O3CEL1";
-const VERSION_V1: u16 = 1;
-const IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-SERVICE-LAUNCH-MANIFEST/V1\0";
 
 /// Exact canonical byte length of one compiler-execution service launch manifest.
-pub const COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1: usize =
-    PREIMAGE_BYTES + SHA256_BYTES;
+pub const COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1: usize = codec::BYTES;
 
 /// Exact kernel-observed identity of one compiler service client process.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,9 +66,7 @@ impl CompilerExecutionServiceLaunchManifestIdentityV1 {
 
     /// Independently rederives this identity from exact canonical bytes.
     pub fn matches_canonical_bytes(self, bytes: &[u8]) -> bool {
-        bytes.len() == COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1
-            && bytes[PREIMAGE_BYTES..] == self.0
-            && derive_identity(&bytes[..PREIMAGE_BYTES]) == self.0
+        codec::matches(self.0, bytes)
     }
 }
 
@@ -110,81 +100,28 @@ impl CompilerExecutionServiceLaunchManifestV1 {
         external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
         policy: &CompilerExecutionIssuerPolicyV1,
     ) -> Self {
-        Self::from_parts(client, external_anchor_service, policy.identity())
-    }
-
-    fn from_parts(
-        client: CompilerExecutionClientProcessIdentityV1,
-        external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
-        policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
-    ) -> Self {
-        let mut bytes = [0_u8; COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1];
-        encode_header(&mut bytes);
-        bytes[24..28].copy_from_slice(&client.pid.to_le_bytes());
-        bytes[28..32].copy_from_slice(&client.uid.to_le_bytes());
-        bytes[32..36].copy_from_slice(&client.gid.to_le_bytes());
-        bytes[40..44].copy_from_slice(&external_anchor_service.uid().to_le_bytes());
-        bytes[44..48].copy_from_slice(&external_anchor_service.gid().to_le_bytes());
-        bytes[48..80].copy_from_slice(policy_identity.as_bytes());
-        let identity = CompilerExecutionServiceLaunchManifestIdentityV1(derive_identity(
-            &bytes[..PREIMAGE_BYTES],
-        ));
-        bytes[PREIMAGE_BYTES..].copy_from_slice(identity.as_bytes());
-        Self {
+        Self::from_record(codec::encode(
             client,
             external_anchor_service,
-            policy_identity,
-            identity,
-            bytes,
+            *policy.identity().as_bytes(),
+        ))
+    }
+
+    pub(crate) fn from_record(record: codec::Record) -> Self {
+        Self {
+            client: record.client,
+            external_anchor_service: record.service,
+            policy_identity: CompilerExecutionIssuerPolicyIdentityV1::from_bytes_for_protocol(
+                record.policy,
+            ),
+            identity: CompilerExecutionServiceLaunchManifestIdentityV1(record.identity),
+            bytes: record.bytes,
         }
     }
 
     /// Strictly decodes and independently re-encodes one canonical manifest.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionServiceLaunchManifestErrorV1> {
-        if bytes.len() != COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1 {
-            return Err(CompilerExecutionServiceLaunchManifestErrorV1::Length);
-        }
-        validate_header(bytes)?;
-        if bytes[36..40].iter().any(|byte| *byte != 0) {
-            return Err(CompilerExecutionServiceLaunchManifestErrorV1::Reserved);
-        }
-        let client = CompilerExecutionClientProcessIdentityV1::new(
-            read_u32(bytes, 24),
-            read_u32(bytes, 28),
-            read_u32(bytes, 32),
-        )?;
-        let external_anchor_service = CompilerExecutionExternalAnchorServiceIdentityV1::new(
-            read_u32(bytes, 40),
-            read_u32(bytes, 44),
-        )
-        .map_err(CompilerExecutionServiceLaunchManifestErrorV1::ExternalAnchorServiceIdentity)?;
-        let policy_identity_bytes: [u8; SHA256_BYTES] = bytes[48..80]
-            .try_into()
-            .expect("policy identity has a fixed width");
-        if policy_identity_bytes == [0; SHA256_BYTES] {
-            return Err(CompilerExecutionServiceLaunchManifestErrorV1::PolicyIdentity);
-        }
-        let policy_identity =
-            CompilerExecutionIssuerPolicyIdentityV1::from_bytes_for_protocol(policy_identity_bytes);
-        let identity = CompilerExecutionServiceLaunchManifestIdentityV1(
-            bytes[PREIMAGE_BYTES..]
-                .try_into()
-                .expect("manifest identity has a fixed width"),
-        );
-        if !identity.matches_canonical_bytes(bytes) {
-            return Err(CompilerExecutionServiceLaunchManifestErrorV1::Identity);
-        }
-        let canonical = Self::from_parts(client, external_anchor_service, policy_identity);
-        if canonical.policy_identity != policy_identity || canonical.bytes.as_slice() != bytes {
-            return Err(CompilerExecutionServiceLaunchManifestErrorV1::Canonical);
-        }
-        Ok(Self {
-            client,
-            external_anchor_service,
-            policy_identity,
-            identity,
-            bytes: bytes.try_into().expect("manifest length checked"),
-        })
+        codec::decode(bytes).map(Self::from_record)
     }
 
     /// Returns the exact expected client identity.
@@ -228,42 +165,6 @@ impl CompilerExecutionServiceLaunchManifestV1 {
     ) -> bool {
         self.external_anchor_service == external_anchor_service
     }
-}
-
-fn encode_header(bytes: &mut [u8; COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1]) {
-    bytes[..8].copy_from_slice(&MAGIC);
-    bytes[8..10].copy_from_slice(&VERSION_V1.to_le_bytes());
-    bytes[12..16].copy_from_slice(
-        &(COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1 as u32).to_le_bytes(),
-    );
-}
-
-fn validate_header(bytes: &[u8]) -> Result<(), CompilerExecutionServiceLaunchManifestErrorV1> {
-    if bytes[..8] != MAGIC {
-        return Err(CompilerExecutionServiceLaunchManifestErrorV1::Magic);
-    }
-    if u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != VERSION_V1 {
-        return Err(CompilerExecutionServiceLaunchManifestErrorV1::Version);
-    }
-    if bytes[10..12].iter().any(|byte| *byte != 0) || bytes[16..24].iter().any(|byte| *byte != 0) {
-        return Err(CompilerExecutionServiceLaunchManifestErrorV1::Reserved);
-    }
-    if read_u32(bytes, 12) as usize != COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1 {
-        return Err(CompilerExecutionServiceLaunchManifestErrorV1::Length);
-    }
-    Ok(())
-}
-
-fn derive_identity(bytes: &[u8]) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(IDENTITY_DOMAIN);
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
-    digest.finalize().into()
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
 
 /// Stable strict launch-manifest codec failure.
@@ -315,6 +216,7 @@ mod tests {
 
     use super::*;
     use crate::CompilerExecutionIssuerMeasurementV1;
+    use crate::launch_manifest_codec::{PREIMAGE_BYTES, derive_identity};
 
     fn policy(seed: u8) -> CompilerExecutionIssuerPolicyV1 {
         let signing_key = SigningKey::from_bytes(&[seed; 32]);

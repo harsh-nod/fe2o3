@@ -33,6 +33,9 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
+#[path = "production_worker_refined_forwarding_v1.rs"]
+pub(crate) mod refined_forwarding_v1;
+
 /// Move-only output of the sole production compiler pipeline.
 ///
 /// It retains the exact LLVM identity and descriptor embedded in the canonical

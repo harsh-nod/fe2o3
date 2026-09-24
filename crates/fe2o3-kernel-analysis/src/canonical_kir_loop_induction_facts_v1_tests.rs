@@ -1,4 +1,6 @@
 use super::*;
+#[path = "canonical_kir_loop_induction_sparse_v1_tests.rs"]
+mod sparse_inputs;
 use fe2o3_kernel_ir::{
     BasicBlock, BinaryOp, BlockId, CanonicalKernelIrWorkBudgetV1 as Work,
     CanonicalKirFunctionCoordinateV1 as Function, CheckedBinaryOperator, Constant,

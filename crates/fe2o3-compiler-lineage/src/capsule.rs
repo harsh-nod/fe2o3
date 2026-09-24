@@ -22,7 +22,7 @@ use crate::{
 /// Fixed magic at the start of every inert production semantic capsule V3.
 pub const INERT_PRODUCTION_SEMANTIC_CAPSULE_MAGIC_V3: [u8; 8] = *b"F2O3ISV3";
 
-/// The only inert production semantic capsule version implemented by this crate.
+/// Version tag of the legacy inert production semantic capsule.
 pub const INERT_PRODUCTION_SEMANTIC_CAPSULE_VERSION_V3: u16 = 3;
 
 /// Maximum complete canonical inert capsule bytes accepted by the V3 decoder.
@@ -387,6 +387,18 @@ impl InertProductionSemanticCapsuleV3 {
         backing: SharedBackingV3,
         capsule_range: Range<usize>,
     ) -> Result<Self, LineageDecodeErrorV3> {
+        Self::decode_shared_with_mir_limit(
+            backing,
+            capsule_range,
+            crate::MAX_CANONICAL_SEMANTIC_MIR_BYTES_V3,
+        )
+    }
+
+    pub(crate) fn decode_shared_with_mir_limit(
+        backing: SharedBackingV3,
+        capsule_range: Range<usize>,
+        mir_limit: usize,
+    ) -> Result<Self, LineageDecodeErrorV3> {
         let capsule_len = validate_capsule_range(backing.as_slice().len(), &capsule_range)?;
         let bytes = backing
             .as_slice()
@@ -466,8 +478,11 @@ impl InertProductionSemanticCapsuleV3 {
         }
 
         macro_rules! decode_receipt {
-            ($type:ty) => {{
-                let len = reader.bounded_u32(<$type>::FIELD, <$type>::MAX_BYTES)?;
+            ($type:ty) => {
+                decode_receipt!($type, <$type>::MAX_BYTES)
+            };
+            ($type:ty, $limit:expr) => {{
+                let len = reader.bounded_u32(<$type>::FIELD, $limit)?;
                 let local_range = reader.take_range(len)?;
                 let identity = reader.fixed::<32>()?;
                 let absolute_range =
@@ -479,7 +494,10 @@ impl InertProductionSemanticCapsuleV3 {
         let receipts = OrderedInertSemanticLineageReceiptsV3::new(
             decode_receipt!(InertRustcIdentityInventoryReceiptV3),
             decode_receipt!(InertRustcPreflightPlanReceiptV3),
-            decode_receipt!(InertCanonicalSemanticMirReceiptV3),
+            decode_receipt!(
+                InertCanonicalSemanticMirReceiptV3,
+                mir_limit.min(InertCanonicalSemanticMirReceiptV3::MAX_BYTES)
+            ),
             decode_receipt!(InertMiddleEndReceiptV3),
             decode_receipt!(InertKernelIrReceiptV3),
             decode_receipt!(InertMirToKirCorrespondenceReceiptV3),

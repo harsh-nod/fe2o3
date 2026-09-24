@@ -20,20 +20,44 @@ use fe2o3_runtime_protocol::SealedStaticApplicationErrorV1;
 use fe2o3_static_preexec_manifest::StaticPreexecObjectIdentityV1;
 
 mod authority;
+mod authority_v2;
+#[cfg(test)]
+mod authority_v2_test_process;
 #[allow(unsafe_code)]
 mod deployment;
 mod handoff;
+#[allow(unsafe_code)]
+mod handoff_ancillary;
+mod handoff_checks;
+mod handoff_v2;
+mod handoff_v2_io;
+#[cfg(test)]
+mod handoff_v2_test_process;
 mod launch;
+mod launch_checks;
+mod launch_v2;
 mod listener;
 #[allow(unsafe_code)]
 mod process;
+mod process_cleanup;
+mod process_reaper;
+mod process_staging;
+mod program_v2;
 mod provisioning;
+mod root_checks;
+pub use program_v2::{
+    AdmittedIssuerProgramV2, IssuerProgramAdmissionErrorV2, IssuerProgramStorageV2,
+};
 mod session;
 
 pub use authority::{
     ISSUER_SERVICE_SECUREBITS_V1, IssuerServiceCredentialProfileErrorV1,
     IssuerServiceCredentialProfileV1, ProtectedIssuerSupervisorErrorV1,
     ProtectedIssuerSupervisorV1,
+};
+pub use authority_v2::{
+    ProtectedIssuerSupervisorErrorV2, ProtectedIssuerSupervisorStorageV2,
+    ProtectedIssuerSupervisorV2,
 };
 pub use deployment::{
     COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1,
@@ -46,7 +70,15 @@ pub use deployment::{
     run_inherited_protected_issuer_service_v1,
 };
 pub use handoff::{AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1};
+pub use handoff_v2::{
+    AcceptedCompilerExecutionHandoffV2, ProtectedIssuerHandoffErrorV2,
+    ProtectedIssuerHandoffStorageV2,
+};
 pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
+pub use launch_v2::{
+    PreparedProtectedIssuerLaunchV2, ProtectedIssuerLaunchPreparationErrorV2,
+    ProtectedIssuerLaunchStorageV2,
+};
 pub use listener::{
     ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceReportV1,
     ProtectedIssuerServiceShutdownV1, ProtectedIssuerServiceV1,
@@ -56,6 +88,11 @@ pub use process::{
     ExitedProtectedIssuerV1, LaunchedProtectedIssuerV1, MAX_PROTECTED_ISSUER_PROCESSES_V1,
     ProtectedIssuerLaunchErrorV1, ProtectedIssuerTerminationV1, ReadyProtectedIssuerV1,
     ServingProtectedIssuerV1, validate_current_issuer_service_profile_v1,
+};
+pub use process_reaper::{
+    ProtectedIssuerCleanupAdmissionErrorV2, ProtectedIssuerCleanupErrorV2,
+    ProtectedIssuerCleanupReportV2, ProtectedIssuerCleanupReservationV2,
+    ProtectedIssuerCleanupServiceV2,
 };
 pub use provisioning::{
     ProtectedIssuerServiceDeploymentInputsV1, ProtectedIssuerServiceProvisioningErrorV1,

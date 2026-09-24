@@ -138,7 +138,7 @@ impl Error for CanonicalKirSparseErrorV1 {}
 type Result<T> = std::result::Result<T, CanonicalKirSparseErrorV1>;
 type Value = CanonicalKirSparseValueV1;
 
-/// Explicit logical payload transfer. Reserve before another ledger-controlled
+/// Actual retained header/backing transfer. Reserve before another ledger-controlled
 /// allocation while the report lives; release only after dropping the report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CanonicalKirSparseStorageV1 {
@@ -165,6 +165,9 @@ impl<'i, 'g> CanonicalKirSparseV1<'i, 'g> {
     ///
     /// The caller retains all source/owner/inventory floors. Construction
     /// charges before visits, allocations, queue operations and publications.
+    /// All report and temporary Engine headers and actual Vec capacities are
+    /// covered; allocator metadata and process RSS are excluded. Requested
+    /// backing is prepaid; excess capacity is charged before initialization.
     /// Errors drop candidate owners before restoring the incoming floor.
     /// Success drops scratch and transfers only the returned report payload.
     /// Accepted work, peak and first-failure history remain in the ledger.
@@ -370,7 +373,7 @@ impl<'i, 'g> Engine<'i, 'g> {
                 });
             }
         }
-        let retained = size_of::<CanonicalKirSparseV1<'_, '_>>()
+        let mut retained = size_of::<CanonicalKirSparseV1<'_, '_>>()
             .checked_add(bytes::<Value>(definitions)?)
             .and_then(|n| n.checked_add(blocks))
             .and_then(|n| n.checked_add(edges))
@@ -378,28 +381,29 @@ impl<'i, 'g> Engine<'i, 'g> {
                 n.checked_add(operations.checked_mul(size_of::<CanonicalKirSparseExceptionV1>())?)
             })
             .ok_or(Resource::Arithmetic)?;
-        budget.reserve_storage(size_of::<CanonicalKirSparseV1<'_, '_>>())?;
+        budget.reserve_storage(size_of::<Self>())?;
         Ok(Self {
             report: CanonicalKirSparseV1 {
                 inventory,
-                values: allocate(definitions, Value::Unreachable, budget)?,
-                blocks: allocate(blocks, 0, budget)?,
-                edges: allocate(edges, 0, budget)?,
+                values: allocate(definitions, Value::Unreachable, budget, Some(&mut retained))?,
+                blocks: allocate(blocks, 0, budget, Some(&mut retained))?,
+                edges: allocate(edges, 0, budget, Some(&mut retained))?,
                 exceptions: allocate(
                     operations,
                     CanonicalKirSparseExceptionV1::NotAnalyzed,
                     budget,
+                    Some(&mut retained),
                 )?,
                 retained,
             },
-            heads: allocate(definitions, usize::MAX, budget)?,
-            next: allocate(uses, usize::MAX, budget)?,
-            queued: allocate(tasks, 0, budget)?,
-            queue: allocate(tasks, 0, budget)?,
+            heads: allocate(definitions, usize::MAX, budget, None)?,
+            next: allocate(uses, usize::MAX, budget, None)?,
+            queued: allocate(tasks, 0, budget, None)?,
+            queue: allocate(tasks, 0, budget, None)?,
             queue_head: 0,
             queue_tail: 0,
             queue_len: 0,
-            unresolved: allocate(definitions, 0, budget)?,
+            unresolved: allocate(definitions, 0, budget, None)?,
             unresolved_len: 0,
             unresolved_cursor: 0,
         })
@@ -725,7 +729,12 @@ fn bytes<T>(count: usize) -> Result<usize> {
         .checked_mul(size_of::<T>())
         .ok_or(Resource::Arithmetic.into())
 }
-fn allocate<T: Copy>(count: usize, initial: T, budget: &mut Budget<'_>) -> Result<Vec<T>> {
+fn allocate<T: Copy>(
+    count: usize,
+    initial: T,
+    budget: &mut Budget<'_>,
+    retained: Option<&mut usize>,
+) -> Result<Vec<T>> {
     if count == 0 {
         return Ok(Vec::new());
     }
@@ -735,6 +744,17 @@ fn allocate<T: Copy>(count: usize, initial: T, budget: &mut Budget<'_>) -> Resul
     values
         .try_reserve_exact(count)
         .map_err(|_| Resource::Allocation)?;
+    let excess = values
+        .capacity()
+        .checked_sub(count)
+        .ok_or(Resource::Accounting)?;
+    let excess_bytes = bytes::<T>(excess)?;
+    budget.reserve_storage(excess_bytes)?;
+    if let Some(retained) = retained {
+        *retained = retained
+            .checked_add(excess_bytes)
+            .ok_or(Resource::Arithmetic)?;
+    }
     for _ in 0..count {
         budget.charge_work(1)?;
         if values.len() >= count || values.len() == values.capacity() {

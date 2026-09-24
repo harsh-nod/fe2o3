@@ -98,6 +98,15 @@
 //! use fe2o3_broker_authority_service::ProtectedCompilerExecutionOccurrenceV1;
 //! ```
 //!
+//! [`ProtectedExternalAnchorServiceAdmissionV2`] is a separate fresh, bounded
+//! anchor transport owner. It shares V1's mechanical continuity checks, but uses
+//! fixed procfs buffers, finite I/O attempts and allocation-free diagnostics on
+//! the caller's resource ledger. It has no V1-owner conversion or service authority.
+//! [`LiveClientPidfdIdentityV2`] similarly retains one freshly admitted client
+//! pidfd with bounded native liveness checks. Its cached descriptor facts and
+//! supplied expected credentials are inert; UID/GID require a separate trusted
+//! peer-credential join. Neither native owner exposes its retained descriptors.
+//!
 //! The [`BrokerSessionMachineV1`] is a separate fixed-capacity, in-memory lifecycle model. Its
 //! broker-owned route retains prepared and granted Broker V4 state, requires the V4 static-LLD
 //! identity to match the exact W0 closure, invokes only an externally approved static linker, and
@@ -126,6 +135,7 @@ mod compiler_execution_external_anchor;
 mod compiler_execution_issuer;
 #[cfg(target_os = "linux")]
 mod compiler_execution_issuer_durable;
+mod compiler_execution_journal_recovery;
 #[cfg(target_os = "linux")]
 mod compiler_execution_occurrence;
 #[cfg(target_os = "linux")]
@@ -195,9 +205,13 @@ pub use durable_session_consume::{
 };
 #[cfg(target_os = "linux")]
 pub use linux::{
-    AdmissionErrorKindV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
-    ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
-    ProtectedServiceAdmissionV1, current_process_start_time_ticks_v1,
+    AdmissionErrorKindV1, CURRENT_PROCESS_START_TIME_IO_STORAGE_V2,
+    CURRENT_PROCESS_START_TIME_WORK_V2, ExpectedClientProcessIdentityV1, LiveClientPidfdErrorV2,
+    LiveClientPidfdIdentityV1, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2,
+    ProtectedExternalAnchorServiceAdmissionV1, ProtectedExternalAnchorServiceAdmissionV2,
+    ProtectedExternalAnchorServiceErrorV2, ProtectedExternalAnchorServiceStorageV2,
+    ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,
+    current_process_start_time_ticks_v1, current_process_start_time_ticks_v2,
 };
 #[cfg(target_os = "linux")]
 pub use session::{

@@ -148,3 +148,66 @@ explicitly synthetic worker custody fields and cannot mint their authority.
 
 See the [fixture](../../tools/fe2o3-llvm-link-worker/tests/complete-body-abi)
 and [contributor walkthrough](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/complete-body-native-abi-v1.md).
+
+## Integration with concurrent main — 2026-09-24
+
+Before publication, both compiler mains advanced to
+`4bcf5654cc5690e441413bd74ecb08c9040f0871`. The integration preserves that
+peer chain and the renderer commit `9806fb62701c49af59a09d416693e1bbf9fab7c3`.
+The only overlapping renderer registration was additive in the model crate.
+
+Fresh merged-tree qualification used 7,098 files / 106,566,378 bytes, source
+SHA-256 `ccc23a8d75c6168237b576a610e40ea5ac200f34c2126a459f5421f877280e7e`:
+
+- Full kernel-IR/model tests plus the generator example: **1,600 passed,
+  zero failed, 22 ignored**.
+- Backend library filters: `local_order` **46 passed / 8 ignored** and
+  `ordered` **57 passed / 2 ignored**. These are scoped invocations, not a
+  full backend regression or a claim of unique tests across filters.
+- The freshly rebuilt generator's five LLVM outputs are byte-identical to
+  the retained native-r2 inputs above. The C++ fixture/worker inputs did not
+  change; native results remain the original static payload observations,
+  not a new hardware run or an automatically renewed source-authority claim.
+- Tutorial manifest/occurrence/identity/fixture-binding suites passed
+  **77 / 12 / 54 / 23** tests. Physical source contracts validate 50 fixtures
+  with `qualified=false`; `gemm-proof-plan` source binding and broader
+  semantic/policy qualification remain pending.
+
+The first merged regression stopped at strict all-target model Clippy:
+**37 diagnostics in eight files byte-identical to peer main**. They concern
+initialization, collapsible conditions, explicit drops of non-Drop borrowed
+views, test clones and a range loop. No lint allowance was added. The later
+regression deliberately excludes Clippy and is not a lint-clean claim.
+Its existing backend warnings also remain visible.
+
+The first policy run passed ten checker unit tests, then found the newly
+introduced verifier-to-optimizer `test-support` dev dependency missing from
+its exact allowlist. Integration adds only `dev` to the existing
+`fe2o3-verifier -> fe2o3-kernel-opt` edge and checks the real manifest;
+build dependencies and the other verifier exceptions remain unchanged.
+This policy/test/documentation correction follows the Rust source snapshot
+above; it does not change that tested Rust code.
+
+Retained integration receipts (under the same task root as above):
+
+| Gate | Result | Receipt bytes / SHA-256 |
+| --- | --- | --- |
+| `phase28-resume-r6-compiler-peer-merge-regression-r1` | Failed at strict Clippy; earlier tests passed | 15032 / `8f1bfd4d038b6efd4aa367a556f2d9782889484f8f23d0518a76cd03e0f9a8c4` |
+| `phase28-resume-r6-compiler-peer-merge-regression-r2` | Passed the explicitly scoped test/build/input-equality commands | 23478 / `46bd89054c91c4086d5eb534ba3ed0c23dbba019d210a4b04ff65b604fbe06e6` |
+| `phase28-resume-r6-compiler-peer-merge-policies-r1` | Failed at the missing dev edge after tutorial/checker tests | 15438 / `f528842dce9ba5270037f313f3538ba02529669bbca3afcdeb83987620239ae4` |
+
+The passed regression stdout/stderr are 186,943 / 24,663 bytes, SHA-256
+`a8772c366767683b8d0160ca67a84e20f5184ec8eaf3d76bbdc6d3dcd5eadd24` /
+`c5123aa98113b4a37b086af2d799c8a638a158a9ce8528e9f0517500c7f1875a`.
+No additional milestone exit is accepted by the merge.
+
+The corrected policy gate `phase28-resume-r6-compiler-peer-merge-policies-r2`
+passes **11 checker tests**, workspace dependency policy, pliron policy, physical
+tutorial contracts and whitespace checks. Its receipt is 20,636 bytes,
+SHA-256 `3a3d9ec9d03fbcd76f90beb0312df00eb8886f87132ac35af46e4d12d26ec12a`.
+The source census is 7,098 files / 106,570,547 bytes,
+`2f193150e0e56fc8a048080c34e47ec08d152b5dac668af01d50215f6a98fc35`;
+this final receipt paragraph and the status summary are subsequent doc-only edits.
+Stdout/stderr are 444 / 110 bytes, SHA-256
+`7c6b5fc4f6eb5133b64d1abcfa948dd07d9fd431a64a54cad02f5cbadc62f4c8` /
+`ce895947b8ffcb2e77addf8382970fd1c07ecab9486fbbfca209319a47c37f4f`.

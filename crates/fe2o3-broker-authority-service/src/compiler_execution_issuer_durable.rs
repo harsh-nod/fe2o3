@@ -26,6 +26,7 @@ use fe2o3_runtime_protocol::{
 use rustix::fs::{FlockOperation, Mode, OFlags, flock};
 use sha2::{Digest, Sha256};
 
+use crate::compiler_execution_journal_recovery::{JournalNames, reject_legacy_state};
 use crate::compiler_execution_worker_ledger::{
     ProtectedCompilerExecutionWorkerLedgerErrorV1, ReacquiredWorkerReceiptRecordV2,
     WorkerExternalAnchorPublicationPlanV1, WorkerReceiptLedgerV1,
@@ -64,9 +65,13 @@ const RECORD_SIGNATURE_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-ISSUER-DURABLE
 const RECORD_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-ISSUER-DURABLE-IDENTITY/V2\0";
 const CANONICAL_RECORD: &str = "compiler-execution-issuer-v2.state";
 const REDO_RECORD: &str = "compiler-execution-issuer-v2.redo";
-const LEGACY_V1_CANONICAL_RECORD: &str = "compiler-execution-issuer-v1.state";
-const LEGACY_V1_REDO_RECORD: &str = "compiler-execution-issuer-v1.redo";
-const LEGACY_V1_RECORD_BYTES: usize = 2500;
+const RECOVERY_RECORD: &str = "compiler-execution-issuer-v2.recovery";
+const JOURNAL: JournalNames = JournalNames {
+    canonical: CANONICAL_RECORD,
+    redo: REDO_RECORD,
+    recovery: RECOVERY_RECORD,
+    maximum_bytes: COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V2,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -703,28 +708,29 @@ impl IssuerLedgerV2 {
     ) -> Result<Self, ProtectedCompilerExecutionIssuerErrorV1> {
         let singleton_lock = acquire_singleton_lock(&service_root)?;
         let store = RetainedDurableDirectoryV1::admit_service_owned(service_root)?;
-        if store
-            .read_private(LEGACY_V1_CANONICAL_RECORD, LEGACY_V1_RECORD_BYTES)?
-            .is_some()
-            || store
-                .read_private(LEGACY_V1_REDO_RECORD, LEGACY_V1_RECORD_BYTES)?
-                .is_some()
-        {
-            return Err(ProtectedCompilerExecutionIssuerErrorV1::InvalidRecord(
-                "legacy V1 journal requires explicit fail-closed migration",
-            ));
-        }
-        let canonical_bytes = store.read_private(
-            CANONICAL_RECORD,
-            COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V2,
+        reject_legacy_state(&store)?;
+        let recovered = JOURNAL.recover(
+            &store,
+            hooks,
+            |bytes| IssuerRecordV2::decode(bytes, policy),
+            |prior, redo| {
+                let legal = prior.map_or_else(
+                    || {
+                        redo.stage == IssuerStageV2::Ready
+                            && redo.sequence == 1
+                            && redo.prior_anchor == [0; 32]
+                    },
+                    |prior| redo.is_legal_successor_of(prior),
+                );
+                if legal {
+                    Ok(())
+                } else {
+                    Err(ProtectedCompilerExecutionIssuerErrorV1::IllegalSuccessor)
+                }
+            },
         )?;
-        let redo_bytes = store.read_private(
-            REDO_RECORD,
-            COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V2,
-        )?;
-
-        let record = match (canonical_bytes, redo_bytes) {
-            (None, None) => {
+        let record = match recovered {
+            None => {
                 let genesis = IssuerRecordV2::genesis(policy, signing_key)?;
                 store.commit_record(
                     CANONICAL_RECORD,
@@ -735,44 +741,7 @@ impl IssuerLedgerV2 {
                 )?;
                 genesis
             }
-            (canonical, Some(redo_bytes)) => {
-                let redo = IssuerRecordV2::decode(&redo_bytes, policy)?;
-                let canonical_record = canonical
-                    .as_deref()
-                    .map(|bytes| IssuerRecordV2::decode(bytes, policy))
-                    .transpose()?;
-                let legal = canonical_record.as_ref().map_or_else(
-                    || {
-                        redo.stage == IssuerStageV2::Ready
-                            && redo.sequence == 1
-                            && redo.prior_anchor == [0; 32]
-                    },
-                    |prior| redo.is_legal_successor_of(prior),
-                );
-                if !legal {
-                    return Err(ProtectedCompilerExecutionIssuerErrorV1::IllegalSuccessor);
-                }
-                store.promote_validated_redo(
-                    CANONICAL_RECORD,
-                    REDO_RECORD,
-                    canonical.as_deref(),
-                    &redo_bytes,
-                    COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V2,
-                    hooks,
-                )?;
-                redo
-            }
-            (Some(canonical_bytes), None) => {
-                let record = IssuerRecordV2::decode(&canonical_bytes, policy)?;
-                store.establish_recovered_record_durability(
-                    CANONICAL_RECORD,
-                    REDO_RECORD,
-                    &canonical_bytes,
-                    COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V2,
-                    hooks,
-                )?;
-                record
-            }
+            Some(record) => record,
         };
         Ok(Self {
             store,
@@ -2592,19 +2561,214 @@ mod tests {
 
     #[test]
     fn legacy_v1_journal_presence_fails_closed_before_v2_genesis() {
-        for entry in [LEGACY_V1_CANONICAL_RECORD, LEGACY_V1_REDO_RECORD] {
-            let fixture = Fixture::new();
-            let path = fixture.directory.path().join(entry);
-            fs::write(&path, vec![0_u8; LEGACY_V1_RECORD_BYTES]).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        for entry in crate::compiler_execution_journal_recovery::LEGACY_STATE_FILES {
+            for kind in 0..4 {
+                let fixture = Fixture::new();
+                let path = fixture.directory.path().join(entry);
+                match kind {
+                    0 => fs::write(&path, []).unwrap(),
+                    1 => fs::create_dir(&path).unwrap(),
+                    2 => std::os::unix::fs::symlink("missing-target", &path).unwrap(),
+                    _ => rustix::fs::mkfifoat(rustix::fs::CWD, &path, Mode::RUSR | Mode::WUSR)
+                        .unwrap(),
+                }
 
-            assert!(matches!(
-                IssuerLedgerV2::recover(fixture.root(), &fixture.policy, &fixture.signing_key),
-                Err(ProtectedCompilerExecutionIssuerErrorV1::InvalidRecord(
-                    "legacy V1 journal requires explicit fail-closed migration"
-                ))
-            ));
-            assert!(!fixture.directory.path().join(CANONICAL_RECORD).exists());
+                assert!(
+                    IssuerLedgerV2::recover(fixture.root(), &fixture.policy, &fixture.signing_key)
+                        .is_err()
+                );
+                assert!(!fixture.directory.path().join(CANONICAL_RECORD).exists());
+                assert!(!fixture.directory.path().join(REDO_RECORD).exists());
+                assert!(!fixture.directory.path().join(RECOVERY_RECORD).exists());
+            }
+        }
+    }
+
+    #[test]
+    fn every_recovery_crash_preserves_exact_issuer_stage_and_sequence() {
+        use crate::compiler_execution_journal_recovery::test_support::RecoveryFault;
+        let fixture = Fixture::new();
+        let mut ready = IssuerRecordV2::genesis(&fixture.policy, &fixture.signing_key).unwrap();
+        for sequence in 1..=2 {
+            let prepared = fixture.prepare(&ready, [sequence; 32]).unwrap();
+            let request = CompilerExecutionAttestationRequestV1::new(
+                prepared.challenge.clone().unwrap(),
+                fixture.subject.clone(),
+            )
+            .unwrap();
+            let issued = fixture.issue(&prepared, request.canonical_bytes()).unwrap();
+            for record in [&ready, &prepared, &issued] {
+                for mut fault in RecoveryFault::cases(1) {
+                    let directory = Fixture::new();
+                    let path = directory.directory.path().join(CANONICAL_RECORD);
+                    fs::write(&path, record.canonical).unwrap();
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+                    assert!(
+                        IssuerLedgerV2::recover_with_hooks(
+                            directory.root(),
+                            &fixture.policy,
+                            &fixture.signing_key,
+                            &mut fault
+                        )
+                        .is_err()
+                    );
+                    assert!(fault.fired, "{fault:?}");
+                    let recovered = IssuerLedgerV2::recover(
+                        directory.root(),
+                        &fixture.policy,
+                        &fixture.signing_key,
+                    )
+                    .unwrap();
+                    assert_eq!(recovered.record.canonical, record.canonical, "{fault:?}");
+                    assert!(!directory.directory.path().join(REDO_RECORD).exists());
+                    assert!(!directory.directory.path().join(RECOVERY_RECORD).exists());
+                }
+            }
+            ready = issued
+                .acknowledge(&fixture.ack(&issued), &fixture.policy, &fixture.signing_key)
+                .unwrap()
+                .0;
+        }
+    }
+
+    #[test]
+    fn recovery_name_cannot_relax_redo_or_accept_conflicting_names() {
+        let fixture = Fixture::new();
+        let ready = IssuerRecordV2::genesis(&fixture.policy, &fixture.signing_key).unwrap();
+        let prepared = fixture.prepare(&ready, [0x57; 32]).unwrap();
+        for entries in [
+            vec![REDO_RECORD],
+            vec![CANONICAL_RECORD, RECOVERY_RECORD],
+            vec![REDO_RECORD, RECOVERY_RECORD],
+            vec![CANONICAL_RECORD, REDO_RECORD, RECOVERY_RECORD],
+        ] {
+            let directory = Fixture::new();
+            for name in &entries {
+                let path = directory.directory.path().join(name);
+                fs::write(&path, prepared.canonical).unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            assert!(
+                IssuerLedgerV2::recover(directory.root(), &fixture.policy, &fixture.signing_key)
+                    .is_err()
+            );
+            for name in entries {
+                assert_eq!(
+                    fs::read(directory.directory.path().join(name)).unwrap(),
+                    prepared.canonical
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn interrupted_recovery_can_be_interrupted_again_without_advancing() {
+        use crate::compiler_execution_journal_recovery::test_support::RecoveryFault;
+        for mut second in RecoveryFault::resume_cases() {
+            let fixture = Fixture::new();
+            let mut ledger =
+                IssuerLedgerV2::recover(fixture.root(), &fixture.policy, &fixture.signing_key)
+                    .unwrap();
+            let prepared = fixture.prepare(&ledger.record, [0x56; 32]).unwrap();
+            let expected = prepared.canonical;
+            ledger.commit(prepared).unwrap();
+            drop(ledger);
+            let mut first = RecoveryFault::after_rename();
+            assert!(
+                IssuerLedgerV2::recover_with_hooks(
+                    fixture.root(),
+                    &fixture.policy,
+                    &fixture.signing_key,
+                    &mut first
+                )
+                .is_err()
+            );
+            assert!(first.fired);
+            assert_eq!(
+                fs::read(fixture.directory.path().join(RECOVERY_RECORD)).unwrap(),
+                expected
+            );
+            assert!(
+                IssuerLedgerV2::recover_with_hooks(
+                    fixture.root(),
+                    &fixture.policy,
+                    &fixture.signing_key,
+                    &mut second
+                )
+                .is_err()
+            );
+            assert!(second.fired);
+            let recovered =
+                IssuerLedgerV2::recover(fixture.root(), &fixture.policy, &fixture.signing_key)
+                    .unwrap();
+            assert_eq!(recovered.record.canonical, expected);
+        }
+    }
+
+    #[test]
+    fn invalid_or_wrong_policy_recovery_is_not_promoted() {
+        let fixture = Fixture::new();
+        let expected = IssuerRecordV2::genesis(&fixture.policy, &fixture.signing_key)
+            .unwrap()
+            .canonical;
+        for wrong_policy in [false, true] {
+            let directory = Fixture::new();
+            let mut bytes = expected;
+            if !wrong_policy {
+                bytes[0] ^= 1;
+            }
+            let path = directory.directory.path().join(RECOVERY_RECORD);
+            fs::write(&path, bytes).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            let policy = CompilerExecutionIssuerPolicyV1::new(
+                8,
+                fixture.policy.executable(),
+                fixture.policy.runtime(),
+                *fixture.policy.verifying_key(),
+                *fixture.policy.external_anchor_verifying_key(),
+            )
+            .unwrap();
+            let selected = if wrong_policy {
+                &policy
+            } else {
+                &fixture.policy
+            };
+            assert!(
+                IssuerLedgerV2::recover(directory.root(), selected, &fixture.signing_key).is_err()
+            );
+            assert_eq!(fs::read(path).unwrap(), bytes);
+            assert!(!directory.directory.path().join(CANONICAL_RECORD).exists());
+            assert!(!directory.directory.path().join(REDO_RECORD).exists());
+        }
+    }
+
+    #[test]
+    fn legacy_worker_state_blocks_recovery_before_any_journal_mutation() {
+        use crate::compiler_execution_journal_recovery::test_support::RecoveryFault;
+        for entry in crate::compiler_execution_journal_recovery::LEGACY_STATE_FILES {
+            let fixture = Fixture::new();
+            let ledger =
+                IssuerLedgerV2::recover(fixture.root(), &fixture.policy, &fixture.signing_key)
+                    .unwrap();
+            let expected = ledger.record.canonical;
+            drop(ledger);
+            fs::write(fixture.directory.path().join(entry), []).unwrap();
+            let mut fault = RecoveryFault::after_rename();
+            assert!(
+                IssuerLedgerV2::recover_with_hooks(
+                    fixture.root(),
+                    &fixture.policy,
+                    &fixture.signing_key,
+                    &mut fault
+                )
+                .is_err()
+            );
+            assert!(!fault.fired);
+            assert_eq!(
+                fs::read(fixture.directory.path().join(CANONICAL_RECORD)).unwrap(),
+                expected
+            );
+            assert!(!fixture.directory.path().join(RECOVERY_RECORD).exists());
         }
     }
 

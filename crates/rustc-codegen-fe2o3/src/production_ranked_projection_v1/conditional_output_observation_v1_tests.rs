@@ -118,6 +118,7 @@ fn inspect(
         let binding = owner
             .bind_conditional_output_v1(facts, budget)
             .map_err(|e| e.to_string())?;
+        check_transported_extent(&binding, candidate);
         let joined = binding
             .inspect_ranked_output_v1(candidate, budget)
             .and_then(|joined| joined.rederive_output_extent_v1(budget))
@@ -176,6 +177,123 @@ fn inspect(
     );
     assert!(budget.work_ledger_identity_v1() == ledger);
     result
+}
+
+fn check_transported_extent(
+    binding: &ProductionConditionalOutputBindingV1<'_>,
+    candidate: NativeRankedSourceCandidateV1<'_>,
+) {
+    use fe2o3_lower_mir_kernel::{
+        ProductionRankedAccessSourceV1 as Access, ProductionRankedOutputExtentSourceV1 as Extent,
+        decode_production_ranked_source_rows_v1, encode_production_ranked_source_rows_v1,
+    };
+    let floor = binding.owner().retained_analysis_storage_v1();
+    for mutation in 0..6 {
+        let mut work = Work::new(1_000_000);
+        let mut budget = Budget::new(&mut work, floor + 1_000_000);
+        budget.reserve_storage(floor).unwrap();
+        let joined = binding
+            .inspect_ranked_output_v1(candidate, &mut budget)
+            .unwrap();
+        assert!(matches!(
+            joined.dynamic_extent(),
+            ProductionConditionalRankedExtentV1::Unbound(_)
+        ));
+        let site = joined.gpu_write_site();
+        let mut rows = candidate.access_sources().to_vec();
+        let row = rows
+            .iter_mut()
+            .find(|row| {
+                row.ranked_block() == site.block() && row.ranked_operation() == site.operation()
+            })
+            .unwrap();
+        let proposal = row.output_extent().unwrap();
+        let base = Access::new(
+            row.semantic_block(),
+            row.semantic_statement(),
+            row.semantic_access_ordinal(),
+            row.ranked_block(),
+            row.ranked_operation(),
+        );
+        *row = match mutation {
+            0 => *row,
+            1 => base,
+            _ => base.with_output_extent(Extent::new(
+                if mutation == 2 {
+                    proposal.source_argument().wrapping_add(1)
+                } else {
+                    proposal.source_argument()
+                },
+                if mutation == 3 {
+                    ProductionRankedValueV1::Argument(u32::MAX)
+                } else {
+                    proposal.view()
+                },
+                if mutation == 4 {
+                    ProductionRankedValueV1::Argument(u32::MAX)
+                } else {
+                    proposal.extent()
+                },
+                if mutation == 5 {
+                    ProductionRankedValueV1::Argument(u32::MAX)
+                } else {
+                    proposal.index()
+                },
+            )),
+        };
+        let (bytes, encoded_storage) = encode_production_ranked_source_rows_v1(
+            &rows,
+            candidate.executable_effect_sources(),
+            &mut budget,
+        )
+        .unwrap();
+        budget
+            .reserve_storage(encoded_storage.retained_storage())
+            .unwrap();
+        drop(rows);
+        let (decoded, storage) =
+            decode_production_ranked_source_rows_v1(&bytes, &mut budget).unwrap();
+        budget.reserve_storage(storage.retained_storage()).unwrap();
+        let recovered = NativeRankedSourceCandidateV1::from_untrusted_parts(
+            candidate.semantic_root(),
+            candidate.launch_rank(),
+            candidate.kernel(),
+            decoded.access_sources(),
+            decoded.executable_effect_sources(),
+            candidate.ranked_ir(),
+        );
+        let joined = binding
+            .inspect_ranked_output_v1(recovered, &mut budget)
+            .unwrap();
+        assert!(matches!(
+            joined.dynamic_extent(),
+            ProductionConditionalRankedExtentV1::Unbound(_)
+        ));
+        let result = joined.rederive_output_extent_v1(&mut budget);
+        match mutation {
+            0 => {
+                let joined = result.unwrap();
+                assert_eq!(
+                    joined.dynamic_extent(),
+                    ProductionConditionalRankedExtentV1::CanonicalOutputLength {
+                        operand: proposal.extent(),
+                        length: binding.coverage().length()
+                    }
+                );
+                assert!(std::ptr::eq(joined.binding().owner(), binding.owner()));
+                check_extent_budget(binding, recovered);
+            }
+            1 => assert!(matches!(result, Err(Error::MissingExtentSource))),
+            _ => assert!(matches!(result, Err(Error::ExtentSource))),
+        }
+        drop(decoded);
+        budget.release_storage(storage.retained_storage()).unwrap();
+        drop(bytes);
+        budget
+            .release_storage(encoded_storage.retained_storage())
+            .unwrap();
+        assert_eq!(budget.storage(), floor);
+    }
 }
 
 fn check_extent_budget(

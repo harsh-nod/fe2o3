@@ -417,6 +417,19 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes exact nominal pointer-sized source kinds and ordinary V15 content.
+    /// Structural admission does not authenticate the nominal type's producer.
+    pub fn decode_exact_v35_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V35),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -463,6 +476,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V32
                         | SemanticMirWireVersionV1::V33
                         | SemanticMirWireVersionV1::V34
+                        | SemanticMirWireVersionV1::V35
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -858,12 +872,21 @@ impl<'a> CanonicalDecoderV1<'a> {
             first_pointee: self.optional_pointee_info()?,
             second_pointee: self.optional_pointee_info()?,
         };
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V29 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V35 {
+            19
+        } else if self.wire_version == SemanticMirWireVersionV1::V29 {
             17
         } else {
             13
         };
         let shape_tag = self.tagged("type shape", maximum_tag)?;
+        if self.wire_version == SemanticMirWireVersionV1::V35 && matches!(shape_tag, 14..=17) {
+            return Err(SemanticMirDecodeErrorV1::InvalidTag {
+                context: "type shape",
+                offset: self.offset - 1,
+                value: shape_tag,
+            });
+        }
         let rust_type_kind = match shape_tag {
             13 => SemanticRustTypeKindV1::Str,
             14 => SemanticRustTypeKindV1::Execution(SemanticExecutionRoleV29::KernelContext),
@@ -877,12 +900,14 @@ impl<'a> CanonicalDecoderV1<'a> {
                     SemanticExecutionRoleV29::LaneFragmentU32 { lanes, elements }
                 })
             }
+            18 => SemanticRustTypeKindV1::Usize,
+            19 => SemanticRustTypeKindV1::Isize,
             _ => SemanticRustTypeKindV1::Ordinary,
         };
         let shape = match shape_tag {
             0 => SemanticTypeShapeV1::Unit,
             1 => SemanticTypeShapeV1::Never,
-            2 => SemanticTypeShapeV1::Scalar(self.scalar_type()?),
+            2 | 18 | 19 => SemanticTypeShapeV1::Scalar(self.scalar_type()?),
             3 => SemanticTypeShapeV1::Pointer(SemanticPointerTypeV1::new_with_kind(
                 SemanticTypeIdV1(self.u32()?),
                 match self.tagged("pointer kind", 1)? {
@@ -1322,7 +1347,9 @@ impl<'a> CanonicalDecoderV1<'a> {
         let locals = self.records("locals", Some(SemanticMirResourceV1::Locals), |decoder| {
             let identity = SemanticLocalIdentityV1(decoder.identity()?);
             let ty = SemanticTypeIdV1(decoder.u32()?);
-            let maximum_role = if decoder.wire_version >= SemanticMirWireVersionV1::V28 {
+            let maximum_role = if decoder.wire_version >= SemanticMirWireVersionV1::V28
+                && decoder.wire_version != SemanticMirWireVersionV1::V35
+            {
                 3
             } else {
                 2
@@ -2924,6 +2951,8 @@ mod tests {
     mod gfx942_inline_v30_tests;
     mod gfx942_ordered_program_v32_tests;
     mod gfx942_ordered_region_v31_tests;
+    #[path = "../../nominal_pointer_sized_v35_tests.rs"]
+    mod nominal_pointer_sized_v35_tests;
     mod rust_call_local_tests;
     mod saturating_integer_v30_tests;
     mod wave64_shuffle_v33_tests;

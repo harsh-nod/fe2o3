@@ -34,6 +34,7 @@ use slice_projection_v1::ProjectedViewsV1;
 
 #[cfg(test)]
 pub(crate) use tests::{
+    prepare_backend_unroll_direct_prefix_v1, prepare_backend_unroll_erased_prefix_v1,
     with_backend_checked_output_policy3_roster_v1, with_backend_checked_output_policy3_v1,
     with_backend_checked_output_policy4_owned_v1, with_backend_checked_output_policy4_v1,
     with_backend_checked_output_policy5_owned_v1, with_backend_checked_output_policy6_owned_v1,
@@ -41,9 +42,10 @@ pub(crate) use tests::{
     with_backend_erased_output_policy5_owned_v1, with_backend_erased_output_policy6_owned_v1,
     with_backend_erased_roster_v1, with_backend_forwarding_erased_prefix_v1,
     with_backend_licm_direct_prefix_v1, with_backend_licm_erased_prefix_v1,
-    with_backend_loop_preheaders_direct_prefix_v1, with_backend_policy7_direct_prefix_v1,
-    with_backend_policy7_erased_prefix_v1, with_backend_policy8_direct_prefix_v1,
-    with_backend_policy8_erased_prefix_v1,
+    with_backend_loop_preheaders_direct_prefix_v1, with_backend_nominal_policy4_owned_v3,
+    with_backend_policy7_direct_prefix_v1, with_backend_policy7_erased_prefix_v1,
+    with_backend_policy8_direct_prefix_v1, with_backend_policy8_erased_prefix_v1,
+    with_backend_unroll_direct_prefix_v1, with_backend_unroll_erased_prefix_v1,
 };
 
 use analysis_multi_split_v1::{
@@ -424,6 +426,7 @@ include!("production_ranked_projection_v1/induction_body_predicate_v1.rs");
 #[cfg_attr(test, derive(Clone))]
 enum ProjectedInductionPreheaderControlV1 {
     Direct,
+    DistantDirect(Box<multi_entry_induction_v1::single::Proof>),
     Optional {
         discriminant: SemanticOperandV1,
         explicit_value: u128,
@@ -4895,7 +4898,7 @@ fn private_array_write_source_v1(
         }
         _ => return false,
     };
-    // Private-array reads still lack an exact attachment recipe. Keep this
+    // Mixed private reads and indexed writes still lack an exact recipe. Keep this
     // scalar destination subset closed independently of
     // the general RHS-before-destination projection order.
     let value_type = match value {
@@ -4959,6 +4962,9 @@ fn retained_ranked_access_source_v1(
     )
 }
 
+#[path = "production_ranked_projection_v1/private_array_read_source_v1.rs"]
+mod private_array_read_source_v1;
+
 fn production_access_sources(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -4980,10 +4986,30 @@ fn production_access_sources(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "ranked access correspondence is outside the projected graph",
             ))?;
-        if !retained_ranked_access_source_v1(source.memory_space, operation) {
+        if source.memory_space == MemorySpaceAttr::Private
+            && matches!(
+                operation,
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Read,
+                    ..
+                }
+            )
+        {
+            if !private_array_read_source_v1::retained_read(types, function, source, facts)? {
+                continue;
+            }
+            if source
+                .semantic_site
+                .is_some_and(|site| ordinals.contains_key(&(site.block, site.statement)))
+            {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "private array read has duplicate source correspondence",
+                ));
+            }
+        } else if !retained_ranked_access_source_v1(source.memory_space, operation) {
             // Scalar indexed writes are final effects. Literal initializer
             // components contain no RHS slice queries; later sites reset the
-            // shared cursor. Keep ordinary private reads excluded.
+            // shared cursor. Other private reads remain excluded.
             if source.memory_space != MemorySpaceAttr::Private
                 || !matches!(
                     operation,
@@ -12665,6 +12691,48 @@ fn project_uniform_inductions_with_multi_entry_v1(
                 ));
             }
         }
+        if initial.is_none()
+            && step.is_some()
+            && matches!(
+                topology.preheader_control,
+                ProjectedInductionPreheaderControlV1::Direct
+            )
+            && let Some(context) = multi.as_deref_mut()
+        {
+            let proof = multi_entry_induction_v1::single::build(
+                function,
+                &graph,
+                topology.initializer_block,
+                header,
+                topology.latch,
+                induction,
+                context,
+            )?;
+            context.facts.charge_private_array_work(8)?;
+            let site = proof.initialization();
+            let SemanticStatementKindV1::Assign(assignment) =
+                function.blocks()[site.block].statements()[site.statement].kind()
+            else {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a distant induction initializer is not an assignment",
+                ));
+            };
+            let SemanticRvalueKindV1::Use(operand) = assignment.value().kind() else {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a distant induction initializer is not an exact scalar use",
+                ));
+            };
+            if assignment.destination().ty() != induction_type
+                || assignment.value().result_type() != induction_type
+                || operand.ty() != induction_type
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a distant induction initializer changed its exact scalar type",
+                ));
+            }
+            initial = Some(operand);
+            topology.preheader_control = ProjectedInductionPreheaderControlV1::DistantDirect(proof);
+        }
         let (Some(initial), Some((latch_statement, update, step))) = (initial, step) else {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a uniform induction without exact initial and latch definitions",
@@ -12709,6 +12777,17 @@ fn project_uniform_inductions_with_multi_entry_v1(
                         "multi-entry initialization requires live canonical facts",
                     ))?;
             multi_entry_induction_v1::bind_initial(entries, initial, context)?;
+        }
+        if let ProjectedInductionPreheaderControlV1::DistantDirect(proof) =
+            &mut topology.preheader_control
+        {
+            let context =
+                multi
+                    .as_deref_mut()
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "distant induction initialization requires live canonical facts",
+                    ))?;
+            multi_entry_induction_v1::single::bind_initial(proof, initial, context)?;
         }
         let Some(bound) = project_pure_uniform_index_operand_v1(
             types,
@@ -12954,6 +13033,28 @@ fn reconcile_source_progress_with_multi_entry_v1(
                     "multi-entry source initializer or recurrence family changed",
                 ));
             }
+            source_induction_update_parts_v1(
+                function,
+                &graph,
+                &mut semantic_ranges,
+                induction.latch,
+                &induction.loop_blocks,
+                source.induction,
+                source.latch_statement,
+                local_definitions,
+                &assignment_sites,
+                &mut alias_work,
+            )?
+        } else if let ProjectedInductionPreheaderControlV1::DistantDirect(proof) =
+            &induction.preheader_control
+        {
+            let context =
+                multi
+                    .as_deref_mut()
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "distant induction source replay requires live canonical facts",
+                    ))?;
+            multi_entry_induction_v1::single::replay(proof, function, &graph, induction, context)?;
             source_induction_update_parts_v1(
                 function,
                 &graph,
@@ -20644,7 +20745,7 @@ fn build_ranked_cfg(
     entry_operations: Vec<ProductionRankedOperationV1>,
     mut projected_blocks: Vec<ProjectedSemanticBlockV1>,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
-    induction_scope: Option<&mut multi_entry_induction_v1::Scope>,
+    mut induction_scope: Option<&mut multi_entry_induction_v1::Scope>,
 ) -> Result<
     (
         Vec<ProductionRankedBlockV1>,
@@ -20662,6 +20763,24 @@ fn build_ranked_cfg(
     let body_predicates = indexed_induction_body_predicates_v1(function, uniform_inductions)?;
     let mut has_multi_entry = false;
     for induction in uniform_inductions {
+        if let ProjectedInductionPreheaderControlV1::DistantDirect(proof) =
+            &induction.preheader_control
+        {
+            let scope = induction_scope.as_deref_mut().ok_or(
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "distant induction emission requires live canonical facts",
+                ),
+            )?;
+            multi_entry_induction_v1::single::before_emission(
+                proof,
+                function,
+                induction,
+                &mut multi_entry_induction_v1::Context {
+                    scope,
+                    facts: assertion_facts,
+                },
+            )?;
+        }
         has_multi_entry |= matches!(
             induction.preheader_control,
             ProjectedInductionPreheaderControlV1::Multiple(_)
@@ -21027,6 +21146,7 @@ fn build_ranked_cfg(
             let terminator = match (&induction.preheader_control, terminator) {
                 (
                     ProjectedInductionPreheaderControlV1::Direct
+                    | ProjectedInductionPreheaderControlV1::DistantDirect(_)
                     | ProjectedInductionPreheaderControlV1::Multiple(_),
                     ProjectedCfgTerminatorV1::Branch(target),
                 ) if target == induction.header => ProductionRankedTerminatorV1::BranchArgs {
@@ -21078,7 +21198,11 @@ fn build_ranked_cfg(
                         "an optional uniform induction preheader changed after exact control binding",
                     ));
                 }
-                (ProjectedInductionPreheaderControlV1::Direct, _) => {
+                (
+                    ProjectedInductionPreheaderControlV1::Direct
+                    | ProjectedInductionPreheaderControlV1::DistantDirect(_),
+                    _,
+                ) => {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
                         "a direct uniform induction preheader changed after topology binding",
                     ));

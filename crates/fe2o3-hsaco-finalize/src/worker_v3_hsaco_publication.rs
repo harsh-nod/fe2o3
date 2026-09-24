@@ -2,6 +2,7 @@
 
 use std::{error::Error, fmt, path::Path, sync::Arc};
 
+use crate::worker_v3_finalized_schema::{DescriptorSchema, FinalizedOwner, FinalizedRef};
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationErrorV3,
     AttemptScopedHsacoPublicationResultV3, BuildAttempt, CanonicalLinkRequestIdentityV1,
@@ -22,6 +23,16 @@ use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use sha2::{Digest, Sha256};
 
+#[path = "nominal_worker_publication_v3.rs"]
+mod nominal;
+use nominal::RecoveredPublicationRef;
+pub use nominal::{
+    PreparedNominalWorkerPublicationV3, PublishedNominalWorkerHsacoV3,
+    RecoveredNominalWorkerPublicationV3, persist_prepared_nominal_worker_publication_v3,
+    prepare_nominal_worker_publication_v3, publish_recovered_nominal_worker_hsaco_v3,
+    recover_nominal_worker_publication_v3,
+};
+
 use crate::{
     ContentIdentityV1, FinalizedProtectedWorkerV3HsacoIdentityV1,
     InspectedProtectedWorkerV3HsacoIdentityV1, LinkInputKindClosureV1, LinkInputV1, LinkOutputV1,
@@ -32,7 +43,7 @@ use crate::{
     ProtectedWorkerV3CompactFinalizerReplayIdentityV2, ProtectedWorkerV3CompactFinalizerReplayV2,
     ProvenanceNodeV1, WorkerDerivationEvidenceV1, WorkerInputV1, WorkerMeasurementV1,
     WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestConstructionError,
-    derive_unfinalized_hsaco_from_finalized_v1, finalize_protected_worker_v3_hsaco_v1,
+    finalize_protected_worker_v3_hsaco_v1,
     first_build_worker_v3::recover_inert_protected_first_build_worker_v3_evidence_v1,
     inspect_protected_worker_v3_hsaco_v1,
     request_construction::{
@@ -110,9 +121,14 @@ pub struct RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
     raw_hsaco: ContentIdentityV1,
     finalization: FinalizedProtectedWorkerV3HsacoIdentityV1,
     finalized_hsaco: ContentIdentityV1,
+    descriptor_schema: u16,
 }
 
 impl RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+    /// Descriptor wire version independently replayed from exact ABI receipt bytes.
+    pub const fn descriptor_schema_version(&self) -> u16 {
+        self.descriptor_schema
+    }
     /// Returns the identity of every retained finalizer-custody axis.
     pub const fn identity(&self) -> RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1 {
         self.identity
@@ -508,24 +524,7 @@ impl RecoveredProtectedWorkerV3HsacoPublicationV1 {
         &self,
         compiler_closure: CompilerClosureV2,
     ) -> Result<WorkerV3PublicationBindingV1, WorkerV3HsacoPublicationErrorV1> {
-        if compiler_closure != self.finalized.binding_expectation().compiler_closure() {
-            return Err(WorkerV3HsacoPublicationErrorV1::CompilerClosureMismatch);
-        }
-        let raw_output = self.intent.raw_output_identity();
-        let finalized_output = self.intent.finalized_output_identity();
-        WorkerV3PublicationBindingV1::new(
-            compiler_closure,
-            self.record.identity().as_bytes(),
-            *self.intent.finalization_identity().as_bytes(),
-            *self.intent.source_evidence_identity().as_bytes(),
-            *self.intent.binding_identity().as_bytes(),
-            *self.intent.raw_inspection_identity().as_bytes(),
-            *raw_output.sha256(),
-            raw_output.byte_len(),
-            *finalized_output.sha256(),
-            finalized_output.byte_len(),
-        )
-        .map_err(WorkerV3HsacoPublicationErrorV1::PublicationBinding)
+        RecoveredPublicationRef::V1(self).publication_binding(compiler_closure)
     }
 
     pub const fn grants_publication_authority(&self) -> bool {
@@ -544,6 +543,9 @@ impl RecoveredProtectedWorkerV3HsacoPublicationV1 {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WorkerV3HsacoPublicationErrorV1 {
+    DescriptorSchemaMismatch,
+    NominalArtifact(crate::NominalFinalizationErrorV3<std::convert::Infallible>),
+    NominalFinalization(crate::NominalWorkerFinalizationErrorV3<std::convert::Infallible>),
     ProducerIdentityMismatch,
     CompilerClosureMismatch,
     MissingExactFinalizerDerivation,
@@ -573,6 +575,11 @@ pub enum WorkerV3HsacoPublicationErrorV1 {
 impl fmt::Display for WorkerV3HsacoPublicationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DescriptorSchemaMismatch => {
+                formatter.write_str("descriptor schema does not match the typed finalizer boundary")
+            }
+            Self::NominalArtifact(error) => error.fmt(formatter),
+            Self::NominalFinalization(error) => error.fmt(formatter),
             Self::ProducerIdentityMismatch => {
                 formatter.write_str("V3 publication producer differs from the prepared producer")
             }
@@ -625,6 +632,8 @@ impl fmt::Display for WorkerV3HsacoPublicationErrorV1 {
 impl Error for WorkerV3HsacoPublicationErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::NominalArtifact(error) => Some(error),
+            Self::NominalFinalization(error) => Some(error),
             Self::CompactReplay(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::PublicationBinding(error) => Some(error),
@@ -678,9 +687,19 @@ pub fn prepare_protected_worker_v3_hsaco_publication_v1(
     producer: &ProducerIdentity,
     finalized: PreparedFinalizedProtectedWorkerV3HsacoV1,
 ) -> Result<PreparedProtectedWorkerV3HsacoPublicationV1, WorkerV3HsacoPublicationErrorV1> {
+    prepare_versioned_publication(producer, FinalizedOwner::V1(finalized))
+}
+
+fn prepare_versioned_publication(
+    producer: &ProducerIdentity,
+    finalized: FinalizedOwner,
+) -> Result<PreparedProtectedWorkerV3HsacoPublicationV1, WorkerV3HsacoPublicationErrorV1> {
     let producer_package = producer_package_identity_v1(producer);
-    let intent = derive_publication_intent(producer_package, &finalized)?;
-    let replay = crate::prepare_protected_worker_v3_compact_finalizer_replay_v2(finalized)?;
+    let intent = derive_publication_intent(producer_package, finalized.view())?;
+    let replay =
+        crate::worker_v3_compact_finalizer_replay::prepare_versioned_compact_finalizer_replay(
+            finalized,
+        )?;
     Ok(PreparedProtectedWorkerV3HsacoPublicationV1 {
         producer_package,
         intent,
@@ -694,6 +713,15 @@ pub fn persist_prepared_protected_worker_v3_hsaco_publication_v1(
     producer: &ProducerIdentity,
     prepared: PreparedProtectedWorkerV3HsacoPublicationV1,
 ) -> Result<RecoveredProtectedWorkerV3HsacoPublicationV1, WorkerV3HsacoPublicationErrorV1> {
+    let recovered = persist_versioned_publication(output_dir, producer, prepared)?;
+    validate_recovered_publication(producer, recovered)
+}
+
+fn persist_versioned_publication(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    prepared: PreparedProtectedWorkerV3HsacoPublicationV1,
+) -> Result<RecoveredWorkerV3PublicationIntentV1, WorkerV3HsacoPublicationErrorV1> {
     if producer_package_identity_v1(producer) != prepared.producer_package {
         return Err(WorkerV3HsacoPublicationErrorV1::ProducerIdentityMismatch);
     }
@@ -711,15 +739,14 @@ pub fn persist_prepared_protected_worker_v3_hsaco_publication_v1(
         transcript,
     )
     .map_err(WorkerV3PublicationIntentErrorV1::Codec)?;
-    let recovered = persist_worker_v3_publication_intent_v1(
+    Ok(persist_worker_v3_publication_intent_v1(
         output_dir,
         producer,
         attempt,
         plan,
         attachments,
         finalized_hsaco,
-    )?;
-    validate_recovered_publication(producer, recovered)
+    )?)
 }
 
 /// Recovers one durable V3 occurrence and independently reproduces its complete finalizer lineage.
@@ -790,7 +817,8 @@ where
         transcript,
         exact_finalized_hsaco,
     )?
-    .finalized)
+    .finalized
+    .into_v1()?)
 }
 
 /// Completes the production V3 publication path from one independently replayed restart owner.
@@ -798,34 +826,17 @@ where
 /// This is the production entry point. The lower-level artifact-transaction V3 API independently
 /// requires matching durable restart storage under the publication lock, but only this facade
 /// reconstructs and authenticates the strict finalizer transcript before publication.
-#[allow(
-    unsafe_code,
-    reason = "one audited semantic-authority bridge follows complete strict-finalizer replay"
-)]
 pub fn publish_recovered_protected_worker_v3_hsaco_v1(
     output_dir: &Path,
     producer: &ProducerIdentity,
     compiler_closure: CompilerClosureV2,
     recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
 ) -> Result<PublishedProtectedWorkerV3HsacoV1, WorkerV3HsacoPublicationErrorV1> {
-    let intent = recovered.publication_intent();
-    let binding = recovered.publication_binding(compiler_closure)?;
-    // SAFETY: `recovered` exists only after `validate_recovered_publication` independently decodes
-    // and replays every stored finalizer input, checks all binding axes, and retains that owner in
-    // the returned `PublishedProtectedWorkerV3HsacoV1`.
-    let authority = unsafe {
-        VerifiedWorkerV3PublicationAuthorityV1::from_authenticated_finalizer_replay_unchecked(
-            binding,
-        )
-    };
-    let publication = publish_exact_hsaco_evidence_for_attempt_v3(
+    let publication = publish_recovered_versioned(
         output_dir,
         producer,
-        intent.durable_plan().attempt(),
-        intent.durable_plan(),
-        intent.upstream_evidence(),
-        authority,
-        recovered.exact_finalized_hsaco(),
+        compiler_closure,
+        RecoveredPublicationRef::V1(&recovered),
     )?;
     Ok(PublishedProtectedWorkerV3HsacoV1 {
         recovered,
@@ -833,10 +844,66 @@ pub fn publish_recovered_protected_worker_v3_hsaco_v1(
     })
 }
 
+#[allow(
+    unsafe_code,
+    reason = "one audited authority bridge follows complete schema-explicit strict-finalizer replay"
+)]
+fn publish_recovered_versioned(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    compiler_closure: CompilerClosureV2,
+    recovered: RecoveredPublicationRef<'_>,
+) -> Result<AttemptScopedHsacoPublicationResultV3, WorkerV3HsacoPublicationErrorV1> {
+    let intent = recovered.intent();
+    let binding = recovered.publication_binding(compiler_closure)?;
+    // SAFETY: Both closed variants retain independently reconstructed finalizer
+    // custody. Shared replay checked exact schema, every stored input and binding
+    // axis. Each typed facade retains its owner alongside the publication result.
+    let authority = unsafe {
+        VerifiedWorkerV3PublicationAuthorityV1::from_authenticated_finalizer_replay_unchecked(
+            binding,
+        )
+    };
+    Ok(publish_exact_hsaco_evidence_for_attempt_v3(
+        output_dir,
+        producer,
+        intent.durable_plan().attempt(),
+        intent.durable_plan(),
+        intent.upstream_evidence(),
+        authority,
+        recovered.finalized().bytes(),
+    )?)
+}
+
 fn validate_recovered_publication(
     producer: &ProducerIdentity,
     recovered: RecoveredWorkerV3PublicationIntentV1,
 ) -> Result<RecoveredProtectedWorkerV3HsacoPublicationV1, WorkerV3HsacoPublicationErrorV1> {
+    let ValidatedRecoveredPublication {
+        outcome,
+        record,
+        finalized,
+        intent,
+    } = validate_recovered_versioned(producer, recovered)?;
+    Ok(RecoveredProtectedWorkerV3HsacoPublicationV1 {
+        outcome,
+        record,
+        finalized: finalized.into_v1()?,
+        intent,
+    })
+}
+
+struct ValidatedRecoveredPublication {
+    outcome: WorkerV3PublicationIntentOutcomeV1,
+    record: WorkerV3PublicationIntentRecordV1,
+    finalized: FinalizedOwner,
+    intent: SealedProtectedWorkerV3HsacoPublicationIntentV1,
+}
+
+fn validate_recovered_versioned(
+    producer: &ProducerIdentity,
+    recovered: RecoveredWorkerV3PublicationIntentV1,
+) -> Result<ValidatedRecoveredPublication, WorkerV3HsacoPublicationErrorV1> {
     let outcome = recovered.outcome();
     let (record, attachments, exact_finalized_hsaco) = recovered.into_parts();
     let (outer_handoff, provider_payloads, transcript_bytes) = attachments.into_parts();
@@ -851,11 +918,12 @@ fn validate_recovered_publication(
         &exact_finalized_hsaco,
     )?;
     let finalized = validated.finalized;
-    let intent = derive_publication_intent(producer_package_identity_v1(producer), &finalized)?;
+    let intent =
+        derive_publication_intent(producer_package_identity_v1(producer), finalized.view())?;
     if intent.plan != record.plan() {
         return Err(WorkerV3HsacoPublicationErrorV1::DurablePlanMismatch);
     }
-    Ok(RecoveredProtectedWorkerV3HsacoPublicationV1 {
+    Ok(ValidatedRecoveredPublication {
         outcome,
         record,
         finalized,
@@ -864,7 +932,7 @@ fn validate_recovered_publication(
 }
 
 struct ValidatedFinalizerReplayComponentsV1 {
-    finalized: PreparedFinalizedProtectedWorkerV3HsacoV1,
+    finalized: FinalizedOwner,
     derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
 }
 
@@ -937,7 +1005,8 @@ fn validate_finalizer_replay_components<P: FinalizerProviderPayloadV1>(
     let decoded = decode_compiler_module_handoff_v2(outer.module_handoff().canonical_bytes())
         .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
     let (_, worker_options) = decode_link_options(replay.link_options)?;
-    let raw_hsaco = derive_unfinalized_hsaco_from_finalized_v1(exact_finalized_hsaco)?;
+    let schema = DescriptorSchema::from_abi(outer.capsule().receipts().abi().canonical_preimage())?;
+    let raw_hsaco = schema.derive_raw(exact_finalized_hsaco)?;
     let raw_identity = ContentIdentityV1::calculate(&raw_hsaco);
     let plan = derive_link_plan(&decoded, &providers, replay.link_options, raw_identity)?;
     let input_kinds =
@@ -994,18 +1063,30 @@ fn validate_finalizer_replay_components<P: FinalizerProviderPayloadV1>(
     if source.identity().as_bytes() != transcript.source_evidence_identity() {
         return Err(WorkerV3HsacoPublicationErrorV1::TranscriptSourceMismatch);
     }
-    let inspected = inspect_protected_worker_v3_hsaco_v1(source)?;
-    if inspected.exact_bytes() != raw_hsaco {
+    let finalized = match schema {
+        DescriptorSchema::V1 => FinalizedOwner::V1(finalize_protected_worker_v3_hsaco_v1(
+            inspect_protected_worker_v3_hsaco_v1(source)?,
+        )?),
+        DescriptorSchema::NominalV3 => FinalizedOwner::NominalV3(
+            crate::finalize_protected_worker_nominal_hsaco_v3(
+                source,
+                crate::NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3,
+                &mut |_| Ok::<_, std::convert::Infallible>(()),
+            )
+            .map_err(WorkerV3HsacoPublicationErrorV1::NominalFinalization)?,
+        ),
+    };
+    let view = finalized.view();
+    if view.raw().exact_bytes() != raw_hsaco {
         return Err(WorkerV3HsacoPublicationErrorV1::RawOutputMismatch);
     }
-    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected)?;
-    if finalized.identity().as_bytes() != transcript.expected_finalization_identity() {
+    if view.identity().as_bytes() != transcript.expected_finalization_identity() {
         return Err(WorkerV3HsacoPublicationErrorV1::TranscriptFinalizationMismatch);
     }
-    if finalized.exact_finalized_bytes() != exact_finalized_hsaco {
+    if view.bytes() != exact_finalized_hsaco {
         return Err(WorkerV3HsacoPublicationErrorV1::FinalizedOutputMismatch);
     }
-    let derivation = derive_revalidated_finalizer_derivation(transcript_identity, &finalized);
+    let derivation = derive_revalidated_finalizer_derivation(transcript_identity, view);
     Ok(ValidatedFinalizerReplayComponentsV1 {
         finalized,
         derivation,
@@ -1014,19 +1095,20 @@ fn validate_finalizer_replay_components<P: FinalizerProviderPayloadV1>(
 
 fn derive_revalidated_finalizer_derivation(
     transcript: ProtectedWorkerV3CompactFinalizerReplayIdentityV2,
-    finalized: &PreparedFinalizedProtectedWorkerV3HsacoV1,
+    finalized: FinalizedRef<'_>,
 ) -> RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
-    let source = finalized.source_evidence();
+    let raw = finalized.raw();
+    let source = raw.source_evidence();
     let worker = source.worker_measurement().clone();
     let bootstrap = source.bootstrap().response();
     let replay = source.exact_replay().response();
     let compiler_module =
-        ContentIdentityV1::calculate(finalized.outer_handoff().module_handoff().module_bytes());
+        ContentIdentityV1::calculate(raw.outer_handoff().module_handoff().module_bytes());
     let derivation = source.derivation_evidence().clone();
-    let raw_hsaco = finalized.raw_output_identity();
+    let raw_hsaco = raw.linked_output_identity();
     debug_assert_eq!(derivation.hsaco(), raw_hsaco);
     let finalization = finalized.identity();
-    let finalized_hsaco = finalized.finalized_output_identity();
+    let finalized_hsaco = finalized.output_identity();
     let identity = RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1(hash_identity(
         REVALIDATED_FINALIZER_DERIVATION_DOMAIN_V1,
         |hash| {
@@ -1073,6 +1155,10 @@ fn derive_revalidated_finalizer_derivation(
         raw_hsaco,
         finalization,
         finalized_hsaco,
+        descriptor_schema: match finalized.schema() {
+            DescriptorSchema::V1 => 1,
+            DescriptorSchema::NominalV3 => 3,
+        },
     }
 }
 
@@ -1133,19 +1219,17 @@ fn plan_inputs_with_kinds(
 
 fn derive_publication_intent(
     producer_package: PackageIdentityV1,
-    finalized: &PreparedFinalizedProtectedWorkerV3HsacoV1,
+    finalized: FinalizedRef<'_>,
 ) -> Result<SealedProtectedWorkerV3HsacoPublicationIntentV1, WorkerV3HsacoPublicationErrorV1> {
-    if !finalized
-        .finalized_output_identity()
-        .matches(finalized.exact_finalized_bytes())
-    {
+    if !finalized.output_identity().matches(finalized.bytes()) {
         return Err(WorkerV3HsacoPublicationErrorV1::FinalizedOutputMismatch);
     }
-    let raw = derive_unfinalized_hsaco_from_finalized_v1(finalized.exact_finalized_bytes())?;
-    if !finalized.raw_output_identity().matches(&raw) {
+    let raw_bytes = finalized.schema().derive_raw(finalized.bytes())?;
+    let raw = finalized.raw();
+    if !raw.linked_output_identity().matches(&raw_bytes) {
         return Err(WorkerV3HsacoPublicationErrorV1::RawOutputMismatch);
     }
-    let manifest = finalized
+    let manifest = raw
         .outer_handoff()
         .module_handoff()
         .symbol_manifest()
@@ -1153,30 +1237,30 @@ fn derive_publication_intent(
     let kernel_set = KernelSetIdentityV1::from_bytes(hash_identity(KERNEL_SET_DOMAIN_V1, |hash| {
         hash.update(manifest.sha256());
         hash.update(manifest.byte_len().to_le_bytes());
-        hash.update(finalized.outer_handoff_identity().sha256());
+        hash.update(raw.outer_handoff_identity().sha256());
     }));
-    let target_text = finalized.target().to_string();
+    let target_text = raw.target().to_string();
     let target = TargetIdentityV1::from_bytes(hash_identity(TARGET_DOMAIN_V1, |hash| {
         hash_blob(hash, target_text.as_bytes());
-        hash.update([finalized.code_object_version().number()]);
-        hash.update(finalized.policy_identity().as_bytes());
+        hash.update([raw.code_object_version().number()]);
+        hash.update(raw.policy().identity().as_bytes());
     }));
     let scope = LinkPublicationScopeV1::new(producer_package, kernel_set, target);
-    let expectation = finalized.binding_expectation();
+    let expectation = raw.binding_expectation();
     let request =
         CanonicalLinkRequestIdentityV1::from_bytes(hash_identity(REQUEST_DOMAIN_V1, |hash| {
-            hash_attempt(hash, finalized.attempt());
-            hash.update([finalized.handoff_slot() as u8]);
-            hash.update(finalized.transaction_identity().as_bytes());
-            hash.update(finalized.outer_handoff_identity().sha256());
-            hash.update(finalized.binding_identity().as_bytes());
-            hash.update(finalized.source_evidence_identity().as_bytes());
-            hash.update(finalized.raw_inspection_identity().as_bytes());
-            hash.update(finalized.link_plan_identity().as_bytes());
-            hash.update(finalized.policy_identity().as_bytes());
+            hash_attempt(hash, raw.attempt());
+            hash.update([raw.handoff_slot() as u8]);
+            hash.update(raw.transaction_identity().as_bytes());
+            hash.update(raw.outer_handoff_identity().sha256());
+            hash.update(raw.binding_identity().as_bytes());
+            hash.update(raw.source_evidence_identity().as_bytes());
+            hash.update(raw.identity().as_bytes());
+            hash.update(raw.link_plan_identity().as_bytes());
+            hash.update(raw.policy().identity().as_bytes());
             hash.update(expectation.invocation_digest());
         }));
-    let measurement = finalized.worker_measurement();
+    let measurement = raw.worker_measurement();
     let worker = PinnedWorkerIdentityV1::from_bytes(hash_identity(WORKER_DOMAIN_V1, |hash| {
         hash_content(hash, measurement.executable());
         hash_blob(hash, measurement.worker_build_identity().as_bytes());
@@ -1184,25 +1268,24 @@ fn derive_publication_intent(
     }));
     let response =
         ValidatedResponseIdentityV1::from_bytes(hash_identity(RESPONSE_DOMAIN_V1, |hash| {
-            hash.update(finalized.source_evidence_identity().as_bytes());
-            hash.update(finalized.raw_inspection_identity().as_bytes());
-            hash_content(hash, finalized.raw_output_identity());
+            hash.update(raw.source_evidence_identity().as_bytes());
+            hash.update(raw.identity().as_bytes());
+            hash_content(hash, raw.linked_output_identity());
         }));
-    let linked_output =
-        LinkedOutputIdentityV1::from_bytes(*finalized.raw_output_identity().sha256());
+    let linked_output = LinkedOutputIdentityV1::from_bytes(*raw.linked_output_identity().sha256());
     let finalization =
         FinalizationIdentityV1::from_bytes(hash_identity(FINALIZATION_DOMAIN_V1, |hash| {
             hash.update(finalized.identity().as_bytes());
             hash.update(finalized.canonical_digest().as_bytes());
-            hash_content(hash, finalized.canonical_descriptor_evidence_identity());
-            hash_content(hash, finalized.raw_output_identity());
-            hash_content(hash, finalized.finalized_output_identity());
+            hash_content(hash, finalized.descriptor_identity());
+            hash_content(hash, raw.linked_output_identity());
+            hash_content(hash, finalized.output_identity());
         }));
     let finalized_output =
-        FinalizedOutputIdentityV1::from_bytes(*finalized.finalized_output_identity().sha256());
+        FinalizedOutputIdentityV1::from_bytes(*finalized.output_identity().sha256());
     let publication =
         AtomicPublicationIdentityV1::from_bytes(hash_identity(PUBLICATION_DOMAIN_V1, |hash| {
-            hash_attempt(hash, finalized.attempt());
+            hash_attempt(hash, raw.attempt());
             hash.update(producer_package.as_bytes());
             hash.update(kernel_set.as_bytes());
             hash.update(target.as_bytes());
@@ -1214,7 +1297,7 @@ fn derive_publication_intent(
             hash.update(finalized_output.as_bytes());
         }));
     let plan = DurableLinkPublicationPlanV1::new(
-        finalized.attempt(),
+        raw.attempt(),
         scope,
         request,
         worker,
@@ -1228,8 +1311,8 @@ fn derive_publication_intent(
         UPSTREAM_DOMAIN_V1,
         |hash| {
             hash.update(finalized.identity().as_bytes());
-            hash.update(finalized.source_evidence_identity().as_bytes());
-            hash.update(finalized.binding_identity().as_bytes());
+            hash.update(raw.source_evidence_identity().as_bytes());
+            hash.update(raw.binding_identity().as_bytes());
             hash.update(finalization.as_bytes());
         },
     ));
@@ -1237,11 +1320,11 @@ fn derive_publication_intent(
         plan,
         upstream,
         finalization: finalized.identity(),
-        source: finalized.source_evidence_identity(),
-        binding: finalized.binding_identity(),
-        raw_inspection: finalized.raw_inspection_identity(),
-        raw_output: finalized.raw_output_identity(),
-        finalized_output: finalized.finalized_output_identity(),
+        source: raw.source_evidence_identity(),
+        binding: raw.binding_identity(),
+        raw_inspection: raw.identity(),
+        raw_output: raw.linked_output_identity(),
+        finalized_output: finalized.output_identity(),
     })
 }
 

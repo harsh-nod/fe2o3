@@ -1,6 +1,14 @@
 use super::*;
 
 pub(super) fn prefix(profile: Profile, mutation: bool) -> (DirectPreheaders, usize) {
+    prefix_from_source(source(false, mutation), profile, mutation)
+}
+
+pub(super) fn prefix_from_source(
+    original: ProductionPreRankedKirOwnerV1,
+    profile: Profile,
+    mutation: bool,
+) -> (DirectPreheaders, usize) {
     let Prepared {
         receipt,
         bound,
@@ -8,11 +16,7 @@ pub(super) fn prefix(profile: Profile, mutation: bool) -> (DirectPreheaders, usi
         source_storage,
         bound_storage,
         ..
-    } = prepare(
-        array_output_ranked_receipt_v1(source(false, mutation)),
-        profile,
-        None,
-    );
+    } = prepare(array_output_ranked_receipt_v1(original), profile, None);
     drop(output);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);

@@ -289,8 +289,22 @@ fn validate_kernel_requirement(
     requirement: KernelTargetRequirementsV2,
     target: AmdTargetCapabilities,
 ) -> Result<(), ValidationError> {
-    if requirement.lds.static_bytes != kernel.launch().static_shared_memory_bytes()
-        || requirement.lds.max_dynamic_bytes != kernel.launch().max_dynamic_shared_memory_bytes()
+    validate_borrowed_kernel_requirement_v3(
+        kernel.launch(),
+        kernel.capabilities(),
+        requirement,
+        target,
+    )
+}
+
+pub(crate) fn validate_borrowed_kernel_requirement_v3(
+    launch: &crate::LaunchConstraintsV1,
+    capabilities: &[CapabilityV1],
+    requirement: KernelTargetRequirementsV2,
+    target: AmdTargetCapabilities,
+) -> Result<(), ValidationError> {
+    if requirement.lds.static_bytes != launch.static_shared_memory_bytes()
+        || requirement.lds.max_dynamic_bytes != launch.max_dynamic_shared_memory_bytes()
     {
         return Err(ValidationError::InvalidValue {
             field: "LDS requirements conflict with V1 launch constraints",
@@ -317,7 +331,6 @@ fn validate_kernel_requirement(
         });
     }
 
-    let capabilities = kernel.capabilities();
     if !capabilities.contains(&CapabilityV1::AmdWave) {
         return Err(ValidationError::InvalidValue {
             field: "exact wavefront width requires the AMD wave capability",

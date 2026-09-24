@@ -47,6 +47,16 @@ fn genuine_erased_source_final_o_still_requires_actual_signed_ranked_execution()
                                 .all(|function| function.role != FunctionRole::InternalHelper)
                         );
                         let before = budget.storage();
+                        let roster_ptr = ranked.roots().as_ptr();
+                        let borrowed = prepare_borrowed_erased_native_source_packet_v1(
+                            admitted.erased_source(),
+                            &ranked,
+                            budget,
+                        );
+                        assert!(matches!(borrowed,
+                            Err(E::MissingSignedRankedReceipt { root }) if root == first_root));
+                        assert_eq!(budget.storage(), before);
+                        assert_eq!(ranked.roots().as_ptr(), roster_ptr);
                         let result = try_prepare_erased_native_source_lineage_v1(
                             admitted.erased_source(),
                             ranked,

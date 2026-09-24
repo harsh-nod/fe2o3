@@ -115,65 +115,13 @@ pub fn validate_native_compiler_unit_local_erased_source_proof_v1(
             budget,
         )?;
         budget.reserve_storage(packet_storage.retained_storage())?;
-        budget.charge_work(1)?;
-        if inputs.ranked_roots.len() != checked.roots.len() {
-            return Err(E::Mismatch("complete typed ranked root roster"));
-        }
-        let wrapper = std::mem::size_of::<ValidatedNativeCompilerUnitLocalErasedSourceProofV1>();
-        budget.reserve_storage(wrapper)?;
-        let RecompiledNativeRankedRootsV1 {
-            candidates,
-            lowerings,
-            candidate_storage,
-            lowering_vector_storage,
-            lowering_storage,
-        } = recompile_native_ranked_roots_v1(
-            checked.source.source(),
-            &checked.middle,
-            &checked.roots,
+        complete_unit_local_erased_source_proof_v1(
+            checked,
+            packet_storage,
             inputs.ranked_roots,
-            budget,
-        )?;
-        let CheckedNativeCompilerSourcePacketV1 {
-            source,
-            middle,
-            correspondence,
-            verus,
-            roots,
-        } = checked;
-        let ReconstructedNativeSource::UnitLocal(source) = source else {
-            return Err(E::Mismatch("UnitLocal reconstruction route"));
-        };
-        let (source, attachment_storage) = attach_replayed_native_unit_local_erasure_v1(
-            source,
-            &candidates,
-            lowerings,
             inputs.erased,
             budget,
         )
-        .map_err(E::Source)?;
-        drop(candidates);
-        budget.release_storage(
-            candidate_storage
-                .checked_add(lowering_vector_storage)
-                .ok_or(Resource::Arithmetic)?,
-        )?;
-        let retained = packet_storage
-            .retained_storage()
-            .checked_add(wrapper)
-            .and_then(|value| value.checked_add(lowering_storage))
-            .and_then(|value| value.checked_add(attachment_storage.retained_storage()))
-            .ok_or(Resource::Arithmetic)?;
-        Ok((
-            ValidatedNativeCompilerUnitLocalErasedSourceProofV1 {
-                source,
-                middle,
-                correspondence,
-                verus,
-                roots,
-            },
-            NativeCompilerUnitLocalErasedSourceProofStorageV1(retained),
-        ))
     }));
     if token != budget.work_ledger_identity_v1() || slot != budget as *const Budget<'_> as usize {
         drop(result);
@@ -191,4 +139,79 @@ pub fn validate_native_compiler_unit_local_erased_source_proof_v1(
         Ok(result) => result,
         Err(payload) => std::panic::resume_unwind(payload),
     }
+}
+
+/// Caller retains the packet reservation and supplies the outer cleanup scope.
+pub(super) fn complete_unit_local_erased_source_proof_v1(
+    checked: CheckedNativeCompilerSourcePacketV1,
+    packet_storage: NativeCompilerSourceProofStorageV1,
+    ranked_roots: &[NativeCompilerRankedRootV1<'_>],
+    erased: &VerifiedCanonicalKernelIrModuleV12,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        ValidatedNativeCompilerUnitLocalErasedSourceProofV1,
+        NativeCompilerUnitLocalErasedSourceProofStorageV1,
+    ),
+    E,
+> {
+    budget.charge_work(1)?;
+    if ranked_roots.len() != checked.roots.len() {
+        return Err(E::Mismatch("complete typed ranked root roster"));
+    }
+    let wrapper = std::mem::size_of::<ValidatedNativeCompilerUnitLocalErasedSourceProofV1>();
+    budget.reserve_storage(wrapper)?;
+    let RecompiledNativeRankedRootsV1 {
+        candidates,
+        lowerings,
+        candidate_storage,
+        lowering_vector_storage,
+        lowering_storage,
+    } = recompile_native_ranked_roots_v1(
+        checked.source.source(),
+        &checked.middle,
+        &checked.roots,
+        ranked_roots,
+        budget,
+    )?;
+    let CheckedNativeCompilerSourcePacketV1 {
+        source,
+        middle,
+        correspondence,
+        verus,
+        roots,
+    } = checked;
+    let ReconstructedNativeSource::UnitLocal(source) = source else {
+        return Err(E::Mismatch("UnitLocal reconstruction route"));
+    };
+    let (source, attachment_storage) = attach_replayed_native_unit_local_erasure_v1(
+        source,
+        &candidates,
+        lowerings,
+        erased,
+        budget,
+    )
+    .map_err(E::Source)?;
+    drop(candidates);
+    budget.release_storage(
+        candidate_storage
+            .checked_add(lowering_vector_storage)
+            .ok_or(Resource::Arithmetic)?,
+    )?;
+    let retained = packet_storage
+        .retained_storage()
+        .checked_add(wrapper)
+        .and_then(|value| value.checked_add(lowering_storage))
+        .and_then(|value| value.checked_add(attachment_storage.retained_storage()))
+        .ok_or(Resource::Arithmetic)?;
+    Ok((
+        ValidatedNativeCompilerUnitLocalErasedSourceProofV1 {
+            source,
+            middle,
+            correspondence,
+            verus,
+            roots,
+        },
+        NativeCompilerUnitLocalErasedSourceProofStorageV1(retained),
+    ))
 }

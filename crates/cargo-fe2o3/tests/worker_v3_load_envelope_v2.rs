@@ -26,6 +26,8 @@ use fe2o3_runtime_protocol::{
     recover_worker_v3_load_envelope_v2,
 };
 
+#[path = "worker_v3_load_envelope_v2/nominal.rs"]
+mod nominal;
 #[path = "fixtures/worker_v3_hsaco_admission.rs"]
 mod worker_v3_fixture;
 

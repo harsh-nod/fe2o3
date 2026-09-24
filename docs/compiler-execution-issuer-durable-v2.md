@@ -127,20 +127,42 @@ Every transition uses the retained-directory protocol:
 
 Recovery accepts only one of these shapes:
 
-- no canonical and no redo: create signed genesis;
+- no canonical, redo, or recovery: create signed genesis;
 - canonical only: decode it, then reestablish its durability with a complete
-  rename-and-sync cycle;
+  rename-and-sync cycle through `compiler-execution-issuer-v2.recovery`;
+- recovery only: decode and restore the exact previously canonical record,
+  without advancing its stage or sequence;
 - redo only: accept only exact signed genesis and promote it; or
 - canonical plus redo: decode both and promote only an immediate legal
   successor.
+
+Recovery plus either other name is rejected, even for identical bytes. Each
+nonempty recovery path rereads exact canonical bytes and requires no-follow
+absence of both sidecars before returning an owner. The distinct recovery name
+makes an interrupted recovery distinguishable from an orphan successor redo;
+it does not relax the ordinary redo admission rules or add a record version.
 
 Any malformed, unsigned, wrong-policy, noncanonical, stale/non-successor redo,
 symlink, hard link, wrong owner, wrong mode, wrong size, or changed directory
 identity fails closed. A recovered prepared state re-emits the exact challenge.
 A recovered issued state reconstructs and re-emits the exact receipt sidecar.
-Presence of either historical V1 journal name fails before V2 genesis. V1
+Presence of any historical issuer or Worker V1 canonical/redo name fails under
+the singleton lock before any journal mutation, including V2 genesis. Empty
+files, directories, dangling symlinks, and FIFOs are present, not absence.
+Managed reads are nonblocking before validating the regular-file requirement.
+V1
 advanced state lacks a publication-bound ACK and therefore requires an explicit
 offline migration policy rather than an implicit reset.
+
+Deployment rollback must understand all three journal names; do not restart an
+older binary against an interrupted `.recovery` transaction. Recover using the
+matched deployment first. An older ambiguous non-genesis orphan `.redo` remains
+rejected; it cannot be automatically relabeled as recovery evidence.
+
+Deterministic tests interrupt recovery at every rename/sync hook and directory
+sync syscall, including repeated interruption and non-genesis records. These
+are local fault-injection tests, not physical power-loss or GPU qualification.
+Native SubjectV2 durable records and end-to-end activation remain separate work.
 
 ## Security Limit
 

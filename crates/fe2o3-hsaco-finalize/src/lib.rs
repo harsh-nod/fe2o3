@@ -24,6 +24,9 @@ mod engineering_hsaco;
 mod first_build_worker_engine;
 mod first_build_worker_v3;
 mod link_plan;
+mod nominal_descriptor_finalization_v3;
+mod nominal_descriptor_physical_v3;
+mod nominal_worker_finalization_v3;
 mod production_kir_v7_structural_bridge_v1;
 mod production_profiler_kir_archive_v1;
 mod production_semantic_anchor_v1;
@@ -38,6 +41,7 @@ mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
 mod worker_v3_compact_finalizer_replay;
+mod worker_v3_finalized_schema;
 mod worker_v3_hsaco_admission;
 mod worker_v3_hsaco_finalization;
 mod worker_v3_hsaco_publication;
@@ -96,6 +100,16 @@ pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
+};
+pub use nominal_descriptor_finalization_v3::{
+    FinalizedNominalHsacoV3, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3, NominalDescriptorInspectionV3,
+    NominalFinalizationErrorV3, derive_unfinalized_nominal_hsaco_v3,
+    finalize_unfinalized_nominal_hsaco_v3, inspect_finalized_nominal_hsaco_v3,
+    inspect_unfinalized_nominal_hsaco_v3,
+};
+pub use nominal_worker_finalization_v3::{
+    NominalWorkerFinalizationErrorV3, PreparedFinalizedNominalWorkerHsacoV3,
+    finalize_protected_worker_nominal_hsaco_v3,
 };
 pub use production_kir_v7_structural_bridge_v1::{
     InertProductionKirV7StructuralBridgeV1, MAX_PRODUCTION_KIR_V7_BRIDGE_BYTES_V1,
@@ -224,6 +238,7 @@ pub use worker_v3_compact_finalizer_replay::{
     ProtectedWorkerV3CompactFinalizerReplayIdentityV2,
     ProtectedWorkerV3CompactFinalizerReplayPartsV1, ProtectedWorkerV3CompactFinalizerReplayPartsV2,
     ProtectedWorkerV3CompactFinalizerReplayV1, ProtectedWorkerV3CompactFinalizerReplayV2,
+    prepare_nominal_worker_compact_finalizer_replay_v3,
     prepare_protected_worker_v3_compact_finalizer_replay_v1,
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
 };
@@ -240,15 +255,18 @@ pub use worker_v3_hsaco_finalization::{
     finalize_protected_worker_v3_hsaco_v1,
 };
 pub use worker_v3_hsaco_publication::{
-    PreparedProtectedWorkerV3HsacoPublicationV1, PublishedProtectedWorkerV3HsacoV1,
-    PublishedProtectedWorkerV3LoadEnvelopePartsV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
+    PreparedNominalWorkerPublicationV3, PreparedProtectedWorkerV3HsacoPublicationV1,
+    PublishedNominalWorkerHsacoV3, PublishedProtectedWorkerV3HsacoV1,
+    PublishedProtectedWorkerV3LoadEnvelopePartsV1, RecoveredNominalWorkerPublicationV3,
+    RecoveredProtectedWorkerV3HsacoPublicationV1,
     RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1,
     RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     SealedProtectedWorkerV3HsacoPublicationIntentV1, WorkerV3HsacoPublicationErrorV1,
+    persist_prepared_nominal_worker_publication_v3,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
-    prepare_protected_worker_v3_hsaco_publication_v1,
-    publish_recovered_protected_worker_v3_hsaco_v1,
-    recover_protected_worker_v3_hsaco_publication_v1,
+    prepare_nominal_worker_publication_v3, prepare_protected_worker_v3_hsaco_publication_v1,
+    publish_recovered_nominal_worker_hsaco_v3, publish_recovered_protected_worker_v3_hsaco_v1,
+    recover_nominal_worker_publication_v3, recover_protected_worker_v3_hsaco_publication_v1,
     revalidate_protected_worker_v3_finalizer_derivation_v1,
 };
 
@@ -289,6 +307,7 @@ pub enum FinalizationError {
     InvalidElf(&'static str),
     MissingDescriptorSection,
     DuplicateDescriptorSection,
+    DescriptorSectionVersionMismatch,
     InvalidDescriptorSectionType,
     InvalidDescriptorSectionFlags(u64),
     InvalidDescriptorSectionAlignment,
@@ -300,6 +319,16 @@ pub enum FinalizationError {
     ExpectedFinalizedDigest,
     CodeObjectVersionMismatch,
     DeviceTargetMismatch,
+    KernelCountMismatch {
+        descriptor: usize,
+        metadata: usize,
+    },
+    KernelWavefrontSizeMismatch {
+        entry_name: String,
+        descriptor: u32,
+        metadata: u32,
+        hardware: u32,
+    },
     DescriptorKernelMissingInMetadata {
         entry_name: String,
     },
@@ -376,6 +405,9 @@ impl fmt::Display for FinalizationError {
                 formatter,
                 "ELF contains multiple {DEVICE_DESCRIPTOR_SECTION_NAME} sections"
             ),
+            Self::DescriptorSectionVersionMismatch => {
+                formatter.write_str("ELF contains a descriptor section of another schema version")
+            }
             Self::InvalidDescriptorSectionType => {
                 formatter.write_str("descriptor section must be SHT_PROGBITS")
             }
@@ -412,6 +444,22 @@ impl fmt::Display for FinalizationError {
             Self::DeviceTargetMismatch => {
                 formatter.write_str("descriptor and HSACO targets do not match")
             }
+            Self::KernelCountMismatch {
+                descriptor,
+                metadata,
+            } => write!(
+                formatter,
+                "descriptor kernel count {descriptor} does not match metadata count {metadata}"
+            ),
+            Self::KernelWavefrontSizeMismatch {
+                entry_name,
+                descriptor,
+                metadata,
+                hardware,
+            } => write!(
+                formatter,
+                "kernel {entry_name} requires wavefront {descriptor}, metadata declares {metadata}, hardware descriptor declares {hardware}"
+            ),
             Self::DescriptorKernelMissingInMetadata { entry_name } => write!(
                 formatter,
                 "descriptor kernel {entry_name} is missing from HSACO metadata"
@@ -989,6 +1037,16 @@ fn validate_kernel_physical_abi(
         }
     }
 
+    validate_kernel_tail_and_launch(entry_name, layout, descriptor.launch(), metadata, binding)
+}
+
+fn validate_kernel_tail_and_launch(
+    entry_name: &str,
+    layout: fe2o3_kernel_descriptor::KernelAbiLayoutV1,
+    launch: &fe2o3_kernel_descriptor::LaunchConstraintsV1,
+    metadata: &InspectedKernel,
+    binding: KernelDescriptorBinding,
+) -> Result<(), FinalizationError> {
     let explicit_size = u64::from(layout.explicit_argument_size());
     let expected_implicit_offset = align_up(explicit_size, 8)?;
     if let Some(implicit_offset) = metadata.implicit_argument_offset() {
@@ -1014,9 +1072,9 @@ fn validate_kernel_physical_abi(
         });
     }
 
-    let static_group = descriptor.launch().static_shared_memory_bytes();
+    let static_group = launch.static_shared_memory_bytes();
     if u64::from(static_group) != metadata.group_segment_fixed_size()
-        || static_group != bound_descriptor.group_segment_fixed_size()
+        || static_group != binding.descriptor().group_segment_fixed_size()
     {
         return Err(FinalizationError::StaticGroupSegmentSizeMismatch {
             entry_name: entry_name.to_owned(),
@@ -1024,7 +1082,7 @@ fn validate_kernel_physical_abi(
             metadata: metadata.group_segment_fixed_size(),
         });
     }
-    let max_flat = descriptor.launch().max_flat_workgroup_size();
+    let max_flat = launch.max_flat_workgroup_size();
     if max_flat != metadata.max_flat_workgroup_size() {
         return Err(FinalizationError::MaxFlatWorkgroupSizeMismatch {
             entry_name: entry_name.to_owned(),
@@ -1032,7 +1090,7 @@ fn validate_kernel_physical_abi(
             metadata: metadata.max_flat_workgroup_size(),
         });
     }
-    let expected_required = match descriptor.launch().block_size() {
+    let expected_required = match launch.block_size() {
         BlockSizeV1::Any | BlockSizeV1::AtMost(_) => None,
         BlockSizeV1::Exact(dimensions) => Some([dimensions.x(), dimensions.y(), dimensions.z()]),
     };
@@ -1041,7 +1099,7 @@ fn validate_kernel_physical_abi(
             entry_name: entry_name.to_owned(),
         });
     }
-    let max_grid = descriptor.launch().max_grid();
+    let max_grid = launch.max_grid();
     let descriptor_max = [max_grid.x(), max_grid.y(), max_grid.z()];
     for (axis, (declared, observed)) in descriptor_max
         .into_iter()
@@ -1312,6 +1370,14 @@ fn locate_descriptor_section_with_placement(
     bytes: &[u8],
     placement: DescriptorPlacementV1,
 ) -> Result<ElfSection, FinalizationError> {
+    locate_versioned_descriptor_section(bytes, placement, DEVICE_DESCRIPTOR_SECTION_NAME)
+}
+
+fn locate_versioned_descriptor_section(
+    bytes: &[u8],
+    placement: DescriptorPlacementV1,
+    section_name: &str,
+) -> Result<ElfSection, FinalizationError> {
     if bytes.len() < ELF64_HEADER_BYTES {
         return Err(FinalizationError::InvalidElf("ELF header is truncated"));
     }
@@ -1385,7 +1451,15 @@ fn locate_descriptor_section_with_placement(
         let header = section_header_offset(&section_table, index)?;
         let name_offset = usize::try_from(read_u32(bytes, header + ELF64_SECTION_NAME_OFFSET)?)
             .map_err(|_| FinalizationError::InvalidElf("section name offset overflows usize"))?;
-        let is_descriptor = fixed_section_name_matches(shstr, name_offset)?;
+        let is_descriptor = fixed_section_name_matches(shstr, name_offset, section_name)?;
+        for known in [
+            DEVICE_DESCRIPTOR_SECTION_NAME,
+            fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V3,
+        ] {
+            if known != section_name && fixed_section_name_matches(shstr, name_offset, known)? {
+                return Err(FinalizationError::DescriptorSectionVersionMismatch);
+            }
+        }
         let section_type = read_u32(bytes, header + ELF64_SECTION_TYPE_OFFSET)?;
         let range = section_file_range(bytes, header)?;
         sections.push(ElfSection {
@@ -1562,11 +1636,15 @@ fn section_file_range(bytes: &[u8], header: usize) -> Result<Range<usize>, Final
     checked_range(bytes.len(), offset, size, "section file range is invalid")
 }
 
-fn fixed_section_name_matches(bytes: &[u8], offset: usize) -> Result<bool, FinalizationError> {
+fn fixed_section_name_matches(
+    bytes: &[u8],
+    offset: usize,
+    section_name: &str,
+) -> Result<bool, FinalizationError> {
     let suffix = bytes.get(offset..).ok_or(FinalizationError::InvalidElf(
         "section name offset is out of bounds",
     ))?;
-    let name = DEVICE_DESCRIPTOR_SECTION_NAME.as_bytes();
+    let name = section_name.as_bytes();
     let Some(candidate) = suffix.get(..name.len() + 1) else {
         return Ok(false);
     };

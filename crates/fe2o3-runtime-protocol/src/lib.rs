@@ -74,7 +74,8 @@ pub use fe2o3_compiler_execution_protocol::{
     sealed_static_issuer_runtime_measurement_v1,
 };
 pub use static_application::{
-    SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,
+    SEALED_STATIC_APPLICATION_WORKSPACE_BYTES_V1, SealedStaticApplicationErrorV1,
+    sealed_static_application_identity_v1, sealed_static_application_work_bound_v1,
 };
 pub use worker_v3_load_envelope::{
     MAX_WORKER_V3_LOAD_ENVELOPE_ALLOCATION_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,

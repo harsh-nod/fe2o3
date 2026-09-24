@@ -5,6 +5,10 @@ use super::{
     Inventory, Operation, OperationKind, Resource, ScalarType, Terminator, Type,
 };
 use crate::canonical_kir_private_cell_pair_resources_v1 as resources;
+use crate::{
+    CanonicalKirSparseErrorV1 as SparseError, CanonicalKirSparseLimitsV1 as SparseLimits,
+    CanonicalKirSparseV1 as Sparse, CanonicalKirSparseValueV1 as SparseValue,
+};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrWorkLedgerIdentityV1, CanonicalKirControlFlowScopeErrorV1 as CfgError,
     CanonicalKirControlFlowViewV1 as Cfg, ComparePredicate, ValueId,
@@ -43,7 +47,7 @@ pub enum CanonicalKirGuardDistanceV1 {
         initial: Definition,
         bound: Definition,
     },
-    /// Exact ceiling division from literal definitions, possibly zero.
+    /// Exact ceiling division from literal or sparse-proven constant inputs.
     Literal(u64),
 }
 use CanonicalKirGuardDistanceV1 as Distance;
@@ -140,6 +144,7 @@ pub enum CanonicalKirInductionErrorV1 {
     Resource(Resource),
     Loops(LoopError),
     ControlFlow(CfgError),
+    Sparse(SparseError),
     ForeignLoops,
     /// Replay must use all seven exact limits captured by derivation.
     LimitsMismatch,
@@ -162,6 +167,14 @@ impl From<LoopError> for Error {
 impl From<CfgError> for Error {
     fn from(v: CfgError) -> Self {
         Self::ControlFlow(v)
+    }
+}
+impl From<SparseError> for Error {
+    fn from(v: SparseError) -> Self {
+        match v {
+            SparseError::Resource(error) => Self::Resource(error),
+            error => Self::Sparse(error),
+        }
     }
 }
 impl From<crate::CanonicalKirInventoryErrorV1> for Error {
@@ -220,7 +233,9 @@ pub struct CanonicalKirInductionFactsV1<'l, 'i, 'g> {
 impl<'l, 'i, 'g> CanonicalKirInductionFactsV1<'l, 'i, 'g> {
     /// Replays the input loops, derives bounded facts, then independently checks
     /// every actual row before transfer. Beyond inherited CFG/loop analysis,
-    /// work is O((R+H)*(B+E+O)+D queries), scratch O(B+E), retained rows O(R).
+    /// work is O((R+H)*(B+E+O)+D queries), plus two fresh bounded sparse input
+    /// analyses. Scratch is O(B+E+D+U+O), retained rows O(R). Sparse inputs are
+    /// not cached in the report and never establish execution or trap freedom.
     /// All capacities coexist with live inputs, are paid before initialization,
     /// and are dropped before same-ledger cleanup on error or unwind.
     pub fn derive(
@@ -234,10 +249,13 @@ impl<'l, 'i, 'g> CanonicalKirInductionFactsV1<'l, 'i, 'g> {
             meter.derive(|b| Ok(loops.replay(loops.inventory(), limits, b)?))?;
             meter.reserve(size_of::<Self>())?;
             let (mut rows, bytes) = meter.table::<Row>(loops.recurrences.len())?;
+            let (sparse, sparse_bytes) = sparse_inputs(loops.inventory(), limits, meter)?;
             let (mut scratch, scratch_bytes) = Scratch::new(loops.inventory(), meter)?;
-            meter.derive(|b| build::derive(loops, &mut rows, &mut scratch, b))?;
+            meter.derive(|b| build::derive(loops, &sparse, &mut rows, &mut scratch, b))?;
             drop(scratch);
             meter.release(scratch_bytes)?;
+            drop(sparse);
+            meter.release(sparse_bytes)?;
             meter.work(1)?;
             let retained = size_of::<Self>()
                 .checked_add(bytes)
@@ -291,8 +309,34 @@ impl<'l, 'i, 'g> CanonicalKirInductionFactsV1<'l, 'i, 'g> {
     }
 }
 
-// Shared helpers only resolve typed coordinates, initialize bounded scratch, or
-// decode exact literals. Producer/checker make their own admission decisions.
+// Sparse is a fresh input analysis in each pass, never a trusted producer cache.
+fn sparse_inputs<'i, 'g>(
+    inventory: &'i Inventory<'g>,
+    limits: Limits,
+    meter: &mut Meter<'_, '_>,
+) -> Result<(Sparse<'i, 'g>, usize)> {
+    meter.work(3)?;
+    let sparse_limits = SparseLimits {
+        functions: limits.functions,
+        definitions: limits.definitions,
+        uses: inventory.uses().len(),
+        blocks: limits.blocks,
+        operations: limits.operations,
+        edges: limits.edges,
+        worklist: inventory
+            .blocks()
+            .len()
+            .checked_add(inventory.operations().len())
+            .ok_or(Resource::Arithmetic)?,
+    };
+    let (sparse, receipt) = meter.derive(|b| Ok(Sparse::derive(inventory, sparse_limits, b)?))?;
+    let bytes = receipt.retained_storage();
+    meter.reserve(bytes)?;
+    Ok((sparse, bytes))
+}
+
+// Shared helpers resolve typed coordinates and decode exact input values.
+// Producer/checker retain separate control and arithmetic admission decisions.
 fn block_index(i: &Inventory<'_>, c: Block, b: &mut Budget<'_>) -> Result<usize> {
     Ok(super::block_index(i, c, b)?)
 }
@@ -308,6 +352,9 @@ fn definition<'a, 'g>(
     c: Definition,
     b: &mut Budget<'_>,
 ) -> Result<&'a crate::CanonicalKirDefinitionRefV1<'g>> {
+    Ok(&i.definitions()[definition_index(i, c, b)?])
+}
+fn definition_index(i: &Inventory<'_>, c: Definition, b: &mut Budget<'_>) -> Result<usize> {
     b.charge_work(4)?;
     let (range, ordinal) = match c {
         Definition::FunctionArgument { function, argument } => {
@@ -333,6 +380,7 @@ fn definition<'a, 'g>(
     i.definitions()
         .get(index)
         .filter(|r| index < range.end && r.coordinate == c)
+        .map(|_| index)
         .ok_or(Error::ReplayMismatch)
 }
 fn resolve(i: &Inventory<'_>, block: Block, id: ValueId, b: &mut Budget<'_>) -> Result<Definition> {
@@ -374,25 +422,39 @@ fn maximum(scalar: ScalarType) -> Option<u64> {
     })
 }
 fn literal(
-    i: &Inventory<'_>,
+    sparse: &Sparse<'_, '_>,
     c: Definition,
     scalar: ScalarType,
     b: &mut Budget<'_>,
 ) -> Result<Option<u64>> {
     b.charge_work(2)?;
-    let Definition::Result {
+    let i = sparse.inventory();
+    if let Definition::Result {
         operation: op,
         result: 0,
     } = c
-    else {
-        return Ok(None);
-    };
-    let OperationKind::Constant(value) = &operation(i, op, b)?.operation.kind else {
-        return Ok(None);
-    };
-    Ok(super::fixed_integer_bits(value)
-        .filter(|(s, _)| *s == scalar)
-        .map(|(_, v)| v))
+        && let OperationKind::Constant(value) = &operation(i, op, b)?.operation.kind
+    {
+        return Ok(super::fixed_integer_bits(value)
+            .filter(|(s, _)| *s == scalar)
+            .map(|(_, v)| v));
+    }
+    let index = definition_index(i, c, b)?;
+    b.charge_work(3)?;
+    if i.definitions()[index].ty != &Type::Scalar(scalar) {
+        return Err(Error::ReplayMismatch);
+    }
+    Ok(match sparse.value(index).ok_or(Error::ReplayMismatch)? {
+        SparseValue::Constant(value) if value.ty() == scalar => {
+            let bits = u64::try_from(value.bits()).map_err(|_| Error::ReplayMismatch)?;
+            if maximum(scalar).is_none_or(|maximum| bits > maximum) {
+                return Err(Error::ReplayMismatch);
+            }
+            Some(bits)
+        }
+        SparseValue::Constant(_) => return Err(Error::ReplayMismatch),
+        SparseValue::Unreachable | SparseValue::Unknown | SparseValue::Dynamic => None,
+    })
 }
 
 struct Scratch {

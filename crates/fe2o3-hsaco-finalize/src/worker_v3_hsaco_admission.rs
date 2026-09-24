@@ -554,8 +554,15 @@ impl Error for WorkerV3HsacoInspectionError {
 pub fn inspect_protected_worker_v3_hsaco_v1(
     source: InertProtectedFirstBuildWorkerV3EvidenceV1,
 ) -> Result<InspectedProtectedWorkerV3HsacoV1, WorkerV3HsacoInspectionError> {
-    validate_protected_v3_lineage(&source)?;
     let launch = strict_v3_launch_contract(&source)?;
+    inspect_protected_worker_with_launch(source, launch)
+}
+
+pub(crate) fn inspect_protected_worker_with_launch(
+    source: InertProtectedFirstBuildWorkerV3EvidenceV1,
+    launch: WorkerV3LaunchContractV1,
+) -> Result<InspectedProtectedWorkerV3HsacoV1, WorkerV3HsacoInspectionError> {
+    validate_protected_v3_lineage(&source)?;
     let raw = inspect_worker_v3_hsaco_v1(&source, launch)?;
     let response_identity =
         calculate_response_identity(source.exact_replay().response().canonical_bytes());
@@ -610,7 +617,13 @@ fn strict_v3_launch_contract(
 fn strict_v3_kernel_launch_contract(
     kernel: &KernelDescriptorV1,
 ) -> Result<WorkerV3LaunchContractV1, WorkerV3HsacoInspectionError> {
-    let block = match kernel.launch().block_size() {
+    strict_kernel_launch_contract(kernel.launch())
+}
+
+pub(crate) fn strict_kernel_launch_contract(
+    launch: &fe2o3_kernel_descriptor::LaunchConstraintsV1,
+) -> Result<WorkerV3LaunchContractV1, WorkerV3HsacoInspectionError> {
+    let block = match launch.block_size() {
         BlockSizeV1::Exact(block) => block,
         BlockSizeV1::Any | BlockSizeV1::AtMost(_) => {
             return Err(
@@ -622,7 +635,7 @@ fn strict_v3_kernel_launch_contract(
     };
     Ok(WorkerV3LaunchContractV1 {
         required_workgroup_size: [block.x(), block.y(), block.z()],
-        max_flat_workgroup_size: kernel.launch().max_flat_workgroup_size(),
+        max_flat_workgroup_size: launch.max_flat_workgroup_size(),
         wavefront_size: REQUIRED_WAVEFRONT_SIZE,
     })
 }
@@ -1416,10 +1429,11 @@ fn inspect_descriptor_section(
     let file = object::File::parse(bytes)
         .map_err(|_| WorkerV3HsacoInspectionError::DefinedSymbolInspection)?;
     for section in file.sections() {
-        if section
+        let name = section
             .name()
-            .map_err(|_| WorkerV3HsacoInspectionError::DefinedSymbolInspection)?
-            == DEVICE_DESCRIPTOR_SECTION_NAME
+            .map_err(|_| WorkerV3HsacoInspectionError::DefinedSymbolInspection)?;
+        if name == DEVICE_DESCRIPTOR_SECTION_NAME
+            || name == fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V3
         {
             return Ok(
                 CanonicalDescriptorSectionObservationV1::PresentButNotFinalizedByThisInspection,

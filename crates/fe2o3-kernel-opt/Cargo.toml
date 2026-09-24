@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Deterministic, bounded optimization passes over fe2o3 Kernel IR"
 
+[features]
+test-support = []
+
 [dependencies]
 dialect-gpu.workspace = true
 fe2o3-kernel-analysis = { workspace = true, default-features = false }

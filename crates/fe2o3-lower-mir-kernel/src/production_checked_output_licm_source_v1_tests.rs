@@ -4,6 +4,8 @@ use super::*;
 mod cross_block_forwarding;
 #[path = "production_checked_output_induction_refinement_internal_v1_tests.rs"]
 mod induction_refinement;
+#[path = "production_checked_output_loop_unroll_source_v1_tests.rs"]
+mod loop_unroll;
 #[path = "production_checked_output_refined_forwarding_v1_tests.rs"]
 mod refined_forwarding;
 use crate::{
@@ -85,6 +87,14 @@ fn call(callee: u32, target: u32) -> SemanticTerminatorKindV1 {
 }
 
 fn source(shared: bool, mutation: bool) -> ProductionPreRankedKirOwnerV1 {
+    source_with(shared, mutation, |_| {})
+}
+
+fn source_with(
+    shared: bool,
+    mutation: bool,
+    transform: impl FnOnce(&mut Vec<SemanticFunctionDeclV1>),
+) -> ProductionPreRankedKirOwnerV1 {
     let (seed, _) = fixture_with_blocks_and_symbol(
         Fixture::Literal(true),
         shared,
@@ -99,7 +109,7 @@ fn source(shared: bool, mutation: bool) -> ProductionPreRankedKirOwnerV1 {
         &[U32, U32],
     );
     let semantic = seed.source_semantic();
-    let functions = semantic
+    let mut functions = semantic
         .functions()
         .iter()
         .enumerate()
@@ -329,6 +339,7 @@ fn source(shared: bool, mutation: bool) -> ProductionPreRankedKirOwnerV1 {
             }
         })
         .collect();
+    transform(&mut functions);
     let admitted = InertSemanticMirRequestV1::new_with_callables(
         semantic.target(),
         semantic.types().to_vec(),

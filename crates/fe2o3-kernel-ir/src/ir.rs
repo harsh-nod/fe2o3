@@ -267,19 +267,11 @@ impl Function {
             let OperationKind::Atomic(atomic) = &operation.kind else {
                 continue;
             };
-            let Some(Type::Pointer(pointer)) = value_types.get(&atomic.pointer) else {
+            let Some(pointer_type) = value_types.get(&atomic.pointer) else {
                 continue;
             };
-            let Some(width_bits) = pointer.pointee.as_scalar().and_then(ScalarType::bit_width)
-            else {
-                continue;
-            };
-            if matches!(width_bits, 8 | 16 | 32 | 64) {
-                capabilities.insert(TargetCapability::Atomic {
-                    width_bits,
-                    address_space: atomic.access.address_space,
-                    max_scope: atomic.scope,
-                });
+            if let Some(capability) = crate::atomic_pointer_capability_v1(atomic, pointer_type) {
+                capabilities.insert(capability);
             }
         }
         capabilities

@@ -152,6 +152,14 @@ impl NativeSourceErasedCheckedOutputProductionCompilationV1 {
     }
 }
 
+/// Original source/N/E, B and checked O remain reserved on this caller ledger.
+pub(super) struct AdmittedErasedPolicy4StageV1 {
+    pub(super) admitted: Admitted,
+    pub(super) ranked_verification:
+        crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
+    pub(super) bindings: AuthenticatedProductionBindings,
+}
+
 impl RankedVerifiedProductionCompilation {
     /// Explicit route only. It does not activate the default pipeline or allow
     /// protected publication while final source/native origin joins are absent.
@@ -159,8 +167,6 @@ impl RankedVerifiedProductionCompilation {
     pub(crate) fn lower_silent_unit_checked_output_policy4_v1(
         self,
     ) -> Result<ErasedCheckedOutputTargetProductionCompilationV1, ProductionPipelineError> {
-        let Self { ranked, bindings } = self;
-        let profile = bindings.rustc_target.profile();
         let mut work = Work::new(
             usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
                 .map_err(|_| resource(Resource::Arithmetic))?,
@@ -169,6 +175,35 @@ impl RankedVerifiedProductionCompilation {
             &mut work,
             crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
         );
+        let AdmittedErasedPolicy4StageV1 {
+            admitted,
+            ranked_verification,
+            bindings,
+        } = self.prepare_admitted_erased_policy4_v1(&mut budget)?;
+        let (artifacts, storage) = prepare_erased_checked_output_artifacts_v1(
+            admitted,
+            bindings.rustc_target.profile(),
+            &bindings.typed_descriptor_roots,
+            bindings.transaction.compiler_ffi_envelope.clone(),
+            &mut budget,
+        )?;
+        budget
+            .reserve_storage(storage.retained_storage())
+            .map_err(resource)?;
+        Ok(ErasedCheckedOutputTargetProductionCompilationV1 {
+            artifacts,
+            ranked_verification,
+            bindings,
+            retained_storage_floor: budget.storage(),
+        })
+    }
+
+    pub(super) fn prepare_admitted_erased_policy4_v1(
+        self,
+        budget: &mut Budget<'_>,
+    ) -> Result<AdmittedErasedPolicy4StageV1, ProductionPipelineError> {
+        let Self { ranked, bindings } = self;
+        let profile = bindings.rustc_target.profile();
         let original = ranked
             .materialized()
             .unit_local_source_storage_floor_v1()
@@ -182,7 +217,7 @@ impl RankedVerifiedProductionCompilation {
         let (source, ranked_verification, source_storage) = ranked
             .into_verified_roster_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?
-            .into_silent_unit_erased_source_v1(&mut budget)
+            .into_silent_unit_erased_source_v1(budget)
             .map_err(ProductionPipelineError::RankedVerification)?;
         budget
             .reserve_storage(source_storage.retained_storage())
@@ -196,13 +231,13 @@ impl RankedVerifiedProductionCompilation {
         );
         let binding = dialect_amdgcn::bind_production_target_v1(source.erased().module(), profile)
             .map_err(ProductionPipelineError::TargetBinding)?;
-        let (bound, bound_storage) =
-            Owner::from_module_ref_with_verification_budget_v12(binding.module(), &mut budget)
-                .map_err(|error| {
-                    ProductionPipelineError::CheckedOutputStage(
-                        CheckedOutputStageErrorV1::Canonical(error),
-                    )
-                })?;
+        let (bound, bound_storage) = Owner::from_module_ref_with_verification_budget_v12(
+            binding.module(),
+            budget,
+        )
+        .map_err(|error| {
+            ProductionPipelineError::CheckedOutputStage(CheckedOutputStageErrorV1::Canonical(error))
+        })?;
         budget
             .reserve_storage(bound_storage.retained_storage())
             .map_err(resource)?;
@@ -212,7 +247,7 @@ impl RankedVerifiedProductionCompilation {
         #[cfg(test)]
         let phase = timing::begin(timing::Route::SilentUnitErased, timing::Phase::Optimizer);
         let checked =
-            fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy4_v1(&bound, &mut budget)
+            fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy4_v1(&bound, budget)
                 .map_err(|error| {
                     ProductionPipelineError::CheckedOutputStage(
                         CheckedOutputStageErrorV1::Optimization(Box::new(error)),
@@ -234,25 +269,13 @@ impl RankedVerifiedProductionCompilation {
             timing::Route::SilentUnitErased,
             timing::Phase::FinalAdmission,
         );
-        let admitted =
-            Admitted::try_admit_v1(source, bound, checked, &mut budget).map_err(admission)?;
+        let admitted = Admitted::try_admit_v1(source, bound, checked, budget).map_err(admission)?;
         #[cfg(test)]
         phase.complete();
-        let (artifacts, storage) = prepare_erased_checked_output_artifacts_v1(
+        Ok(AdmittedErasedPolicy4StageV1 {
             admitted,
-            profile,
-            &bindings.typed_descriptor_roots,
-            bindings.transaction.compiler_ffi_envelope.clone(),
-            &mut budget,
-        )?;
-        budget
-            .reserve_storage(storage.retained_storage())
-            .map_err(resource)?;
-        Ok(ErasedCheckedOutputTargetProductionCompilationV1 {
-            artifacts,
             ranked_verification,
             bindings,
-            retained_storage_floor: budget.storage(),
         })
     }
 }

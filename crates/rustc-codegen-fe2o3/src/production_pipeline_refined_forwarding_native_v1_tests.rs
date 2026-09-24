@@ -1,4 +1,6 @@
 //! The actual source pipeline must perform both rewrites, never a detached model.
+#[path = "production_refined_forwarding_history_v1_tests.rs"]
+mod history_tests;
 use super::*;
 use crate::production_pipeline::checked_output_policy7_v1::CheckedOutputPolicy7StageErrorV1 as P7Error;
 use crate::production_ranked_projection_v1::{

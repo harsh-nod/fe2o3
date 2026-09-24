@@ -16,9 +16,12 @@ use fe2o3_kernel_opt::{
 };
 pub use induction_refinement::{
     ProductionInductionRefinementErrorV1, ProductionInductionRefinementOriginV1,
-    ProductionInductionRefinementStorageV1, ProductionOwnedInductionRefinementContinuationV1,
+    ProductionInductionRefinementStorageV1, ProductionLoopUnrollErrorV1,
+    ProductionLoopUnrollOriginV1, ProductionLoopUnrollStorageV1,
+    ProductionOwnedInductionRefinementContinuationV1, ProductionOwnedLoopUnrollContinuationV1,
     ProductionOwnedRefinedCrossBlockForwardingContinuationV1,
     ProductionOwnedUnitLocalInductionRefinementContinuationV1,
+    ProductionOwnedUnitLocalLoopUnrollContinuationV1,
     ProductionOwnedUnitLocalRefinedCrossBlockForwardingContinuationV1,
     ProductionRefinedCrossBlockForwardingErrorV1, ProductionRefinedCrossBlockForwardingStorageV1,
 };

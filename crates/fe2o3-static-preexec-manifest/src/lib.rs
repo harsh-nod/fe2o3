@@ -328,6 +328,12 @@ pub struct StaticPreexecDescriptorV1 {
 }
 
 impl StaticPreexecDescriptorV1 {
+    const ZERO: Self = Self {
+        source_fd: 0,
+        destination_fd: 0,
+        object: StaticPreexecObjectIdentityV1::new(0, 0, 0, 0),
+    };
+
     /// Constructs the binding for `index`, deriving its required source FD.
     pub fn for_index(
         index: usize,
@@ -367,33 +373,70 @@ impl StaticPreexecDescriptorV1 {
 }
 
 /// A fully validated typed V1 static pre-exec launcher manifest.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// The descriptor table is stored inline; inactive entries have zero fields.
+#[derive(Clone, Eq, PartialEq)]
 pub struct StaticPreexecManifestV1 {
     parent_pid: i32,
     parent_start_time: u64,
     executable: StaticPreexecObjectIdentityV1,
-    descriptors: Vec<StaticPreexecDescriptorV1>,
+    descriptors: [StaticPreexecDescriptorV1; PREEXEC_MAX_DESCRIPTORS],
+    descriptor_count: usize,
+}
+
+impl fmt::Debug for StaticPreexecManifestV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StaticPreexecManifestV1")
+            .field("parent_pid", &self.parent_pid)
+            .field("parent_start_time", &self.parent_start_time)
+            .field("executable", &self.executable)
+            .field("descriptors", &self.descriptors())
+            .finish()
+    }
 }
 
 impl StaticPreexecManifestV1 {
     /// Constructs and validates a typed V1 manifest.
+    ///
+    /// This compatibility constructor consumes and releases the supplied vector;
+    /// the manifest retains no allocation. Use [`Self::from_descriptors`] to
+    /// construct directly from a fixed array or borrowed slice.
     pub fn new(
         parent_pid: i32,
         parent_start_time: u64,
         executable: StaticPreexecObjectIdentityV1,
         descriptors: Vec<StaticPreexecDescriptorV1>,
     ) -> Result<Self, StaticPreexecManifestErrorV1> {
-        let manifest = Self {
+        Self::from_descriptors(parent_pid, parent_start_time, executable, &descriptors)
+    }
+
+    /// Constructs and validates a typed V1 manifest without allocating.
+    ///
+    /// Copies at most 16 descriptors into inline storage. Validation errors and
+    /// their order are identical to [`Self::new`], including for oversized input.
+    /// Invalid counts reject before any descriptor is read or copied.
+    pub fn from_descriptors(
+        parent_pid: i32,
+        parent_start_time: u64,
+        executable: StaticPreexecObjectIdentityV1,
+        descriptors: &[StaticPreexecDescriptorV1],
+    ) -> Result<Self, StaticPreexecManifestErrorV1> {
+        Self::validate_fields(parent_pid, parent_start_time, &executable, descriptors)?;
+        let mut backing = [StaticPreexecDescriptorV1::ZERO; PREEXEC_MAX_DESCRIPTORS];
+        backing[..descriptors.len()].copy_from_slice(descriptors);
+        Ok(Self {
             parent_pid,
             parent_start_time,
             executable,
-            descriptors,
-        };
-        manifest.validate()?;
-        Ok(manifest)
+            descriptors: backing,
+            descriptor_count: descriptors.len(),
+        })
     }
 
     /// Decodes and strictly validates one exact 704-byte little-endian record.
+    ///
+    /// Uses only fixed-size inline storage and never allocates.
     pub fn decode(bytes: &[u8]) -> Result<Self, StaticPreexecManifestErrorV1> {
         if bytes.len() != PREEXEC_MANIFEST_BYTES_V1 {
             return Err(StaticPreexecManifestErrorV1::WrongLength {
@@ -432,8 +475,8 @@ impl StaticPreexecManifestV1 {
             StaticPreexecObjectClassV1::Fstat,
         );
 
-        let mut descriptors = Vec::with_capacity(descriptor_count);
-        for index in 0..descriptor_count {
+        let mut descriptors = [StaticPreexecDescriptorV1::ZERO; PREEXEC_MAX_DESCRIPTORS];
+        for (index, descriptor) in descriptors[..descriptor_count].iter_mut().enumerate() {
             let offset = descriptor_offset(index);
             let encoded_class = read_u32(
                 bytes,
@@ -445,11 +488,11 @@ impl StaticPreexecManifestV1 {
                     class: encoded_class,
                 },
             )?;
-            descriptors.push(StaticPreexecDescriptorV1 {
+            *descriptor = StaticPreexecDescriptorV1 {
                 source_fd: read_i32(bytes, offset + SOURCE_FD_OFFSET),
                 destination_fd: read_i32(bytes, offset + DESTINATION_FD_OFFSET),
                 object: decode_object(bytes, offset + DESCRIPTOR_OBJECT_OFFSET, class),
-            });
+            };
         }
         for index in descriptor_count..PREEXEC_MAX_DESCRIPTORS {
             let offset = descriptor_offset(index);
@@ -461,7 +504,19 @@ impl StaticPreexecManifestV1 {
             }
         }
 
-        Self::new(parent_pid, parent_start_time, executable, descriptors)
+        Self::validate_fields(
+            parent_pid,
+            parent_start_time,
+            &executable,
+            &descriptors[..descriptor_count],
+        )?;
+        Ok(Self {
+            parent_pid,
+            parent_start_time,
+            executable,
+            descriptors,
+            descriptor_count,
+        })
     }
 
     /// Encodes this validated value into the exact C-compatible V1 record.
@@ -472,7 +527,7 @@ impl StaticPreexecManifestV1 {
         write_u32(
             &mut bytes,
             DESCRIPTOR_COUNT_OFFSET_V1,
-            self.descriptors.len() as u32,
+            self.descriptor_count as u32,
         );
         write_i32(&mut bytes, PARENT_PID_OFFSET_V1, self.parent_pid);
         write_u64(
@@ -481,7 +536,7 @@ impl StaticPreexecManifestV1 {
             self.parent_start_time,
         );
         encode_object(&mut bytes, EXECUTABLE_OFFSET_V1, &self.executable);
-        for (index, descriptor) in self.descriptors.iter().enumerate() {
+        for (index, descriptor) in self.descriptors().iter().enumerate() {
             let offset = descriptor_offset(index);
             write_i32(&mut bytes, offset + SOURCE_FD_OFFSET, descriptor.source_fd);
             write_i32(
@@ -515,7 +570,7 @@ impl StaticPreexecManifestV1 {
 
     /// Returns the ordered active descriptor table.
     pub fn descriptors(&self) -> &[StaticPreexecDescriptorV1] {
-        &self.descriptors
+        &self.descriptors[..self.descriptor_count]
     }
 
     /// Rejects an external manifest-file identity that aliases any carried object.
@@ -531,7 +586,7 @@ impl StaticPreexecManifestV1 {
             return Err(StaticPreexecManifestErrorV1::ExecutableManifestAlias);
         }
         if let Some(descriptor) = self
-            .descriptors
+            .descriptors()
             .iter()
             .position(|entry| entry.object.has_same_key(manifest_object))
         {
@@ -540,28 +595,31 @@ impl StaticPreexecManifestV1 {
         Ok(())
     }
 
-    fn validate(&self) -> Result<(), StaticPreexecManifestErrorV1> {
-        if self.executable.class != StaticPreexecObjectClassV1::Fstat {
+    fn validate_fields(
+        parent_pid: i32,
+        parent_start_time: u64,
+        executable: &StaticPreexecObjectIdentityV1,
+        descriptors: &[StaticPreexecDescriptorV1],
+    ) -> Result<(), StaticPreexecManifestErrorV1> {
+        if executable.class != StaticPreexecObjectClassV1::Fstat {
             return Err(StaticPreexecManifestErrorV1::InvalidExecutableObjectClass(
-                self.executable.class as u32,
+                executable.class as u32,
             ));
         }
-        if self.parent_pid < MIN_PARENT_PID {
-            return Err(StaticPreexecManifestErrorV1::InvalidParentPid(
-                self.parent_pid,
-            ));
+        if parent_pid < MIN_PARENT_PID {
+            return Err(StaticPreexecManifestErrorV1::InvalidParentPid(parent_pid));
         }
-        if self.parent_start_time == 0 {
+        if parent_start_time == 0 {
             return Err(StaticPreexecManifestErrorV1::ZeroParentStartTime);
         }
-        if !(MIN_DESCRIPTOR_COUNT..=PREEXEC_MAX_DESCRIPTORS).contains(&self.descriptors.len()) {
+        if !(MIN_DESCRIPTOR_COUNT..=PREEXEC_MAX_DESCRIPTORS).contains(&descriptors.len()) {
             return Err(StaticPreexecManifestErrorV1::InvalidDescriptorCount(
-                self.descriptors.len(),
+                descriptors.len(),
             ));
         }
 
         let mut destinations = [None; PREEXEC_MAX_DESTINATION_FD as usize + 1];
-        for (index, descriptor) in self.descriptors.iter().enumerate() {
+        for (index, descriptor) in descriptors.iter().enumerate() {
             let expected = PREEXEC_SOURCE_FD_BASE + index as i32;
             if descriptor.source_fd != expected {
                 return Err(StaticPreexecManifestErrorV1::SourceFdOutOfOrder {
@@ -585,12 +643,12 @@ impl StaticPreexecManifestV1 {
                 });
             }
             destinations[destination] = Some(index);
-            if descriptor.object.has_same_key(&self.executable) {
+            if descriptor.object.has_same_key(executable) {
                 return Err(StaticPreexecManifestErrorV1::ExecutableDescriptorAlias {
                     descriptor: index,
                 });
             }
-            if let Some(first) = self.descriptors[..index].iter().position(|previous| {
+            if let Some(first) = descriptors[..index].iter().position(|previous| {
                 descriptor.object.has_same_key(&previous.object)
                     && !descriptor.object.may_share_key_with(&previous.object)
             }) {
@@ -672,3 +730,6 @@ fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
 fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + size_of::<u64>()].copy_from_slice(&value.to_le_bytes());
 }
+
+#[cfg(test)]
+mod storage_tests;

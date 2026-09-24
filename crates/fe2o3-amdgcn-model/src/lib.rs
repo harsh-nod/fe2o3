@@ -9,12 +9,16 @@
 //! target-checked low-precision scaled MFMA and LDS transpose-load fragments.
 
 mod amd_isa_spec_catalog_v1;
+mod descriptor_capability_projection_v1;
+mod descriptor_capability_projection_v3;
+mod descriptor_physical_abi_v3;
 mod device_math;
 mod gfx942_complete_body_emission_v1;
 mod gfx942_complete_body_v1;
 mod gfx950;
 mod lowering;
 mod native_v12_text_descriptor_replay_v1;
+mod native_v12_text_descriptor_replay_v3;
 mod production_kir_to_llvm_replay_v1;
 mod production_limits_v1;
 mod production_refinement_v1;
@@ -22,12 +26,23 @@ mod production_target_coordinates_v1;
 mod scalar_v2;
 
 pub use amd_isa_spec_catalog_v1::*;
+pub use descriptor_capability_projection_v1::*;
+pub use descriptor_capability_projection_v3::{
+    ReplayedDescriptorRequirementsV3, check_canonical_v12_descriptor_requirements_v3,
+};
+pub use descriptor_physical_abi_v3::{
+    ReplayedDescriptorPhysicalAbiV3, check_canonical_v12_descriptor_physical_abi_v3,
+};
 pub use device_math::*;
 pub use gfx942_complete_body_emission_v1::*;
 pub use gfx942_complete_body_v1::*;
 pub use gfx950::*;
 pub use lowering::*;
 pub use native_v12_text_descriptor_replay_v1::*;
+pub use native_v12_text_descriptor_replay_v3::{
+    NativeV12TextDescriptorReplayErrorV3, NativeV12TextDescriptorReplayStorageV3,
+    ReplayedNativeV12TextDescriptorRelationV3, check_native_v12_text_descriptor_relation_v3,
+};
 pub use production_kir_to_llvm_replay_v1::*;
 pub use production_limits_v1::*;
 pub use production_refinement_v1::*;

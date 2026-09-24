@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn derive(
     loops: &Loops<'_, '_>,
+    sparse: &Sparse<'_, '_>,
     rows: &mut Vec<Row>,
     scratch: &mut Scratch,
     budget: &mut Budget<'_>,
@@ -32,8 +33,15 @@ pub(super) fn derive(
                     let iterations = completion(loops, index, scratch, budget)?;
                     for recurrence in loops.recurrences(index, budget)? {
                         budget.charge_work(2)?;
-                        let outcome =
-                            candidate(loops, index, *recurrence, iterations, cfg, scratch, budget)?;
+                        let outcome = candidate(
+                            (loops, sparse),
+                            index,
+                            *recurrence,
+                            iterations,
+                            cfg,
+                            scratch,
+                            budget,
+                        )?;
                         if rows.len() == rows.capacity() {
                             return Err(Resource::Accounting.into());
                         }
@@ -57,7 +65,7 @@ pub(super) fn derive(
 }
 
 fn candidate(
-    loops: &Loops<'_, '_>,
+    inputs: (&Loops<'_, '_>, &Sparse<'_, '_>),
     index: usize,
     recurrence: Recurrence,
     iterations: Iterations,
@@ -65,6 +73,7 @@ fn candidate(
     scratch: &mut Scratch,
     budget: &mut Budget<'_>,
 ) -> Result<Outcome> {
+    let (loops, sparse) = inputs;
     let i = loops.inventory();
     let natural = loops.natural_loop(index, budget)?;
     budget.charge_work(4)?;
@@ -173,8 +182,8 @@ fn candidate(
         return Err(Error::ReplayMismatch);
     }
 
-    let initial = literal(i, recurrence.initial, recurrence.scalar, budget)?;
-    let bound_literal = literal(i, bound, recurrence.scalar, budget)?;
+    let initial = literal(sparse, recurrence.initial, recurrence.scalar, budget)?;
+    let bound_literal = literal(sparse, bound, recurrence.scalar, budget)?;
     budget.charge_work(8)?;
     let (distance, update) = match (initial, bound_literal) {
         (Some(a), Some(b)) if a >= b => (Distance::Literal(0), Update::NoUpdate),

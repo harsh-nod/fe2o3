@@ -23,6 +23,7 @@ mod function_commitment_v1;
 mod gfx942_inline_v30;
 mod gfx942_ordered_program_v32;
 mod gfx942_ordered_region_v31;
+mod nominal_pointer_sized_v35;
 mod saturating_integer_v30;
 mod target_properties;
 mod wave64_shuffle_v33;
@@ -85,6 +86,8 @@ pub const INERT_SEMANTIC_MIR_VERSION_V32: u16 = 32;
 pub const INERT_SEMANTIC_MIR_VERSION_V33: u16 = 33;
 /// V28 plus standalone scalar authoring at intrinsic 91, with inert source tails.
 pub const INERT_SEMANTIC_MIR_VERSION_V34: u16 = 34;
+/// Ordinary V15 grammar plus nominal pointer-sized integer type records.
+pub const INERT_SEMANTIC_MIR_VERSION_V35: u16 = 35;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -114,6 +117,7 @@ pub enum SemanticMirWireVersionV1 {
     V32,
     V33,
     V34,
+    V35,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -140,6 +144,7 @@ impl SemanticMirWireVersionV1 {
             Self::V32 => INERT_SEMANTIC_MIR_VERSION_V32,
             Self::V33 => INERT_SEMANTIC_MIR_VERSION_V33,
             Self::V34 => INERT_SEMANTIC_MIR_VERSION_V34,
+            Self::V35 => INERT_SEMANTIC_MIR_VERSION_V35,
         }
     }
 
@@ -166,6 +171,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V32 => Some(Self::V32),
             INERT_SEMANTIC_MIR_VERSION_V33 => Some(Self::V33),
             INERT_SEMANTIC_MIR_VERSION_V34 => Some(Self::V34),
+            INERT_SEMANTIC_MIR_VERSION_V35 => Some(Self::V35),
             _ => None,
         }
     }
@@ -1933,6 +1939,10 @@ pub enum SemanticRustTypeKindV1 {
     Str,
     /// Nominal execution role with preserved aggregate layout, not issuance authority.
     Execution(SemanticExecutionRoleV29),
+    /// Rust usize, retaining its distinct nominal kind beside its integer shape.
+    Usize,
+    /// Rust isize, retaining its distinct nominal kind beside its integer shape.
+    Isize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6428,6 +6438,15 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V34, limits)
     }
 
+    /// Admits nominal usize/isize with the ordinary V15 grammar. Special
+    /// V28..V34 grammars remain excluded; nominality is never silently erased.
+    pub fn admit_exact_v35(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V35, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6440,6 +6459,7 @@ impl InertSemanticMirRequestV1 {
     /// integer saturation; V33 adds inert gfx942 Wave64 primitive capture.
     /// V31/V32 retain their independent diagnostic authoring grammars; V34 adds
     /// standalone scalar authoring at its noncolliding intrinsic allocation.
+    /// V35 preserves nominal usize/isize with ordinary V15 content only.
     /// Inert capability content remains independently refused.
     pub fn admit_current_production(
         self,
@@ -6456,6 +6476,7 @@ impl InertSemanticMirRequestV1 {
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         wire_schema_membership_v1::validate_request_schema(&self, wire_version)?;
+        nominal_pointer_sized_v35::validate_request_schema(&self, wire_version)?;
         validate_request(&self, limits)?;
         let mut required = minimum_wire_version(&self);
         if required == SemanticMirWireVersionV1::V34
@@ -10016,6 +10037,7 @@ fn validate_type(
     validate_target_backend_repr(context.request.target, &ty.layout)?;
     validate_single_backend_layout_facts(&ty.layout)?;
     validate_type_abi_properties(context.request, ty)?;
+    nominal_pointer_sized_v35::validate_type(context, ty)?;
     if let Some(niche) = ty.layout.largest_niche {
         validate_layout_niche(niche, Some(ty.layout.rustc_size_bytes))?;
     }
@@ -16953,6 +16975,16 @@ fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    if nominal_pointer_sized_v35::contains_nominal(request) {
+        SemanticMirWireVersionV1::V35
+    } else {
+        minimum_wire_version_without_nominal(request)
+    }
+}
+
+fn minimum_wire_version_without_nominal(
+    request: &InertSemanticMirRequestV1,
+) -> SemanticMirWireVersionV1 {
     if gfx942_ordered_program_v32::uses_v32(request) {
         return SemanticMirWireVersionV1::V32;
     }
@@ -17346,6 +17378,7 @@ fn encode_type(
     ty: &SemanticTypeDeclV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    nominal_pointer_sized_v35::check_type_version(ty, wire_version)?;
     if let SemanticRustTypeKindV1::Execution(role) = ty.rust_type_kind {
         if wire_version != SemanticMirWireVersionV1::V29 {
             return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
@@ -17372,6 +17405,13 @@ fn encode_type(
         };
         role.encode(writer)?;
         return encode_type_list(writer, fields);
+    }
+    if let Some((tag, _)) = nominal_pointer_sized_v35::kind(ty.rust_type_kind) {
+        let SemanticTypeShapeV1::Scalar(scalar) = &ty.shape else {
+            return Err(SemanticMirErrorV1::InvalidTypeLayout);
+        };
+        writer.u8(tag)?;
+        return encode_scalar_type(writer, *scalar);
     }
     match &ty.shape {
         SemanticTypeShapeV1::Unit => writer.u8(0),
@@ -17979,7 +18019,9 @@ fn encode_function(
             }
             SemanticLocalRoleV1::Temporary => writer.u8(2)?,
             SemanticLocalRoleV1::RustCallTupleField { argument, field } => {
-                if wire_version < SemanticMirWireVersionV1::V28 {
+                if wire_version < SemanticMirWireVersionV1::V28
+                    || wire_version == SemanticMirWireVersionV1::V35
+                {
                     return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                         requested: wire_version,
                         required: SemanticMirWireVersionV1::V28,

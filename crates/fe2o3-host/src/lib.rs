@@ -56,6 +56,26 @@ pub mod __hardware_test {
             )];
     }
 
+    /// Inert canonical roster whose synthetic ELF uses the opposite physical order.
+    pub struct ApplicationHandoffTwoKernelRosterFixtureV1;
+
+    impl CompilerGeneratedKernelExpectationRosterV1 for ApplicationHandoffTwoKernelRosterFixtureV1 {
+        const ENTRIES: &'static [CompilerGeneratedKernelExpectationRosterEntryV1] = &[
+            CompilerGeneratedKernelExpectationRosterEntryV1::from_parts(
+                "synthetic_second_transform",
+                "synthetic_second_transform",
+                [0xb1; 32],
+                [0xc2; 32],
+            ),
+            CompilerGeneratedKernelExpectationRosterEntryV1::from_parts(
+                "synthetic_first_transform",
+                "synthetic_first_transform",
+                [0xc1; 32],
+                [0xb2; 32],
+            ),
+        ];
+    }
+
     /// Constructs inert device facts for a descriptor-handoff integration fixture.
     pub fn application_handoff_observed_context_fixture_v1(target: &str) -> ObservedContext {
         ObservedContext::for_test(0xf3_02, 0, target, 1_024, 65_536)
@@ -175,6 +195,13 @@ pub use fe2o3_kfd::{
     KfdWithAdmittedUapi, OpenedKfd,
 };
 #[doc(hidden)]
+pub use generated_argument_plan::nominal_v3::{
+    GeneratedNominalArgumentPlanV3, GeneratedNominalArgumentRefV3, GeneratedNominalBindingV3,
+    GeneratedNominalPackErrorV3, GeneratedNominalPackedArgumentsV3, GeneratedNominalStorageV3,
+    NOMINAL_ARGUMENT_PLAN_STORAGE_V3, NOMINAL_ARGUMENT_REF_STORAGE_V3,
+    NOMINAL_BIND_SCRATCH_STORAGE_V3, NOMINAL_PACK_SCRATCH_STORAGE_V3,
+};
+#[doc(hidden)]
 pub use generated_argument_plan::{
     CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
@@ -245,10 +272,11 @@ pub use published_hsaco_inspection::{
     PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError,
 };
 pub use recovered_worker_v3_admission::{
+    RecoveredNominalWorkerV3AdmissionError, RecoveredNominalWorkerV3PinnedRoster,
     RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3EntrypointV1,
     RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3PinnedRosterV1,
-    WorkerV3HostLineageIdentityV1, admit_recovered_worker_v3_descriptor_v1,
-    admit_recovered_worker_v3_roster_v1,
+    WorkerV3HostLineageIdentityV1, admit_recovered_nominal_worker_v3_roster,
+    admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use tile_interop::{

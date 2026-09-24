@@ -2,30 +2,25 @@
 
 use std::{error::Error, fmt};
 
-use sha2::{Digest, Sha256};
-
 use crate::{
-    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
-    CompilerExecutionServiceLaunchManifestErrorV1, CompilerExecutionServiceLaunchManifestV1,
+    CompilerExecutionClientProcessIdentityV1, CompilerExecutionServiceLaunchManifestErrorV1,
+    CompilerExecutionServiceLaunchManifestV1, supervisor_handoff_codec as codec,
 };
 
 const SHA256_BYTES: usize = 32;
-const HEADER_BYTES: usize = 24;
-const SUBMITTER_BYTES: usize = 16;
-const MANIFEST_OFFSET: usize = HEADER_BYTES + SUBMITTER_BYTES;
-const PREIMAGE_BYTES: usize = MANIFEST_OFFSET + COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1;
-const MAGIC: [u8; 8] = *b"F2O3CEH1";
-const VERSION_V1: u16 = 1;
-const IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-SUPERVISOR-HANDOFF/V1\0";
 
 /// Exact canonical byte length of one direct-parent supervisor handoff record.
-pub const COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1: usize = PREIMAGE_BYTES + SHA256_BYTES;
+pub const COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1: usize = codec::BYTES;
 
 /// Domain-separated identity of one canonical protected-supervisor handoff.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerExecutionSupervisorHandoffIdentityV1([u8; SHA256_BYTES]);
 
 impl CompilerExecutionSupervisorHandoffIdentityV1 {
+    pub(crate) const fn from_bytes_for_protocol(bytes: [u8; SHA256_BYTES]) -> Self {
+        Self(bytes)
+    }
+
     /// Returns the exact identity bytes.
     pub const fn as_bytes(&self) -> &[u8; SHA256_BYTES] {
         &self.0
@@ -33,9 +28,7 @@ impl CompilerExecutionSupervisorHandoffIdentityV1 {
 
     /// Independently rederives this identity from exact canonical bytes.
     pub fn matches_canonical_bytes(self, bytes: &[u8]) -> bool {
-        bytes.len() == COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1
-            && bytes[PREIMAGE_BYTES..] == self.0
-            && derive_identity(&bytes[..PREIMAGE_BYTES]) == self.0
+        codec::matches(self.0, bytes)
     }
 }
 
@@ -66,64 +59,33 @@ impl CompilerExecutionSupervisorHandoffV1 {
         submitter: CompilerExecutionClientProcessIdentityV1,
         launch_manifest: CompilerExecutionServiceLaunchManifestV1,
     ) -> Result<Self, CompilerExecutionSupervisorHandoffErrorV1> {
-        validate_relationship(submitter, launch_manifest.client())?;
-        Ok(Self::from_parts(submitter, launch_manifest))
+        let frame = codec::encode(
+            submitter,
+            launch_manifest.client(),
+            launch_manifest.canonical_bytes(),
+        )?;
+        Ok(Self::from_parts(frame, launch_manifest))
     }
 
     fn from_parts(
-        submitter: CompilerExecutionClientProcessIdentityV1,
+        frame: codec::Frame,
         launch_manifest: CompilerExecutionServiceLaunchManifestV1,
     ) -> Self {
-        let mut bytes = [0_u8; COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1];
-        encode_header(&mut bytes);
-        bytes[24..28].copy_from_slice(&submitter.pid().to_le_bytes());
-        bytes[28..32].copy_from_slice(&submitter.uid().to_le_bytes());
-        bytes[32..36].copy_from_slice(&submitter.gid().to_le_bytes());
-        bytes[MANIFEST_OFFSET..PREIMAGE_BYTES].copy_from_slice(launch_manifest.canonical_bytes());
-        let identity =
-            CompilerExecutionSupervisorHandoffIdentityV1(derive_identity(&bytes[..PREIMAGE_BYTES]));
-        bytes[PREIMAGE_BYTES..].copy_from_slice(identity.as_bytes());
         Self {
-            submitter,
+            submitter: frame.submitter,
             launch_manifest,
-            identity,
-            bytes,
+            identity: CompilerExecutionSupervisorHandoffIdentityV1(frame.identity),
+            bytes: frame.bytes,
         }
     }
 
     /// Strictly decodes and independently re-encodes one complete canonical handoff.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionSupervisorHandoffErrorV1> {
-        if bytes.len() != COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1 {
-            return Err(CompilerExecutionSupervisorHandoffErrorV1::Length);
-        }
-        validate_header(bytes)?;
-        if bytes[36..40].iter().any(|byte| *byte != 0) {
-            return Err(CompilerExecutionSupervisorHandoffErrorV1::Reserved);
-        }
-        let submitter = CompilerExecutionClientProcessIdentityV1::new(
-            read_u32(bytes, 24),
-            read_u32(bytes, 28),
-            read_u32(bytes, 32),
-        )
-        .map_err(|_| CompilerExecutionSupervisorHandoffErrorV1::SubmitterPid)?;
-        let launch_manifest = CompilerExecutionServiceLaunchManifestV1::decode(
-            &bytes[MANIFEST_OFFSET..PREIMAGE_BYTES],
-        )
-        .map_err(CompilerExecutionSupervisorHandoffErrorV1::LaunchManifest)?;
-        validate_relationship(submitter, launch_manifest.client())?;
-        let identity = CompilerExecutionSupervisorHandoffIdentityV1(
-            bytes[PREIMAGE_BYTES..]
-                .try_into()
-                .expect("handoff identity has a fixed width"),
-        );
-        if !identity.matches_canonical_bytes(bytes) {
-            return Err(CompilerExecutionSupervisorHandoffErrorV1::Identity);
-        }
-        let canonical = Self::from_parts(submitter, launch_manifest);
-        if canonical.bytes.as_slice() != bytes {
-            return Err(CompilerExecutionSupervisorHandoffErrorV1::Canonical);
-        }
-        Ok(canonical)
+        let (frame, launch) = codec::decode(bytes)?;
+        Ok(Self::from_parts(
+            frame,
+            CompilerExecutionServiceLaunchManifestV1::from_record(launch),
+        ))
     }
 
     /// Returns the exact direct-parent process identity authorized to submit this record.
@@ -145,54 +107,6 @@ impl CompilerExecutionSupervisorHandoffV1 {
     pub const fn canonical_bytes(&self) -> &[u8; COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1] {
         &self.bytes
     }
-}
-
-fn validate_relationship(
-    submitter: CompilerExecutionClientProcessIdentityV1,
-    client: CompilerExecutionClientProcessIdentityV1,
-) -> Result<(), CompilerExecutionSupervisorHandoffErrorV1> {
-    if submitter.pid() == client.pid() {
-        return Err(CompilerExecutionSupervisorHandoffErrorV1::SubmitterIsClient);
-    }
-    if submitter.uid() != client.uid() || submitter.gid() != client.gid() {
-        return Err(CompilerExecutionSupervisorHandoffErrorV1::CredentialMismatch);
-    }
-    Ok(())
-}
-
-fn encode_header(bytes: &mut [u8; COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1]) {
-    bytes[..8].copy_from_slice(&MAGIC);
-    bytes[8..10].copy_from_slice(&VERSION_V1.to_le_bytes());
-    bytes[12..16]
-        .copy_from_slice(&(COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1 as u32).to_le_bytes());
-}
-
-fn validate_header(bytes: &[u8]) -> Result<(), CompilerExecutionSupervisorHandoffErrorV1> {
-    if bytes[..8] != MAGIC {
-        return Err(CompilerExecutionSupervisorHandoffErrorV1::Magic);
-    }
-    if u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != VERSION_V1 {
-        return Err(CompilerExecutionSupervisorHandoffErrorV1::Version);
-    }
-    if bytes[10..12].iter().any(|byte| *byte != 0) || bytes[16..24].iter().any(|byte| *byte != 0) {
-        return Err(CompilerExecutionSupervisorHandoffErrorV1::Reserved);
-    }
-    if read_u32(bytes, 12) as usize != COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1 {
-        return Err(CompilerExecutionSupervisorHandoffErrorV1::Length);
-    }
-    Ok(())
-}
-
-fn derive_identity(bytes: &[u8]) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(IDENTITY_DOMAIN);
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
-    digest.finalize().into()
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
 
 /// Stable strict supervisor-handoff codec failure.
@@ -254,6 +168,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use super::*;
+    use crate::supervisor_handoff_codec::{PREIMAGE_BYTES, derive_identity};
     use crate::{
         CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
         CompilerExecutionIssuerPolicyV1,

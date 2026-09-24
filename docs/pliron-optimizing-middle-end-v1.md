@@ -346,10 +346,15 @@ Fresh formal-memory extraction can bound an ordinary nonvolatile global read
 whose runtime Index value is not affine. The actual pointer must be exactly
 `GEP(SliceData(formal_slice), index)`, and a successful `index < SliceLength`
 edge for that same slice and value must dominate the actual load. Existing
-all-incoming unique-origin analysis can transport block arguments; ambiguous
-or changing loop origins, false-edge complements and stale pre-arithmetic
-guards do not establish this relation. The rule applies only to the existing
-64-bit Index model and scalar element widths of 1, 2, 4 or 8 bytes.
+all-incoming unique-origin analysis can transport block arguments. A changing
+loop parameter can also name the exact current SSA value: this does not equate
+it with its seed, update, or another parameter. A bounded representation cache
+follows only verified `U64 <-> Index` bitcasts and same-type unique-origin
+transport, allowing independently emitted index bridges to agree. Raw guard
+and address operands still require Index; numeric and signed casts do not
+establish this equivalence. False-edge complements and stale pre-arithmetic
+guards remain insufficient. The rule applies only to the existing 64-bit Index
+model and scalar element widths of 1, 2, 4 or 8 bytes.
 
 This is a distinct read-only access domain, not an affine-address theorem.
 Its byte expression stays unbounded and its alias coverage is the whole formal
@@ -1185,3 +1190,157 @@ gates. New analysis and continuation storage is metered alongside retained
 inputs, but inherited source/ranked/formal services keep their documented
 accounting domains; these are not whole-compiler RSS bounds or artifact/launch
 authority.
+
+### Bounded unroll and final-output components
+
+The [bounded owning unroller](../crates/fe2o3-kernel-opt/src/owned_loop_unroll_v1.rs)
+selects supported literal U8/U16/U32/U64 loops with zero through eight updates.
+It retains N+1 header evaluations and N body copies; a zero-trip rewrite records
+the omitted body explicitly. Selection requires the independently checked
+normal-header-completion and nonwrapping facts, a unique unconditional
+preheader/latch and closed SSA transport. Symbolic, over-limit, nested,
+early-exit, call, atomic, volatile and convergent cases remain unchanged.
+Output growth uses the actual header/body/outside multiplicities, not a
+whole-module multiplication. This component is not yet a production schedule
+change or ordinary-Rust unroll qualification.
+
+Its [independent actual-pair checker](../crates/fe2o3-kernel-analysis/src/canonical_kir_loop_unroll_check_v1.rs)
+checks all six ordered origin families: blocks, definitions, operations,
+terminators, edges and edge arguments. Owning replay retains exact input,
+output and limits. Literal [canonical-wire goldens](../crates/fe2o3-kernel-opt/tests/bounded_loop_unroll_wire_goldens.rs)
+check full before/after graphs and lineage, fresh-process determinism, malformed
+input and hostile rows/output payloads. These are canonical-wire tests, not
+registered-dialect textual lit or source compilation.
+
+The [source-owned unroll continuation](../crates/fe2o3-lower-mir-kernel/src/production_checked_output_loop_unroll_v1.rs)
+consumes the actual Direct or UnitLocal final-F owner after checked induction
+refinement and cross-block private forwarding. It retains that entire prefix
+and the independent F/U clone relation. Complete emitted and omitted operation
+rows transport the original source occurrences; an omitted row grants no U
+site, and cloned trap permissions are refused. U arithmetic permission retains
+the actual L/R, R/F and F/U relations and exact U inventory rather than treating
+an F permission table as authority for a different graph.
+
+This continuation reruns source lifetime, private-memory, native-operation and
+formal-memory admission on actual U. The source operation ceiling is checked,
+not widened or clamped. New retained headers, actual vector capacities and
+report extents use the same cumulative budget; inherited formal-engine and
+report-comparison accounting exclusions remain explicit. Induction derivation
+and independent replay each build a fresh sparse-constant analysis, so constants
+transported through preheader block parameters can establish literal bounds and
+seeds. Unknown, dynamic and conflicting inputs remain symbolic; existing
+no-wrap and normal-completion conditions are unchanged. Typed integer-extrema
+rules independently check CFG elimination such as unsigned `i < 0`. An earlier
+checked scalar/CFG pass can therefore remove a zero-trip loop before unrolling;
+that source path must show no remaining loops and an exact F/U no-op, not claim
+a selected zero-trip clone. Canonical selected-zero coverage remains separate.
+
+The [actual-U native continuation](../crates/rustc-codegen-fe2o3/src/production_pipeline_loop_unroll_native_v1.rs)
+consumes the same ranked/source prefix and emits its first LLVM text only after
+constructing U. It retains complete original source, target, ranked and launch
+custody. The fixed twelve-graph history still ends at actual F; U is a separate
+independently replayed F-to-U relation, never a relabeled F. Descriptor evidence
+uses U's signatures and fresh formal reports with the original source/root/ABI
+joins. Complete borrowed headers, live owners and new backing share the existing
+cumulative budget, without extending inherited engine accounting to a whole-
+compiler RSS claim. This is a nondefault component: its U descriptor evidence
+has no wire encoding, signed worker handoff, publication or launch authority.
+The final-F wire described below remains a distinct contract. Full source/SIM,
+strict resource phases, protected production and tutorial qualification must
+be recorded for the exact integrated revision rather than inferred from wiring.
+
+The [complete forwarding history](../crates/fe2o3-kernel-opt/src/checked_refined_forwarding_history_v1.rs)
+composes B/C/S/O/I/J/K/P/H/L/R/F and their actual transformation records.
+The corresponding source-owned native continuation retains its entire prefix;
+neither a final graph digest nor a pre-optimization formal report replaces that
+replay. A separate [borrowed formal adapter](../crates/fe2o3-lower-mir-kernel/src/production_checked_output_guarded_formal_v1.rs)
+analyzes the actual canonical output under its genuine Direct or UnitLocal
+source policy. It preserves existing unsupported cases and cross-invocation
+conflicts. The adapter alone is not a proof of source-to-output equivalence.
+
+The [independent final-F consumer](../crates/fe2o3-verifier/src/compiler_refined_forwarding_output_v1.rs)
+joins the fourteen output fields to an independently supplied, already admitted
+signed source owner. It replays all twelve history graphs and seventeen retained
+limits, checks semantic/original/final/descriptor root coordinates, ABI and
+launch rows, derives capabilities from the actual final graph, and reruns both
+original and final formal extraction. Native text and embedded descriptors must
+agree with that same final graph. Decoding a frame never supplies the original
+signed source proof.
+
+The [owning wire handoff](../crates/rustc-codegen-fe2o3/src/production_refined_forwarding_wire_v1.rs)
+retains its actual signed worker and native owners. New wire backing uses actual
+allocation capacity, and callers reserve returned storage additions before
+further controlled use. Borrowed checked receipts cannot be cloned, detached,
+mutated or manufactured. These contracts do not turn the documented constituent
+storage domains into whole-compiler RSS accounting.
+
+The fixed [ranked-to-inert-wire entry](../crates/rustc-codegen-fe2o3/src/production_refined_forwarding_entry_v1.rs)
+adds one nondefault consuming method to the actual ranked compilation owner:
+`prepare_inert_refined_forwarding_wire_with_budget_v1`. It runs the existing
+combined native constructor, signed live worker handoff A, inert wire encoding
+and complete wire replay in that order. It fixes all seventeen refinement,
+memory and CFG limits internally; it accepts no optimizer selector. Each native,
+A and wire storage addition is checked and paid before the next controlled use,
+then returned as one cumulative unreserved addition. The wire retains actual A
+and its original source, execution and final-F custody. Missing signed ranked
+receipts remain typed refusals, never unsigned fallback or successful skips.
+
+This entry's genuine ordinary-rustc parent requires all eight Direct/UnitLocal,
+motion/no-op and target-profile children. Their source, four-graph SIM and
+factory/replay resource phases are NOT_RUN pending root execution. The entry's
+sixteen P-1 observations, and the source-unroll continuation's sixteen P-1
+observations, require closed runs and strict typed-phase successors before
+resource qualification. Normal component/protocol tests do not qualify those
+source paths or provide a missing protected runtime.
+
+The live final-F worker, consumer and bounded history/output encodings remain
+nondefault components. Complete signed-positive execution, default activation
+and full tutorial coverage remain separate requirements. Successful unit,
+ownership, golden or simulator tests do not establish those requirements.
+
+### Pointer-sized source arguments
+
+The general rustc descriptor collector admits `usize` and `isize`, including
+aliases and bounded pointer-free aggregates containing them, through its
+existing compiler-laid-out by-value path. The actual rustc size, alignment,
+ABI class and normalized type identity remain authoritative. The collector
+does not substitute a fixed-width U64/I64 source descriptor, and the public
+entry still requires the existing 64-bit target contract.
+
+This is source admission, not launch support: final descriptor construction
+and conditional ABI binding still reject deferred by-value packing. Ordinary
+source compilation must also satisfy ranked, memory, control-flow and final
+verification gates. The [actual-rustc layout regression](../crates/rustc-codegen-fe2o3/src/rust_type_layout_pointer_sized_v3_tests.rs)
+covers the new scalar/alias/nested cases and preserves pointer, enum, union,
+drop, oversized-array and unsupported-width refusals.
+
+Semantic MIR V35 adds explicit `Usize` and `Isize` kinds alongside their existing
+integer shape, rustc type identity and layout identity. The private opt-in rustc
+constructor derives these kinds from normalized rustc types, not from width or
+parameter names. V35 admits ordinary V15 content with those nominal types;
+specialized execution, wave and MFMA schemas remain separate closed contracts.
+Old semantic versions and the legacy constructor keep their original behavior.
+This semantic encoding is inert. It does not make a fixed-width U64/I64 source
+descriptor interchangeable with a pointer-sized Rust argument, or complete the
+descriptor, host packing, signed native handoff and default production route.
+
+The portable [nominal scalar declaration](../crates/fe2o3-artifacts/src/rust_nominal_layout_v3.rs)
+records a closed `Usize` or `Isize` kind and the admitted 64-bit pointer width.
+Its fixed-size type and layout payloads use separate V3 identity domains; equal
+physical size does not equate them with V1 `U64` or `I64` declarations. These
+content identities do not authenticate a rustc source type. Descriptor and host
+consumers must independently join the actual nominal source, target layout and
+physical ABI before admitting packing. Other pointer widths remain explicit
+refusals, and this declaration alone grants no artifact or launch authority.
+
+The inert [descriptor V3 codec](../crates/fe2o3-kernel-descriptor/src/nominal_v3.rs)
+preserves those nominal source distinctions while retaining the original V1
+physical-layout identities. Its source identity domain is distinct from the
+portable artifact declaration domain. A complete borrowed decoder checks all
+record identities, references, kernel arguments, launch constraints and target
+requirements before returning a move-only view. Queries borrow that view;
+encoding checks every input and work charge before modifying caller-owned output.
+Callers prepay the exported view/query/scratch extents and their live backing.
+V1/V2 decoding and identities remain unchanged. This codec admits inert content,
+not an authenticated source ABI, signed native output or executable artifact;
+the independent source join, host packer and production handoff remain separate.

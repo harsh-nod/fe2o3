@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "runtime_slice_read_integration_hostile_v1_tests.rs"]
 mod integration_hostile_tests;
+#[path = "runtime_slice_read_loop_index_v1_tests.rs"]
+mod loop_index_tests;
 #[path = "runtime_slice_read_representation_v1_tests.rs"]
 mod representation_tests;
 use crate::{BasicBlock, Kernel, Signature, ValueDef};

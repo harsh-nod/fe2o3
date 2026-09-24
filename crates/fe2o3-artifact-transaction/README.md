@@ -3,6 +3,18 @@
 This crate coordinates local compiler artifact publication through bounded canonical records,
 descriptor-relative filesystem operations, and one cooperative output-directory lock.
 
+## Child creation custody
+
+`try_acquire_artifact_process_spawn_lease_v1` acquires a move-only lease from the
+same coordinator used by `with_artifact_process_spawn_v1` and lock-descriptor
+release. Supervisors whose cleanup can outlive a spawn call must transfer this
+lease with the child, retaining it until confirmed post-exec closure or terminal
+disposal. Returning an error or observing an interrupted wait is not disposal.
+The lease may move between threads but grants no execution authority. Do not
+drop artifact locks while waiting on a lease that the same thread must advance.
+The coordinator's mutex and descriptor-release waits remain blocking. See the
+[issuer cleanup contract](../../docs/compiler-execution-cleanup-custody.md).
+
 ## Filesystem coordination deployment
 
 Ordinary path-based publication requires an explicit path-guard deployment. Cross-mount-namespace
@@ -22,12 +34,24 @@ the path guard.
 ## Compiler provenance records
 
 The compiler-module handoff protocol exposes V1 compatibility records,
-closure-bound V2 records, and strict semantic V3 records. The Worker V2
+closure-bound V2 records, strict semantic V3 records, and native semantic V4
+records. The Worker V2
 publication-intent protocol exposes V1 and closure-bound V2 records. These
 implementations use shared internal engines for slot ownership, bounded
 filesystem operations, recovery, and fault boundaries; version-specific
 schemas retain distinct names, domains, encodings, byte ceilings, and error
 surfaces.
+
+V4 reuses the transaction/currentness engine with separate version domains and
+no legacy sidecar fallback. Its move-only token retains the cooperative lock
+while `fe2o3-verifier::recover_compiler_native_semantic_handoff_token_v4` checks
+the exact decoded transport and returns the concrete source/F owner. Rejection
+precedes one-shot consumption. Payload capacity, decoder metadata, hash scratch
+and owner headers use the caller's shared ledger; returned storage is admitted
+but unreserved. Filesystem bookkeeping retains its separate protocol bounds.
+This is content/custody integration, not a production dispatch change or
+compiler-execution, executable-publication, machine-refinement or launch grant.
+The V4 execution-subject, Cargo, Worker and host consumers remain pending.
 
 | Protocol | Version binding | Current production selection |
 |---|---|---|

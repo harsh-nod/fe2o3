@@ -203,6 +203,16 @@ pub(super) trait ProjectedAssertionFactsV1 {
         statement: usize,
     ) -> Result<Option<u64>, ProjectionError>;
 
+    fn private_array_access_index_v1(
+        &mut self,
+        _site: super::ProjectedSemanticAccessSiteV1,
+        _role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+    ) -> Result<Option<u64>, ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "private array read requires live canonical correspondence",
+        ))
+    }
+
     fn slice_access(
         &mut self,
         site: super::ProjectedSemanticAccessSiteV1,
@@ -320,6 +330,31 @@ pub(super) struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     masked: Option<&'r MaskedSourceAssertionTableV1<'g>>,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    fn private_array_access_index_v1(
+        &mut self,
+        site: super::ProjectedSemanticAccessSiteV1,
+        role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+    ) -> Result<Option<u64>, ProjectionError> {
+        self.budget.charge_work(4).map_err(resource)?;
+        let block = u32::try_from(site.block).map_err(|_| resource(Resource::Arithmetic))?;
+        let statement = site.statement.ok_or(ProjectionError::Incomplete(
+            "private array access requires a statement",
+        ))?;
+        let statement = u32::try_from(statement).map_err(|_| resource(Resource::Arithmetic))?;
+        self.owner
+            .materialized_private_array_constant_index(
+                self.correspondence_owner,
+                self.semantic_function,
+                fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(block),
+                    statement,
+                },
+                role,
+                self.budget,
+            )
+            .map_err(|error| reject(CanonicalAssertionErrorV1::PrivateArray(error)))
+    }
+
     #[cfg(test)]
     fn observe_conditional_bound_for_test_v1(
         &mut self,

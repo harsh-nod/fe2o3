@@ -1,4 +1,6 @@
 //! Genuine captured Rust through the complete combined owner, never Prefix6 fixtures.
+#[path = "production_rustc_driver_refined_forwarding_entry_v1_tests.rs"]
+mod inert_entry;
 use super::*;
 use fe2o3_kernel_analysis::{
     CanonicalKirCrossBlockForwardingLimitsV1 as ForwardLimits,

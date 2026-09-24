@@ -853,9 +853,9 @@ assert_equals \
   "$(step_command cargo-fe2o3-tests)" \
   'generic core did not gate the feature-invariant cargo-fe2o3 suite'
 assert_equals \
-  "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3 --features ${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE} --test worker_v3_load_envelope_vertical -- --test-threads=1" \
+  "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3 --features ${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE} --test worker_v3_load_envelope_vertical --test worker_v3_load_envelope_v2 -- --test-threads=1" \
   "$(step_command cargo-fe2o3-worker-v3-envelope-tests)" \
-  'generic core did not gate the strict Worker V3 envelope vertical suite'
+  'generic core did not gate the strict Worker V3 vertical and receipt-envelope suites'
 assert_equals \
   'cargo test --locked -p fe2o3-pliron --no-default-features --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact' \
   "$(step_command fe2o3-pliron-default-api-ui)" \

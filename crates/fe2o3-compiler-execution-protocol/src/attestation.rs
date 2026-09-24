@@ -2,10 +2,12 @@
 
 use std::{error::Error, fmt};
 
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use crate::attestation_receipt_codec as receipt_codec;
+use crate::attestation_request_codec as request_codec;
+use crate::issuer_policy_codec as policy_codec;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use fe2o3_artifact_transaction::{
-    INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1, INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1,
-    InertCompilerExecutionSubjectV1,
+    INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1, InertCompilerExecutionSubjectV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -14,18 +16,10 @@ const SIGNATURE_BYTES: usize = 64;
 const HEADER_BYTES: usize = 8 + 2 + 2 + 8 + 4;
 const CONTENT_BINDING_BYTES: usize = SHA256_BYTES + 8;
 
-const POLICY_MAGIC: [u8; 8] = *b"F2O3CEP1";
-const CHALLENGE_MAGIC: [u8; 8] = *b"F2O3CEC1";
-const REQUEST_MAGIC: [u8; 8] = *b"F2O3CEQ1";
-const RECEIPT_MAGIC: [u8; 8] = *b"F2O3CER1";
-const VERSION_V1: u16 = 1;
-
 const POLICY_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-ISSUER-POLICY/V1\0";
 const CHALLENGE_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-CHALLENGE/V1\0";
 const REQUEST_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-REQUEST/V1\0";
 const RECEIPT_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT/V1\0";
-const RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT-SIGNATURE/V1\0";
-const ROLLBACK_ANCHOR_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-ROLLBACK-ANCHOR/V1\0";
 
 /// Canonical content describing the loader-independent issuer runtime closure.
 pub const SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1: &[u8] =
@@ -179,13 +173,7 @@ impl CompilerExecutionIssuerMeasurementV1 {
 /// Caller-pinned issuer executable, runtime closure, key, and policy generation.
 #[derive(Clone, Eq, PartialEq)]
 pub struct CompilerExecutionIssuerPolicyV1 {
-    generation: u64,
-    executable: CompilerExecutionIssuerMeasurementV1,
-    runtime: CompilerExecutionIssuerMeasurementV1,
-    verifying_key: [u8; SHA256_BYTES],
-    external_anchor_verifying_key: [u8; SHA256_BYTES],
-    identity: CompilerExecutionIssuerPolicyIdentityV1,
-    canonical_bytes: [u8; COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1],
+    record: policy_codec::Record,
 }
 
 impl CompilerExecutionIssuerPolicyV1 {
@@ -197,121 +185,57 @@ impl CompilerExecutionIssuerPolicyV1 {
         verifying_key: [u8; SHA256_BYTES],
         external_anchor_verifying_key: [u8; SHA256_BYTES],
     ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        if generation == 0 {
-            return Err(CompilerExecutionAttestationErrorV1::ZeroValue(
-                "issuer policy generation",
-            ));
-        }
-        validate_verifying_key(verifying_key)?;
-        validate_verifying_key(external_anchor_verifying_key)?;
-        if external_anchor_verifying_key == verifying_key {
-            return Err(CompilerExecutionAttestationErrorV1::NonDistinctVerifyingKeys);
-        }
-
-        let mut bytes = [0_u8; COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1];
-        let mut offset = encode_header(&mut bytes, POLICY_MAGIC);
-        put(&mut bytes, &mut offset, &generation.to_le_bytes());
-        encode_measurement(&mut bytes, &mut offset, executable);
-        encode_measurement(&mut bytes, &mut offset, runtime);
-        put(&mut bytes, &mut offset, &verifying_key);
-        put(&mut bytes, &mut offset, &external_anchor_verifying_key);
-        put(
-            &mut bytes,
-            &mut offset,
-            &INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1.to_le_bytes(),
-        );
-        offset += 6;
-        debug_assert_eq!(offset, POLICY_PREIMAGE_BYTES);
-        let identity = CompilerExecutionIssuerPolicyIdentityV1(derive_identity(
-            POLICY_IDENTITY_DOMAIN,
-            &bytes[..POLICY_PREIMAGE_BYTES],
-        ));
-        put(&mut bytes, &mut offset, identity.as_bytes());
-        debug_assert_eq!(offset, bytes.len());
         Ok(Self {
-            generation,
-            executable,
-            runtime,
-            verifying_key,
-            external_anchor_verifying_key,
-            identity,
-            canonical_bytes: bytes,
+            record: policy_codec::V1.encode(policy_codec::Fields {
+                generation,
+                executable,
+                runtime,
+                verifying_key,
+                external_anchor_verifying_key,
+            })?,
         })
     }
 
     /// Strictly decodes one exact canonical policy.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_length(
-            bytes,
-            COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1,
-            "issuer policy",
-        )?;
-        let mut reader = Reader::new(bytes);
-        decode_header(&mut reader, POLICY_MAGIC, bytes.len(), "issuer policy")?;
-        let generation = reader.u64()?;
-        let executable = decode_measurement(&mut reader, "issuer executable")?;
-        let runtime = decode_measurement(&mut reader, "issuer runtime")?;
-        let verifying_key = reader.fixed::<32>()?;
-        let external_anchor_verifying_key = reader.fixed::<32>()?;
-        let subject_version = reader.u16()?;
-        if subject_version != INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1 {
-            return Err(
-                CompilerExecutionAttestationErrorV1::UnsupportedSubjectVersion(subject_version),
-            );
-        }
-        if reader.fixed::<6>()? != [0; 6] {
-            return Err(CompilerExecutionAttestationErrorV1::NonzeroReserved);
-        }
-        let declared_identity = reader.fixed::<32>()?;
-        require_identity(declared_identity, "issuer policy")?;
-        let decoded = Self::new(
-            generation,
-            executable,
-            runtime,
-            verifying_key,
-            external_anchor_verifying_key,
-        )?;
-        if decoded.identity.0 != declared_identity || decoded.canonical_bytes.as_slice() != bytes {
-            return Err(CompilerExecutionAttestationErrorV1::IdentityMismatch(
-                "issuer policy",
-            ));
-        }
-        Ok(decoded)
+        Ok(Self {
+            record: policy_codec::V1.decode(bytes)?,
+        })
     }
 
     /// Returns the monotonically provisioned caller policy generation.
     pub const fn generation(&self) -> u64 {
-        self.generation
+        self.record.fields.generation
     }
 
     /// Returns the caller-pinned protected issuer executable measurement.
     pub const fn executable(&self) -> CompilerExecutionIssuerMeasurementV1 {
-        self.executable
+        self.record.fields.executable
     }
 
     /// Returns the caller-pinned issuer runtime-closure measurement.
     pub const fn runtime(&self) -> CompilerExecutionIssuerMeasurementV1 {
-        self.runtime
+        self.record.fields.runtime
     }
 
     /// Returns the caller-pinned Ed25519 verifying key.
     pub const fn verifying_key(&self) -> &[u8; SHA256_BYTES] {
-        &self.verifying_key
+        &self.record.fields.verifying_key
     }
 
     /// Returns the policy-pinned external monotonic-anchor verifying key.
     pub const fn external_anchor_verifying_key(&self) -> &[u8; SHA256_BYTES] {
-        &self.external_anchor_verifying_key
+        &self.record.fields.external_anchor_verifying_key
     }
 
     /// Returns the complete canonical policy identity.
     pub const fn identity(&self) -> CompilerExecutionIssuerPolicyIdentityV1 {
-        self.identity
+        CompilerExecutionIssuerPolicyIdentityV1(self.record.identity)
     }
 
     /// Returns the exact canonical policy bytes.
     pub const fn canonical_bytes(&self) -> &[u8; COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1] {
-        &self.canonical_bytes
+        &self.record.bytes
     }
 }
 
@@ -319,15 +243,15 @@ impl fmt::Debug for CompilerExecutionIssuerPolicyV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CompilerExecutionIssuerPolicyV1")
-            .field("generation", &self.generation)
-            .field("executable", &self.executable)
-            .field("runtime", &self.runtime)
-            .field("verifying_key", &self.verifying_key)
+            .field("generation", &self.generation())
+            .field("executable", &self.executable())
+            .field("runtime", &self.runtime())
+            .field("verifying_key", self.verifying_key())
             .field(
                 "external_anchor_verifying_key",
-                &self.external_anchor_verifying_key,
+                self.external_anchor_verifying_key(),
             )
-            .field("identity", &self.identity)
+            .field("identity", &self.identity())
             .finish_non_exhaustive()
     }
 }
@@ -345,17 +269,6 @@ impl CompilerExecutionSubjectBindingV1 {
             sha256: *subject.identity().sha256(),
             byte_len: subject.identity().byte_len(),
         }
-    }
-
-    fn new(
-        sha256: [u8; SHA256_BYTES],
-        byte_len: u64,
-    ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        validate_binding(sha256, byte_len, "compiler-execution subject")?;
-        if byte_len != INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1 as u64 {
-            return Err(CompilerExecutionAttestationErrorV1::SubjectLengthMismatch);
-        }
-        Ok(Self { sha256, byte_len })
     }
 
     /// Returns the exact canonical subject identity digest.
@@ -416,62 +329,42 @@ impl CompilerExecutionAttestationChallengeV1 {
         sequence: u64,
         prior_rollback_anchor: [u8; SHA256_BYTES],
     ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_identity(policy_identity.0, "issuer policy")?;
-        require_identity(nonce, "challenge nonce")?;
-        validate_rollback_position(sequence, prior_rollback_anchor)?;
-        let mut bytes = [0_u8; COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1];
-        let mut offset = encode_header(&mut bytes, CHALLENGE_MAGIC);
-        put(&mut bytes, &mut offset, policy_identity.as_bytes());
-        encode_subject_binding(&mut bytes, &mut offset, subject);
-        put(&mut bytes, &mut offset, &nonce);
-        put(&mut bytes, &mut offset, &sequence.to_le_bytes());
-        put(&mut bytes, &mut offset, &prior_rollback_anchor);
-        debug_assert_eq!(offset, CHALLENGE_PREIMAGE_BYTES);
-        let identity = CompilerExecutionAttestationChallengeIdentityV1(derive_identity(
-            CHALLENGE_IDENTITY_DOMAIN,
-            &bytes[..CHALLENGE_PREIMAGE_BYTES],
-        ));
-        put(&mut bytes, &mut offset, identity.as_bytes());
+        let record = request_codec::V1.challenge(request_codec::Fields {
+            policy: policy_identity.0,
+            subject: request_codec::Binding {
+                sha256: subject.sha256,
+                byte_len: subject.byte_len,
+            },
+            nonce,
+            sequence,
+            prior: prior_rollback_anchor,
+        })?;
         Ok(Self {
             policy_identity,
             subject,
             nonce,
             sequence,
             prior_rollback_anchor,
-            identity,
-            canonical_bytes: bytes,
+            identity: CompilerExecutionAttestationChallengeIdentityV1(record.identity),
+            canonical_bytes: record.bytes,
         })
     }
 
     /// Strictly decodes one exact canonical challenge.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_length(
-            bytes,
-            COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
-            "challenge",
-        )?;
-        let mut reader = Reader::new(bytes);
-        decode_header(&mut reader, CHALLENGE_MAGIC, bytes.len(), "challenge")?;
-        let policy_identity = CompilerExecutionIssuerPolicyIdentityV1(reader.fixed::<32>()?);
-        let subject = decode_subject_binding(&mut reader)?;
-        let nonce = reader.fixed::<32>()?;
-        let sequence = reader.u64()?;
-        let prior_rollback_anchor = reader.fixed::<32>()?;
-        let declared_identity = reader.fixed::<32>()?;
-        require_identity(declared_identity, "challenge")?;
-        let decoded = Self::from_fields(
-            policy_identity,
-            subject,
-            nonce,
-            sequence,
-            prior_rollback_anchor,
-        )?;
-        if decoded.identity.0 != declared_identity || decoded.canonical_bytes.as_slice() != bytes {
-            return Err(CompilerExecutionAttestationErrorV1::IdentityMismatch(
-                "challenge",
-            ));
-        }
-        Ok(decoded)
+        let record = request_codec::V1.decode_challenge(bytes)?;
+        Ok(Self {
+            policy_identity: CompilerExecutionIssuerPolicyIdentityV1(record.fields.policy),
+            subject: CompilerExecutionSubjectBindingV1 {
+                sha256: record.fields.subject.sha256,
+                byte_len: record.fields.subject.byte_len,
+            },
+            nonce: record.fields.nonce,
+            sequence: record.fields.sequence,
+            prior_rollback_anchor: record.fields.prior,
+            identity: CompilerExecutionAttestationChallengeIdentityV1(record.identity),
+            canonical_bytes: record.bytes,
+        })
     }
 
     /// Returns the caller-pinned issuer policy identity.
@@ -542,16 +435,9 @@ impl CompilerExecutionAttestationRequestV1 {
         if !challenge.subject.matches_subject(&subject) {
             return Err(CompilerExecutionAttestationErrorV1::SubjectMismatch);
         }
-        let mut bytes = [0_u8; COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1];
-        let mut offset = encode_header(&mut bytes, REQUEST_MAGIC);
-        put(&mut bytes, &mut offset, challenge.canonical_bytes());
-        put(&mut bytes, &mut offset, subject.canonical_bytes());
-        debug_assert_eq!(offset, REQUEST_PREIMAGE_BYTES);
-        let identity = CompilerExecutionAttestationRequestIdentityV1(derive_identity(
-            REQUEST_IDENTITY_DOMAIN,
-            &bytes[..REQUEST_PREIMAGE_BYTES],
-        ));
-        put(&mut bytes, &mut offset, identity.as_bytes());
+        let (bytes, identity) =
+            request_codec::V1.request(challenge.canonical_bytes(), subject.canonical_bytes());
+        let identity = CompilerExecutionAttestationRequestIdentityV1(identity);
         Ok(Self {
             challenge,
             subject,
@@ -562,21 +448,11 @@ impl CompilerExecutionAttestationRequestV1 {
 
     /// Strictly decodes one exact canonical request and its nested records.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_length(
-            bytes,
-            COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
-            "request",
-        )?;
-        let mut reader = Reader::new(bytes);
-        decode_header(&mut reader, REQUEST_MAGIC, bytes.len(), "request")?;
-        let challenge = CompilerExecutionAttestationChallengeV1::decode(
-            reader.take(COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1)?,
-        )?;
-        let subject = InertCompilerExecutionSubjectV1::decode(
-            reader.take(INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1)?,
-        )
-        .map_err(CompilerExecutionAttestationErrorV1::Subject)?;
-        let declared_identity = reader.fixed::<32>()?;
+        let parts = request_codec::V1.request_parts(bytes)?;
+        let challenge = CompilerExecutionAttestationChallengeV1::decode(parts.challenge)?;
+        let subject = InertCompilerExecutionSubjectV1::decode(parts.subject)
+            .map_err(CompilerExecutionAttestationErrorV1::Subject)?;
+        let declared_identity = parts.identity;
         require_identity(declared_identity, "request")?;
         let decoded = Self::new(challenge, subject)?;
         if decoded.identity.0 != declared_identity || decoded.canonical_bytes.as_slice() != bytes {
@@ -622,19 +498,7 @@ impl fmt::Debug for CompilerExecutionAttestationRequestV1 {
 /// Signed response for one exact challenge, request, policy, and rollback transition.
 #[derive(Clone, Eq, PartialEq)]
 pub struct CompilerExecutionAttestationReceiptV1 {
-    request_sha256: [u8; SHA256_BYTES],
-    request_byte_len: u64,
-    policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
-    subject: CompilerExecutionSubjectBindingV1,
-    challenge_identity: CompilerExecutionAttestationChallengeIdentityV1,
-    nonce: [u8; SHA256_BYTES],
-    sequence: u64,
-    prior_rollback_anchor: [u8; SHA256_BYTES],
-    next_rollback_anchor: [u8; SHA256_BYTES],
-    verifying_key: [u8; SHA256_BYTES],
-    signature: [u8; SIGNATURE_BYTES],
-    identity: CompilerExecutionAttestationReceiptIdentityV1,
-    canonical_bytes: [u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1],
+    record: receipt_codec::Record,
 }
 
 impl CompilerExecutionAttestationReceiptV1 {
@@ -647,64 +511,16 @@ impl CompilerExecutionAttestationReceiptV1 {
         if signing_key.verifying_key().as_bytes() != policy.verifying_key() {
             return Err(CompilerExecutionAttestationErrorV1::SigningKeyMismatch);
         }
-        if request.challenge.policy_identity != policy.identity {
-            return Err(CompilerExecutionAttestationErrorV1::PolicyMismatch);
-        }
-        let fields = ReceiptFieldsV1::from_request(policy, request)?;
-        let mut bytes = encode_receipt_prefix(&fields);
-        let message = receipt_signature_message(&bytes[..RECEIPT_SIGNED_PREFIX_BYTES]);
-        let signature = signing_key.sign(&message).to_bytes();
-        bytes[RECEIPT_SIGNED_PREFIX_BYTES..RECEIPT_PREIMAGE_BYTES].copy_from_slice(&signature);
-        finish_receipt(fields, signature, bytes)
+        Ok(Self {
+            record: receipt_codec::V1.issue(expected_receipt(policy, request)?, signing_key)?,
+        })
     }
 
     /// Strictly decodes and cryptographically verifies one exact canonical receipt.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        require_length(
-            bytes,
-            COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1,
-            "receipt",
-        )?;
-        let mut reader = Reader::new(bytes);
-        decode_header(&mut reader, RECEIPT_MAGIC, bytes.len(), "receipt")?;
-        let request_sha256 = reader.fixed::<32>()?;
-        let request_byte_len = reader.u64()?;
-        validate_binding(request_sha256, request_byte_len, "attestation request")?;
-        if request_byte_len != COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1 as u64 {
-            return Err(CompilerExecutionAttestationErrorV1::RequestLengthMismatch);
-        }
-        let policy_identity = CompilerExecutionIssuerPolicyIdentityV1(reader.fixed::<32>()?);
-        let subject = decode_subject_binding(&mut reader)?;
-        let challenge_identity =
-            CompilerExecutionAttestationChallengeIdentityV1(reader.fixed::<32>()?);
-        let nonce = reader.fixed::<32>()?;
-        let sequence = reader.u64()?;
-        let prior_rollback_anchor = reader.fixed::<32>()?;
-        let next_rollback_anchor = reader.fixed::<32>()?;
-        let verifying_key = reader.fixed::<32>()?;
-        let signature = reader.fixed::<64>()?;
-        let declared_identity = reader.fixed::<32>()?;
-        let fields = ReceiptFieldsV1 {
-            request_sha256,
-            request_byte_len,
-            policy_identity,
-            subject,
-            challenge_identity,
-            nonce,
-            sequence,
-            prior_rollback_anchor,
-            next_rollback_anchor,
-            verifying_key,
-        };
-        let mut canonical = encode_receipt_prefix(&fields);
-        canonical[RECEIPT_SIGNED_PREFIX_BYTES..RECEIPT_PREIMAGE_BYTES].copy_from_slice(&signature);
-        let decoded = finish_receipt(fields, signature, canonical)?;
-        if decoded.identity.0 != declared_identity || decoded.canonical_bytes.as_slice() != bytes {
-            return Err(CompilerExecutionAttestationErrorV1::IdentityMismatch(
-                "receipt",
-            ));
-        }
-        Ok(decoded)
+        Ok(Self {
+            record: receipt_codec::V1.decode(bytes)?,
+        })
     }
 
     /// Verifies exact request, policy, and caller-current rollback state.
@@ -714,88 +530,64 @@ impl CompilerExecutionAttestationReceiptV1 {
         request: &CompilerExecutionAttestationRequestV1,
         current_rollback_anchor: [u8; SHA256_BYTES],
     ) -> Result<VerifiedCompilerExecutionAttestationV1, CompilerExecutionAttestationErrorV1> {
-        // Authenticate every field before using any of them for semantic comparison.
-        verify_receipt_signature(&self)?;
-        let expected = ReceiptFieldsV1::from_request(policy, request)?;
-        if self.policy_identity != expected.policy_identity
-            || self.verifying_key != expected.verifying_key
-        {
-            return Err(CompilerExecutionAttestationErrorV1::PolicyMismatch);
-        }
-        if self.subject != expected.subject {
-            return Err(CompilerExecutionAttestationErrorV1::SubjectMismatch);
-        }
-        if self.sequence != expected.sequence {
-            return Err(CompilerExecutionAttestationErrorV1::SequenceMismatch);
-        }
-        if self.challenge_identity != expected.challenge_identity || self.nonce != expected.nonce {
-            return Err(CompilerExecutionAttestationErrorV1::ChallengeMismatch);
-        }
-        if self.prior_rollback_anchor != current_rollback_anchor
-            || self.prior_rollback_anchor != expected.prior_rollback_anchor
-        {
-            return Err(CompilerExecutionAttestationErrorV1::RollbackAnchorMismatch);
-        }
-        if self.next_rollback_anchor != expected.next_rollback_anchor {
-            return Err(CompilerExecutionAttestationErrorV1::RollbackTransitionMismatch);
-        }
-        if self.request_sha256 != expected.request_sha256
-            || self.request_byte_len != expected.request_byte_len
-        {
-            return Err(CompilerExecutionAttestationErrorV1::RequestMismatch);
-        }
+        // Authenticate before expected-field construction or semantic comparison.
+        receipt_codec::V1.verify_signature(&self.record)?;
+        let expected = expected_receipt(policy, request)?;
+        receipt_codec::compare(&self.record.fields, &expected, current_rollback_anchor)?;
         Ok(VerifiedCompilerExecutionAttestationV1 { receipt: self })
     }
 
     /// Returns the domain-separated identity of the exact request.
     pub const fn request_sha256(&self) -> &[u8; SHA256_BYTES] {
-        &self.request_sha256
+        &self.record.fields.request_sha256
     }
 
     /// Returns the caller-pinned issuer policy identity.
     pub const fn policy_identity(&self) -> CompilerExecutionIssuerPolicyIdentityV1 {
-        self.policy_identity
+        CompilerExecutionIssuerPolicyIdentityV1(self.record.fields.policy_identity)
     }
 
     /// Returns the exact compiler-execution subject binding.
     pub const fn subject(&self) -> CompilerExecutionSubjectBindingV1 {
-        self.subject
+        CompilerExecutionSubjectBindingV1 {
+            sha256: self.record.fields.subject.sha256,
+            byte_len: self.record.fields.subject.byte_len,
+        }
     }
 
     /// Returns the issuer challenge identity.
     pub const fn challenge_identity(&self) -> CompilerExecutionAttestationChallengeIdentityV1 {
-        self.challenge_identity
+        CompilerExecutionAttestationChallengeIdentityV1(self.record.fields.challenge_identity)
     }
 
-    /// Returns the issuer nonce needed to reconstruct the exact challenge after an issued-state
-    /// restart. The signed receipt authenticates this value; exposing it grants no authority.
+    /// Returns the authenticated nonce needed to reconstruct the challenge after restart.
     pub const fn challenge_nonce(&self) -> [u8; SHA256_BYTES] {
-        self.nonce
+        self.record.fields.nonce
     }
 
     /// Returns the issuer rollback-ledger sequence.
     pub const fn sequence(&self) -> u64 {
-        self.sequence
+        self.record.fields.sequence
     }
 
     /// Returns the prior rollback anchor consumed by this receipt.
     pub const fn prior_rollback_anchor(&self) -> [u8; SHA256_BYTES] {
-        self.prior_rollback_anchor
+        self.record.fields.prior_rollback_anchor
     }
 
     /// Returns the next rollback anchor that a protected ledger must durably commit.
     pub const fn next_rollback_anchor(&self) -> [u8; SHA256_BYTES] {
-        self.next_rollback_anchor
+        self.record.fields.next_rollback_anchor
     }
 
     /// Returns the complete canonical receipt identity.
     pub const fn identity(&self) -> CompilerExecutionAttestationReceiptIdentityV1 {
-        self.identity
+        CompilerExecutionAttestationReceiptIdentityV1(self.record.identity)
     }
 
     /// Returns the exact canonical signed receipt bytes.
     pub const fn canonical_bytes(&self) -> &[u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1] {
-        &self.canonical_bytes
+        &self.record.bytes
     }
 
     /// Reports that a receipt alone grants no compiler authority.
@@ -818,12 +610,12 @@ impl fmt::Debug for CompilerExecutionAttestationReceiptV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CompilerExecutionAttestationReceiptV1")
-            .field("request_sha256", &self.request_sha256)
-            .field("policy_identity", &self.policy_identity)
-            .field("subject", &self.subject)
-            .field("challenge_identity", &self.challenge_identity)
-            .field("sequence", &self.sequence)
-            .field("identity", &self.identity)
+            .field("request_sha256", &self.request_sha256())
+            .field("policy_identity", &self.policy_identity())
+            .field("subject", &self.subject())
+            .field("challenge_identity", &self.challenge_identity())
+            .field("sequence", &self.sequence())
+            .field("identity", &self.identity())
             .finish_non_exhaustive()
     }
 }
@@ -838,7 +630,7 @@ impl fmt::Debug for CompilerExecutionAttestationReceiptV1 {
 /// rollback anchor before a later authority-bearing type can be constructed.
 ///
 /// ```compile_fail
-/// fn duplicate(value: fe2o3_runtime_protocol::VerifiedCompilerExecutionAttestationV1) {
+/// fn duplicate(value: fe2o3_compiler_execution_protocol::VerifiedCompilerExecutionAttestationV1) {
 ///     let moved = value;
 ///     let _ = (moved, value);
 /// }
@@ -885,172 +677,49 @@ impl VerifiedCompilerExecutionAttestationV1 {
     }
 }
 
-#[derive(Clone, Copy)]
-struct ReceiptFieldsV1 {
-    request_sha256: [u8; SHA256_BYTES],
-    request_byte_len: u64,
-    policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
-    subject: CompilerExecutionSubjectBindingV1,
-    challenge_identity: CompilerExecutionAttestationChallengeIdentityV1,
-    nonce: [u8; SHA256_BYTES],
-    sequence: u64,
-    prior_rollback_anchor: [u8; SHA256_BYTES],
-    next_rollback_anchor: [u8; SHA256_BYTES],
-    verifying_key: [u8; SHA256_BYTES],
-}
-
-impl ReceiptFieldsV1 {
-    fn from_request(
-        policy: &CompilerExecutionIssuerPolicyV1,
-        request: &CompilerExecutionAttestationRequestV1,
-    ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
-        if request.challenge.policy_identity != policy.identity {
-            return Err(CompilerExecutionAttestationErrorV1::PolicyMismatch);
-        }
-        let request_sha256 = *request.identity.as_bytes();
-        let subject = CompilerExecutionSubjectBindingV1::from_subject(&request.subject);
-        let challenge = &request.challenge;
-        let next_rollback_anchor = derive_next_rollback_anchor(
-            challenge.sequence,
-            challenge.prior_rollback_anchor,
-            request_sha256,
-            subject,
-            challenge.nonce,
-            policy.identity.0,
-        );
-        require_identity(next_rollback_anchor, "next rollback anchor")?;
-        Ok(Self {
-            request_sha256,
-            request_byte_len: COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1 as u64,
-            policy_identity: policy.identity,
-            subject,
-            challenge_identity: challenge.identity,
+fn expected_receipt(
+    policy: &CompilerExecutionIssuerPolicyV1,
+    request: &CompilerExecutionAttestationRequestV1,
+) -> Result<receipt_codec::Fields, CompilerExecutionAttestationErrorV1> {
+    let challenge = &request.challenge;
+    let subject = CompilerExecutionSubjectBindingV1::from_subject(&request.subject);
+    receipt_codec::V1.expected(receipt_codec::ExpectedInput {
+        policy_identity: policy.identity().0,
+        verifying_key: *policy.verifying_key(),
+        request_identity: *request.identity.as_bytes(),
+        subject: request_codec::Binding {
+            sha256: subject.sha256,
+            byte_len: subject.byte_len,
+        },
+        challenge: &request_codec::Fields {
+            policy: challenge.policy_identity.0,
+            subject: request_codec::Binding {
+                sha256: challenge.subject.sha256,
+                byte_len: challenge.subject.byte_len,
+            },
             nonce: challenge.nonce,
             sequence: challenge.sequence,
-            prior_rollback_anchor: challenge.prior_rollback_anchor,
-            next_rollback_anchor,
-            verifying_key: policy.verifying_key,
-        })
-    }
+            prior: challenge.prior_rollback_anchor,
+        },
+        challenge_identity: challenge.identity.0,
+    })
 }
 
-fn encode_receipt_prefix(
-    fields: &ReceiptFieldsV1,
-) -> [u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1] {
-    let mut bytes = [0_u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1];
-    let mut offset = encode_header(&mut bytes, RECEIPT_MAGIC);
-    put(&mut bytes, &mut offset, &fields.request_sha256);
-    put(
-        &mut bytes,
-        &mut offset,
-        &fields.request_byte_len.to_le_bytes(),
-    );
-    put(&mut bytes, &mut offset, fields.policy_identity.as_bytes());
-    encode_subject_binding(&mut bytes, &mut offset, fields.subject);
-    put(
-        &mut bytes,
-        &mut offset,
-        fields.challenge_identity.as_bytes(),
-    );
-    put(&mut bytes, &mut offset, &fields.nonce);
-    put(&mut bytes, &mut offset, &fields.sequence.to_le_bytes());
-    put(&mut bytes, &mut offset, &fields.prior_rollback_anchor);
-    put(&mut bytes, &mut offset, &fields.next_rollback_anchor);
-    put(&mut bytes, &mut offset, &fields.verifying_key);
-    debug_assert_eq!(offset, RECEIPT_SIGNED_PREFIX_BYTES);
-    bytes
-}
-
-fn finish_receipt(
-    fields: ReceiptFieldsV1,
-    signature: [u8; SIGNATURE_BYTES],
-    mut bytes: [u8; COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1],
-) -> Result<CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationErrorV1> {
-    validate_verifying_key(fields.verifying_key)?;
-    validate_rollback_position(fields.sequence, fields.prior_rollback_anchor)?;
-    let expected_next = derive_next_rollback_anchor(
-        fields.sequence,
-        fields.prior_rollback_anchor,
-        fields.request_sha256,
-        fields.subject,
-        fields.nonce,
-        fields.policy_identity.0,
-    );
-    if fields.next_rollback_anchor != expected_next {
-        return Err(CompilerExecutionAttestationErrorV1::RollbackTransitionMismatch);
-    }
-    let identity = CompilerExecutionAttestationReceiptIdentityV1(derive_identity(
-        RECEIPT_IDENTITY_DOMAIN,
-        &bytes[..RECEIPT_PREIMAGE_BYTES],
-    ));
-    bytes[RECEIPT_PREIMAGE_BYTES..].copy_from_slice(identity.as_bytes());
-    let receipt = CompilerExecutionAttestationReceiptV1 {
-        request_sha256: fields.request_sha256,
-        request_byte_len: fields.request_byte_len,
-        policy_identity: fields.policy_identity,
-        subject: fields.subject,
-        challenge_identity: fields.challenge_identity,
-        nonce: fields.nonce,
-        sequence: fields.sequence,
-        prior_rollback_anchor: fields.prior_rollback_anchor,
-        next_rollback_anchor: fields.next_rollback_anchor,
-        verifying_key: fields.verifying_key,
-        signature,
-        identity,
-        canonical_bytes: bytes,
-    };
-    verify_receipt_signature(&receipt)?;
-    Ok(receipt)
-}
-
-fn verify_receipt_signature(
-    receipt: &CompilerExecutionAttestationReceiptV1,
-) -> Result<(), CompilerExecutionAttestationErrorV1> {
-    let key = validate_verifying_key(receipt.verifying_key)?;
-    let message =
-        receipt_signature_message(&receipt.canonical_bytes[..RECEIPT_SIGNED_PREFIX_BYTES]);
-    key.verify_strict(&message, &Signature::from_bytes(&receipt.signature))
-        .map_err(|_| CompilerExecutionAttestationErrorV1::SignatureRejected)
-}
-
-fn derive_next_rollback_anchor(
-    sequence: u64,
-    prior: [u8; SHA256_BYTES],
-    request: [u8; SHA256_BYTES],
-    subject: CompilerExecutionSubjectBindingV1,
-    nonce: [u8; SHA256_BYTES],
-    policy: [u8; SHA256_BYTES],
-) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(ROLLBACK_ANCHOR_DOMAIN);
-    digest.update(sequence.to_le_bytes());
-    digest.update(prior);
-    digest.update(request);
-    digest.update(subject.sha256);
-    digest.update(subject.byte_len.to_le_bytes());
-    digest.update(nonce);
-    digest.update(policy);
-    digest.finalize().into()
-}
-
-fn receipt_signature_message(prefix: &[u8]) -> [u8; SHA256_BYTES] {
-    derive_identity(RECEIPT_SIGNATURE_DOMAIN, prefix)
-}
-
-fn encode_header(output: &mut [u8], magic: [u8; 8]) -> usize {
+pub(crate) fn encode_header_version(output: &mut [u8], magic: [u8; 8], version: u16) -> usize {
     let total_len = output.len() as u64;
     let mut offset = 0;
     put(output, &mut offset, &magic);
-    put(output, &mut offset, &VERSION_V1.to_le_bytes());
+    put(output, &mut offset, &version.to_le_bytes());
     put(output, &mut offset, &0_u16.to_le_bytes());
     put(output, &mut offset, &total_len.to_le_bytes());
     put(output, &mut offset, &0_u32.to_le_bytes());
     offset
 }
 
-fn decode_header(
+pub(crate) fn decode_header_version(
     reader: &mut Reader<'_>,
     expected_magic: [u8; 8],
+    expected_version: u16,
     expected_len: usize,
     field: &'static str,
 ) -> Result<(), CompilerExecutionAttestationErrorV1> {
@@ -1058,7 +727,7 @@ fn decode_header(
         return Err(CompilerExecutionAttestationErrorV1::InvalidMagic(field));
     }
     let version = reader.u16()?;
-    if version != VERSION_V1 {
+    if version != expected_version {
         return Err(CompilerExecutionAttestationErrorV1::UnsupportedVersion { field, version });
     }
     let flags = reader.u16()?;
@@ -1081,7 +750,7 @@ fn decode_header(
     Ok(())
 }
 
-fn encode_measurement(
+pub(crate) fn encode_measurement(
     output: &mut [u8],
     offset: &mut usize,
     value: CompilerExecutionIssuerMeasurementV1,
@@ -1090,7 +759,7 @@ fn encode_measurement(
     put(output, offset, &value.byte_len.to_le_bytes());
 }
 
-fn decode_measurement(
+pub(crate) fn decode_measurement(
     reader: &mut Reader<'_>,
     field: &'static str,
 ) -> Result<CompilerExecutionIssuerMeasurementV1, CompilerExecutionAttestationErrorV1> {
@@ -1100,22 +769,7 @@ fn decode_measurement(
     Ok(CompilerExecutionIssuerMeasurementV1 { sha256, byte_len })
 }
 
-fn encode_subject_binding(
-    output: &mut [u8],
-    offset: &mut usize,
-    value: CompilerExecutionSubjectBindingV1,
-) {
-    put(output, offset, &value.sha256);
-    put(output, offset, &value.byte_len.to_le_bytes());
-}
-
-fn decode_subject_binding(
-    reader: &mut Reader<'_>,
-) -> Result<CompilerExecutionSubjectBindingV1, CompilerExecutionAttestationErrorV1> {
-    CompilerExecutionSubjectBindingV1::new(reader.fixed::<32>()?, reader.u64()?)
-}
-
-fn validate_binding(
+pub(crate) fn validate_binding(
     sha256: [u8; SHA256_BYTES],
     byte_len: u64,
     field: &'static str,
@@ -1127,7 +781,7 @@ fn validate_binding(
     Ok(())
 }
 
-fn validate_verifying_key(
+pub(crate) fn validate_verifying_key(
     bytes: [u8; SHA256_BYTES],
 ) -> Result<VerifyingKey, CompilerExecutionAttestationErrorV1> {
     let key = VerifyingKey::from_bytes(&bytes)
@@ -1138,7 +792,7 @@ fn validate_verifying_key(
     Ok(key)
 }
 
-fn validate_rollback_position(
+pub(crate) fn validate_rollback_position(
     sequence: u64,
     prior: [u8; SHA256_BYTES],
 ) -> Result<(), CompilerExecutionAttestationErrorV1> {
@@ -1153,7 +807,7 @@ fn validate_rollback_position(
     Ok(())
 }
 
-fn require_identity(
+pub(crate) fn require_identity(
     value: [u8; SHA256_BYTES],
     field: &'static str,
 ) -> Result<(), CompilerExecutionAttestationErrorV1> {
@@ -1164,7 +818,7 @@ fn require_identity(
     }
 }
 
-fn require_length(
+pub(crate) fn require_length(
     bytes: &[u8],
     expected: usize,
     field: &'static str,
@@ -1180,7 +834,7 @@ fn require_length(
     }
 }
 
-fn derive_identity(domain: &[u8], bytes: &[u8]) -> [u8; SHA256_BYTES] {
+pub(crate) fn derive_identity(domain: &[u8], bytes: &[u8]) -> [u8; SHA256_BYTES] {
     let mut digest = Sha256::new();
     digest.update(domain);
     digest.update((bytes.len() as u64).to_le_bytes());
@@ -1188,19 +842,19 @@ fn derive_identity(domain: &[u8], bytes: &[u8]) -> [u8; SHA256_BYTES] {
     digest.finalize().into()
 }
 
-fn put(output: &mut [u8], offset: &mut usize, value: &[u8]) {
+pub(crate) fn put(output: &mut [u8], offset: &mut usize, value: &[u8]) {
     let end = offset.checked_add(value.len()).expect("fixed codec offset");
     output[*offset..end].copy_from_slice(value);
     *offset = end;
 }
 
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
 impl<'a> Reader<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
 
@@ -1217,13 +871,15 @@ impl<'a> Reader<'a> {
         Ok(value)
     }
 
-    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], CompilerExecutionAttestationErrorV1> {
+    pub(crate) fn fixed<const N: usize>(
+        &mut self,
+    ) -> Result<[u8; N], CompilerExecutionAttestationErrorV1> {
         self.take(N)?
             .try_into()
             .map_err(|_| CompilerExecutionAttestationErrorV1::Truncated)
     }
 
-    fn u16(&mut self) -> Result<u16, CompilerExecutionAttestationErrorV1> {
+    pub(crate) fn u16(&mut self) -> Result<u16, CompilerExecutionAttestationErrorV1> {
         Ok(u16::from_le_bytes(self.fixed()?))
     }
 
@@ -1231,7 +887,7 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes(self.fixed()?))
     }
 
-    fn u64(&mut self) -> Result<u64, CompilerExecutionAttestationErrorV1> {
+    pub(crate) fn u64(&mut self) -> Result<u64, CompilerExecutionAttestationErrorV1> {
         Ok(u64::from_le_bytes(self.fixed()?))
     }
 }

@@ -24,6 +24,39 @@ Without it, displayed declarations are unknown, not guessed from current files.
 
 ## Report Contract
 
+### Ordinary Source Stage Observations
+
+To bind the existing corpus runner's diagnostic report to the projection:
+
+```sh
+python3 scripts/validate-tutorial-kernel-manifest.py --emit-kernel-pairs \
+  --ordinary-source-report /absolute/path/ordinary-source-corpus.json
+```
+
+The report must match the raw manifest bytes and its complete fixture, compiler
+input and target roster. Its raw-file SHA-256 differs from the projection's
+canonical-JSON `sourceContractSha256`. Reordered cases are allowed; missing,
+duplicate, foreign or substituted cases reject before any JSON output.
+
+`ordinarySourceObservations` carries the original report with `diagnosticOnly`
+true. `fixtureSelections[].ordinarySourceCaseIndex` refers to that report's
+case, not an individually qualified kernel. A multi-root fixture refusal does
+not identify which root failed. `stageStatus` becomes
+`fixture-source-observations-bound`; without a report it remains `not-evaluated`.
+
+Preserve recorded `callback_progress`, nested Policy4 phases, `refusal` and
+progress errors as observations. Missing stages remain unobserved; an active
+snapshot records incomplete observation, not a currently running process.
+Do not infer internal phase failures from a broader refusal or connect these
+cases to unbound tutorial variants by matching names or lesson scope.
+
+This checks input correspondence and outcome consistency, not report provenance
+or compiler execution. Even an all-pass source report leaves `qualified` false,
+`qualifiedPairCount` zero, and all missing source/variant/evidence bindings
+unchanged. It grants no proof, simulator, hardware or launch credit;
+`--require-qualified` still refuses. Both input and encoded output are bounded
+to 16 MiB. Unknown nested diagnostic data is not independently certified.
+
 ### Live Compiler Source Census
 
 Set `FE2O3_DIAGNOSTIC_SOURCE_CENSUS_PATH_V1` to a new file path and
@@ -100,7 +133,8 @@ symbols under different features, and omit still-unbound kernel identities.
 For the current incomplete inventory, `requiredPairCount` is null,
 `qualifiedPairCount` is zero, and `inventoryComplete` and `qualified` are false.
 One SIMT variant has an exact source association; the remaining 119 variants
-are pending, no pair is source-bound, and execution stages are not evaluated.
+are pending and no pair is source-bound. Stages are not evaluated unless a
+diagnostic source report is bound; binding that report does not qualify a pair.
 Existing historical successes do not
 acquire new source/variant/target bindings from this report.
 
@@ -289,8 +323,8 @@ curriculum denominator or qualify pairs. Complete source binding removes only
 `per-kernel-variant-sources` from the report's missing bindings. Numerical
 contracts and independent oracles, verified artifacts, target-matched execution
 and other production evidence remain required; `per-variant-target-evidence`
-remains, stages are `not-evaluated`, and `qualified` stays false with zero
-qualified pairs. The separate runtime census and source/display join rules for
+remains, and `qualified` stays false with zero qualified pairs. Stages are
+`not-evaluated` unless a diagnostic source report is bound. The separate runtime census and source/display join rules for
 `requiredPairCount` remain unchanged.
 
 ## Remaining Integration

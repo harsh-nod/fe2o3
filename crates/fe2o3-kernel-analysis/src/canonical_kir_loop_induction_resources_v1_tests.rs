@@ -38,9 +38,12 @@ fn measure(
 
 #[test]
 fn induction_facts_exact_and_short_work_preserve_typed_denial_and_final_charge_prefix() {
-    for (module, remaining_work) in [
-        (fixture(ScalarType::U32, None, 1, false), 366),
-        (fixture(ScalarType::U8, Some((2, 12)), 3, true), 400),
+    for (module, pending_suffix) in [
+        (
+            fixture(ScalarType::U32, None, 1, false),
+            Some(366 + 2 * (4 + 3)),
+        ),
+        (fixture(ScalarType::U8, Some((2, 12)), 3, true), None),
     ] {
         with_loops(module, |loops, budget| {
             let floor = budget.storage();
@@ -63,27 +66,101 @@ fn induction_facts_exact_and_short_work_preserve_typed_denial_and_final_charge_p
                 (short.failed_work, short.failed_storage),
                 (Some(measured.work), None)
             );
-            // Independent replay's final Scratch table reserves four pending
-            // pairs after its table-work charge, before initialization/checks.
+            // The fixed fixtures have different live backing. The dynamic
+            // fixture retains the checker pending-table peak; its unchanged
+            // 366-unit suffix gains two exact definition(4)/value(3) queries.
+            // The literal fixture instead peaks in the first Sparse engine.
+            let reference = sparse_prefix_reference(loops, floor, measured.peak - 1);
             let storage = measure(loops, floor, LIMIT, measured.peak - 1);
             let Err(Error::Resource(Resource::Storage(error))) = storage.result else {
-                panic!("exact independent-checker pending table Storage refusal: {storage:?}")
+                panic!("exact fixture-specific Storage refusal: {storage:?}")
             };
             assert_eq!(
                 (error.actual(), error.limit()),
                 (measured.peak, measured.peak - 1)
             );
-            assert_eq!(storage.work, measured.work - remaining_work);
             assert_eq!(loops.inventory().blocks().len(), 4);
-            assert_eq!(
-                storage.peak,
-                measured.peak - 4 * size_of::<(usize, usize)>()
-            );
+            if let Some(remaining_work) = pending_suffix {
+                assert!(reference.result.is_ok());
+                assert!(reference.peak < measured.peak);
+                assert_eq!(storage.work, measured.work - remaining_work);
+                assert_eq!(
+                    storage.peak,
+                    reference
+                        .peak
+                        .max(measured.peak - 4 * size_of::<(usize, usize)>())
+                );
+                assert_eq!(
+                    (reference.failed_work, reference.failed_storage),
+                    (None, None)
+                );
+            } else {
+                // Public component reference, never a private layout mirror or
+                // a whole-factory self-oracle. Any other phase fails this test.
+                let Err(Error::Resource(Resource::Storage(reference_error))) = reference.result
+                else {
+                    panic!(
+                        "first Sparse construction must reach exact Storage refusal: {reference:?}"
+                    )
+                };
+                assert_eq!(error, reference_error);
+                assert_eq!(storage.work, reference.work);
+                assert_eq!(storage.peak, reference.peak);
+                assert_eq!(
+                    (reference.failed_work, reference.failed_storage),
+                    (None, Some(measured.peak))
+                );
+            }
             assert_eq!(
                 (storage.failed_work, storage.failed_storage),
                 (None, Some(measured.peak))
             );
         });
+    }
+}
+
+fn sparse_prefix_reference(loops: &Loops<'_, '_>, floor: usize, limit: usize) -> Measurement {
+    let mut work = Work::new(LIMIT);
+    let (result, peak, failed_storage) = {
+        let mut budget = Budget::new(&mut work, limit);
+        budget.reserve_storage(floor).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let result = resources::scoped(&mut budget, |meter: &mut Meter<'_, '_>| {
+            let limits = Limits::default();
+            meter.derive(|b| Ok(loops.replay(loops.inventory(), limits, b)?))?;
+            meter.reserve(size_of::<CanonicalKirInductionFactsV1<'_, '_, '_>>())?;
+            let (rows, _) = meter.table::<Row>(loops.recurrences.len())?;
+            meter.work(3)?;
+            let i = loops.inventory();
+            let limits = SparseLimits {
+                functions: limits.functions,
+                definitions: limits.definitions,
+                uses: i.uses().len(),
+                blocks: limits.blocks,
+                operations: limits.operations,
+                edges: limits.edges,
+                worklist: i
+                    .blocks()
+                    .len()
+                    .checked_add(i.operations().len())
+                    .ok_or(Resource::Arithmetic)?,
+            };
+            let result = meter.derive(|budget| Ok(Sparse::derive(i, limits, budget)?));
+            // The reference deliberately stops at this public component, before
+            // producer row construction or independent induction checking.
+            drop(rows);
+            result.map(|(sparse, _)| drop(sparse))
+        });
+        assert_eq!(budget.storage(), floor);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        (result, budget.peak_storage(), budget.failed_storage())
+    };
+    Measurement {
+        result,
+        work: work.work(),
+        peak,
+        failed_work: work.failed_work(),
+        failed_storage,
     }
 }
 #[test]

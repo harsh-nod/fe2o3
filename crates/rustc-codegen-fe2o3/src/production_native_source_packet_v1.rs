@@ -194,6 +194,7 @@ pub(super) fn with_native_lineage_transfer_v1<T>(
 pub(super) struct NativeSourcePacketPartsV1<T> {
     pub(super) proof: T,
     pub(super) native_module: Vec<u8>,
+    pub(super) source_packet: Vec<u8>,
     pub(super) retained: usize,
 }
 
@@ -202,11 +203,10 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
     ranked: &AuthenticatedRankedVerificationRosterV1,
     wrapper_header: fn() -> Result<usize, E>,
     budget: &mut Budget<'w>,
-    replay: impl for<'p> FnOnce(
-        NativeCompilerRankedSourceProofInputsV1<'p>,
-        &mut Budget<'w>,
-    ) -> Result<(T, usize), E>,
+    replay: impl for<'p> FnOnce(&'p [u8], &mut Budget<'w>) -> Result<(T, usize), E>,
 ) -> Result<NativeSourcePacketPartsV1<T>, E> {
+    let header = wrapper_header()?;
+    budget.reserve_storage(header)?;
     source.verify(budget)?;
     let native = source.native()?;
     let launch = source.launch()?;
@@ -388,19 +388,49 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
     }
     let (candidates, candidate_storage) = source.candidates(budget)?;
     budget.reserve_storage(candidate_storage)?;
-    let mut ranked_roots = reserved_vec(count, budget)?;
     if candidates.len() != count {
         return Err(E::Mismatch("complete typed ranked candidate roster"));
     }
-    for (candidate, root) in candidates.iter().zip(ranked.roots()) {
+    budget.reserve_storage(std::mem::size_of::<Vec<(Vec<u8>, Vec<u8>)>>())?;
+    let mut encoded = reserved_vec(count, budget)?;
+    for candidate in &candidates {
+        let (recipe, storage) = fe2o3_pliron::encode_production_ranked_recipe_v1(
+            candidate.kernel(),
+            budget,
+        )
+        .map_err(|error| {
+            E::Replay(fe2o3_verifier::NativeCompilerSourceProofErrorV1::RankedRecipeWire(error))
+        })?;
+        budget.reserve_storage(storage.retained_storage())?;
+        let (rows, storage) = fe2o3_lower_mir_kernel::encode_production_ranked_source_rows_v1(
+            candidate.access_sources(),
+            candidate.executable_effect_sources(),
+            budget,
+        )
+        .map_err(|error| {
+            E::Replay(fe2o3_verifier::NativeCompilerSourceProofErrorV1::RankedSourceRowsWire(error))
+        })?;
+        budget.reserve_storage(storage.retained_storage())?;
+        encoded.push((recipe, rows));
+    }
+    let mut ranked_roots = reserved_vec(count, budget)?;
+    for ((candidate, root), (recipe, rows)) in candidates.iter().zip(ranked.roots()).zip(&encoded) {
         budget.charge_work(2)?;
-        ranked_roots.push(NativeCompilerRankedRootV1 {
-            candidate: *candidate,
+        ranked_roots.push(NativeCompilerRankedRecipeRootV1 {
+            semantic_root: candidate.semantic_root(),
+            launch_rank: candidate.launch_rank(),
+            recipe_bytes: recipe,
+            source_rows_bytes: rows,
+            ranked_ir: candidate.ranked_ir(),
             effect_receipts: root.verification().effect_receipts(),
         });
     }
-    let (proof, proof_storage) = replay(
-        NativeCompilerRankedSourceProofInputsV1 {
+    let erased = match source {
+        NativeSourceRefV1::Direct(_) => None,
+        NativeSourceRefV1::Erased(source) => Some(source.erased().canonical().canonical_bytes()),
+    };
+    let (source_packet, packet_storage) = encode_native_compiler_source_packet_v1(
+        NativeCompilerRankedRecipeSourceProofInputsV1 {
             source: NativeCompilerSourceProofInputsV1 {
                 semantic_mir: semantic.canonical_encoding(),
                 native_module: &native_module,
@@ -412,13 +442,16 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
             },
             ranked_roots: &ranked_roots,
         },
+        erased,
         budget,
-    )?;
+    )
+    .map_err(E::Replay)?;
+    budget.reserve_storage(packet_storage.retained_storage())?;
+    let (proof, proof_storage) = replay(&source_packet, budget)?;
     budget.reserve_storage(proof_storage)?;
-    let header = wrapper_header()?;
-    budget.reserve_storage(header)?;
     let retained = header
         .checked_add(native_module.capacity())
+        .and_then(|n| n.checked_add(source_packet.capacity()))
         .and_then(|n| n.checked_add(proof_storage))
         .ok_or(Resource::Arithmetic)?;
     drop(rows);
@@ -426,10 +459,12 @@ pub(super) fn prepare_native_source_packet_v1<'w, T>(
     drop(launches);
     drop(joins);
     drop(ranked_roots);
+    drop(encoded);
     drop(candidates);
     Ok(NativeSourcePacketPartsV1 {
         proof,
         native_module,
+        source_packet,
         retained,
     })
 }

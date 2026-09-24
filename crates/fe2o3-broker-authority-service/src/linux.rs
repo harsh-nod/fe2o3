@@ -6,8 +6,26 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 
 use fe2o3_runtime_protocol::CompilerExecutionExternalAnchorServiceIdentityV1;
+#[cfg(test)]
 use rustix::fs::OFlags;
+#[cfg(test)]
 use rustix::net::{AddressFamily, SocketType};
+
+mod checks;
+mod client_v2;
+mod continuity;
+mod native;
+mod native_io;
+
+pub use client_v2::{
+    CURRENT_PROCESS_START_TIME_IO_STORAGE_V2, CURRENT_PROCESS_START_TIME_WORK_V2,
+    LiveClientPidfdErrorV2, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2,
+    current_process_start_time_ticks_v2,
+};
+pub use native::{
+    ProtectedExternalAnchorServiceAdmissionV2, ProtectedExternalAnchorServiceErrorV2,
+    ProtectedExternalAnchorServiceStorageV2,
+};
 
 const DIRECTORY_PERMISSIONS: u32 = 0o700;
 const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
@@ -139,21 +157,7 @@ impl ObjectIdentityV1 {
         kind: AdmissionErrorKindV1,
         label: &'static str,
     ) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
-        let stat = rustix::fs::fstat(descriptor).map_err(|error| {
-            ProtectedServiceAdmissionErrorV1::io(
-                kind,
-                format!("cannot inspect retained {label} descriptor"),
-                io::Error::from(error),
-            )
-        })?;
-        Ok(Self {
-            device: stat.st_dev,
-            inode: stat.st_ino,
-            mode: stat.st_mode,
-            uid: stat.st_uid,
-            gid: stat.st_gid,
-            links: stat.st_nlink,
-        })
+        checks::inspect_object(descriptor, kind, label).map_err(Into::into)
     }
 
     const fn object(self) -> (u64, u64) {
@@ -170,31 +174,7 @@ struct PeerCredentialsV1 {
 
 impl PeerCredentialsV1 {
     fn inspect(peer: &OwnedFd) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
-        let credentials = rustix::net::sockopt::socket_peercred(peer).map_err(|error| {
-            ProtectedServiceAdmissionErrorV1::io(
-                AdmissionErrorKindV1::InspectPeer,
-                "cannot inspect retained peer SO_PEERCRED",
-                io::Error::from(error),
-            )
-        })?;
-        let raw_pid = credentials.pid.as_raw_nonzero().get();
-        let pid = u32::try_from(raw_pid).map_err(|_| {
-            ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ExpectedClientPid,
-                "service peer SO_PEERCRED PID is not a positive u32",
-            )
-        })?;
-        if pid == 0 {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ExpectedClientPid,
-                "service peer SO_PEERCRED PID is zero",
-            ));
-        }
-        Ok(Self {
-            pid,
-            uid: credentials.uid.as_raw(),
-            gid: credentials.gid.as_raw(),
-        })
+        checks::inspect_peer_credentials(peer).map_err(Into::into)
     }
 }
 
@@ -284,29 +264,7 @@ impl LiveClientPidfdIdentityV1 {
         supervisor_pidfd: OwnedFd,
         expected_client: ExpectedClientProcessIdentityV1,
     ) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
-        require_close_on_exec(
-            &supervisor_pidfd,
-            AdmissionErrorKindV1::ClientPidfdCloseOnExec,
-            "client pidfd",
-        )?;
-        let descriptor_identity = ObjectIdentityV1::inspect(
-            &supervisor_pidfd,
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "client pidfd",
-        )?;
-        let observation = inspect_pidfd_target(&supervisor_pidfd)?;
-        require_process_pidfd_mode(&supervisor_pidfd)?;
-        require_pidfd_target(observation.pid, expected_client.pid)?;
-        let start_time_ticks = inspect_process_start_time_ticks(expected_client.pid)?;
-        let identity = Self {
-            pidfd: supervisor_pidfd,
-            expected_client,
-            descriptor_identity,
-            identity_source: observation.source,
-            start_time_ticks,
-        };
-        identity.validate_liveness()?;
-        Ok(identity)
+        Self::admit_with::<continuity::Legacy>(supervisor_pidfd, expected_client)
     }
 
     /// Revalidates the retained descriptor, exact target PID, and point-in-time liveness.
@@ -316,59 +274,7 @@ impl LiveClientPidfdIdentityV1 {
     /// reaps. `ECHILD` is expected for a valid non-child pidfd and leaves poll as the liveness
     /// authority. A successful return cannot prevent a later process exit.
     pub fn validate_liveness(&self) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-        require_close_on_exec(
-            &self.pidfd,
-            AdmissionErrorKindV1::ClientPidfdCloseOnExec,
-            "client pidfd",
-        )?;
-        let descriptor_identity = ObjectIdentityV1::inspect(
-            &self.pidfd,
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "client pidfd",
-        )?;
-        if descriptor_identity != self.descriptor_identity {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ClientPidfdIdentityChanged,
-                "retained client pidfd descriptor identity changed",
-            ));
-        }
-        let observation = inspect_pidfd_target(&self.pidfd)?;
-        require_process_pidfd_mode(&self.pidfd)?;
-        if observation.source != self.identity_source {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ClientPidfdIdentityChanged,
-                "retained client pidfd identity probe changed",
-            ));
-        }
-        require_pidfd_target(observation.pid, self.expected_client.pid)?;
-        require_client_start_time(
-            inspect_process_start_time_ticks(self.expected_client.pid)?,
-            self.start_time_ticks,
-        )?;
-        require_pidfd_live(&self.pidfd)?;
-        let final_observation = inspect_pidfd_target(&self.pidfd)?;
-        if final_observation != observation {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ClientPidfdIdentityChanged,
-                "retained client pidfd target changed while checking liveness",
-            ));
-        }
-        let final_identity = ObjectIdentityV1::inspect(
-            &self.pidfd,
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "client pidfd",
-        )?;
-        if final_identity != self.descriptor_identity {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ClientPidfdIdentityChanged,
-                "retained client pidfd descriptor changed while checking liveness",
-            ));
-        }
-        require_client_start_time(
-            inspect_process_start_time_ticks(self.expected_client.pid)?,
-            self.start_time_ticks,
-        )?;
-        Ok(())
+        self.validate_liveness_with::<continuity::Legacy>()
     }
 }
 
@@ -447,45 +353,11 @@ impl ProtectedExternalAnchorServiceAdmissionV1 {
         service_pidfd: OwnedFd,
         expected_service: CompilerExecutionExternalAnchorServiceIdentityV1,
     ) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
-        let issuer_uid = rustix::process::geteuid().as_raw();
-        require_close_on_exec(
-            &retained_peer,
-            AdmissionErrorKindV1::PeerCloseOnExec,
-            "external-anchor peer",
-        )?;
-        validate_external_anchor_peer_status(&retained_peer)?;
-        let peer_identity = validate_peer_shape(&retained_peer)?;
-        let credentials = PeerCredentialsV1::inspect(&retained_peer)?;
-        if (credentials.uid, credentials.gid) != (expected_service.uid(), expected_service.gid()) {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ExternalAnchorServiceCredentialsMismatch,
-                "external-anchor peer credentials differ from the pinned service identity",
-            ));
-        }
-        if REQUIRE_DISTINCT_UID && credentials.uid == issuer_uid {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::SameUidExternalAnchorService,
-                "external-anchor service UID equals the protected issuer UID",
-            ));
-        }
-        let expected_process = ExpectedClientProcessIdentityV1::new(
-            credentials.pid,
-            credentials.uid,
-            credentials.gid,
-        )?;
-        let live_service = LiveClientPidfdIdentityV1::admit(service_pidfd, expected_process)?;
-        require_distinct_peer_and_pidfd(peer_identity, live_service.descriptor_identity)?;
-        let admitted = Self {
-            peer: retained_peer,
-            live_service,
+        Self::admit_with::<continuity::Legacy, REQUIRE_DISTINCT_UID>(
+            retained_peer,
+            service_pidfd,
             expected_service,
-            issuer_uid,
-            peer_identity,
-            #[cfg(any(test, feature = "test-support"))]
-            non_authoritative_same_uid_test: !REQUIRE_DISTINCT_UID,
-        };
-        admitted.validate_continuity_inner::<REQUIRE_DISTINCT_UID>()?;
-        Ok(admitted)
+        )
     }
 
     /// Revalidates the exact endpoint, pidfd target, liveness, credentials, and issuer UID.
@@ -500,45 +372,7 @@ impl ProtectedExternalAnchorServiceAdmissionV1 {
     fn validate_continuity_inner<const REQUIRE_DISTINCT_UID: bool>(
         &self,
     ) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-        if rustix::process::geteuid().as_raw() != self.issuer_uid {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ServiceIdentityChanged,
-                "protected issuer UID changed after external-anchor admission",
-            ));
-        }
-        require_close_on_exec(
-            &self.peer,
-            AdmissionErrorKindV1::PeerCloseOnExec,
-            "external-anchor peer",
-        )?;
-        validate_external_anchor_peer_status(&self.peer)?;
-        self.live_service.validate_liveness()?;
-        let peer_identity = validate_peer_shape(&self.peer)?;
-        if peer_identity != self.peer_identity {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::PeerIdentityChanged,
-                "external-anchor peer descriptor identity changed",
-            ));
-        }
-        require_distinct_peer_and_pidfd(peer_identity, self.live_service.descriptor_identity)?;
-        let credentials = PeerCredentialsV1::inspect(&self.peer)?;
-        if credentials != self.live_service.expected_client.credentials()
-            || (credentials.uid, credentials.gid)
-                != (self.expected_service.uid(), self.expected_service.gid())
-        {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ExternalAnchorServiceCredentialsMismatch,
-                "external-anchor peer credentials changed after admission",
-            ));
-        }
-        if REQUIRE_DISTINCT_UID && credentials.uid == self.issuer_uid {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::SameUidExternalAnchorService,
-                "external-anchor service UID equals the protected issuer UID",
-            ));
-        }
-        self.live_service.validate_liveness()?;
-        Ok(())
+        self.validate_continuity_with::<continuity::Legacy, REQUIRE_DISTINCT_UID>()
     }
 
     /// Returns the pinned external-anchor service credential identity.
@@ -559,25 +393,11 @@ impl ProtectedExternalAnchorServiceAdmissionV1 {
     pub fn try_clone_for_transfer(
         &self,
     ) -> Result<(OwnedFd, OwnedFd), ProtectedServiceAdmissionErrorV1> {
-        self.validate_continuity()?;
-        let peer = rustix::io::fcntl_dupfd_cloexec(&self.peer, 0).map_err(|error| {
-            ProtectedServiceAdmissionErrorV1::io(
-                AdmissionErrorKindV1::InspectPeer,
-                "cannot clone external-anchor peer for issuer transfer",
-                io::Error::from(error),
-            )
-        })?;
-        let service_pidfd =
-            rustix::io::fcntl_dupfd_cloexec(&self.live_service.pidfd, 0).map_err(|error| {
-                ProtectedServiceAdmissionErrorV1::io(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "cannot clone external-anchor pidfd for issuer transfer",
-                    io::Error::from(error),
-                )
-            })?;
-        self.validate_transfer(&peer, &service_pidfd)?;
-        self.validate_continuity()?;
-        Ok((peer, service_pidfd))
+        #[cfg(any(test, feature = "test-support"))]
+        if self.non_authoritative_same_uid_test {
+            return self.clone_transfer_with::<continuity::Legacy, false>();
+        }
+        self.clone_transfer_with::<continuity::Legacy, true>()
     }
 
     /// Revalidates a transferred endpoint pair against this exact retained admission.
@@ -586,72 +406,11 @@ impl ProtectedExternalAnchorServiceAdmissionV1 {
         peer: &impl AsFd,
         service_pidfd: &impl AsFd,
     ) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-        self.validate_continuity()?;
-        for (descriptor, kind, label) in [
-            (
-                peer.as_fd(),
-                AdmissionErrorKindV1::PeerCloseOnExec,
-                "transferred external-anchor peer",
-            ),
-            (
-                service_pidfd.as_fd(),
-                AdmissionErrorKindV1::ClientPidfdCloseOnExec,
-                "transferred external-anchor pidfd",
-            ),
-        ] {
-            let flags = rustix::io::fcntl_getfd(descriptor).map_err(|error| {
-                ProtectedServiceAdmissionErrorV1::io(
-                    kind,
-                    format!("cannot inspect {label} descriptor flags"),
-                    io::Error::from(error),
-                )
-            })?;
-            if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
-                return Err(ProtectedServiceAdmissionErrorV1::new(
-                    kind,
-                    format!("{label} descriptor does not have FD_CLOEXEC"),
-                ));
-            }
-        }
-        let peer = rustix::io::fcntl_dupfd_cloexec(peer, 0).map_err(|error| {
-            ProtectedServiceAdmissionErrorV1::io(
-                AdmissionErrorKindV1::InspectPeer,
-                "cannot retain transferred external-anchor peer for revalidation",
-                io::Error::from(error),
-            )
-        })?;
-        let service_pidfd = rustix::io::fcntl_dupfd_cloexec(service_pidfd, 0).map_err(|error| {
-            ProtectedServiceAdmissionErrorV1::io(
-                AdmissionErrorKindV1::InspectClientPidfd,
-                "cannot retain transferred external-anchor pidfd for revalidation",
-                io::Error::from(error),
-            )
-        })?;
         #[cfg(any(test, feature = "test-support"))]
-        let transferred = if self.non_authoritative_same_uid_test {
-            Self::admit_inner::<false>(peer, service_pidfd, self.expected_service)?
-        } else {
-            Self::admit_inner::<true>(peer, service_pidfd, self.expected_service)?
-        };
-        #[cfg(not(any(test, feature = "test-support")))]
-        let transferred = Self::admit_inner::<true>(peer, service_pidfd, self.expected_service)?;
-        if transferred.peer_identity != self.peer_identity {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::PeerIdentityChanged,
-                "transferred external-anchor endpoint is not the admitted socket object",
-            ));
+        if self.non_authoritative_same_uid_test {
+            return self.validate_transfer_with::<continuity::Legacy, false>(peer, service_pidfd);
         }
-        if transferred.live_service.descriptor_identity != self.live_service.descriptor_identity
-            || transferred.live_service.expected_client != self.live_service.expected_client
-            || transferred.live_service.start_time_ticks != self.live_service.start_time_ticks
-        {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ClientPidfdIdentityChanged,
-                "transferred external-anchor pidfd is not the admitted live service process",
-            ));
-        }
-        transferred.validate_continuity()?;
-        self.validate_continuity()
+        self.validate_transfer_with::<continuity::Legacy, true>(peer, service_pidfd)
     }
 
     pub(crate) fn service_peer(&self) -> std::os::fd::BorrowedFd<'_> {
@@ -1006,87 +765,15 @@ fn require_close_on_exec(
     kind: AdmissionErrorKindV1,
     label: &'static str,
 ) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    let flags = rustix::io::fcntl_getfd(descriptor).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            kind,
-            format!("cannot inspect {label} descriptor flags"),
-            io::Error::from(error),
-        )
-    })?;
-    if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            kind,
-            format!("retained {label} descriptor does not have FD_CLOEXEC"),
-        ));
-    }
-    Ok(())
+    checks::require_close_on_exec(descriptor, kind, label).map_err(Into::into)
 }
 
-fn require_process_pidfd_mode(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    let flags = rustix::fs::fcntl_getfl(pidfd).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "cannot inspect client pidfd file status flags",
-            io::Error::from(error),
-        )
-    })?;
-    // Linux v6.12 UAPI defines PIDFD_THREAD as exactly O_EXCL. This contract rejects only that
-    // identified process-vs-thread selector and does not require unrelated flag bits to be zero.
-    if flags.contains(rustix::fs::OFlags::EXCL) {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientPidfdThread,
-            "client pidfd has Linux PIDFD_THREAD (O_EXCL) semantics",
-        ));
-    }
-    Ok(())
-}
-
-fn inspect_pidfd_target(
-    pidfd: &OwnedFd,
-) -> Result<PidfdTargetObservationV1, ProtectedServiceAdmissionErrorV1> {
-    // SAFETY: PidfdInfoV0 contains only integer fields, so all-zero is a valid request. The ioctl
-    // reads the request mask and initializes fields indicated by the returned mask.
-    let mut info = unsafe { MaybeUninit::<PidfdInfoV0>::zeroed().assume_init() };
-    info.mask = PIDFD_INFO_PID_V0;
-    // SAFETY: `info` is writable for the exact 64-byte v0 type encoded by PIDFD_GET_INFO_V0 and the
-    // descriptor remains borrowed for the call.
-    let result = unsafe { libc::ioctl(pidfd.as_raw_fd(), PIDFD_GET_INFO_V0, &mut info) };
-    if result == 0 {
-        if info.mask & PIDFD_INFO_PID_V0 == 0 || info.pid == 0 || info.tgid != info.pid {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientPidfd,
-                "PIDFD_GET_INFO omitted a usable process-leader target PID",
-            ));
-        }
-        return Ok(PidfdTargetObservationV1 {
-            pid: info.pid,
-            source: PidfdIdentitySourceV1::KernelIoctl,
-        });
-    }
-
-    dispatch_pidfd_get_info_error(pidfd, io::Error::last_os_error())
-}
-
+#[cfg(test)]
 fn dispatch_pidfd_get_info_error(
     pidfd: &OwnedFd,
     error: io::Error,
 ) -> Result<PidfdTargetObservationV1, ProtectedServiceAdmissionErrorV1> {
-    match error.raw_os_error() {
-        // Linux v6.12 checks for a nonzero pidfd ioctl argument before its command switch, so the
-        // pointer-bearing v0 info request returns EINVAL. Linux v6.13 dispatches PIDFD_GET_INFO
-        // before that check. Neither errno proves descriptor type: only strict kernel procfs
-        // inspection below can make this fallback succeed.
-        Some(libc::ENOTTY) | Some(libc::EINVAL) => inspect_pidfd_target_from_procfs(pidfd),
-        Some(libc::ESRCH) => Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientAlreadyDead,
-            "client pidfd target exited before identity inspection",
-        )),
-        _ => Err(ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "cannot inspect client pidfd with PIDFD_GET_INFO",
-            error,
-        )),
-    }
+    continuity::dispatch_ioctl_error::<continuity::Legacy>(pidfd, error)
 }
 
 fn inspect_pidfd_target_from_procfs(
@@ -1157,107 +844,7 @@ fn inspect_pidfd_target_from_procfs(
 }
 
 fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, ProtectedServiceAdmissionErrorV1> {
-    let mut pid_value = None;
-    let mut flags_value = None;
-    for line in contents.lines() {
-        if let Some(field) = line.strip_prefix("Pid:") {
-            let value = field.strip_prefix('\t').ok_or_else(|| {
-                ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a malformed Pid field",
-                )
-            })?;
-            if pid_value.is_some() {
-                return Err(ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has duplicate Pid fields",
-                ));
-            }
-            let canonical_positive_or_zero = !value.is_empty()
-                && value.bytes().all(|byte| byte.is_ascii_digit())
-                && (value.len() == 1 || !value.starts_with('0'));
-            if value != "-1" && !canonical_positive_or_zero {
-                return Err(ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a non-canonical decimal Pid field",
-                ));
-            }
-            pid_value = Some(value.parse::<i64>().map_err(|_| {
-                ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a malformed Pid field",
-                )
-            })?);
-        }
-        if let Some(field) = line.strip_prefix("flags:") {
-            let value = field.strip_prefix('\t').ok_or_else(|| {
-                ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a malformed flags field",
-                )
-            })?;
-            if flags_value.is_some() {
-                return Err(ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has duplicate flags fields",
-                ));
-            }
-            if value.len() < 2
-                || !value.starts_with('0')
-                || !value.bytes().all(|byte| matches!(byte, b'0'..=b'7'))
-            {
-                return Err(ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a malformed octal flags field",
-                ));
-            }
-            flags_value = Some(u32::from_str_radix(value, 8).map_err(|_| {
-                ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has an out-of-range octal flags field",
-                )
-            })?);
-        }
-    }
-    let pid_value = pid_value.ok_or_else(|| {
-        ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "descriptor is not a pidfd with a procfs Pid identity field",
-        )
-    })?;
-    let flags_value = flags_value.ok_or_else(|| {
-        ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "descriptor has no exact procfs octal flags identity field",
-        )
-    })?;
-    // Linux v6.12 fs/proc/fd.c emits file->f_flags in octal, and pidfd.h defines PIDFD_THREAD as
-    // O_EXCL. Reject only that exact bit so unrelated current or future flags remain admissible.
-    if flags_value & libc::PIDFD_THREAD != 0 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientPidfdThread,
-            "procfs client pidfd flags contain Linux PIDFD_THREAD (O_EXCL)",
-        ));
-    }
-    if pid_value == -1 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientAlreadyDead,
-            "client pidfd target was already reaped",
-        ));
-    }
-    let pid = u32::try_from(pid_value).map_err(|_| {
-        ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "procfs client pidfd identity is not positive in the selected procfs namespace view",
-        )
-    })?;
-    if pid == 0 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "procfs client pidfd identity is not positive in the selected procfs namespace view",
-        ));
-    }
-    Ok(pid)
+    checks::parse_pidfd_fdinfo(contents).map_err(Into::into)
 }
 
 fn open_validated_procfs_self() -> Result<File, ProtectedServiceAdmissionErrorV1> {
@@ -1304,20 +891,7 @@ pub(crate) fn require_procfs(
     file: &File,
     label: &'static str,
 ) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    let filesystem = rustix::fs::fstatfs(file).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            format!("cannot inspect filesystem type for {label}"),
-            io::Error::from(error),
-        )
-    })?;
-    if filesystem.f_type != rustix::fs::PROC_SUPER_MAGIC {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            format!("{label} is not backed by procfs"),
-        ));
-    }
-    Ok(())
+    checks::require_procfs(file, label).map_err(Into::into)
 }
 
 fn inspect_process_start_time_ticks(pid: u32) -> Result<u64, ProtectedServiceAdmissionErrorV1> {
@@ -1368,150 +942,20 @@ fn parse_process_start_time_ticks(
     contents: &[u8],
     expected_pid: u32,
 ) -> Result<u64, ProtectedServiceAdmissionErrorV1> {
-    let close = contents
-        .iter()
-        .rposition(|byte| *byte == b')')
-        .ok_or_else(|| {
-            ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "client procfs stat identity has no command terminator",
-            )
-        })?;
-    let first_space = contents
-        .iter()
-        .position(|byte| *byte == b' ')
-        .ok_or_else(|| {
-            ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "client procfs stat identity has no PID terminator",
-            )
-        })?;
-    if contents.get(first_space + 1) != Some(&b'(') || close <= first_space + 1 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat identity has a malformed command field",
-        ));
-    }
-    let pid_bytes = &contents[..first_space];
-    if pid_bytes.is_empty()
-        || (pid_bytes.len() > 1 && pid_bytes.starts_with(b"0"))
-        || !pid_bytes.iter().all(u8::is_ascii_digit)
-    {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat identity has a noncanonical PID",
-        ));
-    }
-    let recorded_pid = std::str::from_utf8(pid_bytes)
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok());
-    if recorded_pid != Some(expected_pid) {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat PID does not match the retained pidfd target",
-        ));
-    }
-    let mut fields = contents
-        .get(close + 1..)
-        .ok_or_else(|| {
-            ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "client procfs stat identity ended at its command field",
-            )
-        })?
-        .split(u8::is_ascii_whitespace)
-        .filter(|field| !field.is_empty());
-    let start_time = fields.nth(19).ok_or_else(|| {
-        ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat identity has no start-time field",
-        )
-    })?;
-    if start_time.is_empty()
-        || (start_time.len() > 1 && start_time.starts_with(b"0"))
-        || !start_time.iter().all(u8::is_ascii_digit)
-    {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat identity has a noncanonical start time",
-        ));
-    }
-    let start_time = std::str::from_utf8(start_time)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value != 0)
-        .ok_or_else(|| {
-            ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "client procfs stat identity has an invalid start time",
-            )
-        })?;
-    Ok(start_time)
+    checks::parse_process_start_time_ticks(contents, expected_pid).map_err(Into::into)
 }
 
-fn require_client_start_time(
-    actual: u64,
-    expected: u64,
-) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientStartTimeChanged,
-            "retained client process start time changed",
-        ))
-    }
-}
-
-fn require_pidfd_target(
-    actual_pid: u32,
-    expected_pid: u32,
-) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    if actual_pid != expected_pid {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientPidfdTargetMismatch,
-            format!("client pidfd targets PID {actual_pid}, expected exact PID {expected_pid}"),
-        ));
-    }
-    Ok(())
-}
-
-fn require_pidfd_live(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    require_pidfd_not_pollable(pidfd)?;
-    let options = rustix::process::WaitIdOptions::EXITED
-        | rustix::process::WaitIdOptions::NOHANG
-        | rustix::process::WaitIdOptions::NOWAIT;
-    match rustix::process::waitid(rustix::process::WaitId::PidFd(pidfd.as_fd()), options) {
-        Ok(Some(_)) => {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::ClientAlreadyDead,
-                "client pidfd identifies an exited waitable child",
-            ));
-        }
-        Ok(None) | Err(rustix::io::Errno::CHILD) => {}
-        Err(error) => {
-            return Err(ProtectedServiceAdmissionErrorV1::io(
-                AdmissionErrorKindV1::InspectClientPidfd,
-                "cannot perform non-reaping waitid liveness probe on client pidfd",
-                io::Error::from(error),
-            ));
-        }
-    }
-    require_pidfd_not_pollable(pidfd)
-}
-
-fn require_pidfd_not_pollable(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    let mut poll_descriptor = libc::pollfd {
+fn poll_legacy(pidfd: &OwnedFd) -> Result<(i32, i16), ProtectedServiceAdmissionErrorV1> {
+    let mut descriptor = libc::pollfd {
         fd: pidfd.as_raw_fd(),
         events: libc::POLLIN,
         revents: 0,
     };
-    let ready = loop {
-        // SAFETY: `poll_descriptor` is writable for one declared pollfd and timeout zero cannot
-        // block. The retained descriptor remains borrowed for the call.
-        let result = unsafe { libc::poll(&mut poll_descriptor, 1, 0) };
-        if result >= 0 {
-            break result;
+    loop {
+        // SAFETY: one writable pollfd is borrowed and timeout zero cannot block.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, 0) };
+        if ready >= 0 {
+            return Ok((ready, descriptor.revents));
         }
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {
@@ -1521,23 +965,7 @@ fn require_pidfd_not_pollable(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdm
                 error,
             ));
         }
-    };
-    if ready == 0 {
-        return Ok(());
     }
-    if poll_descriptor.revents & (libc::POLLIN | libc::POLLHUP) != 0 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientAlreadyDead,
-            "client pidfd reports process exit",
-        ));
-    }
-    Err(ProtectedServiceAdmissionErrorV1::new(
-        AdmissionErrorKindV1::InspectClientPidfd,
-        format!(
-            "client pidfd returned unexpected poll events 0x{:x}",
-            poll_descriptor.revents
-        ),
-    ))
 }
 
 fn validate_root(
@@ -1581,136 +1009,13 @@ fn validate_root(
 fn validate_peer_shape(
     peer: &OwnedFd,
 ) -> Result<ObjectIdentityV1, ProtectedServiceAdmissionErrorV1> {
-    let identity = ObjectIdentityV1::inspect(peer, AdmissionErrorKindV1::InspectPeer, "peer")?;
-    let domain = rustix::net::sockopt::socket_domain(peer).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::PeerDomain,
-            "retained service peer is not a socket with an inspectable domain",
-            io::Error::from(error),
-        )
-    })?;
-    if domain != AddressFamily::UNIX {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::PeerDomain,
-            "retained service peer is not an AF_UNIX socket",
-        ));
-    }
-
-    let socket_type = rustix::net::sockopt::socket_type(peer).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::PeerSocketType,
-            "cannot inspect retained service peer socket type",
-            io::Error::from(error),
-        )
-    })?;
-    if socket_type != SocketType::SEQPACKET {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::PeerSocketType,
-            "retained service peer is not SOCK_SEQPACKET",
-        ));
-    }
-
-    require_unnamed_unix_address(
-        peer,
-        UnixAddressSideV1::Remote,
-        AdmissionErrorKindV1::PeerRemoteAddress,
-        "remote",
-    )?;
-    require_unnamed_unix_address(
-        peer,
-        UnixAddressSideV1::Local,
-        AdmissionErrorKindV1::PeerLocalAddress,
-        "local",
-    )?;
-    let final_identity =
-        ObjectIdentityV1::inspect(peer, AdmissionErrorKindV1::InspectPeer, "peer")?;
-    if final_identity != identity {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::PeerIdentityChanged,
-            "retained service peer identity changed while checking socket shape",
-        ));
-    }
-    Ok(final_identity)
-}
-
-fn validate_external_anchor_peer_status(
-    peer: &OwnedFd,
-) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    let status = rustix::fs::fcntl_getfl(peer).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::PeerStatusFlags,
-            "cannot inspect external-anchor peer status flags",
-            io::Error::from(error),
-        )
-    })?;
-    if status != OFlags::RDWR | OFlags::NONBLOCK {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::PeerStatusFlags,
-            "external-anchor peer is not an exact nonblocking read-write endpoint",
-        ));
-    }
-    Ok(())
+    checks::validate_peer_shape(peer).map_err(Into::into)
 }
 
 #[derive(Clone, Copy)]
 enum UnixAddressSideV1 {
     Local,
     Remote,
-}
-
-fn require_unnamed_unix_address(
-    peer: &OwnedFd,
-    side: UnixAddressSideV1,
-    kind: AdmissionErrorKindV1,
-    label: &'static str,
-) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    let mut address = MaybeUninit::<libc::sockaddr_un>::zeroed();
-    let mut length = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_un>())
-        .expect("sockaddr_un length fits socklen_t");
-    // SAFETY: the address buffer is writable for its declared size, `length` is initialized to
-    // that size, and the retained descriptor remains borrowed for the syscall.
-    let result = unsafe {
-        match side {
-            UnixAddressSideV1::Local => libc::getsockname(
-                peer.as_raw_fd(),
-                address.as_mut_ptr().cast::<libc::sockaddr>(),
-                &mut length,
-            ),
-            UnixAddressSideV1::Remote => libc::getpeername(
-                peer.as_raw_fd(),
-                address.as_mut_ptr().cast::<libc::sockaddr>(),
-                &mut length,
-            ),
-        }
-    };
-    if result != 0 {
-        let error_kind = match side {
-            UnixAddressSideV1::Local => kind,
-            UnixAddressSideV1::Remote => AdmissionErrorKindV1::PeerNotConnected,
-        };
-        return Err(ProtectedServiceAdmissionErrorV1::io(
-            error_kind,
-            format!("cannot inspect retained service peer {label} address"),
-            io::Error::last_os_error(),
-        ));
-    }
-    // SAFETY: a successful getsockname/getpeername initialized at least the family field, and the
-    // buffer began fully zeroed for any bytes the kernel did not write.
-    let address = unsafe { address.assume_init() };
-    if i32::from(address.sun_family) != libc::AF_UNIX {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            kind,
-            format!("retained service peer {label} address is not AF_UNIX"),
-        ));
-    }
-    let unnamed_length = std::mem::offset_of!(libc::sockaddr_un, sun_path);
-    if usize::try_from(length).ok() != Some(unnamed_length) {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            kind,
-            format!("retained service peer {label} address is named"),
-        ));
-    }
-    Ok(())
 }
 
 fn require_distinct_descriptors(
@@ -1735,19 +1040,6 @@ fn require_distinct_pidfd_descriptor(
         return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::DuplicateDescriptors,
             "client pidfd resolves to the same object as another retained service descriptor",
-        ));
-    }
-    Ok(())
-}
-
-fn require_distinct_peer_and_pidfd(
-    peer: ObjectIdentityV1,
-    pidfd: ObjectIdentityV1,
-) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    if peer.object() == pidfd.object() {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::DuplicateDescriptors,
-            "external-anchor peer and pidfd resolve to the same object",
         ));
     }
     Ok(())
@@ -1785,7 +1077,7 @@ mod tests {
         .unwrap()
     }
 
-    fn nonblocking_seqpacket() -> (OwnedFd, OwnedFd) {
+    pub(super) fn nonblocking_seqpacket() -> (OwnedFd, OwnedFd) {
         socketpair(
             AddressFamily::UNIX,
             SocketType::SEQPACKET,
@@ -1795,7 +1087,8 @@ mod tests {
         .unwrap()
     }
 
-    fn external_anchor_service_identity() -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+    pub(super) fn external_anchor_service_identity()
+    -> CompilerExecutionExternalAnchorServiceIdentityV1 {
         CompilerExecutionExternalAnchorServiceIdentityV1::new(
             rustix::process::geteuid().as_raw(),
             rustix::process::getegid().as_raw(),
@@ -1943,7 +1236,7 @@ mod tests {
         Ok(unsafe { OwnedFd::from_raw_fd(descriptor as RawFd) })
     }
 
-    fn pidfd_for(pid: u32) -> OwnedFd {
+    pub(super) fn pidfd_for(pid: u32) -> OwnedFd {
         try_pidfd_for(pid, 0).unwrap()
     }
 

@@ -32,6 +32,8 @@ pub(crate) enum GeneralTypedArgumentKindV3 {
     DisjointSlice(RustScalarElementTypeV1),
     GlobalMutPointer(RustScalarElementTypeV1),
     CompilerLaidOutByValue,
+    CompilerLaidOutUsize,
+    CompilerLaidOutIsize,
 }
 
 impl GeneralTypedArgumentKindV3 {
@@ -42,8 +44,17 @@ impl GeneralTypedArgumentKindV3 {
             | Self::WriteOnlyDisjointSlice(scalar)
             | Self::DisjointSlice(scalar)
             | Self::GlobalMutPointer(scalar) => Some(scalar),
-            Self::CompilerLaidOutByValue => None,
+            Self::CompilerLaidOutByValue
+            | Self::CompilerLaidOutUsize
+            | Self::CompilerLaidOutIsize => None,
         }
+    }
+
+    pub(crate) const fn is_compiler_laid_out(self) -> bool {
+        matches!(
+            self,
+            Self::CompilerLaidOutByValue | Self::CompilerLaidOutUsize | Self::CompilerLaidOutIsize
+        )
     }
 }
 
@@ -117,7 +128,7 @@ impl GeneralTypedKernelContractV3 {
     pub(crate) fn layout_deferred(&self) -> bool {
         self.arguments
             .iter()
-            .any(|argument| argument.kind == GeneralTypedArgumentKindV3::CompilerLaidOutByValue)
+            .any(|argument| argument.kind.is_compiler_laid_out())
     }
 }
 
@@ -209,7 +220,7 @@ pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
     validate_general_typed_launch_v3(launch)?;
     let abi = if arguments
         .iter()
-        .any(|argument| argument.kind == GeneralTypedArgumentKindV3::CompilerLaidOutByValue)
+        .any(|argument| argument.kind.is_compiler_laid_out())
     {
         AbiLayout::new(0, 1, PointerWidth::Bits64, Vec::new()).map_err(|error| {
             GeneralTypedExtractError::new(format!(
@@ -361,7 +372,15 @@ fn extract_argument<'tcx>(
         ));
     }
 
-    if matches!(ty.kind(), TyKind::Tuple(_) | TyKind::Array(..)) {
+    // Keep pointer-sized Rust identity in the compiler-derived layout path;
+    // treating usize/isize as the fixed-width schema would change the contract.
+    if matches!(
+        ty.kind(),
+        TyKind::Tuple(_)
+            | TyKind::Array(..)
+            | TyKind::Int(IntTy::Isize)
+            | TyKind::Uint(UintTy::Usize)
+    ) {
         return compiler_laid_out_by_value_argument(tcx, layout_cx, ty, &argument());
     }
 
@@ -390,7 +409,15 @@ fn compiler_laid_out_by_value_argument<'tcx>(
                 "by-value aggregate type graph exceeds the bounded component domain",
             ));
         }
-        if scalar_type(ty).is_some() || matches!(ty.kind(), TyKind::Bool | TyKind::Char) {
+        if scalar_type(ty).is_some()
+            || matches!(
+                ty.kind(),
+                TyKind::Bool
+                    | TyKind::Char
+                    | TyKind::Int(IntTy::Isize)
+                    | TyKind::Uint(UintTy::Usize)
+            )
+        {
             return Ok(());
         }
         match ty.kind() {
@@ -469,8 +496,26 @@ fn compiler_laid_out_by_value_argument<'tcx>(
     };
     let alignment = u32::try_from(layout.align.abi.bytes())
         .map_err(|_| GeneralTypedExtractError::new(format!("{argument} alignment exceeds u32")))?;
+    let kind = match ty.kind() {
+        TyKind::Uint(UintTy::Usize) => GeneralTypedArgumentKindV3::CompilerLaidOutUsize,
+        TyKind::Int(IntTy::Isize) => GeneralTypedArgumentKindV3::CompilerLaidOutIsize,
+        _ => GeneralTypedArgumentKindV3::CompilerLaidOutByValue,
+    };
+    if kind != GeneralTypedArgumentKindV3::CompilerLaidOutByValue {
+        let signed = kind == GeneralTypedArgumentKindV3::CompilerLaidOutIsize;
+        if layout.size.bytes() != POINTER_BYTES
+            || alignment != POINTER_ALIGNMENT
+            || !matches!(layout.backend_repr, BackendRepr::Scalar(scalar)
+                if matches!(scalar.primitive(), Primitive::Int(integer, actual_signed)
+                    if integer.size().bits() == 64 && actual_signed == signed))
+        {
+            return Err(GeneralTypedExtractError::new(format!(
+                "{argument} lacks its exact signed or unsigned 64-bit pointer-sized scalar layout"
+            )));
+        }
+    }
     Ok(GeneralTypedArgumentV3 {
-        kind: GeneralTypedArgumentKindV3::CompilerLaidOutByValue,
+        kind,
         layout: None,
         size: layout.size.bytes(),
         alignment,
@@ -927,7 +972,9 @@ fn build_abi_field(
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
-            GeneralTypedArgumentKindV3::CompilerLaidOutByValue => unreachable!(),
+            GeneralTypedArgumentKindV3::CompilerLaidOutByValue
+            | GeneralTypedArgumentKindV3::CompilerLaidOutUsize
+            | GeneralTypedArgumentKindV3::CompilerLaidOutIsize => unreachable!(),
         };
     AbiField::new(
         Name::new(name).map_err(|error| GeneralTypedExtractError::new(error.to_string()))?,
@@ -973,7 +1020,9 @@ fn argument_size_alignment(kind: GeneralTypedArgumentKindV3) -> (u64, u32) {
         | GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_)
         | GeneralTypedArgumentKindV3::DisjointSlice(_) => (SLICE_BYTES, POINTER_ALIGNMENT),
         GeneralTypedArgumentKindV3::GlobalMutPointer(_) => (POINTER_BYTES, POINTER_ALIGNMENT),
-        GeneralTypedArgumentKindV3::CompilerLaidOutByValue => (0, 1),
+        GeneralTypedArgumentKindV3::CompilerLaidOutByValue
+        | GeneralTypedArgumentKindV3::CompilerLaidOutUsize
+        | GeneralTypedArgumentKindV3::CompilerLaidOutIsize => (0, 1),
     }
 }
 
@@ -1056,6 +1105,10 @@ fn trusted_index1d_type<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Ty<'tcx>, GeneralType
 }
 
 #[cfg(test)]
+#[path = "rust_type_layout_pointer_sized_v3_tests.rs"]
+mod pointer_sized_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use fe2o3_artifacts::{DigestBytes, Dimensions, derive_generated_host_contract_identity_v1};
@@ -1116,7 +1169,9 @@ mod tests {
                     .unwrap(),
                 ],
             ),
-            GeneralTypedArgumentKindV3::CompilerLaidOutByValue => unreachable!(),
+            GeneralTypedArgumentKindV3::CompilerLaidOutByValue
+            | GeneralTypedArgumentKindV3::CompilerLaidOutUsize
+            | GeneralTypedArgumentKindV3::CompilerLaidOutIsize => unreachable!(),
         };
         GeneralTypedArgumentV3::from_layout(
             kind,

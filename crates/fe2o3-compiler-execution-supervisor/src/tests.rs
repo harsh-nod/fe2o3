@@ -29,6 +29,9 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+#[path = "program_v2_tests.rs"]
+mod native_program;
+
 static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
 static TEST_ANCHOR_SERVICE_PEERS: Mutex<Vec<OwnedFd>> = Mutex::new(Vec::new());
 const TEST_ANCHOR_DESCRIPTOR_FLOOR: i32 = 512;
@@ -83,14 +86,14 @@ fn normalize_test_anchor_descriptor(descriptor: OwnedFd) -> OwnedFd {
     normalized
 }
 
-struct Fixture {
-    root: PathBuf,
+pub(super) struct Fixture {
+    pub(super) root: PathBuf,
     image: PathBuf,
     bytes: Vec<u8>,
 }
 
 impl Fixture {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         Self::with_code(name, &[0xc3])
     }
 
@@ -109,7 +112,7 @@ impl Fixture {
         Self { root, image, bytes }
     }
 
-    fn measurement(&self) -> ProvisionedStaticExecutableMeasurementV1 {
+    pub(super) fn measurement(&self) -> ProvisionedStaticExecutableMeasurementV1 {
         ProvisionedStaticExecutableMeasurementV1::new(
             Sha256::digest(&self.bytes).into(),
             u64::try_from(self.bytes.len()).unwrap(),
@@ -117,7 +120,7 @@ impl Fixture {
         .unwrap()
     }
 
-    fn issuer_measurement(&self) -> CompilerExecutionIssuerMeasurementV1 {
+    pub(super) fn issuer_measurement(&self) -> CompilerExecutionIssuerMeasurementV1 {
         CompilerExecutionIssuerMeasurementV1::new(
             Sha256::digest(&self.bytes).into(),
             u64::try_from(self.bytes.len()).unwrap(),
@@ -125,7 +128,7 @@ impl Fixture {
         .unwrap()
     }
 
-    fn open(&self) -> File {
+    pub(super) fn open(&self) -> File {
         File::open(&self.image).unwrap()
     }
 }
@@ -1530,6 +1533,7 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
         .unwrap();
+    assert!(launched.retains_spawn_lease_for_test());
     assert!(launched.is_live().unwrap());
     let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
     read_exact_nonblocking(launched.stdout_reader_for_test(), b"LAUNCHED\n");
@@ -1543,6 +1547,7 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
     );
     drop(injected_readiness);
     let ready = launched.await_readiness(Duration::from_secs(2)).unwrap();
+    assert!(!ready.retains_spawn_lease_for_test());
     assert_eq!(ready.readiness(), &readiness);
     ready.revalidate().unwrap();
     let rendered = format!("{ready:?}");

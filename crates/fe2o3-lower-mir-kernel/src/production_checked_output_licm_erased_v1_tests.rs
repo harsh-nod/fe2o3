@@ -63,6 +63,14 @@ fn roots(source: &ProductionPreRankedKirOwnerV1) -> Vec<ProductionRankedSemantic
 
 pub(super) fn prefix(profile: Profile, mutation: bool) -> (ErasedPreheaders, usize) {
     let original = source(true, mutation);
+    prefix_from_source(original, profile, mutation)
+}
+
+pub(super) fn prefix_from_source(
+    original: ProductionPreRankedKirOwnerV1,
+    profile: Profile,
+    mutation: bool,
+) -> (ErasedPreheaders, usize) {
     let roots = roots(&original);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);

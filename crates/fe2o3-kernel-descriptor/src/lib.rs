@@ -14,8 +14,10 @@ mod error;
 pub mod ffi_contract;
 mod launch_policy;
 mod model;
+mod nominal_v3;
 mod requirements_v2;
 mod wire_v2;
+mod wire_v3;
 
 pub use decode::decode_device_descriptor_table_v1;
 pub use digest::{
@@ -45,6 +47,16 @@ pub use model::{
     OwnershipSemantics, PhysicalAbiComponentKind, ProducerIdentityV1, ScalarTypeV1,
     SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
 };
+pub use nominal_v3::{
+    ArgumentCursorV3, CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V3, CapabilityCursorV3,
+    DESCRIPTOR_ENCODER_SCRATCH_STORAGE_V3, DESCRIPTOR_QUERY_STORAGE_V3,
+    DESCRIPTOR_READER_SCRATCH_STORAGE_V3, DESCRIPTOR_TABLE_VIEW_STORAGE_V3,
+    DEVICE_DESCRIPTOR_TABLE_DOMAIN_V3, DEVICE_DESCRIPTOR_VERSION_V3, DescriptorWireErrorV3,
+    DeviceDescriptorTableInputV3, DeviceDescriptorTableV3, KernelDescriptorInputV3,
+    KernelDescriptorRefV3, LogicalArgumentInputV3, LogicalArgumentRefV3, PhysicalComponentV3,
+    RUST_TYPE_DOMAIN_V3, SourceTypeDescriptorV3, SourceTypeRecordV3, device_layout_record_v3,
+    encode_device_descriptor_table_v3, encoded_device_descriptor_table_v3_len,
+};
 pub use requirements_v2::{
     AtomicRequirementsV2, DeviceDescriptorTableV2, KernelTargetRequirementsV2, LdsRequirementsV2,
     RequiredWavefrontWidthV2, SynchronizationRequirementsV2,
@@ -53,6 +65,7 @@ pub use wire_v2::{
     CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V2, DEVICE_DESCRIPTOR_VERSION_V2,
     decode_device_descriptor_table_v2, encode_device_descriptor_table_v2,
 };
+pub use wire_v3::decode_device_descriptor_table_v3;
 
 #[cfg(test)]
 mod tests;

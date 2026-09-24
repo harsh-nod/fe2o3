@@ -338,7 +338,7 @@ fn parse_component(reader: &mut Reader<'_>) -> Result<PhysicalAbiComponentV1, De
     })
 }
 
-fn parse_descriptor_kind(tag: u8) -> Result<DescriptorKind, DecodeError> {
+pub(crate) fn parse_descriptor_kind(tag: u8) -> Result<DescriptorKind, DecodeError> {
     match tag {
         1 => Ok(DescriptorKind::Scalar),
         2 => Ok(DescriptorKind::SharedSlice),
@@ -351,7 +351,7 @@ fn parse_descriptor_kind(tag: u8) -> Result<DescriptorKind, DecodeError> {
     }
 }
 
-fn parse_scalar(tag: u8) -> Result<ScalarTypeV1, DecodeError> {
+pub(crate) fn parse_scalar(tag: u8) -> Result<ScalarTypeV1, DecodeError> {
     match tag {
         1 => Ok(ScalarTypeV1::I8),
         2 => Ok(ScalarTypeV1::U8),
@@ -371,7 +371,7 @@ fn parse_scalar(tag: u8) -> Result<ScalarTypeV1, DecodeError> {
     }
 }
 
-fn parse_code_object_version(tag: u8) -> Result<CodeObjectVersion, DecodeError> {
+pub(crate) fn parse_code_object_version(tag: u8) -> Result<CodeObjectVersion, DecodeError> {
     match tag {
         4 => Ok(CodeObjectVersion::V4),
         5 => Ok(CodeObjectVersion::V5),
@@ -383,7 +383,7 @@ fn parse_code_object_version(tag: u8) -> Result<CodeObjectVersion, DecodeError> 
     }
 }
 
-fn parse_ownership(tag: u8) -> Result<OwnershipSemantics, DecodeError> {
+pub(crate) fn parse_ownership(tag: u8) -> Result<OwnershipSemantics, DecodeError> {
     match tag {
         1 => Ok(OwnershipSemantics::ByValue),
         2 => Ok(OwnershipSemantics::SharedBorrow),
@@ -395,7 +395,7 @@ fn parse_ownership(tag: u8) -> Result<OwnershipSemantics, DecodeError> {
     }
 }
 
-fn parse_access(tag: u8) -> Result<AccessMode, DecodeError> {
+pub(crate) fn parse_access(tag: u8) -> Result<AccessMode, DecodeError> {
     match tag {
         1 => Ok(AccessMode::ByValue),
         2 => Ok(AccessMode::ReadOnly),
@@ -408,7 +408,7 @@ fn parse_access(tag: u8) -> Result<AccessMode, DecodeError> {
     }
 }
 
-fn parse_alias(tag: u8) -> Result<AliasSemantics, DecodeError> {
+pub(crate) fn parse_alias(tag: u8) -> Result<AliasSemantics, DecodeError> {
     match tag {
         1 => Ok(AliasSemantics::Value),
         2 => Ok(AliasSemantics::SharedReadOnly),
@@ -420,7 +420,7 @@ fn parse_alias(tag: u8) -> Result<AliasSemantics, DecodeError> {
     }
 }
 
-fn parse_capability(tag: u16) -> Result<CapabilityV1, DecodeError> {
+pub(crate) fn parse_capability(tag: u16) -> Result<CapabilityV1, DecodeError> {
     match tag {
         1 => Ok(CapabilityV1::Subgroup),
         2 => Ok(CapabilityV1::Ballot),

@@ -70,6 +70,110 @@ pub(crate) fn with_backend_checked_output_policy4_owned_v1(
     });
 }
 
+pub(crate) fn with_backend_nominal_policy4_owned_v3(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    kind: SemanticRustTypeKindV1,
+    signed: bool,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    let case = match (kind, signed) {
+        (SemanticRustTypeKindV1::Usize, false) => 0u8,
+        (SemanticRustTypeKindV1::Isize, true) => 1,
+        (SemanticRustTypeKindV1::Ordinary, false) => 2,
+        (SemanticRustTypeKindV1::Ordinary, true) => 3,
+        // fe2o3-hygiene: allow-panic - this include is inside the cfg(test) module.
+        _ => panic!("inconsistent nominal scalar fixture"),
+    };
+    with_backend_checked_ranked_bound_types_functions_v1(
+        profile,
+        None,
+        |types, functions| {
+            let unit = SemanticTypeIdV1::from_index(0);
+            let scalar = SemanticTypeIdV1::from_index(1);
+            types[1] = SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(bytes(230 + case)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(240 + case)),
+                SemanticTypeLayoutV1::new_with_backend_repr(
+                    Some(8),
+                    8,
+                    neutral_scalar_backend_v1(
+                        SemanticBackendPrimitiveV1::integer(signed, 64, 8),
+                        u64::MAX.into(),
+                    ),
+                    false,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { signed, bits: 64 }),
+            )
+            .with_rust_type_kind(kind)
+            .with_rustc_abi_properties(
+                SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true),
+            );
+            for (i, source) in functions.iter_mut().enumerate() {
+                let stamp = 40 + 2 * case + i as u8;
+                let abi = SemanticFunctionAbiV1::from_rustc(
+                    SemanticAbiIdentityV1::from_sha256(bytes(stamp)),
+                    SemanticLayoutIdentityV1::from_sha256(bytes(stamp + 16)),
+                    SemanticCanonAbiV1::GpuKernel,
+                    SemanticExternAbiV1::GpuKernel,
+                    false,
+                    false,
+                    1,
+                    vec![SemanticAbiArgumentV1::source(
+                        neutral_plain_direct_abi_value_v1(scalar),
+                    )],
+                    SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+                )
+                .unwrap()
+                .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
+                .unwrap();
+                *source = SemanticFunctionDeclV1::new(
+                    source.identity(),
+                    source.role(),
+                    source.item_definition_identity(),
+                    source.monomorphization_identity(),
+                    source.generic_type_arguments_identity(),
+                    source.const_generic_arguments_identity(),
+                    source.source(),
+                    abi,
+                    source.locals().to_vec(),
+                    source.entry(),
+                    vec![block(
+                        90 + i as u8,
+                        vec![typed_assignment(
+                            2,
+                            scalar,
+                            SemanticRvalueKindV1::Use(typed_constant(scalar, 7 + i as u128, 8)),
+                        )],
+                        SemanticTerminatorKindV1::Return,
+                    )],
+                )
+                .unwrap()
+                .with_kernel_entry(source.kernel_entry().unwrap().clone());
+            }
+        },
+        |receipt, bound, _, budget| {
+            let checked =
+                fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy4_v1(&bound, budget)
+                    .unwrap();
+            let storage = checked.retained_storage();
+            budget.reserve_storage(storage).unwrap();
+            let floor = budget.storage();
+            let owner =
+                fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1::try_admit_v1(
+                    receipt, bound, checked, budget,
+                )
+                .unwrap();
+            next(owner, budget);
+            assert_eq!(budget.storage(), floor);
+            budget.release_storage(storage).unwrap();
+        },
+    );
+}
+
 pub(crate) fn with_backend_checked_output_policy4_v1(
     profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
     next: impl FnOnce(
@@ -137,8 +241,42 @@ fn with_backend_checked_ranked_bound_types_functions_v1(
 ) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
-        CanonicalKernelIrWorkBudgetV1 as Work, VerifiedCanonicalKernelIrModuleV12,
+        CanonicalKernelIrWorkBudgetV1 as Work,
     };
+    let mut work = Work::new(
+        usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
+    );
+    let mut budget = Budget::new(
+        &mut work,
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+    );
+    let (receipt, bound, verification, retained) =
+        prepare_backend_checked_ranked_bound_types_functions_v1(
+            profile,
+            stores,
+            transform,
+            &mut budget,
+        );
+    let floor = budget.storage();
+    next(receipt, bound, verification, &mut budget);
+    assert_eq!(budget.storage(), floor);
+    budget.release_storage(retained).unwrap();
+    assert_eq!(budget.storage(), 29);
+}
+
+fn prepare_backend_checked_ranked_bound_types_functions_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    stores: Option<usize>,
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> (
+    fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1,
+    fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    AuthenticatedRankedVerificationRosterV1,
+    usize,
+) {
+    use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
+    assert_eq!(budget.storage(), 0);
     let original = source_launch_test_semantic_v1(70, 0xa1);
     let unit = SemanticTypeIdV1::from_index(0);
     let scalar = SemanticTypeIdV1::from_index(1);
@@ -251,19 +389,12 @@ fn with_backend_checked_ranked_bound_types_functions_v1(
         profile,
     )
     .unwrap();
-    let mut work = Work::new(
-        usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
-    );
-    let mut budget = Budget::new(
-        &mut work,
-        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
-    );
     const PREFIX: usize = 29;
     budget.reserve_storage(PREFIX + retained).unwrap();
     let (bound, bound_storage) =
         VerifiedCanonicalKernelIrModuleV12::from_module_ref_with_verification_budget_v12(
             binding.module(),
-            &mut budget,
+            budget,
         )
         .unwrap();
     budget
@@ -272,11 +403,10 @@ fn with_backend_checked_ranked_bound_types_functions_v1(
     drop(binding);
     let verified = program.into_verified_roster_receipt().unwrap();
     let (receipt, verification) = verified.into_module_verified_receipt().unwrap();
-    let floor = budget.storage();
-    next(receipt, bound, verification, &mut budget);
-    assert_eq!(budget.storage(), floor);
-    budget
-        .release_storage(bound_storage.retained_storage() + retained)
-        .unwrap();
-    assert_eq!(budget.storage(), PREFIX);
+    (
+        receipt,
+        bound,
+        verification,
+        bound_storage.retained_storage() + retained,
+    )
 }

@@ -11,12 +11,25 @@ use fe2o3_lower_mir_kernel::{
     ProductionRefinedCrossBlockForwardingErrorV1 as CompositionAdmissionError,
 };
 
+#[path = "production_refined_forwarding_history_v1.rs"]
+mod history;
+use history::{PreparedRefinedForwardingHistoryClaimsV1, RefinedForwardingHistoryErrorV1};
+
+#[path = "production_refined_forwarding_worker_v1.rs"]
+mod worker;
+
+#[path = "production_pipeline_loop_unroll_native_v1.rs"]
+mod loop_unroll_native_v1;
+
 #[derive(Debug)]
 pub(crate) enum RefinedForwardingNativeStageErrorV1 {
     Resource(Resource),
     Admission(Box<CompositionAdmissionError>),
     Descriptor(Box<RefinedForwardingDescriptorErrorV1>),
+    History(Box<RefinedForwardingHistoryErrorV1>),
     Mismatch(&'static str),
+    Worker(Box<worker::RefinedForwardingWorkerErrorV1>),
+    BoundedUnroll(loop_unroll_native_v1::LoopUnrollNativeStageErrorV1),
 }
 impl fmt::Display for RefinedForwardingNativeStageErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -28,6 +41,9 @@ impl std::error::Error for RefinedForwardingNativeStageErrorV1 {
         match self {
             Self::Admission(error) => Some(error.as_ref()),
             Self::Descriptor(error) => Some(error.as_ref()),
+            Self::History(error) => Some(error.as_ref()),
+            Self::Worker(error) => Some(error.as_ref()),
+            Self::BoundedUnroll(error) => Some(error),
             _ => None,
         }
     }
@@ -254,6 +270,38 @@ fn check_native_text(
         mismatch("exact final refined-forwarding native LLVM")
     })
 }
+// Transfer only the existing source owners and individual receipts. The fixed F
+// caller keeps its original summation, header reservation and emission order.
+fn prepare_refined_forwarding_source_prefix_v1(
+    prefix: Prefix6,
+    refinement_limits: Limits,
+    forwarding_limits: ForwardingLimits,
+    budget: &mut Budget<'_>,
+) -> Result<(
+    Composed,
+    Policy7ExecutionWitnessV1,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+)> {
+    let (licm, prefix_execution, history_added, promoted_added, preheaders_added, licm_added) =
+        prepare_licm_source_prefix_v1(prefix, budget)?;
+    let (refined, refined_added) = Refined::continue_once(licm, refinement_limits, budget)?;
+    let (owner, forwarded_added) = Composed::continue_once(refined, forwarding_limits, budget)?;
+    Ok((
+        owner,
+        prefix_execution,
+        history_added,
+        promoted_added,
+        preheaders_added,
+        licm_added,
+        refined_added,
+        forwarded_added,
+    ))
+}
 fn prepare(
     prefix: Prefix6,
     profile: Profile,
@@ -266,10 +314,21 @@ fn prepare(
 )> {
     let floor = budget.storage();
     scoped(prefix.minimum()?, budget, move |budget| {
-        let (licm, prefix_execution, history_added, promoted_added, preheaders_added, licm_added) =
-            prepare_licm_source_prefix_v1(prefix, budget)?;
-        let (refined, refined_added) = Refined::continue_once(licm, refinement_limits, budget)?;
-        let (owner, forwarded_added) = Composed::continue_once(refined, forwarding_limits, budget)?;
+        let (
+            owner,
+            prefix_execution,
+            history_added,
+            promoted_added,
+            preheaders_added,
+            licm_added,
+            refined_added,
+            forwarded_added,
+        ) = prepare_refined_forwarding_source_prefix_v1(
+            prefix,
+            refinement_limits,
+            forwarding_limits,
+            budget,
+        )?;
         let (llvm, native_storage) = lower_native(owner.output(), profile, budget)?;
         budget.reserve_storage(native_storage).map_err(resource)?;
         let header = size_of::<PreparedRefinedForwardingNativeOutputV1>()
@@ -305,6 +364,7 @@ fn prepare(
 /// One actual authenticated source/ranked entry and its final composed output.
 pub(crate) struct RefinedForwardingNativeProductionCompilationV1 {
     native: PreparedRefinedForwardingNativeOutputV1,
+    history: PreparedRefinedForwardingHistoryClaimsV1,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
@@ -335,12 +395,20 @@ impl RankedVerifiedProductionCompilation {
             budget
                 .reserve_storage(receipt.retained_storage())
                 .map_err(resource)?;
+            let history = PreparedRefinedForwardingHistoryClaimsV1::prepare(&native, budget)?;
+            budget
+                .reserve_storage(history.retained_storage())
+                .map_err(resource)?;
             let wrapper = size_of::<RefinedForwardingNativeProductionCompilationV1>()
                 .checked_sub(size_of::<PreparedRefinedForwardingNativeOutputV1>())
+                .and_then(|bytes| {
+                    bytes.checked_sub(size_of::<PreparedRefinedForwardingHistoryClaimsV1>())
+                })
                 .ok_or_else(|| resource(Resource::Arithmetic))?;
             budget.reserve_storage(wrapper).map_err(resource)?;
             let value = RefinedForwardingNativeProductionCompilationV1 {
                 native,
+                history,
                 ranked_verification,
                 bindings,
                 retained_floor: budget.storage(),
@@ -411,6 +479,11 @@ impl RefinedForwardingNativeProductionCompilationV1 {
                     "complete refined-forwarding target/ranked custody",
                 ));
             }
+            let checked = self.history.check(&self.native, budget)?;
+            let history_storage = checked.retained_storage();
+            budget.reserve_storage(history_storage).map_err(resource)?;
+            drop(checked);
+            budget.release_storage(history_storage).map_err(resource)?;
             let owner = match &self.native.owner {
                 Composed::Direct(owner) => FinalOwnerV1::Direct(owner),
                 Composed::Erased(owner) => FinalOwnerV1::Erased(owner),

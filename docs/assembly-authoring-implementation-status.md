@@ -1,5 +1,18 @@
 # Assembly authoring implementation status
 
+## Concurrent-main integration — 2026-09-24
+
+The [merged-tree checks](evidence/complete-body-native-abi-20260923.md#integration-with-concurrent-main--2026-09-24)
+pass 1,600 IR/model/example tests and focused backend filters; the fresh
+generator matches all five retained native inputs exactly. Tutorial suites
+pass 77/12/54/23 tests. An exact missing test-only dependency allowance is
+corrected and policy checks pass with 11 checker tests.
+
+Strict model Clippy is not clean on the merged tree: 37 diagnostics remain
+in eight unchanged peer files; no allowance suppresses them. The earlier
+renderer-only strict pass below is historical, not a merged-tree lint claim.
+Accepted original exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Complete-body renderer and native ABI — 2026-09-23
 
 The [static native qualification](evidence/complete-body-native-abi-20260923.md)

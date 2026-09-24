@@ -480,7 +480,30 @@ impl WorkerV3LoadEnvelopeV2 {
         published: PublishedProtectedWorkerV3HsacoV1,
         compiler_execution: CompilerExecutionReceiptCarriageV1,
     ) -> Result<Self, WorkerV3LoadEnvelopeErrorV2> {
-        let replay = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published)?;
+        let parts = published
+            .into_load_envelope_parts_v1()
+            .map_err(WorkerV3LoadEnvelopeErrorV1::from)?;
+        Self::from_published_parts(parts, compiler_execution)
+    }
+
+    /// Retains a nominal descriptor V3 publication and its exact receipt in the
+    /// existing V2 wire. Neither descriptor schema nor structural replay grants
+    /// compiler authentication, proof, load or launch authority.
+    pub fn from_published_nominal_hsaco_v3(
+        published: fe2o3_hsaco_finalize::PublishedNominalWorkerHsacoV3,
+        compiler_execution: CompilerExecutionReceiptCarriageV1,
+    ) -> Result<Self, WorkerV3LoadEnvelopeErrorV2> {
+        let parts = published
+            .into_load_envelope_parts_v1()
+            .map_err(WorkerV3LoadEnvelopeErrorV1::from)?;
+        Self::from_published_parts(parts, compiler_execution)
+    }
+
+    fn from_published_parts(
+        parts: fe2o3_hsaco_finalize::PublishedProtectedWorkerV3LoadEnvelopePartsV1,
+        compiler_execution: CompilerExecutionReceiptCarriageV1,
+    ) -> Result<Self, WorkerV3LoadEnvelopeErrorV2> {
+        let replay = WorkerV3LoadEnvelopeV1::from_published_parts(parts)?;
         let (replay, current_lease) = replay.into_wire_and_current_lease();
         let wire = WorkerV3LoadEnvelopeWireV2::new(replay, compiler_execution)?;
         Ok(Self {

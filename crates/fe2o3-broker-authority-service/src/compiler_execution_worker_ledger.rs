@@ -28,6 +28,8 @@ use fe2o3_runtime_protocol::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::compiler_execution_journal_recovery::{JournalNames, reject_legacy_state};
+
 const RECORD_MAGIC: [u8; 8] = *b"F2O3CEW2";
 const RECORD_VERSION: u16 = 2;
 const HEADER_BYTES: usize = 24;
@@ -51,11 +53,22 @@ const PROTECTED_WORKER_LEDGER_VERIFICATION_DOMAIN: &[u8] =
     b"FE2O3/PROTECTED-COMPILER-EXECUTION-WORKER-LEDGER-VERIFICATION/V1\0";
 const CANONICAL_RECORD: &str = "compiler-execution-worker-v2.state";
 const REDO_RECORD: &str = "compiler-execution-worker-v2.redo";
-const LEGACY_V1_CANONICAL_RECORD: &str = "compiler-execution-worker-v1.state";
-const LEGACY_V1_REDO_RECORD: &str = "compiler-execution-worker-v1.redo";
-const LEGACY_V1_RECORD_BYTES: usize = 1690;
+const RECOVERY_RECORD: &str = "compiler-execution-worker-v2.recovery";
 const ANCHOR_CANONICAL_RECORD: &str = "compiler-execution-worker-anchor-v1.state";
 const ANCHOR_REDO_RECORD: &str = "compiler-execution-worker-anchor-v1.redo";
+const ANCHOR_RECOVERY_RECORD: &str = "compiler-execution-worker-anchor-v1.recovery";
+const JOURNAL: JournalNames = JournalNames {
+    canonical: CANONICAL_RECORD,
+    redo: REDO_RECORD,
+    recovery: RECOVERY_RECORD,
+    maximum_bytes: COMPILER_EXECUTION_WORKER_LEDGER_RECORD_BYTES_V2,
+};
+const ANCHOR_JOURNAL: JournalNames = JournalNames {
+    canonical: ANCHOR_CANONICAL_RECORD,
+    redo: ANCHOR_REDO_RECORD,
+    recovery: ANCHOR_RECOVERY_RECORD,
+    maximum_bytes: COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
+};
 
 #[derive(Clone)]
 pub(crate) struct WorkerReceiptRecordV2 {
@@ -323,69 +336,27 @@ impl WorkerReceiptLedgerV1 {
         hooks: &mut impl RetainedDurableDirectoryHooksV1,
     ) -> Result<Self, ProtectedCompilerExecutionWorkerLedgerErrorV1> {
         let store = RetainedDurableDirectoryV1::admit_service_owned(service_root)?;
-        if store
-            .read_private(LEGACY_V1_CANONICAL_RECORD, LEGACY_V1_RECORD_BYTES)?
-            .is_some()
-            || store
-                .read_private(LEGACY_V1_REDO_RECORD, LEGACY_V1_RECORD_BYTES)?
-                .is_some()
-        {
-            return Err(
-                ProtectedCompilerExecutionWorkerLedgerErrorV1::InvalidRecord(
-                    "legacy Worker V1 record requires explicit fail-closed migration",
-                ),
-            );
-        }
-        let canonical_bytes = store.read_private(
-            CANONICAL_RECORD,
-            COMPILER_EXECUTION_WORKER_LEDGER_RECORD_BYTES_V2,
-        )?;
-        let redo_bytes = store.read_private(
-            REDO_RECORD,
-            COMPILER_EXECUTION_WORKER_LEDGER_RECORD_BYTES_V2,
-        )?;
-        let record = match (canonical_bytes, redo_bytes) {
-            (None, None) => None,
-            (canonical, Some(redo_bytes)) => {
-                let redo = WorkerReceiptRecordV2::decode(&redo_bytes, policy)?;
-                let canonical_record = canonical
-                    .as_deref()
-                    .map(|bytes| WorkerReceiptRecordV2::decode(bytes, policy))
-                    .transpose()?;
-                let legal = canonical_record.as_ref().map_or_else(
+        reject_legacy_state(&store)?;
+        let record = JOURNAL.recover(
+            &store,
+            hooks,
+            |bytes| WorkerReceiptRecordV2::decode(bytes, policy),
+            |prior, redo| {
+                let legal = prior.map_or_else(
                     || redo.sequence == 1 && redo.prior_rollback_anchor == [0; SHA256_BYTES],
                     |prior| redo.is_legal_successor_of(prior),
                 );
-                if !legal {
-                    return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::IllegalSuccessor);
+                if legal {
+                    Ok(())
+                } else {
+                    Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::IllegalSuccessor)
                 }
-                store.promote_validated_redo(
-                    CANONICAL_RECORD,
-                    REDO_RECORD,
-                    canonical.as_deref(),
-                    &redo_bytes,
-                    COMPILER_EXECUTION_WORKER_LEDGER_RECORD_BYTES_V2,
-                    hooks,
-                )?;
-                Some(reacquire_exact(&store, policy, &redo)?)
-            }
-            (Some(canonical_bytes), None) => {
-                let record = WorkerReceiptRecordV2::decode(&canonical_bytes, policy)?;
-                let established = store.establish_recovered_record_durability(
-                    CANONICAL_RECORD,
-                    REDO_RECORD,
-                    &canonical_bytes,
-                    COMPILER_EXECUTION_WORKER_LEDGER_RECORD_BYTES_V2,
-                    hooks,
-                )?;
-                if established != canonical_bytes {
-                    return Err(
-                        ProtectedCompilerExecutionWorkerLedgerErrorV1::ReacquiredRecordMismatch,
-                    );
-                }
-                Some(reacquire_exact(&store, policy, &record)?)
-            }
-        };
+            },
+        )?;
+        let record = record
+            .as_ref()
+            .map(|record| reacquire_exact(&store, policy, record))
+            .transpose()?;
         let anchor_journal = recover_anchor_journal(&store, policy, record.as_ref(), hooks)?;
         Ok(Self {
             store,
@@ -862,56 +833,29 @@ fn recover_anchor_journal(
     Option<CompilerExecutionWorkerAnchorJournalV1>,
     ProtectedCompilerExecutionWorkerLedgerErrorV1,
 > {
-    let canonical_bytes = store.read_private(
-        ANCHOR_CANONICAL_RECORD,
-        COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
-    )?;
-    let redo_bytes = store.read_private(
-        ANCHOR_REDO_RECORD,
-        COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
-    )?;
-    let journal = match (canonical_bytes, redo_bytes) {
-        (None, None) => None,
-        (canonical, Some(redo_bytes)) => {
-            let redo = CompilerExecutionWorkerAnchorJournalV1::decode(&redo_bytes)?;
-            let canonical_record = canonical
-                .as_deref()
-                .map(CompilerExecutionWorkerAnchorJournalV1::decode)
-                .transpose()?;
-            let legal = canonical_record.as_ref().map_or_else(
+    let journal = ANCHOR_JOURNAL.recover(
+        store,
+        hooks,
+        |bytes| {
+            CompilerExecutionWorkerAnchorJournalV1::decode(bytes)
+                .map_err(ProtectedCompilerExecutionWorkerLedgerErrorV1::from)
+        },
+        |prior, redo| {
+            let legal = prior.map_or_else(
                 || current.is_none() && redo.is_genesis_prepared(),
                 |prior| redo.is_legal_successor_of(prior),
             );
-            if !legal {
-                return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::IllegalAnchorSuccessor);
+            if legal {
+                Ok(())
+            } else {
+                Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::IllegalAnchorSuccessor)
             }
-            store.promote_validated_redo(
-                ANCHOR_CANONICAL_RECORD,
-                ANCHOR_REDO_RECORD,
-                canonical.as_deref(),
-                &redo_bytes,
-                COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
-                hooks,
-            )?;
-            Some(reacquire_anchor_journal_exact(store, &redo)?)
-        }
-        (Some(canonical_bytes), None) => {
-            let record = CompilerExecutionWorkerAnchorJournalV1::decode(&canonical_bytes)?;
-            let established = store.establish_recovered_record_durability(
-                ANCHOR_CANONICAL_RECORD,
-                ANCHOR_REDO_RECORD,
-                &canonical_bytes,
-                COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
-                hooks,
-            )?;
-            if established != canonical_bytes {
-                return Err(
-                    ProtectedCompilerExecutionWorkerLedgerErrorV1::ReacquiredAnchorJournalMismatch,
-                );
-            }
-            Some(reacquire_anchor_journal_exact(store, &record)?)
-        }
-    };
+        },
+    )?;
+    let journal = journal
+        .as_ref()
+        .map(|record| reacquire_anchor_journal_exact(store, record))
+        .transpose()?;
     validate_anchor_journal_join(policy, current, journal.as_ref())?;
     Ok(journal)
 }
@@ -1937,20 +1881,186 @@ mod tests {
 
     #[test]
     fn legacy_v1_worker_files_require_explicit_migration() {
-        for name in [LEGACY_V1_CANONICAL_RECORD, LEGACY_V1_REDO_RECORD] {
+        for name in crate::compiler_execution_journal_recovery::LEGACY_STATE_FILES {
             let fixture = Fixture::new();
             let path = fixture.directory.path().join(name);
-            fs::write(&path, vec![0_u8; LEGACY_V1_RECORD_BYTES]).unwrap();
+            fs::write(&path, []).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 
-            assert!(matches!(
-                WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy),
-                Err(
-                    ProtectedCompilerExecutionWorkerLedgerErrorV1::InvalidRecord(
-                        "legacy Worker V1 record requires explicit fail-closed migration"
+            assert!(WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).is_err());
+        }
+    }
+
+    #[test]
+    fn every_recovery_crash_preserves_later_worker_and_published_anchor() {
+        use crate::compiler_execution_journal_recovery::test_support::RecoveryFault;
+        for occurrence in 1..=2 {
+            for mut fault in RecoveryFault::cases(occurrence) {
+                let fixture = Fixture::new();
+                let mut ledger =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                let (request, publication) = fixture.entry(1, [0; 32], 0x78);
+                fixture
+                    .commit_publication(&mut ledger, request, publication)
+                    .unwrap();
+                let (request, publication) = fixture.entry(
+                    2,
+                    ledger.last_record().unwrap().current_rollback_anchor,
+                    0x79,
+                );
+                let ack = fixture
+                    .commit_publication(&mut ledger, request.clone(), publication.clone())
+                    .unwrap()
+                    .into_acknowledgment();
+                let worker = ledger.last_record().unwrap().canonical;
+                let anchor = ledger.anchor_journal().unwrap().canonical_bytes().to_vec();
+                drop(ledger);
+                assert!(
+                    WorkerReceiptLedgerV1::recover_with_hooks(
+                        fixture.root(),
+                        &fixture.policy,
+                        &mut fault
                     )
-                )
-            ));
+                    .is_err()
+                );
+                assert!(fault.fired, "{fault:?}");
+                let mut recovered =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                assert_eq!(
+                    recovered.last_record().unwrap().canonical,
+                    worker,
+                    "{fault:?}"
+                );
+                assert_eq!(
+                    recovered
+                        .anchor_journal()
+                        .unwrap()
+                        .canonical_bytes()
+                        .as_slice(),
+                    anchor,
+                    "{fault:?}"
+                );
+                let replay = fixture
+                    .commit_publication(&mut recovered, request, publication)
+                    .unwrap()
+                    .into_acknowledgment();
+                assert_eq!(ack, replay);
+                for name in [
+                    REDO_RECORD,
+                    RECOVERY_RECORD,
+                    ANCHOR_REDO_RECORD,
+                    ANCHOR_RECOVERY_RECORD,
+                ] {
+                    assert!(!fixture.directory.path().join(name).exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn interrupted_anchor_only_recovery_preserves_each_non_genesis_stage() {
+        use crate::compiler_execution_journal_recovery::test_support::RecoveryFault;
+        for position in [
+            None,
+            Some(AnchorPositionV1::Prior),
+            Some(AnchorPositionV1::Proposed),
+        ] {
+            for mut fault in RecoveryFault::cases(1) {
+                let fixture = Fixture::new();
+                let mut ledger =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                let (request, publication) = fixture.entry(1, [0; 32], 0x7a);
+                let challenge = ledger
+                    .prepare_external_anchor(request, publication)
+                    .unwrap();
+                if let Some(position) = position {
+                    ledger
+                        .record_external_anchor_observation(
+                            &fixture.anchor_observation(&challenge, position),
+                        )
+                        .unwrap();
+                }
+                let expected = ledger.anchor_journal().unwrap().canonical_bytes().to_vec();
+                drop(ledger);
+                assert!(
+                    WorkerReceiptLedgerV1::recover_with_hooks(
+                        fixture.root(),
+                        &fixture.policy,
+                        &mut fault
+                    )
+                    .is_err()
+                );
+                assert!(fault.fired, "{fault:?}");
+                let recovered =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                assert!(recovered.last_record().is_none());
+                assert_eq!(
+                    recovered
+                        .anchor_journal()
+                        .unwrap()
+                        .canonical_bytes()
+                        .as_slice(),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pending_successor_anchor_recovery_preserves_the_current_worker() {
+        use crate::compiler_execution_journal_recovery::test_support::RecoveryFault;
+        for position in [
+            None,
+            Some(AnchorPositionV1::Prior),
+            Some(AnchorPositionV1::Proposed),
+        ] {
+            for mut fault in RecoveryFault::cases(2) {
+                let fixture = Fixture::new();
+                let mut ledger =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                let (request, publication) = fixture.entry(1, [0; 32], 0x7b);
+                fixture
+                    .commit_publication(&mut ledger, request, publication)
+                    .unwrap();
+                let worker = ledger.last_record().unwrap().canonical;
+                let (request, publication) = fixture.entry(
+                    2,
+                    ledger.last_record().unwrap().current_rollback_anchor,
+                    0x7c,
+                );
+                let challenge = ledger
+                    .prepare_external_anchor(request, publication)
+                    .unwrap();
+                if let Some(position) = position {
+                    ledger
+                        .record_external_anchor_observation(
+                            &fixture.anchor_observation(&challenge, position),
+                        )
+                        .unwrap();
+                }
+                let journal = ledger.anchor_journal().unwrap().canonical_bytes().to_vec();
+                drop(ledger);
+                assert!(
+                    WorkerReceiptLedgerV1::recover_with_hooks(
+                        fixture.root(),
+                        &fixture.policy,
+                        &mut fault
+                    )
+                    .is_err()
+                );
+                assert!(fault.fired, "{fault:?}");
+                let recovered =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                assert_eq!(recovered.last_record().unwrap().canonical, worker);
+                assert_eq!(
+                    recovered
+                        .anchor_journal()
+                        .unwrap()
+                        .canonical_bytes()
+                        .as_slice(),
+                    journal
+                );
+            }
         }
     }
 

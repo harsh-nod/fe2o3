@@ -2,15 +2,19 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+mod bounded_pair;
 mod capsule;
+mod capsule_v4;
 mod error;
 mod multi_root_correspondence_payload_v2;
 mod multi_root_proof_roster_v2;
 mod multi_root_target_lineage_v2;
 mod multi_root_target_lineage_v3;
+mod native_lowering_association_v1;
 mod native_neutral_module_v1;
 mod native_neutral_subject_v1;
 mod native_output_transition_association_v1;
+mod native_refined_forwarding_carrier_v1;
 mod proof_binding;
 mod proof_binding_v4;
 mod receipt;
@@ -24,6 +28,7 @@ pub use capsule::{
     MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_DECODE_OWNED_BYTES_V3,
     OrderedInertSemanticLineageReceiptsV3,
 };
+pub use capsule_v4::*;
 pub use error::{LineageDecodeErrorV3, LineageErrorV3};
 pub use multi_root_correspondence_payload_v2::{
     MULTI_ROOT_CORRESPONDENCE_PAYLOAD_MAGIC_V2, MULTI_ROOT_CORRESPONDENCE_PAYLOAD_POLICY_V2,
@@ -59,6 +64,7 @@ pub use multi_root_target_lineage_v3::{
     MultiRootTargetBindingTranscriptV3, MultiRootTargetWorkgroupInputV3,
     MultiRootTargetWorkgroupV3,
 };
+pub use native_lowering_association_v1::*;
 pub use native_neutral_module_v1::{
     NativeNeutralModuleErrorV1, NativeNeutralModuleRefV1, encode_native_neutral_module_v1,
 };
@@ -74,6 +80,7 @@ pub use native_output_transition_association_v1::{
     NativeOutputTransitionRootV1, encode_native_output_transition_association_v1,
     native_output_transition_association_length_v1,
 };
+pub use native_refined_forwarding_carrier_v1::*;
 pub use proof_binding::{
     INERT_PROOF_BINDING_ASSOCIATION_MAGIC_V3, INERT_PROOF_BINDING_ASSOCIATION_VERSION_V3,
     InertLineageContentIdentityV3, InertProofBindingAssociationErrorV3,

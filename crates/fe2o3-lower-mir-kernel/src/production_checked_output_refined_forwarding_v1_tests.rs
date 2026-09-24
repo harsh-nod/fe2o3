@@ -25,6 +25,9 @@ use fe2o3_kernel_opt::{
     OwnedCrossBlockForwardingV1 as ForwardTail, prepare_owned_cross_block_forwarding_v1,
 };
 
+#[path = "production_checked_output_canonical_formal_adapter_v1_tests.rs"]
+mod canonical_output_formal_adapter_tests;
+
 fn operation(
     owner: &VerifiedCanonicalKernelIrModuleV12,
     coordinate: Coordinate,

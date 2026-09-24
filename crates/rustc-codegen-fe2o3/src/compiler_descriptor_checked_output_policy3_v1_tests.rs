@@ -1,4 +1,6 @@
 use super::*;
+#[path = "compiler_descriptor_nominal_policy4_v3_tests.rs"]
+mod nominal_policy4_tests;
 use crate::production_ranked_projection_v1::with_backend_checked_output_policy3_v1;
 use fe2o3_artifacts::{
     BlockSize, Dimensions, PointerWidth, RustPhysicalComponentKindV1, RustPhysicalComponentV1,

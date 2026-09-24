@@ -1,5 +1,26 @@
 # fe2o3 compiler execution protocol
 
+Native `CompilerExecutionIssuerPolicyV2` and `CompilerExecutionClientProfileV2`
+provide move-only, budgeted SubjectV2 trust inputs using shared private codecs.
+They do not activate a V2 deployment or supply protected execution evidence.
+The attestation/service/durable production path described below still uses V1
+trust inputs. See [the V2 contract](../../docs/compiler-execution-trust-inputs-v2.md)
+for wire, resource, ownership and remaining integration requirements.
+Native SubjectV2 bindings, challenges and requests now share V1 framing mechanics
+while retaining nominal owners and same-ledger nested subject decoding. They are
+inert content records, not signed execution evidence. See the
+[request contract](../../docs/compiler-execution-request-v2.md); production
+issuance, durable state and consumers remain on the previous family.
+Native move-only signed receipts and pinned-key verification are also available
+with explicit work/storage admission. Signature validity does not establish a
+protected compiler occurrence or advance a durable ledger. See the
+[receipt contract](../../docs/compiler-execution-receipt-v2.md).
+Native publication, ACK and complete carriage now validate nested owners and
+their exact relationships on the same resource ledger, without proving durable
+publication. See the [publication contract](../../docs/compiler-execution-publication-v2.md).
+Versioned durable state, service transport and production consumer integration
+remain pending.
+
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
 current-record verification, and bounded service packet records. The sole

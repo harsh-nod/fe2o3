@@ -33,11 +33,45 @@ const NAME: &str = "native_single_store";
 const TEXT: &str = "typed single-store recipe; diagnostic text is not a proof\n";
 const BINDING: [u8; 32] = [33; 32];
 
+#[derive(Clone, Copy)]
+struct StoreSpec {
+    name: &'static str,
+    binding: [u8; 32],
+    value: u32,
+    identity_offset: u8,
+}
+
+const STORES: [StoreSpec; 2] = [
+    StoreSpec {
+        name: NAME,
+        binding: BINDING,
+        value: 7,
+        identity_offset: 0,
+    },
+    StoreSpec {
+        name: "native_second_store",
+        binding: [32; 32],
+        value: 11,
+        identity_offset: 32,
+    },
+];
+
 fn d(byte: u8) -> DigestV1 {
     DigestV1::from_untrusted_bytes([byte; 32])
 }
 
 fn source() -> ProductionPreRankedKirOwnerV1 {
+    source_for_stores(&STORES[..1])
+}
+
+fn source_for_stores(specs: &[StoreSpec]) -> ProductionPreRankedKirOwnerV1 {
+    source_for_stores_with_layout(specs, SemanticLayoutIdentityV1::from_sha256([250; 32]))
+}
+
+fn source_for_stores_with_layout(
+    specs: &[StoreSpec],
+    layout: SemanticLayoutIdentityV1,
+) -> ProductionPreRankedKirOwnerV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let u32_ty = SemanticTypeIdV1::from_index(1);
     let pointer = SemanticTypeIdV1::from_index(2);
@@ -121,7 +155,6 @@ fn source() -> ProductionPreRankedKirOwnerV1 {
         )
         .with_rustc_abi_properties(properties),
     ];
-    let layout = SemanticLayoutIdentityV1::from_sha256([250; 32]);
     let attrs = SemanticAbiValueAttributesV1::new(
         SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
         SemanticAbiExtensionV1::None,
@@ -129,136 +162,158 @@ fn source() -> ProductionPreRankedKirOwnerV1 {
         None,
     )
     .unwrap();
-    let abi = SemanticFunctionAbiV1::from_rustc(
-        SemanticAbiIdentityV1::from_sha256([20; 32]),
-        layout,
-        SemanticCanonAbiV1::GpuKernel,
-        SemanticExternAbiV1::GpuKernel,
-        false,
-        false,
-        1,
-        vec![SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
-            carrier,
-            SemanticAbiPassModeV1::Direct(attrs),
-        ))],
-        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
-    )
-    .unwrap()
-    .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ExclusiveOwner])
-    .unwrap();
-    let provenance = SemanticSourceProvenanceV1::unavailable();
-    let pointer_assignment = SemanticStatementV1::new(
-        provenance,
-        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], pointer).unwrap(),
-            SemanticRvalueV1::new(
-                pointer,
-                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
-                    SemanticPlaceV1::new(
-                        SemanticLocalIdV1::from_index(1),
-                        vec![
-                            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), pointer)
-                                .unwrap(),
-                        ],
+    let functions = specs
+        .iter()
+        .map(|spec| {
+            let tag = |n| [n + spec.identity_offset; 32];
+            let abi = SemanticFunctionAbiV1::from_rustc(
+                SemanticAbiIdentityV1::from_sha256(tag(20)),
+                layout,
+                SemanticCanonAbiV1::GpuKernel,
+                SemanticExternAbiV1::GpuKernel,
+                false,
+                false,
+                1,
+                vec![SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                    carrier,
+                    SemanticAbiPassModeV1::Direct(attrs),
+                ))],
+                SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+            )
+            .unwrap()
+            .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ExclusiveOwner])
+            .unwrap();
+            let provenance = SemanticSourceProvenanceV1::unavailable();
+            let pointer_assignment = SemanticStatementV1::new(
+                provenance,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], pointer)
+                        .unwrap(),
+                    SemanticRvalueV1::new(
                         pointer,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(
+                                SemanticLocalIdV1::from_index(1),
+                                vec![
+                                    SemanticProjectionV1::new(
+                                        SemanticProjectionKindV1::Field(0),
+                                        pointer,
+                                    )
+                                    .unwrap(),
+                                ],
+                                pointer,
+                            )
+                            .unwrap(),
+                        )),
+                    ),
+                )),
+            );
+            let store = SemanticStatementV1::new(
+                provenance,
+                SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                    SemanticPlaceV1::new(
+                        SemanticLocalIdV1::from_index(2),
+                        vec![
+                            SemanticProjectionV1::new(
+                                SemanticProjectionKindV1::Dereference,
+                                u32_ty,
+                            )
+                            .unwrap(),
+                        ],
+                        u32_ty,
                     )
                     .unwrap(),
+                    SemanticOperandV1::Constant(SemanticConstantV1::new(
+                        u32_ty,
+                        SemanticConstantValueV1::Scalar(
+                            SemanticScalarValueV1::new(spec.value.into(), 4).unwrap(),
+                        ),
+                    )),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
                 )),
-            ),
-        )),
-    );
-    let store = SemanticStatementV1::new(
-        provenance,
-        SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
-            SemanticPlaceV1::new(
-                SemanticLocalIdV1::from_index(2),
+            );
+            let dimensions = SemanticWorkgroupDimensionsV1::new([1, 1, 1]).unwrap();
+            SemanticFunctionDeclV1::new(
+                SemanticFunctionIdentityV1::from_sha256(tag(21)),
+                SemanticFunctionRoleV1::KernelRoot,
+                SemanticItemDefinitionIdentityV1::from_sha256(tag(22)),
+                SemanticMonomorphizationIdentityV1::from_sha256(tag(23)),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256(tag(24)),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256(tag(25)),
+                provenance,
+                abi,
                 vec![
-                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, u32_ty)
-                        .unwrap(),
+                    SemanticLocalDeclV1::new(
+                        SemanticLocalIdentityV1::from_sha256(tag(26)),
+                        unit,
+                        SemanticLocalRoleV1::Return,
+                        provenance,
+                    ),
+                    SemanticLocalDeclV1::new(
+                        SemanticLocalIdentityV1::from_sha256(tag(27)),
+                        carrier,
+                        SemanticLocalRoleV1::Argument(0),
+                        provenance,
+                    ),
+                    SemanticLocalDeclV1::new(
+                        SemanticLocalIdentityV1::from_sha256(tag(29)),
+                        pointer,
+                        SemanticLocalRoleV1::Temporary,
+                        provenance,
+                    ),
                 ],
-                u32_ty,
-            )
-            .unwrap(),
-            SemanticOperandV1::Constant(SemanticConstantV1::new(
-                u32_ty,
-                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(7, 4).unwrap()),
-            )),
-            SemanticVolatilityV1::NonVolatile,
-            None,
-        )),
-    );
-    let dimensions = SemanticWorkgroupDimensionsV1::new([1, 1, 1]).unwrap();
-    let function = SemanticFunctionDeclV1::new(
-        SemanticFunctionIdentityV1::from_sha256([21; 32]),
-        SemanticFunctionRoleV1::KernelRoot,
-        SemanticItemDefinitionIdentityV1::from_sha256([22; 32]),
-        SemanticMonomorphizationIdentityV1::from_sha256([23; 32]),
-        SemanticGenericTypeArgumentsIdentityV1::from_sha256([24; 32]),
-        SemanticConstGenericArgumentsIdentityV1::from_sha256([25; 32]),
-        provenance,
-        abi,
-        vec![
-            SemanticLocalDeclV1::new(
-                SemanticLocalIdentityV1::from_sha256([26; 32]),
-                unit,
-                SemanticLocalRoleV1::Return,
-                provenance,
-            ),
-            SemanticLocalDeclV1::new(
-                SemanticLocalIdentityV1::from_sha256([27; 32]),
-                carrier,
-                SemanticLocalRoleV1::Argument(0),
-                provenance,
-            ),
-            SemanticLocalDeclV1::new(
-                SemanticLocalIdentityV1::from_sha256([29; 32]),
-                pointer,
-                SemanticLocalRoleV1::Temporary,
-                provenance,
-            ),
-        ],
-        SemanticBlockIdV1::from_index(0),
-        vec![
-            SemanticBasicBlockV1::new(
-                SemanticBlockIdentityV1::from_sha256([28; 32]),
-                provenance,
-                vec![pointer_assignment, store],
-                SemanticTerminatorV1::new(provenance, SemanticTerminatorKindV1::Return),
-            )
-            .unwrap(),
-        ],
-    )
-    .unwrap()
-    .with_kernel_entry(SemanticKernelEntryV1::new(
-        SemanticLinkSymbolV1::new(NAME.as_bytes().to_vec()).unwrap(),
-        SemanticKernelBindingIdentityV1::from_sha256(BINDING),
-        SemanticKernelSourceContractV1::new(
-            Some(
-                SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                SemanticBlockIdV1::from_index(0),
+                vec![
+                    SemanticBasicBlockV1::new(
+                        SemanticBlockIdentityV1::from_sha256(tag(28)),
+                        provenance,
+                        vec![pointer_assignment, store],
+                        SemanticTerminatorV1::new(provenance, SemanticTerminatorKindV1::Return),
+                    )
                     .unwrap(),
-            ),
-            None,
-            None,
-        )
-        .unwrap(),
-    ));
+                ],
+            )
+            .unwrap()
+            .with_kernel_entry(SemanticKernelEntryV1::new(
+                SemanticLinkSymbolV1::new(spec.name.as_bytes().to_vec()).unwrap(),
+                SemanticKernelBindingIdentityV1::from_sha256(spec.binding),
+                SemanticKernelSourceContractV1::new(
+                    Some(
+                        SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                            .unwrap(),
+                    ),
+                    None,
+                    None,
+                )
+                .unwrap(),
+            ))
+        })
+        .collect();
     let semantic = InertSemanticMirRequestV1::new(
         SemanticTargetDataLayoutV1::gfx942(layout),
         types,
         vec![],
         vec![],
         vec![],
-        vec![function],
-        vec![SemanticFunctionIdV1::from_index(0)],
+        functions,
+        (0..specs.len())
+            .map(|index| SemanticFunctionIdV1::from_index(index as u32))
+            .collect(),
     )
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
-    let inputs = [ProductionSourceLaunchRootInputV1::new(
-        NAME,
-        BINDING,
-        ProductionSourceLaunchInputV1::new(1, Some([1, 1, 1]), [1, 1, 1]),
-    )];
+    let inputs: Vec<_> = specs
+        .iter()
+        .map(|spec| {
+            ProductionSourceLaunchRootInputV1::new(
+                spec.name,
+                spec.binding,
+                ProductionSourceLaunchInputV1::new(1, Some([1, 1, 1]), [1, 1, 1]),
+            )
+        })
+        .collect();
     let launch = ProductionSourceLaunchRosterV1::try_new(&semantic, &inputs).unwrap();
     let semantic =
         ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
@@ -316,15 +371,17 @@ fn sign(
     )
 }
 
-fn ranked(
+fn ranked_for_root(
     source: &ProductionPreRankedKirOwnerV1,
+    ordinal: usize,
+    spec: StoreSpec,
     toolchain: VerusToolchainIdentityV2,
 ) -> (
     ProductionRankedKernelLoweringInputV1,
     InertFunctionalRefinementReceiptSignatureV2,
     NativeCompilerStagingCommitmentV1,
 ) {
-    let layout = source.source_launch().roots()[0].layout();
+    let layout = source.source_launch().roots()[ordinal].layout();
     let local = |n| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(n));
     let exact = ProductionNumericalContractV2::ExactBitVectorOperatorCongruence;
     let subjects = FunctionalRefinementSubjectsV2::new(
@@ -368,7 +425,7 @@ fn ranked(
         bits: 32,
     };
     let kernel = ProductionRankedKernelV1::new(
-        NAME,
+        spec.name,
         0,
         vec![ProductionRankedBlockV1::new(
             vec![
@@ -392,8 +449,8 @@ fn ranked(
                     result: ProductionRankedValueIdV1::new(1),
                     value: 0,
                 },
-                scalar(2, 7, u32_ty),
-                scalar(3, 7, u32_ty),
+                scalar(2, spec.value.into(), u32_ty),
+                scalar(3, spec.value.into(), u32_ty),
                 scalar(4, 1, ProductionSemanticScalarTypeV2::Bool),
                 scalar(
                     5,
@@ -461,6 +518,11 @@ struct Fixture {
     middle: Roster,
     correspondence: Roster,
     verus: Roster,
+    roots: Vec<SignedStore>,
+}
+
+struct SignedStore {
+    spec: StoreSpec,
     kernel: ProductionRankedKernelV1,
     signature: InertFunctionalRefinementReceiptSignatureV2,
     staging: NativeCompilerStagingCommitmentV1,
@@ -471,9 +533,22 @@ fn fixture() -> Fixture {
 }
 
 fn fixture_from_source(source: &ProductionPreRankedKirOwnerV1) -> Fixture {
+    fixture_for_stores(source, &STORES[..1])
+}
+
+fn signed_store(
+    source: &ProductionPreRankedKirOwnerV1,
+    ordinal: usize,
+    spec: StoreSpec,
+) -> (
+    SignedStore,
+    ProductionMiddleEndEvidenceV5,
+    Induction,
+    Signed,
+) {
     let semantic = source.semantic_ssa().source_semantic();
     let toolchain = VerusToolchainIdentityV2::new(d(72), d(73), d(74), d(75), d(76)).unwrap();
-    let (ranked, signature, staging) = ranked(source, toolchain);
+    let (ranked, signature, staging) = ranked_for_root(source, ordinal, spec, toolchain);
     let evidence =
         ProductionMiddleEndEvidenceV5::try_new(source.semantic_ssa().source_owner(), &ranked, TEXT)
             .unwrap();
@@ -507,8 +582,7 @@ fn fixture_from_source(source: &ProductionPreRankedKirOwnerV1) -> Fixture {
         *aggregate_signature.wire(),
     )
     .unwrap();
-    let root = semantic.roots()[0];
-    let function = &semantic.functions()[root.index() as usize];
+    let root = semantic.roots()[ordinal];
     let induction = Induction::from_report(
         &analyze_semantic_u32_induction_no_overflow_v1(
             semantic,
@@ -520,6 +594,27 @@ fn fixture_from_source(source: &ProductionPreRankedKirOwnerV1) -> Fixture {
         .unwrap(),
     )
     .unwrap();
+    (
+        SignedStore {
+            spec,
+            kernel: ranked.kernel().clone(),
+            signature,
+            staging,
+        },
+        evidence,
+        induction,
+        signed,
+    )
+}
+
+fn fixture_for_stores(source: &ProductionPreRankedKirOwnerV1, specs: &[StoreSpec]) -> Fixture {
+    let semantic = source.semantic_ssa().source_semantic();
+    assert_eq!(semantic.roots().len(), specs.len());
+    let signed: Vec<_> = specs
+        .iter()
+        .enumerate()
+        .map(|(ordinal, &spec)| signed_store(source, ordinal, spec))
+        .collect();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget
@@ -549,45 +644,69 @@ fn fixture_from_source(source: &ProductionPreRankedKirOwnerV1) -> Fixture {
     .unwrap();
     let mut identity = Sha256::new();
     identity.update(b"FE2O3/PRODUCTION-RANKED-KERNEL-ROSTER-IDENTITY/V1\0");
-    identity.update(1_u64.to_le_bytes());
-    for field in [
-        &BINDING[..],
-        NAME.as_bytes(),
-        NAME.as_bytes(),
-        &root.index().to_le_bytes(),
-        &function.identity().as_bytes()[..],
-        &[1],
-        evidence.identity().sha256(),
-        &evidence.identity().byte_len().to_le_bytes(),
-        induction.semantic_mir_sha256(),
-        &induction.function().to_le_bytes(),
-        induction.function_identity(),
-        &u64::from(induction.checked_additions_examined()).to_le_bytes(),
-        &(induction.certificates().len() as u64).to_le_bytes(),
-        &induction.work_units().to_le_bytes(),
-    ] {
-        identity.update((field.len() as u64).to_le_bytes());
-        identity.update(field);
+    identity.update((specs.len() as u64).to_le_bytes());
+    let mut order: Vec<_> = (0..specs.len() as u32).collect();
+    order.sort_by_key(|&ordinal| specs[ordinal as usize].binding);
+    for &ordinal in &order {
+        let ordinal = ordinal as usize;
+        let spec = specs[ordinal];
+        let (_, evidence, induction, _) = &signed[ordinal];
+        let root = semantic.roots()[ordinal];
+        let function = &semantic.functions()[root.index() as usize];
+        for field in [
+            &spec.binding[..],
+            spec.name.as_bytes(),
+            spec.name.as_bytes(),
+            &root.index().to_le_bytes(),
+            &function.identity().as_bytes()[..],
+            &[1],
+            evidence.identity().sha256(),
+            &evidence.identity().byte_len().to_le_bytes(),
+            induction.semantic_mir_sha256(),
+            &induction.function().to_le_bytes(),
+            induction.function_identity(),
+            &u64::from(induction.checked_additions_examined()).to_le_bytes(),
+            &(induction.certificates().len() as u64).to_le_bytes(),
+            &induction.work_units().to_le_bytes(),
+        ] {
+            identity.update((field.len() as u64).to_le_bytes());
+            identity.update(field);
+        }
     }
     let identity = identity.finalize().into();
-    let frame = |kind, payload| {
+    let frame = |kind| {
+        let roots: Vec<_> = signed
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (store, evidence, induction, signed))| {
+                let root = semantic.roots()[ordinal];
+                let function = &semantic.functions()[root.index() as usize];
+                let payload = match kind {
+                    Kind::MiddleEnd => evidence.as_inert().canonical_bytes(),
+                    Kind::Correspondence => induction.canonical_bytes(),
+                    Kind::VerusExecution => signed.canonical_bytes(),
+                    _ => unreachable!(),
+                };
+                MultiRootProofRosterRootInputV3 {
+                    semantic_root: root.index(),
+                    semantic_root_identity: *function.identity().as_bytes(),
+                    kernel_binding: store.spec.binding,
+                    source_rank: 1,
+                    workgroup: [1, 1, 1],
+                    logical_name: store.spec.name,
+                    export_symbol: store.spec.name,
+                    kernel_id: store.spec.name,
+                    payload,
+                }
+            })
+            .collect();
         Roster::new(MultiRootProofRosterInputsV3 {
             kind,
             semantic_mir_sha256: *semantic.semantic_sha256().as_bytes(),
             native_neutral_subject: subject,
             roster_identity: identity,
-            canonical_kernel_order: &[0],
-            roots: &[MultiRootProofRosterRootInputV3 {
-                semantic_root: root.index(),
-                semantic_root_identity: *function.identity().as_bytes(),
-                kernel_binding: BINDING,
-                source_rank: 1,
-                workgroup: [1, 1, 1],
-                logical_name: NAME,
-                export_symbol: NAME,
-                kernel_id: NAME,
-                payload,
-            }],
+            canonical_kernel_order: &order,
+            roots: &roots,
         })
         .unwrap()
     };
@@ -595,12 +714,10 @@ fn fixture_from_source(source: &ProductionPreRankedKirOwnerV1) -> Fixture {
         semantic: semantic.canonical_encoding().to_vec(),
         native,
         native_graph: graph.canonical_bytes().to_vec(),
-        middle: frame(Kind::MiddleEnd, evidence.as_inert().canonical_bytes()),
-        correspondence: frame(Kind::Correspondence, induction.canonical_bytes()),
-        verus: frame(Kind::VerusExecution, signed.canonical_bytes()),
-        kernel: ranked.kernel().clone(),
-        signature,
-        staging,
+        middle: frame(Kind::MiddleEnd),
+        correspondence: frame(Kind::Correspondence),
+        verus: frame(Kind::VerusExecution),
+        roots: signed.into_iter().map(|(store, _, _, _)| store).collect(),
     }
 }
 
@@ -638,12 +755,13 @@ impl Fixture {
             BINDING,
             ProductionSourceLaunchInputV1::new(1, Some([1, 1, 1]), [1, 1, 1]),
         )];
-        let commitments = [self.staging];
+        assert_eq!(self.roots.len(), 1);
+        let commitments = [self.roots[0].staging];
         let staging = [NativeCompilerRootStagingV1 {
             semantic_root: 0,
             commitments: &commitments,
         }];
-        let signatures = [self.signature];
+        let signatures = [self.roots[0].signature];
         let roots = [NativeCompilerRankedRootV1 {
             candidate: NativeRankedSourceCandidateV1::from_untrusted_parts(
                 0,
@@ -699,7 +817,7 @@ fn replace_and_resign_aggregate_claim(fixture: &mut Fixture, changed: usize) {
             subjects.kernel_subject_identity(),
             subjects.kernel_mir_hash(),
         ],
-        [fixture.staging.digests()].into_iter(),
+        [fixture.roots[0].staging.digests()].into_iter(),
     );
     let binding = FunctionalRefinementBindingV2::from_subjects(subjects, obligation).unwrap();
     let (imported, signature) = sign(
@@ -751,7 +869,7 @@ fn check_commitment_only_packet(fixture: &Fixture, budget: &mut Budget<'_>) -> R
         BINDING,
         ProductionSourceLaunchInputV1::new(1, Some([1, 1, 1]), [1, 1, 1]),
     )];
-    let commitments = [fixture.staging];
+    let commitments = [fixture.roots[0].staging];
     let staging = [NativeCompilerRootStagingV1 {
         semantic_root: 0,
         commitments: &commitments,
@@ -785,7 +903,7 @@ fn fresh_aggregate_rederivation_rejects_self_consistently_resigned_false_claims(
         check_commitment_only_packet(&fixture, &mut budget).unwrap();
         assert_eq!(budget.storage(), 37);
         assert!(matches!(
-            fixture.validate(&fixture.kernel, &access, &mut budget),
+            fixture.validate(&fixture.roots[0].kernel, &access, &mut budget),
             Err(E::Mismatch("fresh source/ranked aggregate subjects"))
         ));
         assert_eq!(budget.storage(), 37);
@@ -817,7 +935,7 @@ fn changed_or_oversized_diagnostic_text_is_rejected_before_ranked_recompilation(
         let mut budget = Budget::new(&mut work, STORAGE);
         budget.reserve_storage(37).unwrap();
         assert!(matches!(
-            fixture.validate_with_text(&fixture.kernel, &access, diagnostic, &mut budget,),
+            fixture.validate_with_text(&fixture.roots[0].kernel, &access, diagnostic, &mut budget,),
             Err(E::Mismatch("exact typed ranked diagnostic text"))
         ));
         assert_eq!((budget.storage(), budget.work()), (37, exact));
@@ -832,7 +950,7 @@ fn full_signed_typed_native_source_packet_retains_fresh_correspondence_owner() {
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(37).unwrap();
     let (checked, storage) = fixture
-        .validate(&fixture.kernel, &access, &mut budget)
+        .validate(&fixture.roots[0].kernel, &access, &mut budget)
         .unwrap();
     assert_eq!(budget.storage(), 37);
     budget.reserve_storage(storage.retained_storage()).unwrap();
@@ -869,12 +987,12 @@ fn original_full_signature_rejects_changed_typed_graph_and_source_maps() {
         budget.reserve_storage(37).unwrap();
         assert!(
             fixture
-                .validate(&fixture.kernel, access, &mut budget)
+                .validate(&fixture.roots[0].kernel, access, &mut budget)
                 .is_err()
         );
         assert_eq!(budget.storage(), 37);
     }
-    let mut operations = fixture.kernel.blocks()[0].operations().to_vec();
+    let mut operations = fixture.roots[0].kernel.blocks()[0].operations().to_vec();
     let ProductionRankedOperationV1::SemanticExpression { expression, .. } = &mut operations[3]
     else {
         unreachable!()
@@ -901,3 +1019,6 @@ fn original_full_signature_rejects_changed_typed_graph_and_source_maps() {
 
 #[path = "compiler_native_unit_local_erased_source_proof_v1_tests.rs"]
 mod unit_local_erased_fixture;
+
+#[path = "compiler_native_ranked_recipe_recovery_v1_tests.rs"]
+mod recipe_recovery;

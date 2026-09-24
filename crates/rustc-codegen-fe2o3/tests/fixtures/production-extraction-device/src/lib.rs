@@ -1,5 +1,14 @@
 #![no_std]
 
+#[cfg(any(
+    feature = "guarded-loop-read",
+    feature = "guarded-loop-read-control",
+    feature = "guarded-loop-read-stale",
+    feature = "guarded-loop-read-different",
+    feature = "nominal-policy4-unitlocal",
+))]
+mod guarded_loop_read;
+
 #[cfg(feature = "conditional-descriptor-pair")]
 mod conditional_descriptor_pair;
 
@@ -132,6 +141,11 @@ mod ordered_region_v31;
 mod ordered_program_v32;
 
 #[cfg(not(any(
+    feature = "guarded-loop-read",
+    feature = "nominal-policy4-unitlocal",
+    feature = "guarded-loop-read-control",
+    feature = "guarded-loop-read-stale",
+    feature = "guarded-loop-read-different",
     feature = "loop-capture-exact",
     feature = "loop-capture-renamed",
     feature = "loop-capture-generic",
@@ -248,7 +262,7 @@ pub fn wrapped_fill(mut output: DisjointSlice<f32>) -> KernelResult {
     Ok(())
 }
 
-#[cfg(feature = "private-unit-helper")]
+#[cfg(any(feature = "private-unit-helper", feature = "nominal-policy4-unitlocal"))]
 #[inline(never)]
 fn private_unit_helper() {
     let index = 0_usize;

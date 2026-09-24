@@ -2,23 +2,18 @@ use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::io;
-use std::os::fd::AsFd;
 
+use crate::root_checks::{self, RootCheckError, RootSnapshot as RootSnapshotV1};
+use crate::{AdmittedIssuerProgramV1, IssuerProgramAdmissionErrorV1};
 use fe2o3_broker_authority_service::{
     ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
-use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_MODE_V1;
 pub use fe2o3_protected_service_profile::{
     PROTECTED_SERVICE_SECUREBITS_V1 as ISSUER_SERVICE_SECUREBITS_V1,
     ProtectedServiceCredentialProfileErrorV1 as IssuerServiceCredentialProfileErrorV1,
     ProtectedServiceCredentialProfileV1 as IssuerServiceCredentialProfileV1,
 };
-use rustix::fs::{FileType, OFlags};
-
-use crate::{AdmittedIssuerProgramV1, IssuerProgramAdmissionErrorV1};
-
-const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
 
 pub(super) struct ExternalAnchorLaunchClonesV1<'a> {
     pub(super) peer: &'a File,
@@ -358,99 +353,15 @@ impl ProtectedIssuerRootV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RootSnapshotV1 {
-    device: u64,
-    inode: u64,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    links: u64,
-}
-
 fn validate_root(
     root: &File,
     credentials: IssuerServiceCredentialProfileV1,
 ) -> Result<RootSnapshotV1, ProtectedIssuerSupervisorErrorV1> {
-    let descriptor_flags =
-        rustix::io::fcntl_getfd(root).map_err(|source| ProtectedIssuerSupervisorErrorV1::Io {
-            operation: "inspect protected issuer root descriptor flags",
-            source: source.into(),
-        })?;
-    let status =
-        rustix::fs::fcntl_getfl(root).map_err(|source| ProtectedIssuerSupervisorErrorV1::Io {
-            operation: "inspect protected issuer root status flags",
-            source: source.into(),
-        })?;
-    let stat = rustix::fs::fstat(root).map_err(|source| ProtectedIssuerSupervisorErrorV1::Io {
-        operation: "inspect protected issuer root",
-        source: source.into(),
-    })?;
-    let snapshot = RootSnapshotV1 {
-        device: stat.st_dev,
-        inode: stat.st_ino,
-        mode: stat.st_mode,
-        uid: stat.st_uid,
-        gid: stat.st_gid,
-        links: stat.st_nlink,
-    };
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        return Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
-            "descriptor is inheritable",
-        ));
-    }
-    if status & OFlags::ACCMODE != OFlags::RDONLY || status.contains(OFlags::PATH) {
-        return Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
-            "descriptor is not read-only directory custody",
-        ));
-    }
-    if FileType::from_raw_mode(snapshot.mode) != FileType::Directory {
-        return Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
-            "object is not a directory",
-        ));
-    }
-    if snapshot.uid != credentials.uid() || snapshot.gid != credentials.gid() {
-        return Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
-            "owner does not match the service UID and GID",
-        ));
-    }
-    if snapshot.mode & PERMISSION_AND_SPECIAL_BITS
-        != COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_MODE_V1
-    {
-        return Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
-            "mode is not exactly 0700",
-        ));
-    }
-    if snapshot.links == 0 {
-        return Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
-            "directory is unlinked",
-        ));
-    }
-    for attribute in [
-        "security.capability",
-        "system.posix_acl_access",
-        "system.posix_acl_default",
-    ] {
-        require_absent_xattr(root, attribute)?;
-    }
-    Ok(snapshot)
-}
-
-fn require_absent_xattr(
-    root: &impl AsFd,
-    attribute: &'static str,
-) -> Result<(), ProtectedIssuerSupervisorErrorV1> {
-    let mut byte = 0_u8;
-    match rustix::fs::fgetxattr(root, attribute, std::slice::from_mut(&mut byte)) {
-        Err(rustix::io::Errno::NODATA | rustix::io::Errno::OPNOTSUPP) => Ok(()),
-        Ok(_) | Err(rustix::io::Errno::RANGE) => {
-            Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
-                "directory has a forbidden capability or POSIX ACL",
-            ))
-        }
-        Err(source) => Err(ProtectedIssuerSupervisorErrorV1::Io {
-            operation: "inspect protected issuer root extended attributes",
-            source: source.into(),
-        }),
-    }
+    root_checks::inspect(root, credentials).map_err(|error| match error {
+        RootCheckError::Invalid(reason) => ProtectedIssuerSupervisorErrorV1::InvalidRoot(reason),
+        RootCheckError::Io { operation, errno } => ProtectedIssuerSupervisorErrorV1::Io {
+            operation,
+            source: errno.into(),
+        },
+    })
 }

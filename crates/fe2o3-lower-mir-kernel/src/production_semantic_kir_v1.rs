@@ -89,6 +89,11 @@ pub use checked_output_admission_policy3_v1::*;
 #[path = "production_checked_output_guarded_formal_v1.rs"]
 mod checked_output_guarded_formal_v1;
 pub(crate) use checked_output_guarded_formal_v1::derive_checked_output_guarded_obligations_v1;
+pub use checked_output_guarded_formal_v1::{
+    CanonicalOutputFormalSourceAnchorV1, CanonicalOutputGuardedFormalMemoryErrorV1,
+    CanonicalOutputGuardedFormalMemoryStorageV1, CanonicalOutputGuardedFormalMemoryV1,
+    analyze_canonical_output_guarded_formal_memory_v1,
+};
 #[path = "production_original_native_formal_v1.rs"]
 mod original_native_formal_v1;
 pub use original_native_formal_v1::*;
@@ -119,6 +124,12 @@ mod value_origin_v1;
 pub use slice_view_v1::*;
 include!("production_optimized_assert_origins_v1.rs");
 include!("production_source_output_catalog_v1.rs");
+#[path = "production_source_catalog_callback_v1.rs"]
+mod source_catalog_callback_v1;
+pub use source_catalog_callback_v1::{
+    CheckedSourcePipelineCatalogV1, SourcePipelineCatalogCallbackErrorV1,
+    with_checked_source_pipeline_catalog_v1,
+};
 include!("production_source_output_occurrences_v1.rs");
 include!("production_source_output_erased_v1.rs");
 include!("production_source_output_private_arrays_v1.rs");
@@ -1264,10 +1275,11 @@ fn fmt_semantic_source_location_v1(
 /// This is compiler-internal correspondence, not proof authority. It is
 /// revalidated against all three retained IR owners before formal admission.
 ///
-/// Optional output extent provenance is in-memory only. Reconstructing the five
-/// legacy coordinate fields (including a legacy payload decode) uses `new` and
-/// loses that proposal. Existing codecs/digests must not serialize it under an
-/// old version. Eq/Ord compare the complete in-memory row, including the proposal;
+/// Optional output extent provenance is preserved by the separately versioned
+/// ranked source-row transport. Reconstructing the five legacy coordinate fields
+/// (including a legacy payload decode) uses `new` and loses that proposal.
+/// Existing codecs/digests must not serialize it under an old version.
+/// Eq/Ord compare the complete in-memory row, including the proposal;
 /// neither trait is a wire identity or an authentication check. Existing source
 /// replay validates the base coordinates, not this optional extent meaning.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -26787,6 +26799,9 @@ mod shared_slice_helper_parameter_tests {
 
 #[cfg(test)]
 mod resource_tests {
+    mod source_catalog_callback_tests {
+        include!("production_source_catalog_callback_v1_tests.rs");
+    }
     mod gfx942_inline_scalar_correspondence_v30_tests {
         use super::*;
         include!("production_semantic_kir_v1/gfx942_inline_scalar_correspondence_v30_tests.rs");

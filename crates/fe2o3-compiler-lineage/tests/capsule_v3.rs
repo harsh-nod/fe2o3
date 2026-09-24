@@ -8,6 +8,9 @@ use fe2o3_rustc_invocation::{
     RustcInvocationDescriptorV3, RustcUnitV2,
 };
 
+#[path = "support/capsule_v4_cases.rs"]
+mod native_v4;
+
 const HEADER_BYTES: usize = 24;
 const SHA256_BYTES: usize = 32;
 const TARGET: &str = "gfx942:sramecc+:xnack-";

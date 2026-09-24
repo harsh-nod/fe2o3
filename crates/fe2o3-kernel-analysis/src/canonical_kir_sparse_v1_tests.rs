@@ -873,11 +873,12 @@ fn independent_empty_budget_boundaries_preserve_prefix_floor_and_history() {
     let (inventory, inventory_storage) = inventory(&owner, owner_storage);
     let floor = owner_storage + inventory_storage + 7;
     let payload = size_of::<CanonicalKirSparseV1<'_, '_>>();
+    let header = size_of::<Engine<'_, '_>>();
     // One inventory admission event + seven scalar input-limit checks.
     for (allowance, bytes, succeeds) in [
-        (8, payload, true),
-        (7, payload, false),
-        (8, payload - 1, false),
+        (8, header, true),
+        (7, header, false),
+        (8, header - 1, false),
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(13 + allowance);
         work.charge_work(13).unwrap();
@@ -895,7 +896,7 @@ fn independent_empty_budget_boundaries_preserve_prefix_floor_and_history() {
                 Ok((report, receipt)) => {
                     assert_eq!(budget.work(), 21);
                     assert_eq!(receipt.retained_storage(), payload);
-                    assert_eq!(budget.peak_storage(), floor + payload);
+                    assert_eq!(budget.peak_storage(), floor + header);
                     budget.reserve_storage(receipt.retained_storage()).unwrap();
                     drop(report);
                     budget.release_storage(receipt.retained_storage()).unwrap();
@@ -906,7 +907,7 @@ fn independent_empty_budget_boundaries_preserve_prefix_floor_and_history() {
                     assert_eq!(budget.peak_storage(), floor);
                 }
                 Err(CanonicalKirSparseErrorV1::Resource(Resource::Storage(error))) => {
-                    assert_eq!(error.actual(), floor + payload);
+                    assert_eq!(error.actual(), floor + header);
                     assert_eq!(budget.work(), 21);
                     assert_eq!(budget.peak_storage(), floor);
                 }
@@ -931,7 +932,7 @@ fn independent_nonempty_work_boundary_drops_queue_scratch_before_transferring_ou
     let (inventory, inventory_storage) = inventory(&owner, owner_storage);
     let floor = owner_storage + inventory_storage + 7;
     let retained = size_of::<CanonicalKirSparseV1<'_, '_>>() + size_of::<u8>();
-    let peak_payload = retained + size_of::<u8>() + size_of::<usize>();
+    let peak_payload = size_of::<Engine<'_, '_>>() + 2 * size_of::<u8>() + size_of::<usize>();
     // Admission8 + three allocate/init pairs6 + function visit1 + block
     // activation1 + enqueue1 + dequeue1 + terminator transfer1 = 19.
     for allowance in [18, 19] {
@@ -1031,7 +1032,9 @@ fn nonempty_exact_peak_accounts_for_all_inverse_and_closure_buffers() {
         + size_of::<CanonicalKirSparseExceptionV1>();
     // D=1, U=1, N=O+B=2: heads1 + next1 + queue2 + closure1;
     // two queued flags coexist with every retained output allocation.
-    let scratch = 5 * size_of::<usize>() + 2 * size_of::<u8>();
+    let scratch = size_of::<Engine<'_, '_>>() - size_of::<CanonicalKirSparseV1<'_, '_>>()
+        + 5 * size_of::<usize>()
+        + 2 * size_of::<u8>();
     let peak_payload = retained + scratch;
     for available in [peak_payload - 1, peak_payload] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(1000);
@@ -1131,4 +1134,36 @@ fn admitted_entry_parameter_cycle_closes_unknown_without_inventing_an_input() {
             assert!(!report.values().contains(&Value::Unknown));
         },
     );
+}
+
+#[test]
+fn sparse_allocation_receipt_uses_actual_capacity_and_preserves_denial_floor() {
+    for count in [1, 3, 31] {
+        let floor = 29;
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1000);
+        let mut budget = Budget::new(&mut work, 10000);
+        budget.reserve_storage(floor).unwrap();
+        let mut retained = count * size_of::<u64>();
+        let values = allocate(count, 17u64, &mut budget, Some(&mut retained)).unwrap();
+        assert_eq!(retained, values.capacity() * size_of::<u64>());
+        assert_eq!(budget.storage(), floor + retained);
+        assert_eq!(values, vec![17u64; count]);
+        drop(values);
+        budget.release_storage(retained).unwrap();
+        assert_eq!(budget.storage(), floor);
+
+        let mut short_work = CanonicalKernelIrWorkBudgetV1::new(1000);
+        let mut short = Budget::new(&mut short_work, floor + count * size_of::<u64>() - 1);
+        short.reserve_storage(floor).unwrap();
+        let Err(CanonicalKirSparseErrorV1::Resource(Resource::Storage(error))) =
+            allocate(count, 17u64, &mut short, None)
+        else {
+            panic!("requested backing must refuse before allocation")
+        };
+        assert_eq!(error.actual(), floor + count * size_of::<u64>());
+        assert_eq!(error.limit(), error.actual() - 1);
+        assert_eq!(short.work(), 1);
+        assert_eq!((short.storage(), short.peak_storage()), (floor, floor));
+        assert_eq!(short.failed_storage(), Some(error.actual()));
+    }
 }

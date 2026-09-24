@@ -307,6 +307,111 @@ fn aggregate_last_value_v2(
 }
 
 #[test]
+fn gpu_private_copy_to_scalar_temp_keeps_refinement_refusal_v2() {
+    let types = aggregate_types_v2();
+    for mutated in [false, true] {
+        let element = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![aggregate_index_v2(0)],
+            SCALAR_TYPE,
+        )
+        .unwrap();
+        let mut statements = vec![aggregate_assignment_v2(
+            1,
+            ARRAY_TYPE,
+            aggregate_array_v2([11, 17, 23, 29]),
+        )];
+        if mutated {
+            statements.push(statement(SemanticStatementKindV1::Assign(
+                SemanticAssignmentV1::new(
+                    element.clone(),
+                    SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(99))),
+                ),
+            )));
+        }
+        let read_statement = statements.len();
+        statements.push(aggregate_assignment_v2(
+            2,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(element)),
+        ));
+        statements.push(aggregate_output_v2(aggregate_copy_v2(
+            2,
+            SCALAR_TYPE,
+            vec![],
+        )));
+        let output_statement = statements.len() - 1;
+        let function = aggregate_function_v2(statements);
+        let blocks = [ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: ProductionRankedValueIdV1::new(0),
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![4],
+                    dynamic_extents: vec![],
+                    memory_space: MemorySpaceAttr::Private,
+                    allocation_origin: PRIVATE_ALLOCATION_ORIGIN_TAG_V1 + 2,
+                    noalias_class: PRIVATE_ALLOCATION_ORIGIN_TAG_V1 + 2,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: ProductionRankedValueIdV1::new(1),
+                    value: 0,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Read,
+                    view: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0)),
+                    indices: vec![ProductionRankedValueV1::Local(
+                        ProductionRankedValueIdV1::new(1),
+                    )],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )];
+        let source = ProjectedAccessSourceV1 {
+            block: 0,
+            operation: 2,
+            access: AccessKindAttr::Read,
+            memory_space: MemorySpaceAttr::Private,
+            source: SemanticSourceProvenanceV1::unavailable(),
+            output_extent: None,
+            semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                block: 0,
+                statement: Some(read_statement),
+            }),
+        };
+        // These inert rows exercise value resolution only. Genuine retained-read
+        // attachment is covered separately; an attachment is not a value proof.
+        for sources in [&[][..], &[source][..]] {
+            let mut resolver = GpuSemanticExpressionResolverV2::with_ranked_reads(
+                &types,
+                &function,
+                &[],
+                &blocks,
+                sources,
+            )
+            .unwrap();
+            assert!(resolver.loads.is_empty() && resolver.place_loads.is_empty());
+            let value = resolver.resolve_store_v2(
+                function.blocks()[0].statements()[output_statement].kind(),
+                ScalarAssignmentSiteV1 {
+                    block: 0,
+                    statement: output_statement,
+                },
+            );
+            if mutated {
+                assert_eq!(
+                    value,
+                    Err("GPU semantic local has no exact reaching assignment")
+                );
+            } else {
+                assert_eq!(value, Ok(aggregate_expected_v2(11)));
+            }
+        }
+    }
+}
+
+#[test]
 fn gpu_nested_aggregate_components_retain_scalar_value_v2() {
     let types = aggregate_types_v2();
     let tuple = SemanticTypeIdV1::from_index(3);

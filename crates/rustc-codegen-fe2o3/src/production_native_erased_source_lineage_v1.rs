@@ -1,11 +1,7 @@
 //! Original-N signed custody and independently replayed E, never N relabeling.
 use super::*;
 use fe2o3_lower_mir_kernel::ProductionUnitLocalErasedSourceOwnerV1 as ErasedSource;
-use fe2o3_verifier::{
-    NativeCompilerUnitLocalErasedSourceProofInputsV1,
-    ValidatedNativeCompilerUnitLocalErasedSourceProofV1 as Proof,
-    validate_native_compiler_unit_local_erased_source_proof_v1,
-};
+use fe2o3_verifier::ValidatedNativeCompilerUnitLocalErasedSourceProofV1 as Proof;
 
 /// Move-only retained original ranked custody plus fresh source/N/E replay.
 /// The actual-O join belongs to the consuming backend stage, not this packet.
@@ -15,8 +11,7 @@ use fe2o3_verifier::{
 )]
 pub(crate) struct PreparedErasedNativeSourceLineageV1 {
     ranked: AuthenticatedRankedVerificationRosterV1,
-    proof: Proof,
-    original_native_module: Vec<u8>,
+    packet: PreparedNativeSourceProofPacketV1<Proof>,
 }
 
 #[allow(
@@ -28,10 +23,13 @@ impl PreparedErasedNativeSourceLineageV1 {
         &self.ranked
     }
     pub(crate) fn proof(&self) -> &Proof {
-        &self.proof
+        self.packet.proof()
     }
     pub(crate) fn original_native_module(&self) -> &[u8] {
-        &self.original_native_module
+        self.packet.original_native_module()
+    }
+    pub(crate) fn source_packet(&self) -> &[u8] {
+        self.packet.source_packet()
     }
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
@@ -42,7 +40,11 @@ impl PreparedErasedNativeSourceLineageV1 {
         actual_output: &Catalog,
         budget: &mut Budget<'_>,
     ) -> Result<(), E> {
-        check_catalog_v1(self.proof.source().catalog(), actual_output, budget)
+        check_catalog_v1(
+            self.packet.proof().source().catalog(),
+            actual_output,
+            budget,
+        )
     }
 }
 
@@ -87,45 +89,16 @@ pub(crate) fn try_prepare_erased_native_source_lineage_v1(
     ),
     E,
 > {
-    budget.charge_work(6)?;
-    if budget.storage() < source.retained_storage_floor_v1() {
-        return Err(Resource::Accounting.into());
-    }
-    packet::with_native_lineage_transfer_v1(budget, |budget| {
-        let parts = prepare_native_source_packet_v1(
-            NativeSourceRefV1::Erased(source),
-            &ranked,
-            || {
-                std::mem::size_of::<PreparedErasedNativeSourceLineageV1>()
-                    .checked_sub(std::mem::size_of::<Proof>())
-                    .and_then(|n| {
-                        n.checked_sub(
-                            std::mem::size_of::<AuthenticatedRankedVerificationRosterV1>(),
-                        )
-                    })
-                    .ok_or(E::Resource(Resource::Arithmetic))
-            },
-            budget,
-            |inputs, budget| {
-                let (proof, storage) = validate_native_compiler_unit_local_erased_source_proof_v1(
-                    NativeCompilerUnitLocalErasedSourceProofInputsV1 {
-                        original: inputs.source,
-                        ranked_roots: inputs.ranked_roots,
-                        erased: source.erased(),
-                    },
-                    budget,
-                )
-                .map_err(E::Replay)?;
-                Ok((proof, storage.retained_storage()))
-            },
-        )?;
+    packet::with_native_lineage_transfer_v1(budget, move |budget| {
+        let packet = prepare_borrowed_erased_native_source_packet_v1(source, &ranked, budget)?;
+        let retained = owned_packet::roster_wrapper_storage::<
+            _,
+            PreparedErasedNativeSourceLineageV1,
+        >(&packet)?;
+        budget.reserve_storage(retained)?;
         Ok((
-            PreparedErasedNativeSourceLineageV1 {
-                ranked,
-                proof: parts.proof,
-                original_native_module: parts.native_module,
-            },
-            ErasedNativeSourceLineageStorageV1(parts.retained),
+            PreparedErasedNativeSourceLineageV1 { ranked, packet },
+            ErasedNativeSourceLineageStorageV1(retained),
         ))
     })
 }

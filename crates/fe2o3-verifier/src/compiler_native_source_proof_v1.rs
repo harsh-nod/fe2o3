@@ -83,6 +83,8 @@ pub struct NativeCompilerSourceProofInputsV1<'a> {
 #[derive(Debug)]
 pub enum NativeCompilerSourceProofErrorV1 {
     Resource(Resource),
+    PacketWire(&'static str),
+    ErasedAdmission(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12),
     Native(fe2o3_compiler_lineage::NativeNeutralModuleErrorV1),
     Roster(fe2o3_compiler_lineage::MultiRootProofRosterErrorV3),
     Source(fe2o3_lower_mir_kernel::NativeSourceReplayErrorV1),
@@ -90,6 +92,8 @@ pub enum NativeCompilerSourceProofErrorV1 {
     Signed(crate::ProductionMirPlironVerusExecutionEvidenceErrorV1),
     EffectReceipt(fe2o3_functional_proof::FunctionalRefinementImportErrorV2),
     RankedRecipe(fe2o3_pliron::ProductionRankedKernelErrorV1),
+    RankedRecipeWire(fe2o3_pliron::ProductionRankedRecipeWireErrorV1),
+    RankedSourceRowsWire(fe2o3_lower_mir_kernel::ProductionRankedSourceRowsWireErrorV1),
     RankedCompile(Box<fe2o3_pliron::ProductionRankedCompileErrorV2>),
     Aggregate(Box<crate::ProductionMirPlironPerCompilationVerusErrorV1>),
     Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
@@ -655,3 +659,11 @@ pub use ranked_source::*;
 #[path = "compiler_native_unit_local_erased_source_proof_v1.rs"]
 mod unit_local_erased;
 pub use unit_local_erased::*;
+
+#[path = "compiler_native_ranked_recipe_source_proof_v1.rs"]
+mod recipe_source;
+pub use recipe_source::*;
+
+#[path = "compiler_native_source_packet_v1.rs"]
+mod source_packet;
+pub use source_packet::*;

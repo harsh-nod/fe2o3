@@ -160,7 +160,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "134c10f696ac9aca7b39045c4b61d5ff001de61f2e2b26e96290ffc1fd9fd175")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "a9f9d2fa6d75ad3ef3e9b1b5d89ac6747d6b8227d28342ce68cec453ec8ae403")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -484,6 +484,140 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             self.validator.validate_site_inventory(self.manifest["curriculum"], inventory)
         return self.validator._kernel_pair_report(self.manifest, fixtures, gaps, inventory)
 
+    def ordinary_source_report(self, raw, passed=True):
+        cases = []
+        for fixture in self.manifest["compilerFixtures"]:
+            inputs = copy.deepcopy(fixture["compilerInput"])
+            inputs.pop("contractSha256")
+            cases.append({
+                "fixture": {"fixtureId": fixture["fixtureId"], "target": fixture["target"],
+                            "compilerInput": inputs},
+                "status": "checked-output-pass" if passed else "blocked",
+                "observation": {"roots": inputs["kernelSymbols"]} if passed else None,
+                "refusal": None if passed else {"stage": "manifest", "detail": "synthetic refusal"},
+                "compiler_artifacts": [],
+            })
+        return {
+            "schema": "fe2o3-ordinary-source-policy4-extraction-corpus-v1",
+            "manifest_sha256": hashlib.sha256(raw).hexdigest(), "configurations": len(cases),
+            "distinct_expected_roots": len({symbol for case in cases
+                                           for symbol in case["fixture"]["compilerInput"]["kernelSymbols"]}),
+            "all_checked_output_passed": passed, "default_pipeline_activated": False,
+            "grants_artifact_or_launch_authority": False, "cases": cases,
+        }
+
+    def test_ordinary_source_mutations_reject_without_changing_projection(self):
+        original = self.ordinary_source_report(json.dumps(self.manifest).encode())
+        baseline = self.kernel_pair_report()
+        cases = original["cases"]
+        fixtures = {fixture["fixtureId"]: fixture for fixture in self.manifest["compilerFixtures"]}
+        mutations = [
+            (("schema",), "unknown"), (("manifest_sha256",), "0" * 64),
+            (("configurations",), True), (("distinct_expected_roots",), 0),
+            (("default_pipeline_activated",), 0), (("grants_artifact_or_launch_authority",), True),
+            (("all_checked_output_passed",), False), (("all_checked_output_passed",), 1),
+            (("cases",), cases[:-1]), (("cases",), cases + [cases[0]]),
+            (("cases",), cases[:-1] + [cases[0]]),
+            (("cases", 0, "fixture", "fixtureId"), "absent"),
+            (("cases", 0, "fixture", "target"), "gfx950" if cases[0]["fixture"]["target"] == "gfx942" else "gfx942"),
+            (("cases", 0, "fixture", "compilerInput", "contractSha256"), "0" * 64),
+        ]
+        for key, value in cases[0]["fixture"]["compilerInput"].items():
+            changed = (not value if type(value) is bool else value + ["changed"] if isinstance(value, list)
+                       else dict(value, name="changed") if isinstance(value, dict) else "changed")
+            mutations.append((("cases", 0, "fixture", "compilerInput", key), changed))
+        for key in ("status", "observation", "refusal", "compiler_artifacts"):
+            mutations.append((("cases", 0), {k: v for k, v in cases[0].items() if k != key}))
+        mutations.extend((("cases", 0, key), value) for key, value in (
+            ("observation", None), ("refusal", {}), ("compiler_artifacts", ["unexpected.o"]),
+            ("compiler_artifacts", [None]), ("status", "unknown"), ("callback_progress", []),
+        ))
+        for path, value in mutations:
+            with self.subTest(path=path, value=value):
+                report, projection = copy.deepcopy(original), copy.deepcopy(baseline)
+                parent = report
+                for key in path[:-1]:
+                    parent = parent[key]
+                parent[path[-1]] = copy.deepcopy(value)
+                with self.assertRaises(SystemExit):
+                    self.validator._bind_ordinary_source_report(projection, fixtures, report, original["manifest_sha256"])
+                self.assertEqual(projection, baseline)
+
+    def test_ordinary_source_cli_preserves_diagnostics_without_qualification(self):
+        raw = b"\n" + json.dumps(self.manifest).encode() + b"\n"
+        baseline = self.kernel_pair_report()
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, path = Path(temporary) / "manifest.json", Path(temporary) / "report.json"
+            for mode in ("canonical", "changed-bytes", "reordered", "partial", "panic", "replay", "blocked", "allpass"):
+                with self.subTest(mode=mode):
+                    manifest.write_bytes(raw + (b" " if mode == "changed-bytes" else b""))
+                    report = self.ordinary_source_report(raw, passed=mode != "blocked")
+                    if mode == "canonical":
+                        report["manifest_sha256"] = baseline["sourceContractSha256"]
+                    if mode == "reordered":
+                        report["cases"].reverse()
+                    if mode in ("partial", "panic", "replay"):
+                        report["cases"][0].update(
+                            callback_progress={"outcome": "panicked" if mode == "panic" else None,
+                                               "active": {"stage": "policy4", "policy4": {"unavailable": "not observed"}},
+                                               "phases": [{"stage": "source-collection", "outcome": "complete"}]},
+                            callback_progress_error="synthetic diagnostic error",
+                        )
+                        if mode != "replay":
+                            report["all_checked_output_passed"] = False
+                            report["cases"][0].update(
+                                status="blocked", refusal={"stage": "policy4", "detail": "synthetic refusal"},
+                            )
+                    path.write_text(json.dumps(report), encoding="utf-8")
+                    result = subprocess.run(
+                        [sys.executable, "-I", "-B", str(CHECKER), "--manifest", str(manifest),
+                         "--emit-kernel-pairs", "--ordinary-source-report", str(path)],
+                        text=True, capture_output=True,
+                    )
+                    if mode in ("canonical", "changed-bytes"):
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, "")
+                        continue
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    projection = json.loads(result.stdout)
+                    self.assertEqual(projection.pop("ordinarySourceObservations"), {"diagnosticOnly": True, "report": report})
+                    self.assertEqual(projection["stageStatus"], "fixture-source-observations-bound")
+                    projection["stageStatus"] = baseline["stageStatus"]
+                    for row in projection["fixtureSelections"]:
+                        self.assertEqual(report["cases"][row.pop("ordinarySourceCaseIndex")]["fixture"]["fixtureId"], row["fixtureId"])
+                    self.assertEqual(projection, baseline)
+
+    def test_ordinary_source_report_requires_projection_and_cannot_qualify(self):
+        for flags in ([], ["--emit-matrix", "gfx942"], ["--emit-kernel-pairs", "--require-qualified"]):
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", str(CHECKER), *flags, "--ordinary-source-report", "absent.json"],
+                text=True, capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("requires --emit-kernel-pairs" if not flags or flags[0] == "--emit-matrix"
+                          else "qualification receipts", result.stderr)
+
+    def test_manifest_raw_digest_and_read_bounds(self):
+        raw = b"{}\r\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            path, link = Path(temporary) / "report.json", Path(temporary) / "link.json"
+            path.write_bytes(raw)
+            link.symlink_to(path)
+            self.assertEqual(self.validator.load_manifest(path, len(raw), with_sha256=True),
+                             ({}, hashlib.sha256(raw).hexdigest()))
+            for candidate, limit in ((path, len(raw) - 1), (link, 64), (Path(temporary), 64), (Path(temporary) / "absent", 64)):
+                with self.subTest(candidate=candidate), self.assertRaises(SystemExit):
+                    self.validator.load_manifest(candidate, limit, with_sha256=True)
+            with mock.patch.object(Path, "open", mock.mock_open(read_data=raw + b" ")) as opened:
+                with self.assertRaises(SystemExit):
+                    self.validator.load_manifest(path, len(raw), with_sha256=True)
+                opened.return_value.read.assert_called_once_with(len(raw) + 1)
+            for invalid in (b'{"a":0,"a":1}', b'{"a":NaN}', b'{"a":Infinity}', b'{"a":1e400}'):
+                path.write_bytes(invalid)
+                with self.subTest(invalid=invalid), self.assertRaises(SystemExit):
+                    self.validator.load_manifest(path, with_sha256=True)
+
     def test_kernel_pair_legacy_report_remains_v1_without_identity_extension(self):
         self.manifest.pop("kernelInventory")
         report = self.kernel_pair_report()
@@ -498,7 +632,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "b3e3b462fbe1af2b956fec32a00e2209009bc7669c00fee4056b7f29977a2452")
+                         "67e01952b68abc12098ac45c1d24a1b4289602aa3d065709f1b629c8dd348e44")
         self.assertEqual(len(inventory["kernels"]), 60)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 74, "required-negative": 3, "conceptual": 26, "helper": 18})

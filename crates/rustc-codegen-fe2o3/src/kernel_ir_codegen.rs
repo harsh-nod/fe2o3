@@ -22,6 +22,15 @@ use fe2o3_kernel_ir::{
 use std::collections::BTreeSet;
 use std::fmt;
 
+#[path = "kernel_ir_codegen_nominal_descriptor_v3.rs"]
+pub(crate) mod nominal_v3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DescriptorSourceIdentity {
+    V1(CompilerDescriptorSourceIdentityV1),
+    V3(fe2o3_compiler_ffi::CompilerDescriptorSourceIdentityV3),
+}
+
 const MAX_COMPILER_MODULE_ID_BYTES: usize = 256;
 const MAX_COMPILER_MODULE_SYMBOL_BYTES: usize = 256;
 const MAX_COMPILER_MODULE_FUNCTIONS: usize = 1_024;
@@ -52,7 +61,7 @@ pub(crate) struct InertCompilerModuleTextV1 {
     internal_helpers: Vec<String>,
     device_ffi_exports: Vec<String>,
     external_declarations: Vec<String>,
-    descriptor_source_identity: Option<CompilerDescriptorSourceIdentityV1>,
+    descriptor_source_identity: Option<DescriptorSourceIdentity>,
 }
 
 impl InertCompilerModuleTextV1 {
@@ -80,7 +89,14 @@ impl InertCompilerModuleTextV1 {
     pub(crate) const fn descriptor_source_identity(
         &self,
     ) -> Option<CompilerDescriptorSourceIdentityV1> {
-        self.descriptor_source_identity
+        match self.descriptor_source_identity {
+            None => None,
+            Some(DescriptorSourceIdentity::V1(identity)) => Some(identity),
+            Some(DescriptorSourceIdentity::V3(_)) => {
+                // fe2o3-hygiene: allow-panic - the V1-only accessor is cfg(test).
+                panic!("V3 binding requires the closed-tag test view")
+            }
+        }
     }
 }
 
@@ -451,7 +467,7 @@ pub(crate) fn bind_compiler_descriptor_source_v1(
     }
 
     append_descriptor_module_assembly(&mut module.llvm_ir, source.canonical_bytes());
-    module.descriptor_source_identity = Some(source.identity());
+    module.descriptor_source_identity = Some(DescriptorSourceIdentity::V1(source.identity()));
     Ok(module)
 }
 

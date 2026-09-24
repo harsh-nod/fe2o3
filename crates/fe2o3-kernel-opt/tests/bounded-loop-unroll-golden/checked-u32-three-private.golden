@@ -1,0 +1,145 @@
+CASE: checked-u32-three-private
+CHECK-BEFORE: module wire-bounded-unroll kernels=0 capabilities=[]
+CHECK-BEFORE: f0 unroll role=InternalHelper params=[v0:U32,v1:U32,v2:Bool] results=[] capabilities=[]
+CHECK-BEFORE: f0:b0 block-id=13 params=[]
+CHECK-BEFORE: f0:b0:o0 [v10:U32] Constant U32(1)
+CHECK-BEFORE: f0:b0:o1 [v11:U32] Constant U32(0)
+CHECK-BEFORE: f0:b0:o2 [v12:U32] Constant U32(3)
+CHECK-BEFORE: f0:b0:o3 [v3:PtrPrivate] Alloca U32 private align=4 count=none
+CHECK-BEFORE: f0:b0 Branch bb41 [v11]
+CHECK-BEFORE: f0:b1 block-id=41 params=[v20:U32]
+CHECK-BEFORE: f0:b1:o0 [v21:Bool] LessThan v20,v12
+CHECK-BEFORE: f0:b1 Conditional v21 bb97 [v20] bb701 [v20]
+CHECK-BEFORE: f0:b2 block-id=97 params=[v25:U32]
+CHECK-BEFORE: f0:b2:o0 [] Store v3,v25 Private align=4 volatile=false
+CHECK-BEFORE: f0:b2:o1 [v32:U32] Load v3 Private align=4 volatile=false
+CHECK-BEFORE: f0:b2:o2 [v30:U32,v31:Bool] CheckedAdd v20,v10
+CHECK-BEFORE: f0:b2 Branch bb41 [v30]
+CHECK-BEFORE: f0:b3 block-id=701 params=[v40:U32]
+CHECK-BEFORE: f0:b3 Return []
+CHECK-AFTER: module wire-bounded-unroll kernels=0 capabilities=[]
+CHECK-AFTER: f0 unroll role=InternalHelper params=[v0:U32,v1:U32,v2:Bool] results=[] capabilities=[]
+CHECK-AFTER: f0:b0 block-id=13 params=[]
+CHECK-AFTER: f0:b0:o0 [v10:U32] Constant U32(1)
+CHECK-AFTER: f0:b0:o1 [v11:U32] Constant U32(0)
+CHECK-AFTER: f0:b0:o2 [v12:U32] Constant U32(3)
+CHECK-AFTER: f0:b0:o3 [v3:PtrPrivate] Alloca U32 private align=4 count=none
+CHECK-AFTER: f0:b0 Branch bb702 [v11]
+CHECK-AFTER: f0:b1 block-id=702 params=[v41:U32]
+CHECK-AFTER: f0:b1:o0 [v42:Bool] LessThan v41,v12
+CHECK-AFTER: f0:b1 Branch bb703 [v41]
+CHECK-AFTER: f0:b2 block-id=703 params=[v43:U32]
+CHECK-AFTER: f0:b2:o0 [] Store v3,v43 Private align=4 volatile=false
+CHECK-AFTER: f0:b2:o1 [v44:U32] Load v3 Private align=4 volatile=false
+CHECK-AFTER: f0:b2:o2 [v45:U32,v46:Bool] CheckedAdd v41,v10
+CHECK-AFTER: f0:b2 Branch bb704 [v45]
+CHECK-AFTER: f0:b3 block-id=704 params=[v47:U32]
+CHECK-AFTER: f0:b3:o0 [v48:Bool] LessThan v47,v12
+CHECK-AFTER: f0:b3 Branch bb705 [v47]
+CHECK-AFTER: f0:b4 block-id=705 params=[v49:U32]
+CHECK-AFTER: f0:b4:o0 [] Store v3,v49 Private align=4 volatile=false
+CHECK-AFTER: f0:b4:o1 [v50:U32] Load v3 Private align=4 volatile=false
+CHECK-AFTER: f0:b4:o2 [v51:U32,v52:Bool] CheckedAdd v47,v10
+CHECK-AFTER: f0:b4 Branch bb706 [v51]
+CHECK-AFTER: f0:b5 block-id=706 params=[v53:U32]
+CHECK-AFTER: f0:b5:o0 [v54:Bool] LessThan v53,v12
+CHECK-AFTER: f0:b5 Branch bb707 [v53]
+CHECK-AFTER: f0:b6 block-id=707 params=[v55:U32]
+CHECK-AFTER: f0:b6:o0 [] Store v3,v55 Private align=4 volatile=false
+CHECK-AFTER: f0:b6:o1 [v56:U32] Load v3 Private align=4 volatile=false
+CHECK-AFTER: f0:b6:o2 [v57:U32,v58:Bool] CheckedAdd v53,v10
+CHECK-AFTER: f0:b6 Branch bb708 [v57]
+CHECK-AFTER: f0:b7 block-id=708 params=[v59:U32]
+CHECK-AFTER: f0:b7:o0 [v60:Bool] LessThan v59,v12
+CHECK-AFTER: f0:b7 Branch bb701 [v59]
+CHECK-AFTER: f0:b8 block-id=701 params=[v40:U32]
+CHECK-AFTER: f0:b8 Return []
+CHECK-REMARK: limits functions=16384 blocks=65536 edges=262144 definitions=262144 operations=65536 loops=65536 rows=1048576 max-iterations=8 operand-uses=1048576 edge-arguments=1048576 origin-rows=4194304
+CHECK-REMARK: selection fact=0 iterations=3 independent-pair=true owning-replay=true authority=false
+CHECK-REMARK: block f0:b0 -> f0:b0 retained
+CHECK-REMARK: block f0:b1 -> f0:b1 header(0)
+CHECK-REMARK: block f0:b2 -> f0:b2 body(0)
+CHECK-REMARK: block f0:b1 -> f0:b3 header(1)
+CHECK-REMARK: block f0:b2 -> f0:b4 body(1)
+CHECK-REMARK: block f0:b1 -> f0:b5 header(2)
+CHECK-REMARK: block f0:b2 -> f0:b6 body(2)
+CHECK-REMARK: block f0:b1 -> f0:b7 header(3)
+CHECK-REMARK: block f0:b3 -> f0:b8 retained
+CHECK-REMARK: definition f0:a0 -> f0:a0 retained
+CHECK-REMARK: definition f0:a1 -> f0:a1 retained
+CHECK-REMARK: definition f0:a2 -> f0:a2 retained
+CHECK-REMARK: definition f0:b0:o0:r0 -> f0:b0:o0:r0 retained
+CHECK-REMARK: definition f0:b0:o1:r0 -> f0:b0:o1:r0 retained
+CHECK-REMARK: definition f0:b0:o2:r0 -> f0:b0:o2:r0 retained
+CHECK-REMARK: definition f0:b0:o3:r0 -> f0:b0:o3:r0 retained
+CHECK-REMARK: definition f0:b1:a0 -> f0:b1:a0 header(0)
+CHECK-REMARK: definition f0:b1:o0:r0 -> f0:b1:o0:r0 header(0)
+CHECK-REMARK: definition f0:b2:a0 -> f0:b2:a0 body(0)
+CHECK-REMARK: definition f0:b2:o1:r0 -> f0:b2:o1:r0 body(0)
+CHECK-REMARK: definition f0:b2:o2:r0 -> f0:b2:o2:r0 body(0)
+CHECK-REMARK: definition f0:b2:o2:r1 -> f0:b2:o2:r1 body(0)
+CHECK-REMARK: definition f0:b1:a0 -> f0:b3:a0 header(1)
+CHECK-REMARK: definition f0:b1:o0:r0 -> f0:b3:o0:r0 header(1)
+CHECK-REMARK: definition f0:b2:a0 -> f0:b4:a0 body(1)
+CHECK-REMARK: definition f0:b2:o1:r0 -> f0:b4:o1:r0 body(1)
+CHECK-REMARK: definition f0:b2:o2:r0 -> f0:b4:o2:r0 body(1)
+CHECK-REMARK: definition f0:b2:o2:r1 -> f0:b4:o2:r1 body(1)
+CHECK-REMARK: definition f0:b1:a0 -> f0:b5:a0 header(2)
+CHECK-REMARK: definition f0:b1:o0:r0 -> f0:b5:o0:r0 header(2)
+CHECK-REMARK: definition f0:b2:a0 -> f0:b6:a0 body(2)
+CHECK-REMARK: definition f0:b2:o1:r0 -> f0:b6:o1:r0 body(2)
+CHECK-REMARK: definition f0:b2:o2:r0 -> f0:b6:o2:r0 body(2)
+CHECK-REMARK: definition f0:b2:o2:r1 -> f0:b6:o2:r1 body(2)
+CHECK-REMARK: definition f0:b1:a0 -> f0:b7:a0 header(3)
+CHECK-REMARK: definition f0:b1:o0:r0 -> f0:b7:o0:r0 header(3)
+CHECK-REMARK: definition f0:b3:a0 -> f0:b8:a0 retained
+CHECK-REMARK: operation f0:b0:o0 -> f0:b0:o0 retained
+CHECK-REMARK: operation f0:b0:o1 -> f0:b0:o1 retained
+CHECK-REMARK: operation f0:b0:o2 -> f0:b0:o2 retained
+CHECK-REMARK: operation f0:b0:o3 -> f0:b0:o3 retained
+CHECK-REMARK: operation f0:b1:o0 -> f0:b1:o0 header(0)
+CHECK-REMARK: operation f0:b2:o0 -> f0:b2:o0 body(0)
+CHECK-REMARK: operation f0:b2:o1 -> f0:b2:o1 body(0)
+CHECK-REMARK: operation f0:b2:o2 -> f0:b2:o2 body(0)
+CHECK-REMARK: operation f0:b1:o0 -> f0:b3:o0 header(1)
+CHECK-REMARK: operation f0:b2:o0 -> f0:b4:o0 body(1)
+CHECK-REMARK: operation f0:b2:o1 -> f0:b4:o1 body(1)
+CHECK-REMARK: operation f0:b2:o2 -> f0:b4:o2 body(1)
+CHECK-REMARK: operation f0:b1:o0 -> f0:b5:o0 header(2)
+CHECK-REMARK: operation f0:b2:o0 -> f0:b6:o0 body(2)
+CHECK-REMARK: operation f0:b2:o1 -> f0:b6:o1 body(2)
+CHECK-REMARK: operation f0:b2:o2 -> f0:b6:o2 body(2)
+CHECK-REMARK: operation f0:b1:o0 -> f0:b7:o0 header(3)
+CHECK-REMARK: terminator f0:b0 -> f0:b0 retained
+CHECK-REMARK: terminator f0:b1 -> f0:b1 header(0)
+CHECK-REMARK: terminator f0:b2 -> f0:b2 body(0)
+CHECK-REMARK: terminator f0:b1 -> f0:b3 header(1)
+CHECK-REMARK: terminator f0:b2 -> f0:b4 body(1)
+CHECK-REMARK: terminator f0:b1 -> f0:b5 header(2)
+CHECK-REMARK: terminator f0:b2 -> f0:b6 body(2)
+CHECK-REMARK: terminator f0:b1 -> f0:b7 header(3)
+CHECK-REMARK: terminator f0:b3 -> f0:b8 retained
+CHECK-REMARK: edge f0:b0:e0 -> f0:b0:e0 retained
+CHECK-REMARK: edge f0:b1:e0 -> f0:b1:e0 header(0)
+CHECK-REMARK: edge f0:b1:e1 -> none header(0)
+CHECK-REMARK: edge f0:b2:e0 -> f0:b2:e0 body(0)
+CHECK-REMARK: edge f0:b1:e0 -> f0:b3:e0 header(1)
+CHECK-REMARK: edge f0:b1:e1 -> none header(1)
+CHECK-REMARK: edge f0:b2:e0 -> f0:b4:e0 body(1)
+CHECK-REMARK: edge f0:b1:e0 -> f0:b5:e0 header(2)
+CHECK-REMARK: edge f0:b1:e1 -> none header(2)
+CHECK-REMARK: edge f0:b2:e0 -> f0:b6:e0 body(2)
+CHECK-REMARK: edge f0:b1:e0 -> none header(3)
+CHECK-REMARK: edge f0:b1:e1 -> f0:b7:e0 header(3)
+CHECK-REMARK: argument f0:b0:e0:a0 -> f0:b0:e0:a0 retained
+CHECK-REMARK: argument f0:b1:e0:a0 -> f0:b1:e0:a0 header(0)
+CHECK-REMARK: argument f0:b1:e1:a0 -> none header(0)
+CHECK-REMARK: argument f0:b2:e0:a0 -> f0:b2:e0:a0 body(0)
+CHECK-REMARK: argument f0:b1:e0:a0 -> f0:b3:e0:a0 header(1)
+CHECK-REMARK: argument f0:b1:e1:a0 -> none header(1)
+CHECK-REMARK: argument f0:b2:e0:a0 -> f0:b4:e0:a0 body(1)
+CHECK-REMARK: argument f0:b1:e0:a0 -> f0:b5:e0:a0 header(2)
+CHECK-REMARK: argument f0:b1:e1:a0 -> none header(2)
+CHECK-REMARK: argument f0:b2:e0:a0 -> f0:b6:e0:a0 body(2)
+CHECK-REMARK: argument f0:b1:e0:a0 -> none header(3)
+CHECK-REMARK: argument f0:b1:e1:a0 -> f0:b7:e0:a0 header(3)

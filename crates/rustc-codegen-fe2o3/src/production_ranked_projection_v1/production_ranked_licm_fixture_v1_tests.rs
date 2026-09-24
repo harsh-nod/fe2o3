@@ -31,6 +31,16 @@ fn native_licm_source_v1(
     wide: SemanticTypeIdV1,
     erased: bool,
 ) {
+    native_unroll_source_v1(functions, boolean, wide, erased, None);
+}
+
+fn native_unroll_source_v1(
+    functions: &mut [SemanticFunctionDeclV1],
+    boolean: SemanticTypeIdV1,
+    wide: SemanticTypeIdV1,
+    erased: bool,
+    literal_bound: Option<u64>,
+) {
     for (ordinal, function) in functions.iter_mut().take(2).enumerate() {
         let scalar = function.locals()[if erased { 4 } else { 1 }].ty();
         let slot = if erased { 3 } else { 2 };
@@ -163,7 +173,10 @@ fn native_licm_source_v1(
                 boolean,
                 SemanticBinaryOpV1::LessThan,
                 typed_operand(counter, wide),
-                typed_operand(bound, wide),
+                literal_bound.map_or_else(
+                    || typed_operand(bound, wide),
+                    |n| typed_constant(wide, n.into(), 8),
+                ),
             )],
             condition(predicate, start + 4, start + 7),
         ));
@@ -253,40 +266,112 @@ pub(crate) fn with_backend_licm_direct_prefix_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
-    with_backend_checked_ranked_bound_types_functions_v1(
-        profile,
-        None,
-        |types, functions| {
-            if mutation {
-                let boolean = SemanticTypeIdV1::from_index(types.len() as u32);
-                let wide = SemanticTypeIdV1::from_index(types.len() as u32 + 1);
-                types.push(native_licm_scalar_type_v1(239, true));
-                types.push(native_licm_scalar_type_v1(240, false));
-                native_licm_source_v1(functions, boolean, wide, false);
-            }
-        },
-        |receipt, bound, ranked, budget| {
-            let checked =
-                fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy5_v1(&bound, budget)
-                    .unwrap();
-            budget.reserve_storage(checked.retained_storage()).unwrap();
-            let checked = fe2o3_kernel_opt::continue_checked_canonical_kernel_ir_policy6_v1(
-                &bound, checked, budget,
-            )
-            .unwrap();
-            let storage = checked.retained_storage();
-            budget.reserve_storage(storage).unwrap();
-            let floor = budget.storage();
-            let owner =
-                fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1::try_admit_v1(
-                    receipt, bound, checked, budget,
-                )
-                .unwrap();
-            next(owner, ranked, budget);
-            assert_eq!(budget.storage(), floor);
-            budget.release_storage(storage).unwrap();
-        },
+    with_backend_unroll_direct_prefix_inner_v1(profile, mutation, None, next);
+}
+
+pub(crate) fn with_backend_unroll_direct_prefix_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    literal_bound: Option<u64>,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_unroll_direct_prefix_inner_v1(profile, true, literal_bound, next);
+}
+
+fn with_backend_unroll_direct_prefix_inner_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    mutation: bool,
+    literal_bound: Option<u64>,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
     );
+    let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut work,
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+    );
+    let (owner, ranked, storage, source_storage) = prepare_backend_unroll_direct_prefix_inner_v1(
+        profile,
+        mutation,
+        literal_bound,
+        &mut budget,
+    );
+    let floor = budget.storage();
+    next(owner, ranked, &mut budget);
+    assert_eq!(budget.storage(), floor);
+    budget.release_storage(storage).unwrap();
+    assert_eq!(budget.storage(), 29 + source_storage);
+    budget.release_storage(source_storage).unwrap();
+    assert_eq!(budget.storage(), 29);
+}
+
+pub(crate) fn prepare_backend_unroll_direct_prefix_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    literal_bound: Option<u64>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> (
+    fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1,
+    AuthenticatedRankedVerificationRosterV1,
+    usize,
+    usize,
+) {
+    prepare_backend_unroll_direct_prefix_inner_v1(profile, true, literal_bound, budget)
+}
+
+fn prepare_backend_unroll_direct_prefix_inner_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    mutation: bool,
+    literal_bound: Option<u64>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> (
+    fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1,
+    AuthenticatedRankedVerificationRosterV1,
+    usize,
+    usize,
+) {
+    let (receipt, bound, ranked, source_storage) =
+        prepare_backend_checked_ranked_bound_types_functions_v1(
+            profile,
+            None,
+            |types, functions| {
+                if mutation {
+                    let boolean = SemanticTypeIdV1::from_index(types.len() as u32);
+                    let wide = SemanticTypeIdV1::from_index(types.len() as u32 + 1);
+                    types.push(native_licm_scalar_type_v1(239, true));
+                    types.push(native_licm_scalar_type_v1(240, false));
+                    match literal_bound {
+                        None => native_licm_source_v1(functions, boolean, wide, false),
+                        Some(n) => {
+                            native_unroll_source_v1(functions, boolean, wide, false, Some(n))
+                        }
+                    }
+                }
+            },
+            budget,
+        );
+    let checked =
+        fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy5_v1(&bound, budget).unwrap();
+    budget.reserve_storage(checked.retained_storage()).unwrap();
+    let checked =
+        fe2o3_kernel_opt::continue_checked_canonical_kernel_ir_policy6_v1(&bound, checked, budget)
+            .unwrap();
+    let storage = checked.retained_storage();
+    budget.reserve_storage(storage).unwrap();
+    let floor = budget.storage();
+    let owner = fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1::try_admit_v1(
+        receipt, bound, checked, budget,
+    )
+    .unwrap();
+    assert_eq!(budget.storage(), floor);
+    (owner, ranked, storage, source_storage)
 }
 
 pub(crate) fn with_backend_licm_erased_prefix_v1(
@@ -323,91 +408,175 @@ fn with_backend_licm_erased_prefix_order_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
-    canonical_assertion_graph_tests::with_backend_erased_functions_roster_v1(
-        false,
-        2,
+    with_backend_unroll_erased_prefix_inner_v1(
         profile,
-        false,
-        true,
-        |functions| {
-            if mutation {
-                let boolean = functions[0].locals()[5].ty();
-                let wide = functions[0].locals()[6].ty();
-                native_licm_source_v1(functions, boolean, wide, true);
-                if global_before_private {
-                    for function in functions.iter_mut().take(2) {
-                        let mut blocks = function.blocks().to_vec();
-                        let body = &blocks[6];
-                        let mut statements = body.statements().to_vec();
-                        assert_eq!(statements.len(), 4);
-                        assert!(matches!(
-                            statements[2].kind(),
-                            SemanticStatementKindV1::Store(_)
-                        ));
-                        assert!(matches!(
-                            statements[3].kind(),
-                            SemanticStatementKindV1::Store(_)
-                        ));
-                        // Change only these unadmitted source occurrences. The
-                        // old wrapper never takes this branch; all admission,
-                        // source lifetime, erasure and ranked gates below rerun.
-                        statements.swap(2, 3);
-                        blocks[6] = SemanticBasicBlockV1::new(
-                            body.identity(),
-                            body.source(),
-                            statements,
-                            body.terminator().clone(),
-                        )
-                        .unwrap();
-                        let rebuilt = SemanticFunctionDeclV1::new(
-                            function.identity(),
-                            function.role(),
-                            function.item_definition_identity(),
-                            function.monomorphization_identity(),
-                            function.generic_type_arguments_identity(),
-                            function.const_generic_arguments_identity(),
-                            function.source(),
-                            function.abi().clone(),
-                            function.locals().to_vec(),
-                            function.entry(),
-                            blocks,
-                        )
-                        .unwrap()
-                        .with_kernel_entry(function.kernel_entry().unwrap().clone());
-                        *function = rebuilt;
+        mutation,
+        global_before_private,
+        None,
+        next,
+    );
+}
+
+pub(crate) fn with_backend_unroll_erased_prefix_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    literal_bound: Option<u64>,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_unroll_erased_prefix_inner_v1(profile, true, true, literal_bound, next);
+}
+
+fn with_backend_unroll_erased_prefix_inner_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    mutation: bool,
+    global_before_private: bool,
+    literal_bound: Option<u64>,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
+    );
+    let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut work,
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+    );
+    let (owner, ranked, storage, source_storage) = prepare_backend_unroll_erased_prefix_inner_v1(
+        profile,
+        mutation,
+        global_before_private,
+        literal_bound,
+        &mut budget,
+    );
+    let floor = budget.storage();
+    next(owner, ranked, &mut budget);
+    assert_eq!(budget.storage(), floor);
+    budget.release_storage(storage).unwrap();
+    assert_eq!(budget.storage(), 29 + source_storage);
+    budget.release_storage(source_storage).unwrap();
+    assert_eq!(budget.storage(), 29);
+}
+
+pub(crate) fn prepare_backend_unroll_erased_prefix_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    literal_bound: Option<u64>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> (
+    fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1,
+    AuthenticatedRankedVerificationRosterV1,
+    usize,
+    usize,
+) {
+    prepare_backend_unroll_erased_prefix_inner_v1(profile, true, true, literal_bound, budget)
+}
+
+fn prepare_backend_unroll_erased_prefix_inner_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    mutation: bool,
+    global_before_private: bool,
+    literal_bound: Option<u64>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> (
+    fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1,
+    AuthenticatedRankedVerificationRosterV1,
+    usize,
+    usize,
+) {
+    let (source, bound, ranked, source_storage) =
+        canonical_assertion_graph_tests::prepare_backend_erased_functions_roster_v1(
+            false,
+            2,
+            profile,
+            false,
+            true,
+            |functions| {
+                if mutation {
+                    let boolean = functions[0].locals()[5].ty();
+                    let wide = functions[0].locals()[6].ty();
+                    match literal_bound {
+                        None => native_licm_source_v1(functions, boolean, wide, true),
+                        Some(n) => native_unroll_source_v1(functions, boolean, wide, true, Some(n)),
+                    }
+                    if global_before_private {
+                        for function in functions.iter_mut().take(2) {
+                            let mut blocks = function.blocks().to_vec();
+                            let body = &blocks[6];
+                            let mut statements = body.statements().to_vec();
+                            assert_eq!(statements.len(), 4);
+                            assert!(matches!(
+                                statements[2].kind(),
+                                SemanticStatementKindV1::Store(_)
+                            ));
+                            assert!(matches!(
+                                statements[3].kind(),
+                                SemanticStatementKindV1::Store(_)
+                            ));
+                            // Change only these unadmitted source occurrences. The
+                            // old wrapper never takes this branch; all admission,
+                            // source lifetime, erasure and ranked gates below rerun.
+                            statements.swap(2, 3);
+                            blocks[6] = SemanticBasicBlockV1::new(
+                                body.identity(),
+                                body.source(),
+                                statements,
+                                body.terminator().clone(),
+                            )
+                            .unwrap();
+                            let rebuilt = SemanticFunctionDeclV1::new(
+                                function.identity(),
+                                function.role(),
+                                function.item_definition_identity(),
+                                function.monomorphization_identity(),
+                                function.generic_type_arguments_identity(),
+                                function.const_generic_arguments_identity(),
+                                function.source(),
+                                function.abi().clone(),
+                                function.locals().to_vec(),
+                                function.entry(),
+                                blocks,
+                            )
+                            .unwrap()
+                            .with_kernel_entry(function.kernel_entry().unwrap().clone());
+                            *function = rebuilt;
+                        }
                     }
                 }
-            }
-        },
-        |source, bound, ranked, budget| {
-            assert_eq!(source.deleted_call_count(), 2);
-            assert_eq!(source.deleted_function_count(), 1);
-            assert_eq!(
-                source
-                    .original_source()
-                    .semantic_ssa()
-                    .source_semantic()
-                    .functions()
-                    .len(),
-                3
-            );
-            let checked =
-                fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy5_v1(&bound, budget)
-                    .unwrap();
-            budget.reserve_storage(checked.retained_storage()).unwrap();
-            let checked = fe2o3_kernel_opt::continue_checked_canonical_kernel_ir_policy6_v1(
-                &bound, checked, budget,
-            )
-            .unwrap();
-            let storage = checked.retained_storage();
-            budget.reserve_storage(storage).unwrap();
-            let floor = budget.storage();
-            let owner = fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1::try_admit_v1(source, bound, checked, budget).unwrap();
-            next(owner, ranked, budget);
-            assert_eq!(budget.storage(), floor);
-            budget.release_storage(storage).unwrap();
-        },
+            },
+            budget,
+        );
+    assert_eq!(source.deleted_call_count(), 2);
+    assert_eq!(source.deleted_function_count(), 1);
+    assert_eq!(
+        source
+            .original_source()
+            .semantic_ssa()
+            .source_semantic()
+            .functions()
+            .len(),
+        3
     );
+    let checked =
+        fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy5_v1(&bound, budget).unwrap();
+    budget.reserve_storage(checked.retained_storage()).unwrap();
+    let checked =
+        fe2o3_kernel_opt::continue_checked_canonical_kernel_ir_policy6_v1(&bound, checked, budget)
+            .unwrap();
+    let storage = checked.retained_storage();
+    budget.reserve_storage(storage).unwrap();
+    let floor = budget.storage();
+    let owner =
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1::try_admit_v1(
+            source, bound, checked, budget,
+        )
+        .unwrap();
+    assert_eq!(budget.storage(), floor);
+    (owner, ranked, storage, source_storage)
 }
 
 #[test]

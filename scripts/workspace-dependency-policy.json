@@ -163,6 +163,28 @@
   ],
   "allowed_dependency_edges": [
     {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-kernel-opt",
+      "kinds": [
+        "normal",
+        "dev"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-kernel-analysis",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-amdgcn-model",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
       "from": "fe2o3-kernel-opt",
       "to": "fe2o3-kir-sim",
       "kinds": [

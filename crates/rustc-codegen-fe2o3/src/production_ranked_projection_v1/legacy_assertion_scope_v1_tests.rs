@@ -231,39 +231,40 @@ mod legacy_scope_tests {
                 let prefix = statements.len() as u32;
                 statements.extend_from_slice(old.blocks()[0].statements());
                 let function = private_write_statements_v1(&old, statements);
-                let _owner = attach_private_write_fixture_v1(function, legacy, |materialized, root| {
-                    assert_private_write_row_v1(materialized, root, prefix + 1);
-                    let promoted = materialized
-                        .semantic_ssa()
-                        .plan_for_function(ROOT)
-                        .unwrap()
-                        .plan()
-                        .promoted_variables()
-                        .iter()
-                        .any(|variable| variable.get() == 1);
-                    assert_eq!(promoted, !retained_scalar);
-                    let scalar_slots = materialized
-                        .executable()
-                        .module()
-                        .functions
-                        .iter()
-                        .filter_map(|function| function.body.as_ref())
-                        .flat_map(|body| &body.blocks)
-                        .flat_map(|block| &block.operations)
-                        .filter(|operation| {
-                            matches!(
-                                operation.kind,
-                                fe2o3_kernel_ir::OperationKind::Alloca {
-                                    count: None,
-                                    address_space: fe2o3_kernel_ir::AddressSpace::Private,
-                                    ..
-                                }
-                            )
-                        })
-                        .count();
-                    assert_eq!(scalar_slots, usize::from(retained_scalar));
-                })
-                .unwrap();
+                let _owner =
+                    attach_private_write_fixture_v1(function, legacy, |materialized, root| {
+                        assert_private_write_row_v1(materialized, root, prefix + 1);
+                        let promoted = materialized
+                            .semantic_ssa()
+                            .plan_for_function(ROOT)
+                            .unwrap()
+                            .plan()
+                            .promoted_variables()
+                            .iter()
+                            .any(|variable| variable.get() == 1);
+                        assert_eq!(promoted, !retained_scalar);
+                        let scalar_slots = materialized
+                            .executable()
+                            .module()
+                            .functions
+                            .iter()
+                            .filter_map(|function| function.body.as_ref())
+                            .flat_map(|body| &body.blocks)
+                            .flat_map(|block| &block.operations)
+                            .filter(|operation| {
+                                matches!(
+                                    operation.kind,
+                                    fe2o3_kernel_ir::OperationKind::Alloca {
+                                        count: None,
+                                        address_space: fe2o3_kernel_ir::AddressSpace::Private,
+                                        ..
+                                    }
+                                )
+                            })
+                            .count();
+                        assert_eq!(scalar_slots, usize::from(retained_scalar));
+                    })
+                    .unwrap();
             }
         }
     }
@@ -574,22 +575,35 @@ mod legacy_scope_tests {
                 }),
             })
             .collect::<Vec<_>>();
-        let mut work = Work::new(96);
-        let mut budget = Budget::new(&mut work, 0);
-        let mut facts = PrivateSourceMeterV1 {
-            budget: &mut budget,
-            calls: 0,
-        };
-        let rows =
-            production_access_sources(&types, &function, &blocks, &sources, &mut facts).unwrap();
-        assert_eq!(facts.calls, 2);
-        assert_eq!(facts.budget.work(), 96);
-        assert_eq!(
-            rows.iter()
-                .map(|row| (row.ranked_operation(), row.semantic_access_ordinal()))
-                .collect::<Vec<_>>(),
-            vec![(2, 0), (3, 1)]
-        );
+        // Excluded plain read48 + predicated0 + two ordinary writes48 each.
+        for limit in [143, 144] {
+            let mut work = Work::new(limit);
+            let mut budget = Budget::new(&mut work, 0);
+            let mut facts = PrivateSourceMeterV1 {
+                budget: &mut budget,
+                calls: 0,
+            };
+            let result =
+                production_access_sources(&types, &function, &blocks, &sources, &mut facts);
+            assert_eq!(facts.calls, 3);
+            if limit == 143 {
+                assert!(
+                    matches!(result, Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    CanonicalAssertionErrorV1::Resource(Resource::Work(error))))
+                    if error.actual() == 144 && error.limit() == 143)
+                );
+                assert_eq!(facts.budget.work(), 96);
+            } else {
+                let rows = result.unwrap();
+                assert_eq!(facts.budget.work(), 144);
+                assert_eq!(
+                    rows.iter()
+                        .map(|row| (row.ranked_operation(), row.semantic_access_ordinal()))
+                        .collect::<Vec<_>>(),
+                    vec![(2, 0), (3, 1)]
+                );
+            }
+        }
         // Duplicate inert rows exercise the converter's existing ordinal rule,
         // not a claim that two such source effects pass translation validation.
     }
@@ -1930,4 +1944,5 @@ mod legacy_scope_tests {
 
     include!("private_array_checked_output_v1_tests.rs");
     include!("private_array_initializer_v1_tests.rs");
+    include!("private_array_read_source_v1_tests.rs");
 }

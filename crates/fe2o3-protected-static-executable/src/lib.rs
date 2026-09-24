@@ -4,6 +4,16 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-protected-static-executable requires Linux x86-64");
 
+mod native;
+mod native_io;
+#[cfg(test)]
+mod native_tests;
+pub use native::{
+    ProtectedStaticExecutableErrorV2, ProtectedStaticExecutableOperationV2,
+    ProtectedStaticExecutableQuotaV2, ProtectedStaticExecutableStorageV2,
+    ProtectedStaticExecutableV2,
+};
+
 use std::error::Error;
 use std::fmt;
 use std::fs::{File, Metadata};
@@ -226,9 +236,18 @@ impl ProtectedStaticExecutableV1 {
         owner: ProtectedStaticExecutableOwnerV1,
         role: &'static str,
     ) -> Result<Self, ProtectedStaticExecutableErrorV1> {
+        Self::seal_source_with::<false>(source, measurement, owner, role)
+    }
+
+    fn seal_source_with<const BOUNDED: bool>(
+        source: File,
+        measurement: ProtectedStaticExecutableMeasurementV1,
+        owner: ProtectedStaticExecutableOwnerV1,
+        role: &'static str,
+    ) -> Result<Self, ProtectedStaticExecutableErrorV1> {
         require_owner_transition(owner, role)?;
         let before = validate_source(&source, measurement, role)?;
-        let bytes = read_exact(&source, measurement, role)?;
+        let bytes = read_exact::<BOUNDED>(&source, measurement, role)?;
         let after = snapshot(&source, "inspect static executable source after read")?;
         if before != after {
             return Err(ProtectedStaticExecutableErrorV1::SourceChanged(role));
@@ -239,8 +258,8 @@ impl ProtectedStaticExecutableV1 {
         let static_identity = sealed_static_application_identity_v1(&bytes).map_err(|source| {
             ProtectedStaticExecutableErrorV1::InvalidStaticImage { role, source }
         })?;
-        let image = create_sealed_image(&bytes, owner, role)?;
-        let snapshot = validate_sealed_image(&image, measurement, owner, role)?;
+        let image = create_sealed_image::<BOUNDED>(&bytes, owner, role)?;
+        let snapshot = validate_sealed_image::<BOUNDED>(&image, measurement, owner, role)?;
         let admitted = Self {
             image,
             snapshot,
@@ -249,7 +268,7 @@ impl ProtectedStaticExecutableV1 {
             static_identity,
             role,
         };
-        admitted.revalidate()?;
+        admitted.revalidate_with::<BOUNDED>()?;
         Ok(admitted)
     }
 
@@ -260,8 +279,17 @@ impl ProtectedStaticExecutableV1 {
         owner: ProtectedStaticExecutableOwnerV1,
         role: &'static str,
     ) -> Result<Self, ProtectedStaticExecutableErrorV1> {
-        let snapshot = validate_sealed_image(&image, measurement, owner, role)?;
-        let bytes = read_exact(&image, measurement, role)?;
+        Self::admit_sealed_with::<false>(image, measurement, owner, role)
+    }
+
+    fn admit_sealed_with<const BOUNDED: bool>(
+        image: File,
+        measurement: ProtectedStaticExecutableMeasurementV1,
+        owner: ProtectedStaticExecutableOwnerV1,
+        role: &'static str,
+    ) -> Result<Self, ProtectedStaticExecutableErrorV1> {
+        let snapshot = validate_sealed_image::<BOUNDED>(&image, measurement, owner, role)?;
+        let bytes = read_exact::<BOUNDED>(&image, measurement, role)?;
         let static_identity = sealed_static_application_identity_v1(&bytes).map_err(|source| {
             ProtectedStaticExecutableErrorV1::InvalidStaticImage { role, source }
         })?;
@@ -273,7 +301,7 @@ impl ProtectedStaticExecutableV1 {
             static_identity,
             role,
         };
-        admitted.revalidate()?;
+        admitted.revalidate_with::<BOUNDED>()?;
         Ok(admitted)
     }
 
@@ -294,11 +322,16 @@ impl ProtectedStaticExecutableV1 {
 
     /// Revalidates descriptor flags, object identity, ownership, seals, bytes, and static ELF form.
     pub fn revalidate(&self) -> Result<(), ProtectedStaticExecutableErrorV1> {
-        let snapshot = validate_sealed_image(&self.image, self.measurement, self.owner, self.role)?;
+        self.revalidate_with::<false>()
+    }
+
+    fn revalidate_with<const BOUNDED: bool>(&self) -> Result<(), ProtectedStaticExecutableErrorV1> {
+        let snapshot =
+            validate_sealed_image::<BOUNDED>(&self.image, self.measurement, self.owner, self.role)?;
         if snapshot != self.snapshot {
             return Err(ProtectedStaticExecutableErrorV1::Changed(self.role));
         }
-        let bytes = read_exact(&self.image, self.measurement, self.role)?;
+        let bytes = read_exact::<BOUNDED>(&self.image, self.measurement, self.role)?;
         if <[u8; 32]>::from(Sha256::digest(&bytes)) != self.measurement.sha256
             || sealed_static_application_identity_v1(&bytes).map_err(|source| {
                 ProtectedStaticExecutableErrorV1::InvalidStaticImage {
@@ -314,21 +347,36 @@ impl ProtectedStaticExecutableV1 {
 
     /// Clones the exact same object as a close-on-exec descriptor for controlled `execveat` use.
     pub fn try_clone_for_exec(&self) -> Result<File, ProtectedStaticExecutableErrorV1> {
-        self.revalidate()?;
-        let image =
+        self.try_clone_with::<false>()
+    }
+
+    fn try_clone_with<const BOUNDED: bool>(
+        &self,
+    ) -> Result<File, ProtectedStaticExecutableErrorV1> {
+        self.revalidate_with::<BOUNDED>()?;
+        let image = if BOUNDED {
+            rustix::io::fcntl_dupfd_cloexec(&self.image, 0)
+                .map(File::from)
+                .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
+                    operation: "clone bounded static executable",
+                    source: source.into(),
+                })?
+        } else {
             self.image
                 .try_clone()
                 .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
                     operation: "clone protected static executable for exec",
                     source,
-                })?;
+                })?
+        };
         rustix::io::fcntl_setfd(&image, rustix::io::FdFlags::CLOEXEC).map_err(|source| {
             ProtectedStaticExecutableErrorV1::Io {
                 operation: "protect cloned static executable descriptor",
                 source: source.into(),
             }
         })?;
-        if validate_sealed_image(&image, self.measurement, self.owner, self.role)? != self.snapshot
+        if validate_sealed_image::<BOUNDED>(&image, self.measurement, self.owner, self.role)?
+            != self.snapshot
         {
             return Err(ProtectedStaticExecutableErrorV1::Changed(self.role));
         }
@@ -340,8 +388,17 @@ impl ProtectedStaticExecutableV1 {
         &self,
         image: &File,
     ) -> Result<(), ProtectedStaticExecutableErrorV1> {
-        self.revalidate()?;
-        if validate_sealed_image(image, self.measurement, self.owner, self.role)? != self.snapshot {
+        self.revalidate_clone_with::<false>(image)
+    }
+
+    fn revalidate_clone_with<const BOUNDED: bool>(
+        &self,
+        image: &File,
+    ) -> Result<(), ProtectedStaticExecutableErrorV1> {
+        self.revalidate_with::<BOUNDED>()?;
+        if validate_sealed_image::<BOUNDED>(image, self.measurement, self.owner, self.role)?
+            != self.snapshot
+        {
             return Err(ProtectedStaticExecutableErrorV1::Changed(self.role));
         }
         Ok(())
@@ -404,7 +461,7 @@ fn validate_source(
     Ok(observed)
 }
 
-fn create_sealed_image(
+fn create_sealed_image<const BOUNDED: bool>(
     bytes: &[u8],
     owner: ProtectedStaticExecutableOwnerV1,
     role: &'static str,
@@ -418,14 +475,18 @@ fn create_sealed_image(
         source: source.into(),
     })?;
     let mut writable = File::from(descriptor);
-    writable
-        .write_all(bytes)
-        .and_then(|()| writable.flush())
-        .and_then(|()| writable.sync_all())
-        .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
-            operation: "populate protected static executable memfd",
-            source,
-        })?;
+    if BOUNDED {
+        native_io::populate(&writable, bytes)?;
+    } else {
+        writable
+            .write_all(bytes)
+            .and_then(|()| writable.flush())
+            .and_then(|()| writable.sync_all())
+            .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
+                operation: "populate protected static executable memfd",
+                source,
+            })?;
+    }
     if owner != ProtectedStaticExecutableOwnerV1::current() {
         rustix::fs::fchown(
             &writable,
@@ -452,19 +513,23 @@ fn create_sealed_image(
             operation: "seal protected static executable",
             source: source.into(),
         })?;
-    let path = PathBuf::from(format!("/proc/self/fd/{}", writable.as_raw_fd()));
-    let read_only = rustix::fs::open(&path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
-        .map(File::from)
-        .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
-            operation: "bind read-only protected static executable",
-            source: source.into(),
-        })?;
+    let read_only = if BOUNDED {
+        native_io::reopen_read_only(&writable)?
+    } else {
+        let path = PathBuf::from(format!("/proc/self/fd/{}", writable.as_raw_fd()));
+        rustix::fs::open(&path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
+            .map(File::from)
+            .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
+                operation: "bind read-only protected static executable",
+                source: source.into(),
+            })?
+    };
     drop(writable);
     require_no_file_capability(&read_only, role, true)?;
     Ok(read_only)
 }
 
-fn validate_sealed_image(
+fn validate_sealed_image<const BOUNDED: bool>(
     image: &File,
     measurement: ProtectedStaticExecutableMeasurementV1,
     owner: ProtectedStaticExecutableOwnerV1,
@@ -503,7 +568,7 @@ fn validate_sealed_image(
         return Err(ProtectedStaticExecutableErrorV1::InvalidSealedImage(role));
     }
     require_no_file_capability(image, role, true)?;
-    let bytes = read_exact(image, measurement, role)?;
+    let bytes = read_exact::<BOUNDED>(image, measurement, role)?;
     if <[u8; 32]>::from(Sha256::digest(&bytes)) != measurement.sha256 {
         return Err(ProtectedStaticExecutableErrorV1::MeasurementMismatch(role));
     }
@@ -512,11 +577,14 @@ fn validate_sealed_image(
     Ok(observed)
 }
 
-fn read_exact(
+fn read_exact<const BOUNDED: bool>(
     image: &File,
     measurement: ProtectedStaticExecutableMeasurementV1,
     role: &'static str,
 ) -> Result<Vec<u8>, ProtectedStaticExecutableErrorV1> {
+    if BOUNDED {
+        return native_io::read(image, measurement, role);
+    }
     let length = usize::try_from(measurement.byte_len)
         .map_err(|_| ProtectedStaticExecutableErrorV1::InvalidMeasurement)?;
     let mut bytes = Vec::new();
@@ -678,14 +746,14 @@ mod tests {
 
     const MAX_BYTES: u64 = 1024 * 1024;
 
-    struct Fixture {
+    pub(super) struct Fixture {
         _root: tempfile::TempDir,
         path: PathBuf,
         bytes: Vec<u8>,
     }
 
     impl Fixture {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let root = tempfile::tempdir().unwrap();
             let path = root.path().join("static-entry");
             let bytes = static_elf();
@@ -698,7 +766,7 @@ mod tests {
             }
         }
 
-        fn measurement(&self) -> ProtectedStaticExecutableMeasurementV1 {
+        pub(super) fn measurement(&self) -> ProtectedStaticExecutableMeasurementV1 {
             ProtectedStaticExecutableMeasurementV1::new(
                 Sha256::digest(&self.bytes).into(),
                 self.bytes.len() as u64,
@@ -707,7 +775,7 @@ mod tests {
             .unwrap()
         }
 
-        fn open(&self) -> File {
+        pub(super) fn open(&self) -> File {
             File::open(&self.path).unwrap()
         }
     }

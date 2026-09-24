@@ -27,6 +27,32 @@ load can be authorized.
 
 ## Wire
 
+### Nominal Descriptor Continuation
+
+`WorkerV3LoadEnvelopeV2::from_published_nominal_hsaco_v3` consumes a typed nominal
+publication through the same V2 codec, compiler-subject checks and retained lease.
+There is no nominal receiptless public V1 constructor or additional wire format.
+Persistence, readiness retirement and strict restart recovery preserve the exact
+V3 descriptor bytes and full receipt carriage.
+
+`admit_recovered_nominal_worker_v3_roster` is an explicit, inert host continuation.
+It independently replays finalization, checks the linked/finalized identities,
+target, exports and exact normalized ABI receipt, then matches the entire ordered
+roster to physical kernels by identity. Its borrowed table retains V3 source types
+and device layouts, not a V1 projection. Revalidation reacquires the retained
+publication token and repeats custody and descriptor checks. Host lineage identities use
+a distinct nominal domain over the same custody coordinates as legacy admission.
+
+This move-only owner has no verifier promotion, load or launch method. Its
+`authenticates_descriptor_source()` reports exact ABI-receipt association only,
+not source-to-machine semantic proof or protected compiler provenance. The normal
+CLI, nominal source-proof lineage and generated verified-launch owner still need
+to be joined. The fixture-worker lifecycle tests use synthetic ELF and issuer
+receipts; they give neither protected-runtime nor GPU qualification credit.
+Codec bounds and retained allocation checks are not aggregate process metering.
+
+### Encoding
+
 The V2 wire preserves the exact canonical V1 replay bytes without projection:
 
 | Offset | Bytes | Field |

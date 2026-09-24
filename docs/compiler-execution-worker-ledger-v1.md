@@ -23,10 +23,13 @@ record is not accepted.
 
 ## Canonical Record
 
-The ledger has no synthetic genesis record. Absence of both managed V2 names and
-both legacy V1 names means `next_sequence=1` and a zero current rollback anchor.
+The ledger has no synthetic genesis record. Absence of all three managed Worker
+V2 names and all four historical issuer/Worker V1 names permits an empty Worker
+position (`next_sequence=1`, zero current rollback anchor), subject to
+anchor-journal validation.
 The managed names are `compiler-execution-worker-v2.state` and
-`compiler-execution-worker-v2.redo`. Every committed state is one fixed
+`compiler-execution-worker-v2.redo`, plus the transient
+`compiler-execution-worker-v2.recovery` name. Every committed state is one fixed
 2,218-byte record:
 
 | Offset | Bytes | Field |
@@ -191,18 +194,26 @@ it is not verifier, load, or launch authority.
 
 Recovery accepts only:
 
-- no canonical and no redo: empty sequence-one state;
+- no canonical, redo, or recovery: empty sequence-one state;
 - canonical only: strict decode followed by the full durability-reestablishment
-  rename cycle and exact reacquisition;
+  rename cycle through the distinct recovery name and exact reacquisition;
+- recovery only: strict decode, restore the exact canonical record and reacquire
+  it without advancing the sequence;
 - redo only: sequence one with zero prior anchor, promoted and reacquired; or
 - canonical plus redo: one strictly decoded immediate successor, promoted and
   reacquired.
 
+Recovery cannot coexist with canonical or redo, even with identical bytes.
+Every nonempty path checks exact canonical bytes and no-follow absence of both
+sidecars. The issuer, Worker, and anchor share this namespace state machine;
+each retains its own typed decoder, successor relation, and cross-journal joins.
+
 No implicit migration, truncation repair, reset, or selection of a later
 sequence occurs.
 
-Presence of either `compiler-execution-worker-v1.state` or
-`compiler-execution-worker-v1.redo` fails before V2 recovery or genesis. V1 does
+Presence of any issuer or Worker V1 canonical/redo name fails before journal
+mutation, including V2 recovery or genesis. No-follow presence checks reject
+malformed objects without interpreting them as absence. V1 does
 not retain the external receipt and therefore requires an explicit offline
 migration policy. A V2 Worker record without its anchor journal also fails
 closed.
@@ -213,6 +224,14 @@ protocol. It promotes only one legal adjacent journal successor and then joins
 the recovered journal to the configured policy and recovered Worker record.
 An anchor journal under a substituted policy is rejected even when the Worker
 ledger is still empty.
+
+The anchor uses `compiler-execution-worker-anchor-v1.recovery` for interrupted
+canonical recovery. Ordinary orphan anchor redo still requires genesis
+preparation and an empty Worker ledger. Recovery tests also cover pending
+sequence-two Prepared/Committed/Aborted journals with a sequence-one Worker,
+and Published sequence two, preserving exact bytes and replay acknowledgment.
+The [issuer recovery contract](compiler-execution-issuer-durable-v2.md#durable-commit-and-recovery)
+describes deployment rollback and fault-injection limits.
 
 ## Cross-Journal Invariant
 

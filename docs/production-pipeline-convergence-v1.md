@@ -6,6 +6,334 @@ work under [#134](https://github.com/harsh-nod/fe2o3/issues/134) to one
 production transaction. The former scalar, GEMM, attention, collective, and MoE compiler oracles have been deleted. They are not additional production architectures. Differential evidence may remain as
 inert fixtures or offline tools, never as another route in production crates.
 
+## Nominal P4 continuation
+
+The nominal descriptor continuation retains the original source, authenticated
+bindings and actual P4 optimized output O. Its consuming native-text continuation
+uses the existing target-bound emitter and LLVM22 layout binder, embeds one V3
+descriptor section, and retains that same owner. It does not advance O to a later
+optimization stage or reconstruct an independent executable graph.
+
+Replay checks source-to-O history, nominal source ABI, physical argument packing,
+target requirements, all five stored symbol vectors, a source-derived catalog,
+and the complete emitted text including the descriptor suffix. Input storage
+transfers unchanged; the caller reserves only the returned additional receipt.
+This is an inert compiler boundary, not a Worker V3 handoff or launch authority.
+Nonempty source catalogs and deferred matrix/LDS/atomic/synchronization
+requirements still reject rather than discard their obligations.
+
+The source harness covers eight ordinary-MIR guarded-read cases and two
+retained-MIR private-helper cases across gfx942/gfx950. The latter assert genuine
+helper/call erasure; they do not claim ordinary-MIR helper retention. Exact
+retained-MIR flags are checked by the request validator and full-argv digest,
+not by portable metadata alone. Tests check allocation-capacity receipts,
+unchanged descriptor/O backing, text substitution, resource refusals, and
+consuming-error cleanup. Diagnostic work/peak observations include negative
+checks and are not performance measurements. These source tests must be run
+explicitly with their ignored parent tests; declarations alone are not coverage.
+
+The following consuming source-proof continuation retains that native owner
+unchanged and borrows its authenticated ranked roster into the existing
+Direct/Erased proof assembler. It shares collector/preflight/context and exact
+source/N/E/catalog/launch binding with the existing output handoff. The original-N
+packet is separately checked byte-for-byte against the retained source and
+catalog, and its subject must match each of the three typed proof rosters.
+Framing, graph hashes, or an erased/optimized graph alone cannot satisfy this
+join. The caller reserves only the additional owned packet receipt; consuming
+failure drops the input and leaves its original reservation for caller retirement.
+
+The ten source cases also exercise the consuming unsigned-proof refusal. Fresh
+control owners cover work/storage refusal and corrupted native-text refusal.
+Component tests cover exact packet bytes, each roster subject, route/graph
+substitution, and resource limits. These are not successful signed-source runs:
+genuine reference-bound Direct/Erased positives, including post-proof failure
+cleanup, still require the protected proof runtime and remain unvalidated.
+
+Protected worker execution, proof/artifact custody, generated safe launch and
+target-matched GPU qualification remain separate unfinished integration work.
+This boundary does not complete #272 milestones or qualify the tutorial corpus.
+
+The finalizer now has a version-explicit nominal V3 continuation using the same
+strict Worker V3 first-build transaction and shared ELF/physical checks. It
+retains exact descriptor bytes, binds them to the retained ABI receipt, checks
+the export manifest, rejects same-width nominal substitutions and mixed schema
+sections, and patches only the canonical digest field. Raw reconstruction
+rechecks the artifact independently. Fixture-worker tests cover descriptor-derived
+launch and original transaction retention; their synthetic ELF/receipts do not
+establish production compiler or protected proof provenance.
+
+Typed nominal publication now consumes that finalizer owner, retaining exact
+descriptor bytes through the existing compact replay and durable transaction.
+Restart reconstruction selects the strict descriptor codec from the exact ABI
+receipt and repeats inspection/finalization before publication. A closed internal
+schema distinction shares the existing publication authority bridge; it does not
+flatten nominal V3 into V1. Legacy identities retain their domain and encoding,
+while nominal finalization uses a distinct domain over the same custody axes.
+Typed V1 and nominal recovery APIs reject each other's artifacts. Published
+nominal output can transfer its exact current-publication lease and replay parts
+without acquiring compiler, proof, load or launch authority.
+
+The nominal publication owner can now enter the same receipt-bearing V2 load
+envelope, retaining its exact compiler subject, carriage, replay and publication
+lease through durable restart. Version-explicit host roster readmission repeats
+independent finalizer replay, checks the exact normalized V3 ABI receipt and
+exports, and resolves physical kernels against the complete canonical roster.
+The move-only owner retains nominal types without a V1 projection and rechecks
+currentness before returning a successful revalidation. Nominal host identities
+use a separate domain; the legacy preimage remains unchanged. Synthetic fixtures
+cover retirement/restart, foreign compiler occurrences, retained-directory
+recovery, and two-kernel rosters with opposite descriptor/physical orders.
+
+This readmission is inert: exact descriptor-receipt association is not compiler
+source semantics or verification authority, and it cannot load or launch.
+The normal CLI, generated verified host launch, and nominal P4 source-proof owner
+are not yet joined to this continuation. Native-aware production lineage
+construction and independent replay remain required. Descriptor traversal
+quotas and existing bounded artifact/replay allocations are separate; publication
+does not produce a complete resource receipt or claim whole-process metering.
+The synthetic receipt/artifact tests do not qualify any tutorial kernel, and
+M0-M7 remain open.
+
+## Durable source replay
+
+Native source replay has reconstructive typed ranked recipe transport through
+`encode_production_ranked_recipe_v1` and `decode_production_ranked_recipe_v1`.
+The versioned, little-endian schema preserves all 41 operation forms, 12
+terminators, eight expression forms, numerical tolerance bits and ordered proof
+claims. It enforces structural bounds before construction and rejects any
+normalization that changes the encoded recipe. Diagnostic ranked text and graph
+hashes are not parsed as substitute recipes.
+
+`encode_production_ranked_source_rows_v1` and its decoder transport the lowerer's
+ordered access and generated-effect rows in a separate versioned frame. This
+preserves absent versus present output-extent proposals, all three ranked value
+forms through the recipe's existing grammar, explicit effect origins and exact
+recipe identities. Rows are not sorted or repaired. Structural decoding does
+not establish source correspondence or the truth of an extent proposal; those
+still require replay and canonical-owner rederivation.
+
+The Direct and UnitLocal recipe-source verifier entrypoints first validate the
+source packet, then resolve claims against its complete ordered signed effect
+roster and checked aggregate commitments. They share the existing typed replay
+continuations, which independently re-import signatures, recompile, rebuild V5
+and aggregate subjects, and replay source correspondence. UnitLocal recovery
+preserves original N and independently admitted E; it does not rerun the erasure
+producer. Embedded test keys establish consistency, not protected origin.
+`encode_native_compiler_source_packet_v1` now transports the five original source
+frames, detached launch inputs, all nine staging digests, full individual
+receipt wires and keys, recipes, source rows and diagnostic text in one inert
+byte buffer. It preserves independent launch/staging/ranked counts and order,
+both launch ranks, exact logical names, full bindings, workgroup options and
+raw grid values. UnitLocal additionally carries actual E bytes, which receive
+fresh V12 admission rather than a serialized verified flag. Neither grid fields
+nor embedded verifying keys authenticate their origin.
+
+Native backend packet preparation serializes this complete packet, replays it
+through the existing recipe validators, and retains its bytes alongside the
+source-proof owner and original N envelope. This is not yet a serialized capsule
+or protected publication continuation. The packet has a dedicated versioned
+schema and an explicit aggregate 4 MiB limit, including duplicate nested bytes.
+This source-packet limit is independent of the existing refined-forwarding
+output limit (64 MiB, including its complete B/C/S/O/I/J/K/P/H/L/R/F history).
+The legacy ProofBinding receipt's 4 MiB cap cannot carry every admitted pair.
+The paired `F2NRF1` carrier preserves both constituent formats and limits, with
+an additional fixed 80 bytes of framing and terminal content identity. This is
+not a legacy ProofBinding receipt. Distinct V4 capsule/handoff content codecs now
+retain this complete carrier, but typed production dispatch is not integrated.
+It may neither narrow advanced output to 4 MiB nor select the older
+single-transition route.
+
+The V4 capsule contains the unchanged V3 base plus mandatory F2NRF1, all within
+the unchanged complete 160 MiB capsule ceiling. Its distinct frame/hash uses the
+same private bounded-pair engine as F2NRF1. Shared decoding retains base receipts
+and carrier in one allocation and rejects a base MIR too large to fit in the
+complete source packet before deriving the V3 MIR receipt hash. The aggregate
+hashes have already visited those bytes. This is not a semantic equality check:
+unrelated well-framed members remain inert content.
+
+The V4 handoff shares V3's bounded wire parser and identity-neutral pair encoder,
+with explicit V4 outer/pair discriminators and hash domains. It binds complete
+V4 capsule and V2 identities, validates target/final-commitment agreement, and
+retains every nested payload in the same backing, including at nonzero enclosing
+offsets. Direct seal APIs allow all three frames to be written in one final
+allocation. Refused debits and callback/destructor panics precede mutation.
+Tests at representative and maximum raw payload sizes verify no framing
+allocations and unchanged decode allocation traces for a fixed metadata shape;
+old V3 bytes, limits and rejection behavior remain.
+
+V4 content decoding remains an unmetered codec like V3. The compiler-FFI layer
+now defines a conservative versioned logical work-prepayment schedule, audited
+against the pinned toolchain and parser limits, alongside shared metadata-storage
+allowances. This is not instruction-exact accounting, RSS measurement or engine
+replay. Production prepays those amounts and the full actual backing capacity on
+the same ledger. Wire maxima do not imply that every replay fits the unchanged
+256 MiB policy.
+
+A private nondefault continuation now consumes the actual live final-F wire
+owner into a V4 handoff. It requires retained protected invocation custody; an
+extraction-only transaction cannot supply a substitute invocation. It derives
+all fifteen base receipts from retained compiler fields and checked carrier
+members. Original-N proof receipts remain unchanged. Target binding associates
+N/catalog with actual B through the checked Direct or N-to-E erasure route;
+the compact native lowering association separately binds actual F/catalog,
+profile, carrier, descriptor, pre-descriptor LLVM, final LLVM and complete V2.
+It is constructed after native text/descriptor replay, not by substituting a
+legacy lowering receipt. Raw LLVM, V2 and domain-separated receipt identities
+are separate coordinates, including their exact lengths.
+
+The continuation reuses the carrier vector, prepays/reconciles its capacity
+growth, moves the carrier inside the outer buffer, and writes base/V2/framing
+before shared decoding. It retains the actual live compiler owner beside that
+immutable transport. Revalidation rebuilds expected base receipts from the live
+owner and compares every canonical byte. Public construction or decoding of the
+compact association still grants no authority.
+
+`recover_compiler_native_semantic_handoff_v4` now consumes a prepaid V4 transport
+and extends the existing paired recovery with independent native capsule joins.
+It compares original proof preimages, target N/catalog-to-B coordinates,
+semantic-order workgroups, semantic/rustc/LLVM22 layout, actual F native lowering
+and all thirteen semantic-to-LLVM identities. Exact embedded/outer V2 equality
+is checked before borrowing the already decoded outer module; no second complete
+V2 allocation is made. The immutable outer decoder's exact final-commitment
+check remains mandatory. There is no legacy target/lowering admission fallback.
+
+Those joins run while the source, history and independently replayed text
+relation are still borrowed. Only afterward is actual F moved from that history
+into the returned owner alongside the unchanged transport and signed source.
+The caller must keep full enclosing backing capacity (including spare capacity)
+and decoded metadata paid, then reserve the returned additional owner storage.
+Exact/one-short tests check storage cleanup without resetting work or prior
+failures. Signed two-root fixtures use actual profile layout digests, both source
+routes, both AMD profiles, independent root ordering, and resealed substitutions.
+They establish content consistency with public test keys, not protected origin.
+
+The artifact transaction now has a distinct, metered V4 schema over the shared
+transaction/currentness engine. It preserves exact attempts, pinned file custody,
+cooperative locks and one-shot consumption, with no legacy decoder or sidecar
+fallback. Recovery strictly decodes V4 before returning a receipt; lease minting
+streams the occurrence hash without allocating a complete payload. These are
+inert content/custody records, not compiler execution or artifact authority.
+
+`recover_compiler_native_semantic_handoff_token_v4` runs the same native semantic
+checker while retaining the transaction token's lock and unchanged backing.
+Only afterward may the caller consume the exact occurrence. Refusal, resource
+failure or unwind before the ready-to-consumed rename leaves the occurrence
+unconsumed; failures after rename do not permit replay. The generic ownership
+adapter is not an authority gate: the verifier adapter supplies the concrete
+privately constructed source/F owner. Its original backing snapshot is checked
+again before consumption.
+
+V4 payload capacity, decoded metadata, hash scratch and owner headers share the
+caller's work/storage ledger and unchanged 256 MiB cap. Returned storage is
+admitted but unreserved: retain the original token reservation, then reserve
+the additional mapped-owner amount. Consumed-owner storage is prepaid before
+commit. Scoped cleanup preserves accepted work, peaks and first denials; a
+substituted ledger is never released as if it were the original. Filesystem
+registry and directory metadata retain the existing separate protocol bounds;
+this is not whole-filesystem work accounting or an RSS bound.
+
+[Native execution subject V2](compiler-execution-subject-v2.md) now binds the
+exact V4 occurrence, complete carrier-bearing capsule, cached invocation and
+compiler closure under a distinct fixed 690-byte schema. It uses the existing
+ledger, retains no payload backing, and grants no authority. Publication,
+recovery and raw/concrete-verifier consumption reconstruct the same content.
+The V1 wire/API remains frozen through shared codec mechanics and independent
+golden tests; V2 has no legacy fallback.
+
+[Native receipt transport V2](compiler-execution-receipt-transport-v2.md) now
+binds opaque receipt bytes to that complete subject through shared sidecar
+custody. Ready publication/recovery reconstructs the subject from V4; locked
+recovery uses the exact raw token; consumed restart compares all stored subject
+bytes after payload deletion. One move-only buffer retains the body, with actual
+capacity charged and all native postcommit readback work prepaid. This is inert
+transport, not protected issuance or an activated production consumer.
+
+Inventory/preflight receipts remain inert until the compiler custody boundary
+authenticates them. Protected execution policy/attestation/carriage, Cargo,
+Worker, runtime and generated-host V4 consumers are still not
+connected. The transaction adapter has no executable-artifact publication
+conversion; default production remains unchanged. No tutorial kernel gains
+production or hardware coverage from this library integration alone.
+The signed ordinary-Rust producer fixture exercises base construction with an
+explicitly synthetic invocation, but requires the protected proof runtime.
+CPU content/resource tests do not replace that fixture, a positive protected
+producer continuation, machine refinement, or protected production execution.
+
+`recover_compiler_refined_forwarding_output_v1` independently recovers the signed
+Direct or UnitLocal source from its complete packet, freshly admits every graph
+in the existing final-output history, and invokes the complete source/history/
+formal/descriptor/native-text checker. Only after that succeeds does it consume
+the history and move the actual F graph with its original admission receipt into
+an immutable owner alongside the recovered source proof and checked content
+identities. The temporary history and packet adapters are not retained. No
+replacement graph is decoded or synthesized during that move.
+
+The nondefault refined-forwarding producer encodes F2RFO1 directly into the
+carrier's final allocation, then copies the complete source packet from its
+retained live owner into the other region. There is no intermediate full output
+buffer. Both the live packet and the new carrier backing remain charged. The
+legacy output getter still borrows only F2RFO1; a separate getter exposes the
+complete carrier. Replay independently parses the carrier, compares its source
+to the live owner and its fourteen output fields to freshly derived fields, and
+uses `recover_compiler_refined_forwarding_carrier_v1` without format fallback.
+Carrier framing, hashing and getters allocate no heap payloads; nested semantic
+admission still runs through the existing complete source-to-F checker.
+
+The producer's original paired-only recovered owner is dropped after its check;
+the new V4 admission retains its recovered owner beside the outer transport. Worker
+evidence retention/publication is not wired. Its output identity binds the
+embedded fields, not an external Worker request: later admission must bind that
+exact frame, NativeV2 and descriptor to the actual request and finalizer. Dropped
+history is not available for self-contained replay, and this owner supplies no
+protected origin, rustc ABI authentication, machine refinement or launch authority.
+
+Genuine two-root tests cover both source routes and gfx942/gfx950 emitted output,
+after producer and both input buffers are dropped. They retain exact N/E/source
+rosters and actual F, reject cross-source histories and final output, and preserve
+resource floors at exact/one-short limits. Separate nonzero-history tests confirm
+the transferred allocation is actual F after induction and forwarding rewrites.
+These cover both separate-input and paired recovery, and remain CPU consistency
+tests using public test keys, not hardware results. The recovery ends at F and
+uses descriptor V1. The separate loop-unroll route ends at U and requires actual
+U and its F-to-U relation; nominal descriptor V3 also requires explicit applicable
+admission. Neither may be substituted through this F/descriptor-V1 interface.
+
+Work and live logical payload use the shared verification ledger. Resolver
+callbacks can charge work but cannot replace or release the storage ledger;
+ignored callback denials still fail. Parsed owner reservations remain live
+through normalized capacity reconciliation, and returned receipts exclude
+discarded temporary recipes and source rows. Correspondence counts and minimum
+remaining wire sizes are checked before allocation; exact capacities are
+prepaid and remain live throughout replay. Existing checked constructors and proof engines
+retain their separate bounded scratch/work domains: this is not an RSS or
+whole-process accounting claim.
+
+The complete packet decoder borrows wire payloads and reserves its typed launch,
+staging and signature metadata through replay. Returned proof receipts exclude
+these discarded adapters. Tests recover Direct and UnitLocal after dropping
+producer owners and packet bytes. Genuine signed two-root fixtures share one
+semantic module and preserve source order `[0, 1]` independently of canonical
+binding order `[1, 0]`, with distinct stores of 7 and 11. They compare complete
+N/E, catalog and signed rosters, unchanged retained-storage receipts, cross-root
+substitution failures, and second-root truncation cleanup. Exact/one-short work
+and storage tests retain the caller's floor and failure history. These test-key
+fixtures are not protected proofs. Typed native capsule
+production/admission, compiler/Worker custody, generated safe launch, protected proof
+execution and tutorial/GPU qualification remain outstanding. M0-M7 remain open.
+
+The tensor leaf dependency now reuses the existing kernel-IR V8 grammar through
+`encode_tensor_layout_leaf_v1` and `decode_tensor_layout_leaf_v1`. Both require
+the shared verification budget, allocate no heap, and preserve the inherited
+storage ledger. The complete fixed-size schema is at most 117 bytes, including
+opaque and unsupported variants. Syntax round-trip preserves these variants;
+independent semantic checks still reject them. A zero-fill declaration is not
+authenticated zero-fill evidence. No module header or authority owner is created.
+
+Tests cover literal bytes for BF16/FP8/FP4/mixed layouts, independent operand
+swizzles, the full schema bound, malformed input, exact work quotas and historical
+V7/V8 gates. Recipe transport reuses this leaf with prepaid fixed-size scratch;
+neither codec supplies a protected proof or production/GPU qualification result.
+
 ## One transaction
 
 The completed convergence target sends every kernel-containing final crate

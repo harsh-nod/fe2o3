@@ -1,5 +1,7 @@
 //! Source initialization and entry custody for the closed multi-entry recurrence.
 use super::*;
+#[path = "single_entry_initializer_v1.rs"]
+pub(super) mod single;
 #[cfg(test)]
 #[path = "multi_entry_induction_v1_tests.rs"]
 mod tests;
@@ -27,6 +29,9 @@ impl ProjectedInductionPreheaderControlV1 {
             }),
             Self::Multiple(_) => Err(reject(
                 "multi-entry induction cannot be copied as a historical single-entry proof",
+            )),
+            Self::DistantDirect(_) => Err(reject(
+                "distant induction cannot discard its initialization proof",
             )),
         }
     }
@@ -527,6 +532,14 @@ pub(super) fn build(
         &mut scratch,
         context,
     )?;
+    require_reinitialization(
+        graph,
+        header,
+        initialization.block,
+        entries,
+        &mut scratch,
+        context,
+    )?;
     let scratch_storage = scratch.retained()?;
     drop(scratch);
     context.scope.release(context.facts, scratch_storage)?;
@@ -549,6 +562,37 @@ pub(super) fn build(
         ranked_initial: None,
         rows,
     }))
+}
+
+fn require_reinitialization(
+    graph: &ProjectedLoopCfgV1,
+    header: usize,
+    initializer: usize,
+    entries: &[usize],
+    scratch: &mut Scratch,
+    context: &mut Context<'_, '_>,
+) -> Result<()> {
+    // A later entry must rerun the assignment, not reuse a prior latch value.
+    scratch.reset(context)?;
+    scratch.seed(header, context)?;
+    while !scratch.pending.is_empty() {
+        context.charge(3)?;
+        let block = scratch
+            .pending
+            .pop()
+            .ok_or_else(|| resource(Resource::Accounting))?;
+        for &target in &graph.successors[block] {
+            context.charge(2)?;
+            if target != initializer {
+                scratch.seed(target, context)?;
+            }
+        }
+    }
+    context.charge(entries.len())?;
+    if entries.iter().any(|entry| scratch.seen[*entry] != 0) {
+        return Err(reject("induction initializer is bypassed on loop re-entry"));
+    }
+    Ok(())
 }
 
 pub(super) fn bind_initial(

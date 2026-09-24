@@ -2,7 +2,7 @@
 
 use std::{error::Error, fmt};
 
-use sha2::{Digest, Sha256};
+use crate::client_profile_codec as codec;
 
 use crate::{
     COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, CompilerExecutionAttestationErrorV1,
@@ -10,13 +10,8 @@ use crate::{
     CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerPolicyV1,
 };
 
-const MAGIC: [u8; 8] = *b"F2O3CEP1";
-const VERSION: u16 = 1;
-const FLAGS: u16 = 0;
 const HEADER_BYTES: usize = 8 + 2 + 2 + 4;
 const IDENTITY_BYTES: usize = 32;
-const INVALID_ID: u32 = u32::MAX;
-const IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V1\0";
 const PREIMAGE_BYTES: usize =
     HEADER_BYTES + 4 + 4 + 4 + 4 + COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1;
 
@@ -73,8 +68,7 @@ impl CompilerExecutionClientProfileV1 {
         external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
         policy: CompilerExecutionIssuerPolicyV1,
     ) -> Result<Self, CompilerExecutionClientProfileErrorV1> {
-        validate_uid(supervisor_uid)?;
-        validate_gid(supervisor_gid)?;
+        codec::validate_credentials(supervisor_uid, supervisor_gid)?;
         if !policy
             .identity()
             .matches_canonical_bytes(policy.canonical_bytes())
@@ -82,20 +76,13 @@ impl CompilerExecutionClientProfileV1 {
             return Err(CompilerExecutionClientProfileErrorV1::PolicyIdentity);
         }
 
-        let mut bytes = [0_u8; COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1];
-        bytes[..8].copy_from_slice(&MAGIC);
-        bytes[8..10].copy_from_slice(&VERSION.to_le_bytes());
-        bytes[10..12].copy_from_slice(&FLAGS.to_le_bytes());
-        bytes[12..16]
-            .copy_from_slice(&(COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1 as u32).to_le_bytes());
-        bytes[16..20].copy_from_slice(&supervisor_uid.to_le_bytes());
-        bytes[20..24].copy_from_slice(&supervisor_gid.to_le_bytes());
-        bytes[24..28].copy_from_slice(&external_anchor_service.uid().to_le_bytes());
-        bytes[28..32].copy_from_slice(&external_anchor_service.gid().to_le_bytes());
-        bytes[32..PREIMAGE_BYTES].copy_from_slice(policy.canonical_bytes());
-        let identity =
-            CompilerExecutionClientProfileIdentityV1(derive_identity(&bytes[..PREIMAGE_BYTES]));
-        bytes[PREIMAGE_BYTES..].copy_from_slice(identity.as_bytes());
+        let (bytes, identity) = codec::V1.encode(
+            supervisor_uid,
+            supervisor_gid,
+            external_anchor_service,
+            policy.canonical_bytes(),
+        );
+        let identity = CompilerExecutionClientProfileIdentityV1(identity);
 
         Ok(Self {
             supervisor_uid,
@@ -109,50 +96,11 @@ impl CompilerExecutionClientProfileV1 {
 
     /// Strictly decodes one exact canonical client profile.
     pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionClientProfileErrorV1> {
-        if bytes.len() != COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1 {
-            return Err(CompilerExecutionClientProfileErrorV1::Length);
-        }
-        if bytes[..8] != MAGIC {
-            return Err(CompilerExecutionClientProfileErrorV1::Magic);
-        }
-        let version = u16::from_le_bytes(bytes[8..10].try_into().expect("fixed slice"));
-        if version != VERSION {
-            return Err(CompilerExecutionClientProfileErrorV1::Version(version));
-        }
-        let flags = u16::from_le_bytes(bytes[10..12].try_into().expect("fixed slice"));
-        if flags != FLAGS {
-            return Err(CompilerExecutionClientProfileErrorV1::UnsupportedFlags(
-                flags,
-            ));
-        }
-        let declared_length = u32::from_le_bytes(bytes[12..16].try_into().expect("fixed slice"));
-        if declared_length != COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1 as u32 {
-            return Err(CompilerExecutionClientProfileErrorV1::DeclaredLength);
-        }
-        let supervisor_uid = u32::from_le_bytes(bytes[16..20].try_into().expect("fixed slice"));
-        let supervisor_gid = u32::from_le_bytes(bytes[20..24].try_into().expect("fixed slice"));
-        validate_uid(supervisor_uid)?;
-        validate_gid(supervisor_gid)?;
-        let external_anchor_service = CompilerExecutionExternalAnchorServiceIdentityV1::new(
-            u32::from_le_bytes(bytes[24..28].try_into().expect("fixed slice")),
-            u32::from_le_bytes(bytes[28..32].try_into().expect("fixed slice")),
-        )
-        .map_err(CompilerExecutionClientProfileErrorV1::ExternalAnchorServiceIdentity)?;
-        let policy = CompilerExecutionIssuerPolicyV1::decode(&bytes[32..PREIMAGE_BYTES])
+        let parsed = codec::V1.parse(bytes)?;
+        let policy = CompilerExecutionIssuerPolicyV1::decode(parsed.policy)
             .map_err(CompilerExecutionClientProfileErrorV1::Policy)?;
-        let declared_identity: [u8; IDENTITY_BYTES] =
-            bytes[PREIMAGE_BYTES..].try_into().expect("fixed slice");
-        if declared_identity == [0; IDENTITY_BYTES]
-            || derive_identity(&bytes[..PREIMAGE_BYTES]) != declared_identity
-        {
-            return Err(CompilerExecutionClientProfileErrorV1::Identity);
-        }
-        let decoded = Self::new(
-            supervisor_uid,
-            supervisor_gid,
-            external_anchor_service,
-            policy,
-        )?;
+        codec::V1.check_identity(bytes)?;
+        let decoded = Self::new(parsed.uid, parsed.gid, parsed.service, policy)?;
         if decoded.canonical_bytes.as_slice() != bytes {
             return Err(CompilerExecutionClientProfileErrorV1::Canonical);
         }
@@ -289,27 +237,8 @@ impl Error for CompilerExecutionClientProfileErrorV1 {
     }
 }
 
-fn validate_uid(uid: u32) -> Result<(), CompilerExecutionClientProfileErrorV1> {
-    if uid == 0 || uid == INVALID_ID {
-        return Err(CompilerExecutionClientProfileErrorV1::InvalidSupervisorUid);
-    }
-    Ok(())
-}
-
-fn validate_gid(gid: u32) -> Result<(), CompilerExecutionClientProfileErrorV1> {
-    if gid == 0 || gid == INVALID_ID {
-        return Err(CompilerExecutionClientProfileErrorV1::InvalidSupervisorGid);
-    }
-    Ok(())
-}
-
 fn derive_identity(preimage: &[u8]) -> [u8; IDENTITY_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update((IDENTITY_DOMAIN.len() as u64).to_le_bytes());
-    digest.update(IDENTITY_DOMAIN);
-    digest.update((preimage.len() as u64).to_le_bytes());
-    digest.update(preimage);
-    digest.finalize().into()
+    codec::V1.identity(preimage)
 }
 
 #[cfg(test)]

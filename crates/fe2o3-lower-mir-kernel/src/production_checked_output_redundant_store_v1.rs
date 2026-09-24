@@ -315,9 +315,12 @@ pub use owned::{
 mod commutative;
 pub use commutative::{
     ProductionCommutativeContinuationErrorV1, ProductionCommutativeContinuationStorageV1,
-    ProductionOwnedCommutativeContinuationV1, ProductionOwnedPrivateCellPromotionContinuationV1,
+    ProductionLoopUnrollErrorV1, ProductionLoopUnrollOriginV1, ProductionLoopUnrollStorageV1,
+    ProductionOwnedCommutativeContinuationV1, ProductionOwnedLoopUnrollContinuationV1,
+    ProductionOwnedPrivateCellPromotionContinuationV1,
     ProductionOwnedRefinedCrossBlockForwardingContinuationV1,
     ProductionOwnedUnitLocalCommutativeContinuationV1,
+    ProductionOwnedUnitLocalLoopUnrollContinuationV1,
     ProductionOwnedUnitLocalPrivateCellPromotionContinuationV1,
     ProductionOwnedUnitLocalRefinedCrossBlockForwardingContinuationV1,
     ProductionPrivateCellPromotionContinuationErrorV1,

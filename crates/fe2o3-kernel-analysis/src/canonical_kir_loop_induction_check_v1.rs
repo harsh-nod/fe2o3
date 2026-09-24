@@ -13,6 +13,7 @@ pub(super) fn replay(
     if report.rows.len() != loops.recurrences.len() {
         return Err(Error::ReplayMismatch);
     }
+    let (sparse, sparse_bytes) = sparse_inputs(i, limits, meter)?;
     let (incidence, receipt) = meter.derive(|budget| {
         Ok(super::super::scoped(budget, |budget| {
             budget.reserve_storage(size_of::<Incidence>())?;
@@ -51,7 +52,7 @@ pub(super) fn replay(
                     return Err(Error::ReplayMismatch);
                 }
                 let expected = inspect(
-                    loops,
+                    (loops, &sparse),
                     index,
                     *recurrence,
                     completion,
@@ -75,11 +76,13 @@ pub(super) fn replay(
     meter.release(scratch_bytes)?;
     drop(incidence);
     meter.release(receipt)?;
+    drop(sparse);
+    meter.release(sparse_bytes)?;
     Ok(())
 }
 
 fn inspect(
-    loops: &Loops<'_, '_>,
+    inputs: (&Loops<'_, '_>, &Sparse<'_, '_>),
     ordinal: usize,
     recurrence: Recurrence,
     iterations: Iterations,
@@ -87,6 +90,7 @@ fn inspect(
     scratch: &mut Scratch,
     budget: &mut Budget<'_>,
 ) -> Result<Outcome> {
+    let (loops, sparse) = inputs;
     let i = loops.inventory();
     budget.charge_work(4)?;
     let max = match maximum(recurrence.scalar) {
@@ -207,8 +211,8 @@ fn inspect(
         return Err(Error::ReplayMismatch);
     }
 
-    let a = literal(i, recurrence.initial, recurrence.scalar, budget)?;
-    let b = literal(i, bound, recurrence.scalar, budget)?;
+    let a = literal(sparse, recurrence.initial, recurrence.scalar, budget)?;
+    let b = literal(sparse, bound, recurrence.scalar, budget)?;
     budget.charge_work(12)?;
     let (distance, update) = if let (Some(a), Some(b)) = (a, b) {
         if a >= b {

@@ -4,6 +4,71 @@ This package owns the protected process boundary around the static
 compiler-execution issuer. Program admission authenticates the provisioned
 static launcher and issuer before either can enter authority-bearing custody.
 
+## Native Custody Status
+
+`AdmittedIssuerProgramV2` freshly consumes a native policy capability and the
+provisioned launcher/issuer sources. It uses bounded native executable admission,
+checks runtime then launcher then issuer, and retains independently sealed
+objects. Every nested operation uses the same caller ledger; exact clone checks
+reject equal bytes in a different inode. Supplied sources may alias because the
+retained images are separate objects. Trusted provisioning must independently
+pin the policy and launcher measurement.
+
+`ProtectedIssuerSupervisorV2::bind` consumes that native program, its policy-bound
+native signing key, the strict native anchor transport and a service-owned root.
+It checks current effective UID/GID, program, full-policy key binding, anchor,
+root admission and full revalidation in that order. Root admission requires
+CLOEXEC, read-only non-O_PATH directory custody, exact UID/GID, mode0700, nonzero
+links and no capability or POSIX access/default ACL. V1 and V2 share this root
+predicate; the native owner never converts an admitted V1 owner.
+
+Binding alone is pre-session custody. `accept_handoff` now consumes an actual
+control connection and authenticates its canonical native frame, submitter,
+service socket, policy/anchor identities and one retained live client pidfd.
+Its move-only accepted result exposes only immutable facts. Shared socket
+predicates preserve the V1 checks; native receive uses fixed buffers and finite
+attempts. Unsupported ancillary messages fail closed with descriptor cleanup.
+
+`prepare_launch` now consumes the native accepted handoff into move-only
+`PreparedProtectedIssuerLaunchV2`. It retains exact native descriptor transfers,
+a fresh native service-launch capability, seven pipe ends and a sealed 704-byte
+static manifest binding the current parent and twelve ordered source roles.
+Revalidation repeats native owner/transfer continuity, parent, pipe, metadata,
+canonical-byte and non-aliasing checks. The shared `StaticPreexecManifestV1`
+codec has fixed-capacity inert storage: its V1 wire name is not a conversion
+from admitted V1 authority. Native manifest I/O is finite and fixed-size.
+
+Process-profile and namespace observations now have native metered owners in
+`fe2o3-protected-service-profile`. They use the same bounded, allocation-free
+predicates as the existing service path. The supervisor no longer has its own
+profile parser or namespace implementation. Descriptor staging is also one
+shared fixed fourteen-entry table, with deterministic cleanup on partial failure.
+These are launch prerequisites, not a native consuming process-launch API. See
+the [process-observation contract](../../docs/compiler-execution-process-observations-v2.md).
+
+`ProtectedIssuerCleanupServiceV2` now funds the existing fixed cleanup pool from
+one persistent owned ledger. Native turns prepay bounded work, retain cumulative
+history, and use the same cleanup engine as V1. Controller Drop/recovery retains
+the account and records; only empty orderly shutdown releases pool storage.
+Native and legacy modes are mutually exclusive. A prepaid launch reservation
+is capacity only, not an enabled native child launch. See the
+[cleanup custody contract](../../docs/compiler-execution-cleanup-custody.md).
+
+Full child confinement, consuming native process creation, readiness,
+serving/recovery and producer activation remain open. Every nested check uses
+the caller's ledger; reserve returned growth while preserving consumed input
+reservations. Logical work/retained/scratch charges are not wall-time, RSS,
+kernel-memory or generated-stack bounds. See the
+[prepared-launch contract](../../docs/compiler-execution-prepared-launch-v2.md),
+[handoff contract](../../docs/compiler-execution-handoff-v2.md),
+[binding resource contract](../../docs/compiler-execution-capabilities-v2.md#native-supervisor-binding)
+and [anchor custody contract](../../docs/compiler-execution-anchor-custody-v2.md).
+No protected proof or GPU qualification is credited; M0-M7 and 47/47 remain incomplete.
+
+The existing serving/deployment path described below remains **V1**.
+
+## Existing Service Path
+
 Both source images are read through stable file descriptions, checked against
 exact SHA-256 and length measurements, validated as loader-independent x86-64
 ELF images, copied into distinct anonymous mode-0555 memfds, sealed with
@@ -79,9 +144,14 @@ while retaining the same pidfd. A closed or stalled Cargo peer fails closed
 before serving custody exists. Serving custody can be consumed by one bounded
 pidfd wait that returns an inert PID/readiness/termination record only after
 `waitid(P_PIDFD)` has reaped the exact child once. A wait timeout fails closed
-and cancels that child. Explicit cancellation uses `pidfd_send_signal`; every
-synchronous path reaps once, and dropped live custody transfers to a fixed
-64-slot reaper. Abrupt supervisor death is covered both by the bootstrap gate
+and cancels that child. Explicit cancellation uses finite nonblocking cleanup
+attempts; success means a confirmed terminal reap. Timeout and inconclusive
+errors retain custody in the fixed 64-slot reaper. Failed termination requests
+remain retryable; ownership loss is quarantined rather than reported as reaped.
+The pre-exec artifact-spawn lease follows that same custody until validated
+issuer readiness or a terminal reap. See the [cleanup contract](../../docs/compiler-execution-cleanup-custody.md),
+including the remaining native accounting requirements.
+Abrupt supervisor death is covered both by the bootstrap gate
 and the static launcher's parent identity check.
 
 `ProtectedIssuerSupervisorV1::run_session` is the sole complete per-connection
