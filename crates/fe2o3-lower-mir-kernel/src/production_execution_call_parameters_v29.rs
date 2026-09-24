@@ -75,12 +75,7 @@ struct PreparedExecutionParametersV29<'scope> {
 }
 
 fn execution_call_error_v29() -> ProductionSemanticKirErrorV1 {
-    unsupported(
-        0,
-        None,
-        None,
-        "execution call parameters differ from their source instance",
-    )
+    fe2o3_pliron::source_argument_v1::execution_call_error_v29().into()
 }
 
 fn execution_call_shape_v29(

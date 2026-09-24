@@ -221,33 +221,14 @@ fn charge_conditional_body_selection_v1(
     association: &SemanticKirFunctionCorrespondenceV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionConditionalOutputBindingErrorV1> {
-    use ProductionConditionalOutputBindingErrorV1 as Error;
-    budget.charge_work(argument_sum_v1(&[32, semantic.roots().len()])?)?;
-    let root = semantic
-        .functions()
-        .get(association.correspondence_owner().index() as usize)
-        .ok_or(Error::SourceAssociation)?;
-    let body = semantic
-        .functions()
-        .get(association.semantic_function().index() as usize)
-        .ok_or(Error::SourceAssociation)?;
-    budget.charge_work(argument_product_v1(
-        argument_sum_v1(&[
-            root.abi().source_input_types().len(),
-            body.abi().source_input_types().len(),
-            root.abi().source_argument_ownership().len(),
-            body.abi().source_argument_ownership().len(),
-            root.blocks().len(),
-        ])?,
-        8,
-    )?)?;
-    for block in root.blocks() {
-        budget.charge_work(argument_product_v1(block.statements().len(), 4)?)?;
-        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() {
-            budget.charge_work(argument_product_v1(call.arguments().len(), 8)?)?;
-        }
-    }
-    Ok(())
+    source_arguments_v1::charge_source_body_selection_v1(semantic, association, budget).map_err(
+        |error| match error {
+            source_arguments_v1::ProductionSourceArgumentErrorV1::CorrespondenceMismatch => {
+                ProductionConditionalOutputBindingErrorV1::SourceAssociation
+            }
+            error => ProductionConditionalOutputBindingErrorV1::Correspondence(error.into()),
+        },
+    )
 }
 
 fn conditional_output_argument_v1(
@@ -255,41 +236,15 @@ fn conditional_output_argument_v1(
     slot: usize,
     value: ValueId,
 ) -> Result<Option<ConditionalOutputArgumentV1>, ProductionSemanticKirErrorV1> {
-    let physical = view
-        .physical(slot)?
-        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    if physical.value() != value {
-        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-    }
-    let ProductionArgumentTraceV1::Direct(trace) = physical.trace() else {
-        return Ok(None);
-    };
-    let mut argument = None;
-    view.visit_nodes(|node| {
-        if !node.source_path().is_empty() {
-            return Ok(());
-        }
-        let ProductionArgumentCoverageV1::Parameter(parameter) = node.coverage() else {
-            return Ok(());
-        };
-        if parameter.slot() != slot || parameter.value() != value {
-            return Ok(());
-        }
-        let Some((local, path)) = node.local_binding() else {
-            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-        };
-        if !path.is_empty() || local != trace.semantic_local() || argument.is_some() {
-            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-        }
-        argument = Some(ConditionalOutputArgumentV1 {
-            source: node.source_argument(),
-            adjusted: node
-                .adjusted_argument()
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            local,
-            ty: node.semantic_type(),
-        });
-        Ok(())
-    })?;
-    Ok(argument)
+    view.data
+        .whole_parameter_v1(view.budget, slot, value)
+        .map(|argument| {
+            argument.map(|argument| ConditionalOutputArgumentV1 {
+                source: argument.source_argument(),
+                adjusted: argument.adjusted_argument(),
+                local: argument.semantic_local(),
+                ty: argument.semantic_type(),
+            })
+        })
+        .map_err(Into::into)
 }

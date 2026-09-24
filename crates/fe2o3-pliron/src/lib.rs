@@ -13,6 +13,11 @@ mod optimization_v1;
 mod optimization_v12;
 mod production;
 mod production_analysis;
+pub mod source_argument_v1;
+pub use source_argument_v1::{
+    ProductionSourceArgumentBindingV1, ProductionSourceArgumentErrorV1,
+    ProductionSourceArgumentRelationV1,
+};
 
 pub use canonical_analysis_scope_v1::*;
 pub use commutative_cse_owner_v1::{

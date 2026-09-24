@@ -2,8 +2,6 @@
 // MIR37 source transport and allocated KIR20 executable profile.
 // Normal source owners are consumed; no pending Function/Module is an input.
 include!("production_physical_entry_context_v20.rs");
-#[path = "production_physical_entry_parameter_v20.rs"]
-mod physical_entry_parameter_v20;
 include!("production_physical_entry_transport_v20.rs");
 include!("production_physical_entry_correspondence_v20.rs");
 

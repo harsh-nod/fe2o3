@@ -6,27 +6,8 @@ fn execution_reference_abi_scalar_v29(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<SemanticBackendScalarV1, ProductionSemanticKirErrorV1> {
-    if execution_cfg_nominal_kind_v29(types, ty)? != Some(true) {
-        return Err(execution_call_error_v29());
-    }
-    let declaration = &types[ty.index() as usize];
-    let SemanticTypeShapeV1::Pointer(pointer) = declaration.shape() else {
-        return Err(execution_call_error_v29());
-    };
-    let SemanticBackendReprV1::Scalar(scalar) = declaration.layout().backend_repr() else {
-        return Err(execution_call_error_v29());
-    };
-    if pointer.address_space() != 0
-        || pointer.pointer_width_bits() != 64
-        || pointer.metadata() != SemanticPointerMetadataV1::None
-        || declaration.layout().size_bytes() != Some(8)
-        || declaration.layout().alignment_bytes() != 8
-        || declaration.layout().is_uninhabited()
-        || scalar.primitive() != SemanticBackendPrimitiveV1::pointer(0, 8, 8)
-    {
-        return Err(execution_call_error_v29());
-    }
-    Ok(*scalar)
+    fe2o3_pliron::source_argument_v1::execution_reference_abi_scalar_v29(types, ty)
+        .map_err(Into::into)
 }
 
 fn execution_reference_parameter_v29(

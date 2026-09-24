@@ -2,8 +2,6 @@
 // MIR36 source transport and allocated KIR19 executable profile.
 // Normal source owners are consumed; no pending Function/Module is an input.
 include!("production_complete_body_context_vnext.rs");
-#[path = "production_complete_body_parameter_vnext.rs"]
-mod complete_body_parameter_vnext;
 include!("production_complete_body_transport_vnext.rs");
 include!("production_complete_body_correspondence_vnext.rs");
 

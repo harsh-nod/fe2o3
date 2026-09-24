@@ -7,12 +7,7 @@ enum ExecutionCfgLeafV29 {
 }
 
 fn execution_cfg_error_v29() -> ProductionSemanticKirErrorV1 {
-    unsupported(
-        0,
-        None,
-        None,
-        "execution CFG transport differs from its captured SSA state",
-    )
+    fe2o3_pliron::source_argument_v1::execution_cfg_error_v29().into()
 }
 
 fn execution_cfg_charge_node_v29(
@@ -31,29 +26,7 @@ fn execution_cfg_nominal_kind_v29(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Option<bool>, ProductionSemanticKirErrorV1> {
-    let declaration = types
-        .get(ty.index() as usize)
-        .ok_or_else(execution_cfg_error_v29)?;
-    if matches!(
-        declaration.rust_type_kind(),
-        fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1::Execution(_)
-    ) {
-        return Ok(Some(false));
-    }
-    if let SemanticTypeShapeV1::Pointer(pointer) = declaration.shape()
-        && matches!(
-            types
-                .get(pointer.pointee().index() as usize)
-                .map(|ty| ty.rust_type_kind()),
-            Some(fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1::Execution(_))
-        )
-    {
-        if pointer.kind() != SemanticPointerKindV1::Reference {
-            return Err(execution_cfg_error_v29());
-        }
-        return Ok(Some(true));
-    }
-    Ok(None)
+    fe2o3_pliron::source_argument_v1::execution_cfg_nominal_kind_v29(types, ty).map_err(Into::into)
 }
 
 fn execution_cfg_nominal_count_v29(

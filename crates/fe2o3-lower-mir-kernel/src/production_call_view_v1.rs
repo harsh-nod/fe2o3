@@ -286,32 +286,25 @@ impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
             ProductionCallResultNodeV1<'n>,
         ) -> Result<(), ProductionSemanticKirErrorV1>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        let floor = self.entry.budget.storage();
-        let result = (|| {
-            let types = self.entry.data.semantic.types();
-            prepay_typed_shape_v1(types, self.result_shape.source_type, 0, self.entry.budget)?;
-            append_parameter_structure_v1(
-                types,
-                self.result_shape.source_type,
-                ParameterLeafPolicyV1::PointerFree,
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut 0,
-                0,
-                &mut |node| {
-                    visit(ProductionCallResultNodeV1 {
-                        semantic_type: node.ty,
-                        path: node.path,
-                        first: node.physical.start,
-                        results: &self.operation.results[node.physical],
-                    })
-                },
-            )
-        })();
-        self.entry
-            .budget
-            .release_storage(self.entry.budget.storage() - floor)?;
-        result
+        let mut visitor_error = None;
+        let results = &self.operation.results;
+        let result = self.entry.data.visit_result_structure_v1(
+            self.result_shape.source_type,
+            self.entry.budget,
+            |semantic_type, path, physical| {
+                visit(ProductionCallResultNodeV1 {
+                    semantic_type,
+                    path,
+                    first: physical.start,
+                    results: &results[physical],
+                })
+                .map_err(|error| {
+                    visitor_error = Some(error);
+                    source_arguments_v1::ProductionSourceArgumentErrorV1::Visitor
+                })
+            },
+        );
+        argument_visitor_result_v1(result, visitor_error)
     }
     /// Original source-plan definitions on the returning edge, including zero-width locals.
     pub fn edge_definitions(
@@ -368,7 +361,7 @@ impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
         let body = self
             .entry
             .data
-            .target
+            .canonical_function()
             .body
             .as_ref()
             .expect("checked helper body");

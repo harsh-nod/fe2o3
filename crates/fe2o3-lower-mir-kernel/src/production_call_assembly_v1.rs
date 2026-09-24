@@ -75,7 +75,7 @@ fn with_checked_call_site_v1<'w, R>(
         |entry| {
             let mut view = ProductionCallViewV1 {
                 entry: ProductionArgumentViewV1 {
-                    data: entry.data,
+                    data: entry.data.reborrow_v1(),
                     budget: &mut *entry.budget,
                 },
                 caller: site.caller,

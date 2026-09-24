@@ -31,15 +31,13 @@ use fe2o3_kernel_ir::{
     plan_integer_cast_v1, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiExtensionV1,
-    SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1,
-    SemanticAbiRegisterKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
-    SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1,
-    SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
-    SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
-    SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
-    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticEnumEncodingV1,
+    AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiPassModeV1,
+    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicOrderingV1,
+    SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1, SemanticAxisV1,
+    SemanticBackendScalarV1, SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1,
+    SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1,
+    SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
+    SemanticDirectCallV1, SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticEnumEncodingV1,
     SemanticEnumVariantV1, SemanticExecutionOperationV29, SemanticF32MathFunctionV1,
     SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
     SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
@@ -55,6 +53,11 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1, semantic_direct_enum_variant_v1,
     semantic_scalar_enum_variant_v1,
+};
+#[cfg(test)]
+use fe2o3_mir_model::semantic_mir_v1::{
+    SemanticAbiExtensionV1, SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1,
+    SemanticAbiRegisterKindV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
@@ -301,162 +304,11 @@ pub struct SemanticKirBlockCorrespondenceV1 {
     source_statement_count: u32,
 }
 
-/// Exact one-to-one mapping from one selected semantic argument local to a
-/// canonical KIR function parameter.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct SemanticKirParameterBindingV1 {
-    correspondence_owner: SemanticFunctionIdV1,
-    semantic_function: SemanticFunctionIdV1,
-    semantic_local: SemanticLocalIdV1,
-    kernel_ir_value: ValueId,
-}
-
-/// One exact local projection used to scalarize a by-value function argument.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum SemanticKirParameterProjectionV1 {
-    /// A tuple or nominal aggregate field.
-    Field(u32),
-    /// One element of a fixed-size array.
-    ArrayIndex(u32),
-}
-
-/// Exact one-to-many correspondence from a by-value source argument to
-/// canonical KIR function parameters.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct SemanticKirParameterComponentBindingV1 {
-    correspondence_owner: SemanticFunctionIdV1,
-    semantic_function: SemanticFunctionIdV1,
-    semantic_local: SemanticLocalIdV1,
-    semantic_component_type: SemanticTypeIdV1,
-    projection: Box<[SemanticKirParameterProjectionV1]>,
-    kernel_ir_value: ValueId,
-}
-
-/// Exact correspondence for a by-value argument whose compiler ABI is
-/// `Ignore`, such as `()` or a zero-sized aggregate.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct SemanticKirIgnoredParameterBindingV1 {
-    correspondence_owner: SemanticFunctionIdV1,
-    semantic_function: SemanticFunctionIdV1,
-    semantic_local: SemanticLocalIdV1,
-    semantic_type: SemanticTypeIdV1,
-}
-
-/// Closed role of one semantic function materialized in the Kernel IR module.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum SemanticKirFunctionRoleV1 {
-    /// The selected semantic body backing the sole kernel entry.
-    KernelEntry,
-    /// A reachable pure helper with an admitted argument/result ABI.
-    InternalHelper,
-}
-
-/// Exact semantic-function to Kernel-IR-function correspondence.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct SemanticKirFunctionCorrespondenceV1 {
-    correspondence_owner: SemanticFunctionIdV1,
-    semantic_function: SemanticFunctionIdV1,
-    kernel_ir_function: FunctionId,
-    role: SemanticKirFunctionRoleV1,
-}
-
-impl SemanticKirFunctionCorrespondenceV1 {
-    /// Returns the semantic root or helper that owns this KIR function instance.
-    pub const fn correspondence_owner(&self) -> SemanticFunctionIdV1 {
-        self.correspondence_owner
-    }
-
-    /// Returns the retained semantic function identity.
-    pub const fn semantic_function(&self) -> SemanticFunctionIdV1 {
-        self.semantic_function
-    }
-
-    /// Returns the exact Kernel IR function identity emitted for the function.
-    pub const fn kernel_ir_function(&self) -> &FunctionId {
-        &self.kernel_ir_function
-    }
-
-    /// Returns whether this is the kernel entry or an internal helper.
-    pub const fn role(&self) -> SemanticKirFunctionRoleV1 {
-        self.role
-    }
-}
-
-impl SemanticKirParameterBindingV1 {
-    /// Returns the semantic root or helper that owns this KIR function instance.
-    pub const fn correspondence_owner(self) -> SemanticFunctionIdV1 {
-        self.correspondence_owner
-    }
-
-    /// Returns the semantic function that owns the parameter local.
-    pub const fn semantic_function(self) -> SemanticFunctionIdV1 {
-        self.semantic_function
-    }
-
-    /// Returns the semantic MIR local represented by this binding.
-    pub const fn semantic_local(self) -> SemanticLocalIdV1 {
-        self.semantic_local
-    }
-
-    /// Returns the exact Kernel IR function-parameter value.
-    pub const fn kernel_ir_value(self) -> ValueId {
-        self.kernel_ir_value
-    }
-}
-
-impl SemanticKirParameterComponentBindingV1 {
-    /// Returns the semantic root whose lowering owns this correspondence.
-    pub const fn correspondence_owner(&self) -> SemanticFunctionIdV1 {
-        self.correspondence_owner
-    }
-
-    /// Returns the semantic function containing the source argument.
-    pub const fn semantic_function(&self) -> SemanticFunctionIdV1 {
-        self.semantic_function
-    }
-
-    /// Returns the semantic argument local being projected.
-    pub const fn semantic_local(&self) -> SemanticLocalIdV1 {
-        self.semantic_local
-    }
-
-    /// Returns the exact semantic leaf type selected by the projection.
-    pub const fn semantic_component_type(&self) -> SemanticTypeIdV1 {
-        self.semantic_component_type
-    }
-
-    /// Returns the canonical argument-local-to-leaf projection path.
-    pub fn projection(&self) -> &[SemanticKirParameterProjectionV1] {
-        &self.projection
-    }
-
-    /// Returns the exact KIR parameter value carrying this leaf.
-    pub const fn kernel_ir_value(&self) -> ValueId {
-        self.kernel_ir_value
-    }
-}
-
-impl SemanticKirIgnoredParameterBindingV1 {
-    /// Returns the semantic root whose lowering owns this correspondence.
-    pub const fn correspondence_owner(self) -> SemanticFunctionIdV1 {
-        self.correspondence_owner
-    }
-
-    /// Returns the semantic function containing the ignored argument.
-    pub const fn semantic_function(self) -> SemanticFunctionIdV1 {
-        self.semantic_function
-    }
-
-    /// Returns the exact ignored argument local.
-    pub const fn semantic_local(self) -> SemanticLocalIdV1 {
-        self.semantic_local
-    }
-
-    /// Returns the exact zero-sized semantic type reconstructed without a KIR parameter.
-    pub const fn semantic_type(self) -> SemanticTypeIdV1 {
-        self.semantic_type
-    }
-}
+pub use fe2o3_pliron::source_argument_v1::{
+    SemanticKirFunctionCorrespondenceV1, SemanticKirFunctionRoleV1,
+    SemanticKirIgnoredParameterBindingV1, SemanticKirParameterBindingV1,
+    SemanticKirParameterComponentBindingV1, SemanticKirParameterProjectionV1,
+};
 
 impl SemanticKirBlockCorrespondenceV1 {
     /// Returns the semantic root or helper that owns this KIR function instance.
@@ -10773,79 +10625,8 @@ fn shared_slice_helper_parameter_v1(
     argument: u32,
     ty: SemanticTypeIdV1,
 ) -> bool {
-    let abi = function.abi();
-    let argument = argument as usize;
-    let Some(value) = abi.adjusted_arguments().get(argument) else {
-        return false;
-    };
-    if abi.canon_abi() != SemanticCanonAbiV1::Rust
-        || abi.extern_abi() != fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::Rust
-        || abi.source_input_types().get(argument) != Some(&ty)
-        || abi.source_argument_ownership().get(argument)
-            != Some(&SemanticSourceArgumentOwnershipV1::SharedBorrow)
-        || value.role() != SemanticAbiArgumentRoleV1::Source
-        || value.ty() != ty
-        || value.value().adjusted().is_some()
-        || value.value().pointee_override().is_some()
-        || !matches!(value.mode(), SemanticAbiPassModeV1::Pair { .. })
-    {
-        return false;
-    }
-    shared_slice_leaf_v1(types, ty)
-}
-
-fn shared_slice_leaf_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
-    let Some(declaration) = types.get(ty.index() as usize) else {
-        return false;
-    };
-    let SemanticTypeShapeV1::Pointer(pointer) = declaration.shape() else {
-        return false;
-    };
-    if pointer.kind() != SemanticPointerKindV1::Reference
-        || pointer.mutability() != SemanticMutabilityV1::Immutable
-        || pointer.address_space() != 0
-        || pointer.pointer_width_bits() != 64
-        || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
-    {
-        return false;
-    }
-    let Some(SemanticTypeShapeV1::Slice { element }) = types
-        .get(pointer.pointee().index() as usize)
-        .map(SemanticTypeDeclV1::shape)
-    else {
-        return false;
-    };
-    let SemanticBackendReprV1::ScalarPair { first, second } = declaration.layout().backend_repr()
-    else {
-        return false;
-    };
-    if declaration.layout().size_bytes() != Some(16)
-        || declaration.layout().alignment_bytes() != 8
-        || !matches!(
-            first.primitive(),
-            SemanticBackendPrimitiveV1::Pointer {
-                address_space: 0,
-                size_bytes: 8,
-                alignment_bytes: 8
-            }
-        )
-        || !matches!(
-            second.primitive(),
-            SemanticBackendPrimitiveV1::Integer {
-                bits: 64,
-                signed: false,
-                alignment_bytes: 8
-            }
-        )
-    {
-        return false;
-    }
-    // Full source/type/ABI admission precedes this representation selection.
-    matches!(
-        types
-            .get(element.index() as usize)
-            .map(SemanticTypeDeclV1::shape),
-        Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+    fe2o3_pliron::source_argument_v1::shared_slice_helper_parameter_v1(
+        types, function, argument, ty,
     )
 }
 
@@ -24230,68 +24011,7 @@ fn lower_parameter_type(
     callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
-    let declaration = types
-        .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
-        .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?;
-    require_ordinary_execution_representation_v29(declaration)?;
-    let shape = declaration.shape();
-    if let Some((element, _, access)) = disjoint_slice_descriptor(callables, ty) {
-        return Ok(Type::slice(
-            lower_scalar_type(types, element)?,
-            AddressSpace::Global,
-            access,
-        ));
-    }
-    match shape {
-        SemanticTypeShapeV1::Pointer(pointer) => {
-            let access = match pointer.mutability() {
-                SemanticMutabilityV1::Immutable => AccessMode::ReadOnly,
-                SemanticMutabilityV1::Mutable => AccessMode::ReadWrite,
-            };
-            let address_space = lower_address_space(pointer.address_space())?;
-            match pointer.metadata() {
-                SemanticPointerMetadataV1::None => Ok(Type::pointer(
-                    lower_parameter_memory_element_v1(types, pointer.pointee())?,
-                    address_space,
-                    access,
-                )),
-                SemanticPointerMetadataV1::SliceLength => {
-                    let pointee =
-                        types
-                            .get(pointer.pointee().index() as usize)
-                            .ok_or_else(|| {
-                                unsupported(0, None, None, "slice pointee type is missing")
-                            })?;
-                    let SemanticTypeShapeV1::Slice { element } = pointee.shape() else {
-                        return Err(unsupported(
-                            0,
-                            None,
-                            None,
-                            "slice-length pointer metadata has a non-slice pointee",
-                        ));
-                    };
-                    Ok(Type::slice(
-                        lower_parameter_scalar_v1(types, *element)?,
-                        address_space,
-                        access,
-                    ))
-                }
-                SemanticPointerMetadataV1::VTable => Err(unsupported(
-                    0,
-                    None,
-                    None,
-                    "vtable-bearing kernel arguments are unsupported",
-                )),
-            }
-        }
-        SemanticTypeShapeV1::Scalar(_) => Ok(lower_scalar_type(types, ty)?),
-        _ => Err(unsupported(
-            0,
-            None,
-            None,
-            "kernel argument type has no authenticated Kernel IR representation",
-        )),
-    }
+    fe2o3_pliron::source_argument_v1::lower_parameter_type(types, callables, ty).map_err(Into::into)
 }
 
 fn lower_memory_element_type(
@@ -24310,15 +24030,7 @@ fn lower_memory_element_type(
 }
 
 fn memory_element_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> Option<Type> {
-    if matches!(
-        types
-            .get(ty.index() as usize)
-            .map(SemanticTypeDeclV1::shape),
-        Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
-    ) {
-        return lower_scalar_type(types, ty).ok();
-    }
-    transparent_scalar_storage_type(types, ty)
+    fe2o3_pliron::source_argument_v1::memory_element_type_v1(types, ty)
 }
 
 fn lower_dynamic_lds_element_type_v1(
@@ -24430,366 +24142,14 @@ fn lower_dynamic_lds_element_type_v1(
     }
 }
 
-fn transparent_scalar_storage_type(
-    types: &[SemanticTypeDeclV1],
-    ty: SemanticTypeIdV1,
-) -> Option<Type> {
-    let mut current = ty;
-    let mut visited = BTreeSet::new();
-    loop {
-        if !visited.insert(current) || visited.len() > MAX_SSA_VALUE_COMPONENTS_V1 {
-            return None;
-        }
-        if matches!(
-            types
-                .get(current.index() as usize)
-                .map(SemanticTypeDeclV1::shape),
-            Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
-        ) {
-            return lower_scalar_type(types, current).ok();
-        }
-        let declaration = types.get(current.index() as usize)?;
-        let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
-            return None;
-        };
-        let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details() else {
-            return None;
-        };
-        if declaration.layout().is_uninhabited()
-            || aggregate.fields().len() != 1
-            || layout.field_offsets() != [0]
-            || !layout.padding().is_empty()
-        {
-            return None;
-        }
-        let field_ty = aggregate.fields()[0];
-        let field = types.get(field_ty.index() as usize)?;
-        if field.layout().is_uninhabited()
-            || declaration.layout().size_bytes() != field.layout().size_bytes()
-            || declaration.layout().alignment_bytes() != field.layout().alignment_bytes()
-        {
-            return None;
-        }
-        current = field_ty;
-    }
-}
-
-fn lower_kernel_parameter_type(
-    types: &[SemanticTypeDeclV1],
-    callables: &[SemanticCallableDeclV1],
-    function: &SemanticFunctionDeclV1,
-    argument: u32,
-    ty: SemanticTypeIdV1,
-) -> Result<Type, ProductionSemanticKirErrorV1> {
-    let declaration = types
-        .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
-        .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?;
-    if let Some(parameter) =
-        authenticated_disjoint_slice_parameter(types, callables, function, argument, ty)
-    {
-        return Ok(parameter);
-    }
-    if matches!(declaration.shape(), SemanticTypeShapeV1::Aggregate(_))
-        && let Some(parameter) =
-            authenticated_global_mut_pointer_parameter(types, function, argument, ty)
-    {
-        return Ok(parameter);
-    }
-    if matches!(
-        declaration.shape(),
-        SemanticTypeShapeV1::Unit
-            | SemanticTypeShapeV1::Array { .. }
-            | SemanticTypeShapeV1::Tuple(_)
-            | SemanticTypeShapeV1::Aggregate(_)
-    ) {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "by-value kernel argument requires exact component lowering",
-        ));
-    }
-    lower_parameter_type(types, callables, ty)
-}
-
-fn lower_by_value_kernel_parameter_components_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    argument: u32,
-    ty: SemanticTypeIdV1,
-) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
-    let argument = usize::try_from(argument).map_err(|_| {
-        unsupported(
-            0,
-            None,
-            None,
-            "kernel argument index does not fit this host",
-        )
-    })?;
-    if function.abi().source_argument_ownership().get(argument)
-        != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
-        || function.abi().source_input_types().get(argument) != Some(&ty)
-    {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "aggregate kernel argument lacks exact by-value ABI ownership",
-        ));
-    }
-    let abi = function
-        .abi()
-        .adjusted_arguments()
-        .get(argument)
-        .ok_or_else(|| unsupported(0, None, None, "aggregate kernel argument ABI is absent"))?;
-    if abi.ty() != ty {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "aggregate kernel argument ABI type changed",
-        ));
-    }
-    lower_by_value_parameter_components_v1(types, function, abi)
-}
-
-fn lower_by_value_parameter_components_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    abi: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1,
-) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
-    lower_by_value_abi_components_v1(
-        types,
-        function,
-        abi.value(),
-        ParameterLeafPolicyV1::PointerFree,
-    )
-}
-
 fn lower_by_value_abi_components_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     abi: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueV1,
     policy: ParameterLeafPolicyV1,
 ) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
-    let ty = abi.ty();
-    if abi.adjusted().is_some() {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "aggregate kernel argument has an adjusted ABI type",
-        ));
-    }
-    let mut output = Vec::new();
-    output
-        .try_reserve_exact(MAX_SSA_VALUE_COMPONENTS_V1.min(8))
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    let mut path = Vec::new();
-    let mut structural_nodes = 0;
-    append_parameter_structure_v1(
-        types,
-        ty,
-        policy,
-        &mut path,
-        &mut output,
-        &mut structural_nodes,
-        0,
-        &mut |_| Ok(()),
-    )?;
-    let source_size = types[ty.index() as usize]
-        .layout()
-        .size_bytes()
-        .ok_or_else(|| unsupported(0, None, None, "by-value argument layout is unsized"))?;
-    let mut words = Vec::new();
-    words
-        .try_reserve_exact(output.len().saturating_mul(2))
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    for (_, _, _, offset, leaf) in &output {
-        for (relative, scalar) in leaf.words() {
-            let offset = offset
-                .checked_add(relative)
-                .ok_or_else(|| unsupported(0, None, None, "by-value ABI word offset overflows"))?;
-            let width = scalar.primitive().size_bytes().ok_or_else(|| {
-                unsupported(
-                    0,
-                    None,
-                    None,
-                    "by-value scalar component has no exact byte width",
-                )
-            })?;
-            let end = offset.checked_add(width).ok_or_else(|| {
-                unsupported(0, None, None, "by-value scalar component range overflows")
-            })?;
-            if end > source_size {
-                return Err(unsupported(
-                    0,
-                    None,
-                    None,
-                    "by-value scalar component exceeds its source layout",
-                ));
-            }
-            words.push((offset, end, scalar));
-        }
-    }
-    words.sort_unstable_by_key(|word| word.0);
-    if words.windows(2).any(|pair| pair[0].1 > pair[1].0) {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "by-value scalar component ranges overlap",
-        ));
-    }
-    let exact_mode = match abi.mode() {
-        SemanticAbiPassModeV1::Ignore => {
-            output.is_empty()
-                && types[ty.index() as usize].layout().size_bytes() == Some(0)
-                && matches!(
-                    types[ty.index() as usize].layout().backend_repr(),
-                    SemanticBackendReprV1::Memory { sized: true }
-                )
-        }
-        SemanticAbiPassModeV1::Direct(attributes) => {
-            match types[ty.index() as usize].layout().backend_repr() {
-                SemanticBackendReprV1::Scalar(root_scalar) => matches!(
-                    words.as_slice(),
-                    [(0, _, leaf_scalar)] if leaf_scalar == root_scalar
-                ),
-                SemanticBackendReprV1::Memory { sized: true } => {
-                    function.abi().spec_abi_unadjusted()
-                        && *attributes
-                            == fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueAttributesV1::plain(
-                            )
-                        && !output.is_empty()
-                }
-                _ => false,
-            }
-        }
-        SemanticAbiPassModeV1::Pair { .. } => {
-            let SemanticBackendReprV1::ScalarPair { first, second } =
-                types[ty.index() as usize].layout().backend_repr()
-            else {
-                return Err(unsupported(
-                    0,
-                    None,
-                    None,
-                    "pair by-value aggregate lacks scalar-pair ABI representation",
-                ));
-            };
-            let first_size = first.primitive().size_bytes().ok_or_else(|| {
-                unsupported(
-                    0,
-                    None,
-                    None,
-                    "first aggregate ABI scalar has invalid width",
-                )
-            })?;
-            let alignment = second.primitive().alignment_bytes();
-            let second_offset = first_size
-                .checked_add(alignment.saturating_sub(1))
-                .map(|value| value & !alignment.saturating_sub(1))
-                .ok_or_else(|| {
-                    unsupported(0, None, None, "aggregate ABI scalar offset overflows")
-                })?;
-            match words.as_slice() {
-                [(0, _, a), (b_offset, _, b)] => {
-                    a == first && *b_offset == second_offset && b == second
-                }
-                _ => false,
-            }
-        }
-        SemanticAbiPassModeV1::Cast { pad_i32, cast } => {
-            let layout = types[ty.index() as usize].layout();
-            let regular = cast.attributes().regular();
-            let exact = matches!(
-                function.abi().canon_abi(),
-                SemanticCanonAbiV1::Rust
-                    | SemanticCanonAbiV1::RustCold
-                    | SemanticCanonAbiV1::RustPreserveNone
-            ) && matches!(
-                layout.backend_repr(),
-                SemanticBackendReprV1::Memory { sized: true }
-            ) && layout.size_bytes().is_some_and(|size| size != 0)
-                && !pad_i32
-                && cast.prefix().iter().all(Option::is_none)
-                && cast.rest_offset_bytes().is_none()
-                && cast.rest().unit().kind() == SemanticAbiRegisterKindV1::Integer
-                && layout.size_bytes() == Some(cast.rest().unit().size_bytes())
-                && layout.size_bytes() == Some(cast.rest_total_bytes())
-                && !cast.rest_consecutive()
-                && !regular.no_alias()
-                && regular.pointer_capture().is_none()
-                && !regular.non_null()
-                && !regular.read_only()
-                && !regular.in_register()
-                && cast.attributes().extension() == SemanticAbiExtensionV1::None
-                && cast.attributes().pointee_size_bytes() == 0
-                && cast.attributes().pointee_alignment_bytes().is_none()
-                && !output.is_empty();
-            if !exact {
-                return Err(unsupported(
-                    0,
-                    None,
-                    None,
-                    "aggregate cast ABI is not an exact simple Rust integer transport",
-                ));
-            }
-            true
-        }
-        SemanticAbiPassModeV1::Indirect {
-            attributes,
-            metadata_attributes,
-            on_stack,
-        } => {
-            let layout = types[ty.index() as usize].layout();
-            let regular = attributes.regular();
-            let exact = matches!(
-                layout.backend_repr(),
-                SemanticBackendReprV1::Memory { sized: true }
-            ) && layout.size_bytes().is_some_and(|size| size != 0)
-                && metadata_attributes.is_none()
-                && !on_stack
-                && regular.no_alias()
-                && matches!(
-                    regular.pointer_capture(),
-                    Some(
-                        SemanticAbiPointerCaptureV1::CapturesAddress
-                            | SemanticAbiPointerCaptureV1::CapturesNone
-                    )
-                )
-                && regular.non_null()
-                && regular.no_undef()
-                && attributes.extension() == SemanticAbiExtensionV1::None
-                && attributes.pointee_size_bytes() == layout.rustc_size_bytes()
-                && attributes.pointee_alignment_bytes() == Some(layout.alignment_bytes())
-                && !output.is_empty();
-            if !exact {
-                let reason = if metadata_attributes.is_some() {
-                    "metadata-bearing indirect aggregate ABI is unsupported"
-                } else if *on_stack {
-                    "on-stack indirect aggregate ABI is unsupported"
-                } else {
-                    "indirect aggregate carrier does not exactly match its sized source layout"
-                };
-                return Err(unsupported(0, None, None, reason));
-            }
-            true
-        }
-    };
-    if !exact_mode {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "aggregate kernel argument ABI mode does not match its scalar components",
-        ));
-    }
-    Ok(output)
+    fe2o3_pliron::source_argument_v1::lower_by_value_abi_components_v1(types, function, abi, policy)
+        .map_err(Into::into)
 }
 
 /// Rechecks the compiler-issued `DisjointSlice<T, IndexSpace>` source, ABI,
@@ -24802,115 +24162,9 @@ fn authenticated_disjoint_slice_parameter(
     argument: u32,
     ty: SemanticTypeIdV1,
 ) -> Option<Type> {
-    let (element, raw_index, access) = disjoint_slice_descriptor(callables, ty)
-        .or_else(|| {
-            complete_body_parameter_vnext::complete_body_slice_parameter_vnext(
-                types, callables, function, argument, ty,
-            )
-        })
-        .or_else(|| {
-            physical_entry_parameter_v20::physical_entry_slice_parameter_v20(
-                types, callables, function, argument, ty,
-            )
-        })
-        .or_else(|| {
-            physical_global_copy_parameter_v21::physical_global_copy_slice_parameter_v21(
-                types, callables, function, argument, ty,
-            )
-        })
-        .or_else(|| {
-            physical_lds_exchange_parameter_v22::physical_lds_exchange_slice_parameter_v22(
-                types, callables, function, argument, ty,
-            )
-        })?;
-    let argument = usize::try_from(argument).ok()?;
-    let abi = function.abi();
-    if abi.source_input_types().get(argument) != Some(&ty)
-        || abi.source_argument_ownership().get(argument)
-            != Some(&SemanticSourceArgumentOwnershipV1::ExclusiveOwner)
-    {
-        return None;
-    }
-    let abi_argument = abi.adjusted_arguments().get(argument)?;
-    if abi_argument.ty() != ty
-        || abi_argument.value().adjusted().is_some()
-        || !matches!(abi_argument.mode(), SemanticAbiPassModeV1::Pair { .. })
-    {
-        return None;
-    }
-
-    let declaration = types.get(ty.index() as usize)?;
-    let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
-        return None;
-    };
-    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details() else {
-        return None;
-    };
-    let SemanticBackendReprV1::ScalarPair { first, second } = declaration.layout().backend_repr()
-    else {
-        return None;
-    };
-    if aggregate.fields().len() != layout.field_offsets().len() {
-        return None;
-    }
-
-    let mut pointer_field = None;
-    let mut length_field = None;
-    for (index, (&field_ty, &offset)) in aggregate
-        .fields()
-        .iter()
-        .zip(layout.field_offsets())
-        .enumerate()
-    {
-        let field = types.get(field_ty.index() as usize)?;
-        if let SemanticTypeShapeV1::Pointer(pointer) = field.shape()
-            && pointer.pointee() == element
-            && pointer.kind() == SemanticPointerKindV1::Raw
-            && pointer.mutability() == SemanticMutabilityV1::Mutable
-            && pointer.address_space() == 0
-            && pointer.pointer_width_bits() == 64
-            && pointer.metadata() == SemanticPointerMetadataV1::None
-        {
-            let SemanticBackendReprV1::Scalar(pointer_scalar) = field.layout().backend_repr()
-            else {
-                return None;
-            };
-            if pointer_field.replace(index).is_some() || offset != 0 || pointer_scalar != first {
-                return None;
-            }
-        } else if field_ty == raw_index {
-            let SemanticBackendReprV1::Scalar(length_scalar) = field.layout().backend_repr() else {
-                return None;
-            };
-            if length_field.replace(index).is_some()
-                || offset != 8
-                || length_scalar != second
-                || !matches!(
-                    field.shape(),
-                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
-                        signed: false,
-                        bits: 64
-                    })
-                )
-            {
-                return None;
-            }
-        } else if field.layout().size_bytes() != Some(0) || field.layout().is_uninhabited() {
-            return None;
-        }
-    }
-    pointer_field?;
-    length_field?;
-    if declaration.layout().size_bytes() != Some(16) || declaration.layout().alignment_bytes() != 8
-    {
-        return None;
-    }
-
-    Some(Type::slice(
-        lower_parameter_scalar_v1(types, element).ok()?,
-        AddressSpace::Global,
-        access,
-    ))
+    fe2o3_pliron::source_argument_v1::authenticated_disjoint_slice_parameter(
+        types, callables, function, argument, ty,
+    )
 }
 
 /// Recognizes the exact source/ABI/layout contract established for the
@@ -24924,99 +24178,20 @@ fn authenticated_global_mut_pointer_parameter(
     argument: u32,
     ty: SemanticTypeIdV1,
 ) -> Option<Type> {
-    let argument = usize::try_from(argument).ok()?;
-    let abi = function.abi();
-    if abi.source_input_types().get(argument) != Some(&ty)
-        || abi.source_argument_ownership().get(argument)
-            != Some(&SemanticSourceArgumentOwnershipV1::ExclusiveOwner)
-    {
-        return None;
-    }
-    let abi_argument = abi.adjusted_arguments().get(argument)?;
-    if abi_argument.ty() != ty || !matches!(abi_argument.mode(), SemanticAbiPassModeV1::Direct(_)) {
-        return None;
-    }
-
-    let declaration = types.get(ty.index() as usize)?;
-    let pointee = abi_argument
-        .value()
-        .pointee_override()
-        .or(declaration.abi_properties().first_pointee())?;
-    if pointee.kind() != SemanticAbiPointeeKindV1::Raw {
-        return None;
-    }
-    let outer_pointer = scalar_backend_pointer(declaration)?;
-    let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
-        return None;
-    };
-    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details() else {
-        return None;
-    };
-    if aggregate.fields().len() != layout.field_offsets().len() {
-        return None;
-    }
-
-    let mut physical_pointer = None;
-    for (&field_ty, &field_offset) in aggregate.fields().iter().zip(layout.field_offsets()) {
-        let field = types.get(field_ty.index() as usize)?;
-        if field.layout().size_bytes() == Some(0) {
-            if field.layout().is_uninhabited() {
-                return None;
-            }
-            continue;
-        }
-        if physical_pointer.is_some() || field_offset != 0 {
-            return None;
-        }
-        let SemanticTypeShapeV1::Pointer(pointer) = field.shape() else {
-            return None;
-        };
-        if pointer.kind() != SemanticPointerKindV1::Raw
-            || pointer.mutability() != SemanticMutabilityV1::Mutable
-            || pointer.metadata() != SemanticPointerMetadataV1::None
-            || scalar_backend_pointer(field)? != outer_pointer
-            || declaration.layout().size_bytes() != field.layout().size_bytes()
-            || declaration.layout().alignment_bytes() != field.layout().alignment_bytes()
-        {
-            return None;
-        }
-        physical_pointer = Some(pointer);
-    }
-
-    let pointer = physical_pointer?;
-    Some(Type::pointer(
-        lower_parameter_scalar_v1(types, pointer.pointee()).ok()?,
-        AddressSpace::Global,
-        AccessMode::ReadWrite,
-    ))
+    fe2o3_pliron::source_argument_v1::authenticated_global_mut_pointer_parameter(
+        types, function, argument, ty,
+    )
 }
 
-fn scalar_backend_pointer(declaration: &SemanticTypeDeclV1) -> Option<SemanticBackendPrimitiveV1> {
-    let SemanticBackendReprV1::Scalar(scalar) = declaration.layout().backend_repr() else {
-        return None;
-    };
-    let primitive = scalar.primitive();
-    matches!(primitive, SemanticBackendPrimitiveV1::Pointer { .. }).then_some(primitive)
-}
-
-const MAX_SSA_VALUE_COMPONENTS_V1: usize = 256;
+const MAX_SSA_VALUE_COMPONENTS_V1: usize =
+    fe2o3_pliron::source_argument_v1::MAX_SSA_VALUE_COMPONENTS_V1;
 const MAX_ENUM_PAYLOAD_STORAGE_COMPONENTS_V1: usize = 4_096;
 
 fn require_ordinary_execution_representation_v29(
     declaration: &SemanticTypeDeclV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    if matches!(
-        declaration.rust_type_kind(),
-        fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1::Execution(_)
-    ) {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "execution roles require occurrence-bound transport, not an ordinary Rust representation",
-        ));
-    }
-    Ok(())
+    fe2o3_pliron::source_argument_v1::require_ordinary_execution_representation_v29(declaration)
+        .map_err(Into::into)
 }
 
 fn lower_ssa_value_components_v1(
@@ -25791,62 +24966,7 @@ fn lower_scalar_type(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
-    let shape = types
-        .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
-        .ok_or_else(|| unsupported(0, None, None, "scalar type is missing"))?
-        .shape();
-    let scalar = match shape {
-        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool) => ScalarType::Bool,
-        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { signed, bits }) => {
-            match (*signed, *bits) {
-                (true, 8) => ScalarType::I8,
-                (true, 16) => ScalarType::I16,
-                (true, 32) => ScalarType::I32,
-                (true, 64) => ScalarType::I64,
-                (true, 128) => ScalarType::I128,
-                (false, 8) => ScalarType::U8,
-                (false, 16) => ScalarType::U16,
-                (false, 32) => ScalarType::U32,
-                (false, 64) => ScalarType::U64,
-                (false, 128) => ScalarType::U128,
-                _ => {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "integer argument width is unsupported",
-                    ));
-                }
-            }
-        }
-        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits }) => match bits {
-            16 => ScalarType::F16,
-            32 => ScalarType::F32,
-            64 => ScalarType::F64,
-            _ => {
-                return Err(unsupported(
-                    0,
-                    None,
-                    None,
-                    "floating argument width is unsupported",
-                ));
-            }
-        },
-        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Char) => ScalarType::U32,
-        SemanticTypeShapeV1::ValidityScalar(validity) => {
-            return lower_scalar_kind(validity.scalar());
-        }
-        _ => {
-            return Err(ProductionSemanticKirErrorV1::ScalarTypeUnavailable {
-                semantic_type: ty.index(),
-                shape: types
-                    .get(ty.index() as usize)
-                    .map(|declaration| format!("{declaration:?}"))
-                    .unwrap_or_else(|| "<missing>".to_owned()),
-            });
-        }
-    };
-    Ok(Type::Scalar(scalar))
+    fe2o3_pliron::source_argument_v1::lower_scalar_type(types, ty).map_err(Into::into)
 }
 
 const fn workgroup_reduction_scalar_supported_v1(ty: &Type) -> bool {
@@ -26057,131 +25177,14 @@ const fn semantic_gfx950_lds_transpose_format_v1(
 }
 
 fn lower_scalar_kind(scalar: SemanticScalarTypeV1) -> Result<Type, ProductionSemanticKirErrorV1> {
-    let scalar = match scalar {
-        SemanticScalarTypeV1::Bool => ScalarType::Bool,
-        SemanticScalarTypeV1::Integer { signed, bits } => match (signed, bits) {
-            (true, 8) => ScalarType::I8,
-            (true, 16) => ScalarType::I16,
-            (true, 32) => ScalarType::I32,
-            (true, 64) => ScalarType::I64,
-            (true, 128) => ScalarType::I128,
-            (false, 8) => ScalarType::U8,
-            (false, 16) => ScalarType::U16,
-            (false, 32) => ScalarType::U32,
-            (false, 64) => ScalarType::U64,
-            (false, 128) => ScalarType::U128,
-            _ => {
-                return Err(unsupported(
-                    0,
-                    None,
-                    None,
-                    "integer argument width is unsupported",
-                ));
-            }
-        },
-        SemanticScalarTypeV1::Float { bits } => match bits {
-            16 => ScalarType::F16,
-            32 => ScalarType::F32,
-            64 => ScalarType::F64,
-            _ => {
-                return Err(unsupported(
-                    0,
-                    None,
-                    None,
-                    "floating argument width is unsupported",
-                ));
-            }
-        },
-        SemanticScalarTypeV1::Char => ScalarType::U32,
-    };
-    Ok(Type::Scalar(scalar))
+    fe2o3_pliron::source_argument_v1::lower_scalar_kind(scalar).map_err(Into::into)
 }
 
 fn disjoint_slice_descriptor(
     callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Option<(SemanticTypeIdV1, SemanticTypeIdV1, AccessMode)> {
-    let mut descriptor = None;
-    for callable in callables {
-        let candidate = match callable {
-            SemanticCallableDeclV1::CompilerIntrinsic {
-                operation:
-                    SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
-                    }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
-                    }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
-                    }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
-                    }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
-                    }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
-                    }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
-                    },
-                ..
-            } if *disjoint_slice == ty => Some((*element, *raw_index, AccessMode::ReadWrite)),
-            SemanticCallableDeclV1::CompilerIntrinsic {
-                operation:
-                    SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
-                    },
-                ..
-            } if *disjoint_slice == ty => Some((*element, *raw_index, AccessMode::WriteOnly)),
-            SemanticCallableDeclV1::CompilerIntrinsic {
-                operation:
-                    SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
-                    },
-                ..
-            } if *disjoint_slice == ty => Some((*element, *raw_index, AccessMode::WriteOnly)),
-            SemanticCallableDeclV1::Defined { .. }
-            | SemanticCallableDeclV1::DeviceFfiImport { .. }
-            | SemanticCallableDeclV1::CompilerIntrinsic { .. } => None,
-        };
-        if let Some(candidate) = candidate {
-            if descriptor.is_some_and(|previous| previous != candidate) {
-                return None;
-            }
-            descriptor = Some(candidate);
-        }
-    }
-    descriptor
+    fe2o3_pliron::source_argument_v1::disjoint_slice_descriptor(callables, ty)
 }
 
 #[cfg(test)]
@@ -26320,18 +25323,7 @@ mod disjoint_slice_parameter_tests {
 }
 
 fn lower_address_space(address_space: u32) -> Result<AddressSpace, ProductionSemanticKirErrorV1> {
-    match address_space {
-        0 | 1 => Ok(AddressSpace::Global),
-        3 => Ok(AddressSpace::Workgroup),
-        4 => Ok(AddressSpace::Constant),
-        5 => Ok(AddressSpace::Private),
-        _ => Err(unsupported(
-            0,
-            None,
-            None,
-            "semantic pointer address space is unsupported",
-        )),
-    }
+    fe2o3_pliron::source_argument_v1::lower_address_space(address_space).map_err(Into::into)
 }
 
 const fn lower_axis(axis: SemanticAxisV1) -> Axis {
