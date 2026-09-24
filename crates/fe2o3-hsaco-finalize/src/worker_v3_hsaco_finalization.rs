@@ -29,8 +29,7 @@ use crate::{
     MultiInputLinkPlanV1, ObservedWorkerKernelSymbolsV1, ProtectedCompilerHandoffBindingIdentityV3,
     ProtectedCompilerHandoffExpectationV3, ProtectedFirstBuildWorkerV3IdentityV1,
     WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerV3HsacoPolicyIdentityV1,
-    WorkerV3HsacoPolicyV1, finalize_allocated_read_only_unfinalized, finalize_unfinalized,
-    verify_allocated_read_only_finalized, verify_finalized,
+    WorkerV3HsacoPolicyV1, finalize_unfinalized, verify_finalized,
 };
 
 const PROTECTED_FINALIZED_IDENTITY_DOMAIN_V3: &[u8] =
@@ -453,9 +452,6 @@ pub fn finalize_protected_worker_v3_hsaco_v1(
         );
     }
     let outer = raw.outer_handoff();
-    let descriptor_source =
-        CompilerDescriptorSourceV1::decode(outer.capsule().receipts().abi().canonical_preimage())
-            .map_err(WorkerV3HsacoFinalizationError::CompilerDescriptorSource)?;
     if outer
         .capsule()
         .receipts()
@@ -465,23 +461,18 @@ pub fn finalize_protected_worker_v3_hsaco_v1(
     {
         return Err(WorkerV3HsacoFinalizationError::ExportManifestMismatch);
     }
-    let core = finalize_worker_v3_hsaco(&raw, false)?
-        .ok_or(WorkerV3HsacoFinalizationError::CompilerDescriptorSourceMismatch)?;
-    let descriptor_bytes =
-        encode_device_descriptor_table_v1(core.finalized.inspection().descriptor_table())
-            .map_err(WorkerV3HsacoFinalizationError::CanonicalDescriptorEvidence)?;
-    let digest_end = CANONICAL_CODE_OBJECT_DIGEST_OFFSET + 32;
-    let mut zero_normalized_descriptor = descriptor_bytes.clone();
-    zero_normalized_descriptor[CANONICAL_CODE_OBJECT_DIGEST_OFFSET..digest_end].fill(0);
-    if zero_normalized_descriptor != descriptor_source.canonical_bytes() {
-        return Err(WorkerV3HsacoFinalizationError::CompilerDescriptorSourceMismatch);
-    }
-    let canonical_descriptor_evidence = ContentIdentityV1::calculate(&descriptor_bytes);
+    let core = finalize_worker_hsaco_preimage_v1(
+        raw.exact_bytes(),
+        raw.linked_output_identity(),
+        raw.policy(),
+        outer.capsule().receipts().abi().canonical_preimage(),
+    )?;
+    let canonical_descriptor_evidence = ContentIdentityV1::calculate(&core.descriptor_bytes);
     let identity = calculate_protected_v3_finalized_identity(
         &raw,
         &core.finalized,
         core.finalized_output,
-        &descriptor_bytes,
+        &core.descriptor_bytes,
         canonical_descriptor_evidence,
     );
     Ok(PreparedFinalizedProtectedWorkerV3HsacoV1 {
@@ -493,40 +484,46 @@ pub fn finalize_protected_worker_v3_hsaco_v1(
     })
 }
 
-struct SharedCanonicalFinalizationV1 {
-    finalized: FinalizedHsaco,
-    finalized_output: ContentIdentityV1,
+pub(crate) struct SharedCanonicalFinalizationV1 {
+    pub(crate) finalized: FinalizedHsaco,
+    pub(crate) finalized_output: ContentIdentityV1,
+    pub(crate) descriptor_bytes: Vec<u8>,
 }
 
-fn finalize_worker_v3_hsaco(
-    raw: &InspectedProtectedWorkerV3HsacoV1,
-    allocated_read_only: bool,
-) -> Result<Option<SharedCanonicalFinalizationV1>, WorkerV3HsacoFinalizationError> {
-    let raw_bytes = raw.exact_bytes();
-    if !raw.linked_output_identity().matches(raw_bytes) {
+pub(crate) fn finalize_worker_hsaco_preimage_v1(
+    raw_bytes: &[u8],
+    raw_identity: ContentIdentityV1,
+    policy: &WorkerV3HsacoPolicyV1,
+    descriptor_source: &[u8],
+) -> Result<SharedCanonicalFinalizationV1, WorkerV3HsacoFinalizationError> {
+    let descriptor_source = CompilerDescriptorSourceV1::decode(descriptor_source)
+        .map_err(WorkerV3HsacoFinalizationError::CompilerDescriptorSource)?;
+    if !raw_identity.matches(raw_bytes) {
         return Err(WorkerV3HsacoFinalizationError::RawOutputIdentityMismatch);
     }
-    if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
-        return Ok(None);
-    }
-
-    let finalized = if allocated_read_only {
-        finalize_allocated_read_only_unfinalized(raw_bytes)
-    } else {
-        finalize_unfinalized(raw_bytes)
-    }
-    .map_err(WorkerV3HsacoFinalizationError::CanonicalFinalization)?;
-    let verified = if allocated_read_only {
-        verify_allocated_read_only_finalized(finalized.as_bytes())
-    } else {
-        verify_finalized(finalized.as_bytes())
-    }
-    .map_err(WorkerV3HsacoFinalizationError::FinalizedVerification)?;
+    let finalized = finalize_unfinalized(raw_bytes)
+        .map_err(WorkerV3HsacoFinalizationError::CanonicalFinalization)?;
+    let verified = verify_finalized(finalized.as_bytes())
+        .map_err(WorkerV3HsacoFinalizationError::FinalizedVerification)?;
     if &verified != finalized.inspection() {
         return Err(WorkerV3HsacoFinalizationError::FinalizedInspectionMismatch);
     }
 
-    validate_metadata_lineage(raw, &finalized)?;
+    validate_metadata_lineage_parts(
+        policy.target(),
+        policy.code_object_version(),
+        policy,
+        &finalized,
+    )?;
+    let descriptor_bytes =
+        encode_device_descriptor_table_v1(finalized.inspection().descriptor_table())
+            .map_err(WorkerV3HsacoFinalizationError::CanonicalDescriptorEvidence)?;
+    let mut normalized = descriptor_bytes.clone();
+    normalized[CANONICAL_CODE_OBJECT_DIGEST_OFFSET..CANONICAL_CODE_OBJECT_DIGEST_OFFSET + 32]
+        .fill(0);
+    if normalized != descriptor_source.canonical_bytes() {
+        return Err(WorkerV3HsacoFinalizationError::CompilerDescriptorSourceMismatch);
+    }
     let finalized_output = ContentIdentityV1::calculate(finalized.as_bytes());
     if !finalized_output.matches(finalized.as_bytes())
         || verified.digest().as_bytes() == &[0; 32]
@@ -534,22 +531,11 @@ fn finalize_worker_v3_hsaco(
     {
         return Err(WorkerV3HsacoFinalizationError::FinalizedOutputIdentityMismatch);
     }
-    Ok(Some(SharedCanonicalFinalizationV1 {
+    Ok(SharedCanonicalFinalizationV1 {
         finalized,
         finalized_output,
-    }))
-}
-
-fn validate_metadata_lineage(
-    raw: &InspectedProtectedWorkerV3HsacoV1,
-    finalized: &FinalizedHsaco,
-) -> Result<(), WorkerV3HsacoFinalizationError> {
-    validate_metadata_lineage_parts(
-        raw.target(),
-        raw.code_object_version(),
-        raw.policy(),
-        finalized,
-    )
+        descriptor_bytes,
+    })
 }
 
 fn validate_metadata_lineage_parts(

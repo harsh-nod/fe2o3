@@ -65,22 +65,23 @@ doctor.
 
 ## Run from Rust source
 
-The primary no-GPU quick start exports the ordinary Rust
-[`examples/fill`](../examples/fill/src/lib.rs) kernel through the production
-source/MIR/KIR stages and executes the resulting bundle on the CPU:
+The no-GPU quickstart exports ordinary Rust through the production source/MIR/KIR
+stages and executes the resulting bundle on the CPU. It selects the default fill
+with no extra features; the protected reference-proof runtime is not required:
 
 ```console
 bash scripts/quickstart.sh no-gpu
 ```
 
-The script checks four exact `f32` outputs of `42.5`, two untouched trailing
+After successful export, the script checks four exact `f32` outputs of `42.5`, two untouched trailing
 canary elements, and the complete initialization state against a committed
 independent expectation. It prints the simulator JSON only after the comparison
 passes. The bundle and result are staged in a private temporary directory and
 removed on success or failure. This does not publish HSACO, load a device,
 dispatch a kernel, authenticate source execution, or establish CPU/GPU equivalence.
 
-The same checker works with any admitted source kernel's complete output:
+The same checker works with any admitted source kernel's complete output. The
+explicit default fill invocation is:
 
 ```console
 bash scripts/quickstart.sh simulate-source \
@@ -88,6 +89,12 @@ bash scripts/quickstart.sh simulate-source \
   --expectation scripts/quickstart/fill-expectation.json \
   -- --package fe2o3-fill --lib
 ```
+
+The separate `reference-proof` feature attaches the CPU reference to the same
+kernel body. It requires protected proof execution and a conditional TotalView
+continuation that is not yet wired. It fails closed, never falls back to the
+default selection, and does not qualify the default manifest row. See the
+[fill proof boundary](../examples/fill/README.md).
 
 An expectation uses schema `fe2o3-simulation-expectation-v1` and contains exactly
 `schema`, `arguments`, and `shared_buffers`. The last two fields specify the
@@ -162,9 +169,9 @@ dependency edge, copied bytes, and terminal cleanup states. It also states
 `"simulated":true`, `"hardware_observed":false`, and
 `"performance_prediction":false`.
 
-This command starts from exact admitted KIR. To begin with ordinary Rust, run
-`bash scripts/quickstart.sh no-gpu` or export its authority-free bundle, then
-replace `--kir-v7 PATH` with `--bundle PATH`. Read the
+This command starts from exact admitted KIR. For ordinary Rust, use
+`bash scripts/quickstart.sh no-gpu`, or supply an exported authority-free bundle
+in place of `--kir-v7 PATH` with `--bundle PATH`. Read the
 [virtual runtime contract](virtual-runtime-v1.md) for limits, typed misuse and
 ambiguous-completion behavior, and the remaining issue #216 criteria.
 
@@ -174,7 +181,8 @@ The `fe2o3-export-sim` binary reuses the production source/MIR/KIR stages under
 extraction-only custody. It produces a content-addressed bundle and cannot
 publish HSACO, load a device, or dispatch a kernel.
 
-Export the [`examples/fill`](../examples/fill/src/lib.rs) kernel:
+The component commands below select default
+[`examples/fill`](../examples/fill/src/lib.rs), without `reference-proof`:
 
 ```console
 FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \

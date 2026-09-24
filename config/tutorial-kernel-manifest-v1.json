@@ -8537,11 +8537,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/fill/Cargo.toml",
-        "packageManifestSha256": "e65ca6e73f075c048a7e2bccf4be7eee6c021327d15c88239ce4eee67c1384c2",
+        "packageManifestSha256": "9cb53d0cb11998a6ada2bec84545e460a001b2b3487256073fdee458adeac011",
         "sourcePaths": [
           "examples/fill/src/lib.rs"
         ],
-        "sourceClosureSha256": "ae2c2c90b3f51e18bb875ef075884a5e33ab974de62771eba01b88add5fd4dbb",
+        "sourceClosureSha256": "4354ee009e177cc5e685637186ad2c6bd405fa0d8ae21ff04767a8cc4e237fe1",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_fill",
@@ -8554,7 +8554,7 @@
         ],
         "cargoLockPath": "Cargo.lock",
         "cargoLockSha256": "eb457ac24a61bcbcef684773b304a3473d8a400ee4d4cc642d4382f3ff6ca32a",
-        "contractSha256": "f9480eefb36372834393c2ca72e6f8f096252ffc4efd4d6816d7db2708aefd73"
+        "contractSha256": "98fe172ecc758cbc2b3634de6f3b728b335a5a764ad75b8e8f36ccc9a1c7ee20"
       },
       "simulation": {
         "requestPath": "scripts/quickstart/fill-request.json",
@@ -11390,10 +11390,10 @@
                 "fixtureId": "gfx942-fill-simulation",
                 "kernelSymbol": "fill"
               },
-              "selectionSha256": "5677f5de02d5976fa8f567b6b6c83d6dd737a7d314e731363dc2eac2b3c863b4",
+              "selectionSha256": "991f0124c21961911cbd37951ab1e6791bdc1ada2576c696b9623464f6a30656",
               "sourcePath": "examples/fill/src/lib.rs",
-              "sourceSha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
-              "functionUtf8Offset": 148
+              "sourceSha256": "66593042d32204a35d4371de11387466c6eb553b54a24d21e370f47b3ee4789e",
+              "functionUtf8Offset": 520
             },
             "blocker": {
               "owner": "issue275-integration",
@@ -13802,8 +13802,8 @@
           "fixture:gfx942-fill-simulation:fill"
         ],
         "negativeCases": [],
-        "bindingStatus": "fixture-source-contract",
-        "reason": "The exact whole-file display and physical function offset bind the registered source selection only; historical simulation results do not qualify the refreshed source."
+        "bindingStatus": "pending",
+        "reason": "The retained display is historical source; current fill adds an opt-in CPU reference while preserving default features. A fresh tutorial display and independent execution evidence remain required."
       },
       {
         "lessonId": "flash-attention",

@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+reference-proof = []
+
 [dependencies]
 fe2o3-device.workspace = true
 

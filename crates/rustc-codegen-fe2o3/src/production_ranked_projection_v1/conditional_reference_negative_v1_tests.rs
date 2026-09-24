@@ -98,10 +98,11 @@ pub(super) fn check(
             b.effect_ir.relations.swap(0, 1)
         }),
         ("raw ordinal as logical", "IR relation", |b| {
-            b.effect_ir.relations[1] = Relation::DisjointOutputCoordinate {
-                argument: 1,
-                element: Scalar::U32,
+            let Relation::DisjointOutputCoordinate { argument, .. } = &mut b.effect_ir.relations[1]
+            else {
+                panic!("point output relation");
             };
+            *argument = 1;
         }),
         ("missing store", "output count", |b| {
             b.observable_output_writes = Box::default()
@@ -172,15 +173,19 @@ pub(super) fn check(
         mutate(&mut changed);
         refuse(label, expected, vec![changed]);
     }
+    let [Input::NominalOutput { element, .. }] = original.signature_preimage.kernel_inputs() else {
+        panic!("single output source");
+    };
+    let element = *element;
     let output = Input::NominalOutput {
         carrier: Carrier::DisjointSlice,
-        element: Scalar::U32,
+        element,
     };
     let point = Input::Scalar(Scalar::Usize);
     let cell = Input::Reference {
         region: Region::Erased,
         mutability: Mutability::Mutable,
-        pointee: Pointee::Scalar(Scalar::U32),
+        pointee: Pointee::Scalar(element),
     };
     for (label, expected, kernel, reference) in [
         (
@@ -204,7 +209,7 @@ pub(super) fn check(
                 Input::Reference {
                     region: Region::Erased,
                     mutability: Mutability::Immutable,
-                    pointee: Pointee::Scalar(Scalar::U32),
+                    pointee: Pointee::Scalar(element),
                 },
             ],
         ),
@@ -217,7 +222,7 @@ pub(super) fn check(
                 Input::Reference {
                     region: Region::Erased,
                     mutability: Mutability::Mutable,
-                    pointee: Pointee::Slice(Scalar::U32),
+                    pointee: Pointee::Slice(element),
                 },
             ],
         ),

@@ -93,7 +93,33 @@ impl NativeFirstBuildWorkerIdentityV1 {
     }
 }
 
-/// Retains the consumed V4 occurrence, signed-source content and actual final F
+/// Custody origin, independent of the deterministic transcript identity. Neither
+/// variant authenticates protected compiler or Worker execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeWorkerEvidenceCustodyV1 {
+    ConsumedPublication,
+    RecoveredTranscript,
+}
+
+enum NativeWorkerSource {
+    Consumed(ConsumedCompilerModuleHandoffV4<RecoveredCompilerNativeSemanticHandoffV4>),
+    Replayed {
+        source: RecoveredCompilerNativeSemanticHandoffV4,
+        receipt: CompilerModuleHandoffReceiptV4,
+    },
+}
+
+impl NativeWorkerSource {
+    const fn content(&self) -> &RecoveredCompilerNativeSemanticHandoffV4 {
+        match self {
+            Self::Consumed(value) => value.content(),
+            Self::Replayed { source, .. } => source,
+        }
+    }
+}
+
+/// Retains the consumed or independently replayed V4 occurrence, signed-source
+/// content and actual final F
 /// together with reproducible Worker output. No carrier is replaced by a digest
 /// or an embedded V3 owner. This is structural evidence, not protected origin,
 /// currentness, semantic-to-machine refinement, publication or GPU authority.
@@ -103,7 +129,7 @@ impl NativeFirstBuildWorkerIdentityV1 {
 /// fn forge() -> Evidence { Evidence::default() }
 /// ```
 pub struct InertNativeFirstBuildWorkerEvidenceV1 {
-    source: ConsumedCompilerModuleHandoffV4<RecoveredCompilerNativeSemanticHandoffV4>,
+    source: NativeWorkerSource,
     binding: ProtectedCompilerNativeHandoffBindingV1,
     identity: NativeFirstBuildWorkerIdentityV1,
     worker: WorkerMeasurementV1,
@@ -114,9 +140,18 @@ pub struct InertNativeFirstBuildWorkerEvidenceV1 {
     replay_request_bytes: Vec<u8>,
     replay: InertWorkerExecutionV2,
     storage: NativeFirstBuildWorkerStorageV1,
+    retained_storage: usize,
 }
 
 impl InertNativeFirstBuildWorkerEvidenceV1 {
+    pub const fn custody(&self) -> NativeWorkerEvidenceCustodyV1 {
+        match &self.source {
+            NativeWorkerSource::Consumed(_) => NativeWorkerEvidenceCustodyV1::ConsumedPublication,
+            NativeWorkerSource::Replayed { .. } => {
+                NativeWorkerEvidenceCustodyV1::RecoveredTranscript
+            }
+        }
+    }
     pub const fn recovered_handoff(&self) -> &RecoveredCompilerNativeSemanticHandoffV4 {
         self.source.content()
     }
@@ -131,6 +166,79 @@ impl InertNativeFirstBuildWorkerEvidenceV1 {
 
     pub const fn storage(&self) -> NativeFirstBuildWorkerStorageV1 {
         self.storage
+    }
+
+    /// Complete source, preflight and Worker reservation that must stay paid
+    /// while this owner or a downstream retaining owner is live.
+    pub const fn required_retained_storage(&self) -> usize {
+        self.retained_storage
+    }
+
+    pub(crate) fn revalidate_for_artifact(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), NativeFirstBuildWorkerErrorV1> {
+        budget.with_prepaid_scope(
+            self.retained_storage,
+            0,
+            ENTRY_WORK,
+            ENTRY_STORAGE,
+            |budget| {
+                let actual = match &self.source {
+                    NativeWorkerSource::Consumed(source) => {
+                        ProtectedCompilerNativeHandoffBindingV1::from_consumed(
+                            source,
+                            self.binding.receipt(),
+                            self.binding.compiler_closure(),
+                            budget,
+                        )?
+                    }
+                    NativeWorkerSource::Replayed { source, receipt } => {
+                        if *receipt != self.binding.receipt() {
+                            return Err(NativeFirstBuildWorkerErrorV1::PreflightMismatch(
+                                "replayed native receipt",
+                            ));
+                        }
+                        ProtectedCompilerNativeHandoffBindingV1::from_handoff(
+                            source,
+                            *receipt,
+                            self.binding.compiler_closure(),
+                            budget,
+                        )?
+                    }
+                };
+                if actual != self.binding {
+                    return Err(NativeFirstBuildWorkerErrorV1::PreflightMismatch(
+                        "native artifact source",
+                    ));
+                }
+                Ok(())
+            },
+        )
+    }
+
+    pub(crate) fn artifact_lineage(
+        &self,
+    ) -> crate::worker_hsaco_lineage::WorkerArtifactLineage<'_> {
+        use crate::worker_hsaco_lineage::{WorkerArtifactExchange, WorkerArtifactLineage};
+        WorkerArtifactLineage {
+            module: self.recovered_handoff().handoff().module_handoff(),
+            plan: &self.plan,
+            measurement: &self.worker,
+            exchanges: [
+                WorkerArtifactExchange {
+                    request: &self.bootstrap_request_bytes,
+                    response: self.bootstrap.response(),
+                    executable: self.bootstrap.worker_executable(),
+                },
+                WorkerArtifactExchange {
+                    request: &self.replay_request_bytes,
+                    response: self.replay.response(),
+                    executable: self.replay.worker_executable(),
+                },
+            ],
+            output: self.output_bytes(),
+        }
     }
 
     pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
@@ -384,7 +492,7 @@ pub fn execute_preflighted_native_reproducible_first_build_worker_v1(
             .map_err(|e| failure("evidence identity", e))?;
             Ok((
                 InertNativeFirstBuildWorkerEvidenceV1 {
-                    source: consumed,
+                    source: NativeWorkerSource::Consumed(consumed),
                     binding,
                     identity: NativeFirstBuildWorkerIdentityV1(identity),
                     worker: measurement,
@@ -395,11 +503,103 @@ pub fn execute_preflighted_native_reproducible_first_build_worker_v1(
                     replay_request_bytes: result.authorized_request_bytes,
                     replay: result.authorized,
                     storage,
+                    retained_storage: floor.checked_add(storage.0).ok_or(Resource::Arithmetic)?,
                 },
                 storage,
             ))
         })
     })
+}
+
+pub(crate) struct NativeWorkerReplaySource {
+    pub(crate) source: RecoveredCompilerNativeSemanticHandoffV4,
+    pub(crate) binding: ProtectedCompilerNativeHandoffBindingV1,
+    pub(crate) worker: WorkerMeasurementV1,
+    pub(crate) limits: WorkerExecutionLimitsV1,
+}
+
+/// Called only inside the replay adapter's prepaid common-engine schedule.
+/// Recovered transcript evidence never manufactures a consumed transaction.
+pub(crate) fn recover_prepaid_native_worker_evidence_v1(
+    input: NativeWorkerReplaySource,
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+    exchanges: crate::worker_finalizer_replay_engine::ReconstructedWorkerExchanges,
+    quote: &NativeWorkerResourceQuote,
+) -> Result<
+    (
+        InertNativeFirstBuildWorkerEvidenceV1,
+        NativeFirstBuildWorkerStorageV1,
+    ),
+    NativeFirstBuildWorkerErrorV1,
+> {
+    let NativeWorkerReplaySource {
+        source,
+        binding,
+        worker,
+        limits,
+    } = input;
+    let crate::worker_finalizer_replay_engine::ReconstructedWorkerExchanges {
+        plan,
+        bootstrap_request_bytes,
+        bootstrap_response,
+        replay_request_bytes,
+        replay_response,
+    } = exchanges;
+    validate_replay_parts(
+        (&binding).into(),
+        &worker,
+        decoded,
+        &plan,
+        &bootstrap_request_bytes,
+        &bootstrap_response,
+        &replay_request_bytes,
+        &replay_response,
+    )
+    .map_err(|e| failure("recovered transcript replay", e))?;
+    let identity = calculate_worker_evidence_identity_parts(
+        (&binding).into(),
+        &worker,
+        limits,
+        &plan,
+        &bootstrap_request_bytes,
+        bootstrap_response.canonical_bytes(),
+        &replay_request_bytes,
+        replay_response.canonical_bytes(),
+    )
+    .map_err(|e| failure("recovered evidence identity", e))?;
+    let storage = NativeFirstBuildWorkerStorageV1(
+        quote
+            .returned_retained_storage()
+            .checked_add(size_of::<InertNativeFirstBuildWorkerEvidenceV1>())
+            .ok_or(Resource::Arithmetic)?,
+    );
+    let retained_storage = native_handoff_storage_floor(&source)?
+        .checked_add(storage.0)
+        .ok_or(Resource::Arithmetic)?;
+    let executable = worker.executable();
+    Ok((
+        InertNativeFirstBuildWorkerEvidenceV1 {
+            source: NativeWorkerSource::Replayed {
+                source,
+                receipt: binding.receipt(),
+            },
+            binding,
+            identity: NativeFirstBuildWorkerIdentityV1(identity),
+            worker,
+            limits,
+            plan,
+            bootstrap_request_bytes,
+            bootstrap: InertWorkerExecutionV2::from_recovered_response(
+                executable,
+                bootstrap_response,
+            ),
+            replay_request_bytes,
+            replay: InertWorkerExecutionV2::from_recovered_response(executable, replay_response),
+            storage,
+            retained_storage,
+        },
+        storage,
+    ))
 }
 
 /// Bounded diagnostic text; failed process transcripts are dropped before their
@@ -408,6 +608,17 @@ pub fn execute_preflighted_native_reproducible_first_build_worker_v1(
 pub struct NativeWorkerDiagnosticV1 {
     bytes: [u8; 80],
     len: usize,
+}
+
+impl NativeWorkerDiagnosticV1 {
+    pub(crate) fn from_display(value: impl fmt::Display) -> Self {
+        let mut diagnostic = Self {
+            bytes: [0; 80],
+            len: 0,
+        };
+        let _ = write!(&mut diagnostic, "{value}");
+        diagnostic
+    }
 }
 
 impl fmt::Write for NativeWorkerDiagnosticV1 {
@@ -477,12 +688,10 @@ impl fmt::Display for NativeFirstBuildWorkerErrorV1 {
 impl std::error::Error for NativeFirstBuildWorkerErrorV1 {}
 
 fn failure(phase: &'static str, error: impl fmt::Display) -> NativeFirstBuildWorkerErrorV1 {
-    let mut diagnostic = NativeWorkerDiagnosticV1 {
-        bytes: [0; 80],
-        len: 0,
-    };
-    let _ = write!(diagnostic, "{error}");
-    NativeFirstBuildWorkerErrorV1::Worker { phase, diagnostic }
+    NativeFirstBuildWorkerErrorV1::Worker {
+        phase,
+        diagnostic: NativeWorkerDiagnosticV1::from_display(error),
+    }
 }
 
 fn currentness_error(

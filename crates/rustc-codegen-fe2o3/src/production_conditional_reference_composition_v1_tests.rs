@@ -20,6 +20,10 @@ fn value(id: u32) -> Value {
 }
 
 fn sample(gpu_bits: u32, cpu_bits: u32) -> Vec<Op> {
+    typed_sample(ConstantScalarV1::U32, gpu_bits, cpu_bits)
+}
+
+fn typed_sample(scalar: ConstantScalarV1, gpu_bits: u32, cpu_bits: u32) -> Vec<Op> {
     let point = Expr::Symbol {
         symbol: 0,
         scalar: U64,
@@ -33,14 +37,14 @@ fn sample(gpu_bits: u32, cpu_bits: u32) -> Vec<Op> {
         yes.clone(),
         yes.clone(),
         Expr::Constant {
-            scalar: U32,
+            scalar: scalar.ranked(),
             bits: u64::from(gpu_bits),
         },
         point,
         yes.clone(),
         yes,
         Expr::Constant {
-            scalar: U32,
+            scalar: scalar.ranked(),
             bits: u64::from(cpu_bits),
         },
     ];
@@ -49,8 +53,8 @@ fn sample(gpu_bits: u32, cpu_bits: u32) -> Vec<Op> {
         .enumerate()
         .map(|(index, expression)| Op::SemanticExpression {
             result: Id::new(index as u32),
+            numerical_contract: Numerical::exact_for_expression(&expression),
             expression,
-            numerical_contract: Numerical::ExactBitVectorOperatorCongruence,
         })
         .collect();
     operations.push(Op::ValueAccess {
@@ -90,7 +94,16 @@ fn sample(gpu_bits: u32, cpu_bits: u32) -> Vec<Op> {
 }
 
 fn run(operations: Vec<Op>, bits: u32, limit: usize) -> (Result<(), Error>, usize, Option<usize>) {
-    let cpu = fixture(u128::from(bits));
+    run_typed(operations, ConstantScalarV1::U32, bits, limit)
+}
+
+fn run_typed(
+    operations: Vec<Op>,
+    scalar: ConstantScalarV1,
+    bits: u32,
+    limit: usize,
+) -> (Result<(), Error>, usize, Option<usize>) {
+    let cpu = typed_fixture(scalar.reference(), u128::from(bits));
     let mut work = Work::new(limit);
     let mut budget = Budget::new(&mut work, 31);
     budget.reserve_storage(31).unwrap();
@@ -102,12 +115,66 @@ fn run(operations: Vec<Op>, bits: u32, limit: usize) -> (Result<(), Error>, usiz
     else {
         panic!("fixture must end with an unproved request");
     };
-    let result =
-        check_constant_u32_operands_v1(&blocks, contract, *subjects, checked as u32, &mut budget);
+    let result = check_constant_operands_v1(&blocks, contract, *subjects, checked, &mut budget);
     assert_eq!(budget.storage(), 31);
     assert!(budget.work_ledger_identity_v1() == ledger);
     let used = budget.work();
     (result, used, work.failed_work())
+}
+
+#[test]
+fn f32_operands_require_the_float_model_and_never_promote_an_unproved_request() {
+    let scalar = ConstantScalarV1::F32;
+    for bits in [0, 0x8000_0000, 0x422a_0000, 0x7fc0_0123] {
+        let operations = typed_sample(scalar, bits, bits);
+        let (result, exact, failed) = run_typed(operations.clone(), scalar, bits, 100_000);
+        refusal(result, "missing required proof");
+        assert_eq!(failed, None);
+        refusal(
+            run_typed(operations.clone(), scalar, bits, exact).0,
+            "missing required proof",
+        );
+        let (short, _, failed) = run_typed(operations, scalar, bits, exact - 1);
+        assert!(matches!(short, Err(Error::Resource(Resource::Work(_)))));
+        assert_eq!(failed, Some(exact));
+        for role in [3, 7] {
+            for change in 0..3 {
+                let mut operations = typed_sample(scalar, bits, bits);
+                let Op::SemanticExpression {
+                    expression,
+                    numerical_contract,
+                    ..
+                } = &mut operations[role]
+                else {
+                    unreachable!();
+                };
+                match change {
+                    0 => {
+                        *expression = Expr::Constant {
+                            scalar: U32,
+                            bits: u64::from(bits),
+                        }
+                    }
+                    1 => *numerical_contract = Numerical::ExactBitVectorOperatorCongruence,
+                    2 => {
+                        *expression = Expr::Constant {
+                            scalar: scalar.ranked(),
+                            bits: u64::from(bits ^ 1),
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+                refusal(
+                    run_typed(operations, scalar, bits, 100_000).0,
+                    if role == 3 {
+                        "GPU expression"
+                    } else {
+                        "reference expression"
+                    },
+                );
+            }
+        }
+    }
 }
 
 fn refusal(result: Result<(), Error>, expected: &'static str) {

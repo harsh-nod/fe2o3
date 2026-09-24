@@ -151,7 +151,7 @@ pub struct LiveClientPidfdIdentityV2 {
 type Client = LiveClientPidfdIdentityV2;
 
 impl Client {
-    const RETAINED: usize = size_of::<(Self, Storage)>();
+    pub(super) const RETAINED: usize = size_of::<(Self, Storage)>();
     /// Full logical charge for the consumed pidfd owner and receipt padding.
     /// This is not a bound on kernel object allocation or memory usage.
     pub const FD_STORAGE: usize = size_of::<(OwnedFd, Storage)>();
@@ -266,6 +266,19 @@ impl Client {
     pub const fn descriptor_identity(&self) -> (u64, u64, u32) {
         let snapshot = self.state.descriptor_identity;
         (snapshot.device, snapshot.inode, snapshot.mode)
+    }
+
+    // Broker-only joins. These do not re-admit, convert or release this owner.
+    pub(super) const fn descriptor_snapshot(&self) -> super::ObjectIdentityV1 {
+        self.state.descriptor_identity
+    }
+
+    pub(super) const fn process_identity(&self) -> (u32, u64) {
+        (self.state.expected_client.pid, self.state.start_time_ticks)
+    }
+
+    pub(super) fn pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.state.pidfd.as_fd()
     }
 
     /// Full logical owner charge, retired only after this owner is dropped.

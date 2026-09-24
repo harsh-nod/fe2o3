@@ -5,6 +5,8 @@ use super::*;
 mod guarded_loop_read;
 #[path = "production_rustc_driver_nominal_abi_v3_tests.rs"]
 mod nominal_abi_v3;
+#[path = "production_rustc_driver_ordinary_source_cases_v1_tests.rs"]
+mod ordinary_source_cases;
 use crate::production_pipeline::checked_output_policy4_v1::snapshots;
 use fe2o3_kernel_ir::OperationKind;
 use fe2o3_rustc_invocation::{
@@ -12,6 +14,7 @@ use fe2o3_rustc_invocation::{
     classify_rustc_invocation_v2, derive_cargo_metadata_build_observation_v2,
     ordered_rustc_codegen_metadata_v1, portable_rustc_metadata_v1,
 };
+use ordinary_source_cases::OrdinarySourceCase;
 use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -39,6 +42,8 @@ mod integer_identity_source;
 mod licm_native_source;
 #[path = "production_rustc_driver_loop_capture_source_v1_tests.rs"]
 mod loop_capture_source;
+#[path = "production_rustc_driver_manifest_fill_proof_v1_tests.rs"]
+mod manifest_fill_proof;
 #[path = "production_rustc_driver_private_cell_native_source_v1_tests.rs"]
 mod private_cell_native_source;
 #[path = "production_rustc_driver_redundant_store_source_v1_tests.rs"]
@@ -380,20 +385,6 @@ use crate::production_rustc_driver_checked_output_source_helpers_v1_tests::{
 
 #[test]
 #[ignore = "requires pinned nightly rust-src, AMD dependencies, and ordinary-source compilation"]
-fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
-    for profile in [
-        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
-        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
-    ] {
-        ordinary_rust_checked_output_cases_for_profile(
-            &[OrdinarySourceCase::Fill, OrdinarySourceCase::Vecadd],
-            profile,
-        );
-    }
-}
-
-#[test]
-#[ignore = "requires pinned nightly rust-src, AMD dependencies, and ordinary-source compilation"]
 fn ordinary_rust_result_wrapped_fill_reaches_checked_native_output() {
     ordinary_rust_checked_output_cases(&[
         OrdinarySourceCase::RetainedWrappedFill,
@@ -416,33 +407,6 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
     ]);
 }
 
-enum OrdinarySourceCase {
-    GuardedLoopRead(guarded_loop_read::Case),
-    NominalPolicy4ErasedControl,
-    ConditionalDescriptorPair,
-    ReferenceFill,
-    MaskedShift(masked_shift_source::Config),
-    ConstantShift(shift_source::Config),
-    ScalarBorrowPolicy5,
-    RetainedScalarBorrowPolicy5,
-    ScalarBorrowPolicy5Barrier,
-    NumericCast(numeric_cast_source::Config),
-    F32Exp,
-    RetainedF32Exp,
-    SaturatingInteger(saturating_source::Config),
-    Fill,
-    Vecadd,
-    WrappedFill,
-    RetainedWrappedFill,
-    SharedUnitHelper,
-    PrivateUnitHelper,
-    RetainedPrivateUnitHelper,
-    F32Negate,
-    F32Divide,
-    RetainedF32Negate,
-    RetainedF32Divide,
-}
-
 fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
     ordinary_rust_checked_output_cases_for_profile(
         cases,
@@ -454,15 +418,7 @@ fn ordinary_rust_checked_output_cases_for_profile(
     cases: &[OrdinarySourceCase],
     profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
 ) {
-    ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(cases, profile, false);
-}
-
-fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
-    cases: &[OrdinarySourceCase],
-    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
-    fixed_facade: bool,
-) {
-    ordinary_rust_source_cases(cases, profile, fixed_facade, None);
+    ordinary_rust_source_cases(cases, profile, false, None);
 }
 
 struct SourceObserver {
@@ -618,6 +574,24 @@ fn ordinary_rust_source_cases(
                 usize::from(config.retained),
             ),
             OrdinarySourceCase::Fill => ("fill", "examples/fill", None, &["fill"][..], 0, 1, 0),
+            OrdinarySourceCase::ProofFill => (
+                "fill-reference-proof",
+                "examples/fill",
+                Some("reference-proof"),
+                &["fill"][..],
+                0,
+                1,
+                0,
+            ),
+            OrdinarySourceCase::UnannotatedFill => (
+                "unannotated-fill-fixture",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("unannotated-fill"),
+                &["fill"][..],
+                0,
+                1,
+                0,
+            ),
             OrdinarySourceCase::GuardedLoopRead(case) => (
                 case.feature(),
                 "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
@@ -829,6 +803,20 @@ fn ordinary_rust_source_cases(
         ) {
             args.extend(["-Zinline-mir=no", "-Zmir-opt-level=0"].map(str::to_owned));
         }
+        if matches!(case, OrdinarySourceCase::Fill) {
+            assert_eq!(
+                feature, None,
+                "default manifest fill must remain unannotated"
+            );
+            assert!(!args.iter().any(|arg| arg.contains("reference-proof")));
+        }
+        if matches!(case, OrdinarySourceCase::ProofFill) {
+            assert_eq!(feature, Some("reference-proof"));
+            assert!(
+                args.iter()
+                    .any(|arg| arg == "--cfg=feature=\"reference-proof\"")
+            );
+        }
         let original: Vec<OsString> = args.iter().map(OsString::from).collect();
         let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&original).unwrap()
         else {
@@ -904,6 +892,7 @@ fn ordinary_rust_source_cases(
                 Some(simulation::Case::SaturatingInteger(config.operation))
             }
             OrdinarySourceCase::Fill
+            | OrdinarySourceCase::UnannotatedFill
             | OrdinarySourceCase::WrappedFill
             | OrdinarySourceCase::RetainedWrappedFill
             | OrdinarySourceCase::PrivateUnitHelper
@@ -911,6 +900,7 @@ fn ordinary_rust_source_cases(
             OrdinarySourceCase::Vecadd => Some(simulation::Case::Vecadd),
             OrdinarySourceCase::SharedUnitHelper
             | OrdinarySourceCase::ReferenceFill
+            | OrdinarySourceCase::ProofFill
             | OrdinarySourceCase::ConditionalDescriptorPair => None,
             OrdinarySourceCase::F32Negate | OrdinarySourceCase::RetainedF32Negate => {
                 Some(simulation::Case::F32Negate)
@@ -1107,7 +1097,13 @@ fn ordinary_rust_source_cases(
         } else {
             matches!(case, OrdinarySourceCase::PrivateUnitHelper)
         };
-        if matches!(case, OrdinarySourceCase::Fill | OrdinarySourceCase::Vecadd) || probe_private {
+        if matches!(
+            case,
+            OrdinarySourceCase::Fill
+                | OrdinarySourceCase::UnannotatedFill
+                | OrdinarySourceCase::Vecadd
+        ) || probe_private
+        {
             let erased_probe = matches!(
                 case,
                 OrdinarySourceCase::PrivateUnitHelper

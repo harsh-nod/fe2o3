@@ -1388,9 +1388,19 @@ fn validate_prior_position(
 }
 
 fn encode_header(output: &mut [u8], magic: [u8; 8], kind: u16, total: usize) -> usize {
+    encode_versioned_header(output, magic, VERSION_V1, kind, total)
+}
+
+pub(super) fn encode_versioned_header(
+    output: &mut [u8],
+    magic: [u8; 8],
+    version: u16,
+    kind: u16,
+    total: usize,
+) -> usize {
     let mut offset = 0;
     put(output, &mut offset, &magic);
-    put(output, &mut offset, &VERSION_V1.to_le_bytes());
+    put(output, &mut offset, &version.to_le_bytes());
     put(output, &mut offset, &kind.to_le_bytes());
     put(output, &mut offset, &(total as u64).to_le_bytes());
     put(output, &mut offset, &0_u32.to_le_bytes());
@@ -1402,7 +1412,16 @@ fn decode_header(
     magic: [u8; 8],
     actual_len: usize,
 ) -> Result<u16, CompilerExecutionServiceProtocolErrorV1> {
-    if reader.fixed::<8>()? != magic || reader.u16()? != VERSION_V1 {
+    decode_versioned_header(reader, magic, VERSION_V1, actual_len)
+}
+
+pub(super) fn decode_versioned_header(
+    reader: &mut Reader<'_>,
+    magic: [u8; 8],
+    version: u16,
+    actual_len: usize,
+) -> Result<u16, CompilerExecutionServiceProtocolErrorV1> {
+    if reader.fixed::<8>()? != magic || reader.u16()? != version {
         return Err(CompilerExecutionServiceProtocolErrorV1::Header);
     }
     let kind = reader.u16()?;
@@ -1415,13 +1434,13 @@ fn decode_header(
     Ok(kind)
 }
 
-fn put(output: &mut [u8], offset: &mut usize, value: &[u8]) {
+pub(super) fn put(output: &mut [u8], offset: &mut usize, value: &[u8]) {
     let end = *offset + value.len();
     output[*offset..end].copy_from_slice(value);
     *offset = end;
 }
 
-fn derive_identity(domain: &[u8], bytes: &[u8]) -> [u8; SHA256_BYTES] {
+pub(super) fn derive_identity(domain: &[u8], bytes: &[u8]) -> [u8; SHA256_BYTES] {
     let mut digest = Sha256::new();
     digest.update(domain);
     digest.update((bytes.len() as u64).to_le_bytes());
@@ -1429,17 +1448,20 @@ fn derive_identity(domain: &[u8], bytes: &[u8]) -> [u8; SHA256_BYTES] {
     digest.finalize().into()
 }
 
-struct Reader<'a> {
+pub(super) struct Reader<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
 impl<'a> Reader<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
+    pub(super) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
 
-    fn take(&mut self, length: usize) -> Result<&'a [u8], CompilerExecutionServiceProtocolErrorV1> {
+    pub(super) fn take(
+        &mut self,
+        length: usize,
+    ) -> Result<&'a [u8], CompilerExecutionServiceProtocolErrorV1> {
         let end = self
             .offset
             .checked_add(length)
@@ -1452,7 +1474,7 @@ impl<'a> Reader<'a> {
         Ok(value)
     }
 
-    fn fixed<const N: usize>(
+    pub(super) fn fixed<const N: usize>(
         &mut self,
     ) -> Result<[u8; N], CompilerExecutionServiceProtocolErrorV1> {
         self.take(N)?
@@ -1460,7 +1482,7 @@ impl<'a> Reader<'a> {
             .map_err(|_| CompilerExecutionServiceProtocolErrorV1::Truncated)
     }
 
-    fn u8(&mut self) -> Result<u8, CompilerExecutionServiceProtocolErrorV1> {
+    pub(super) fn u8(&mut self) -> Result<u8, CompilerExecutionServiceProtocolErrorV1> {
         Ok(self.fixed::<1>()?[0])
     }
 
@@ -1468,7 +1490,7 @@ impl<'a> Reader<'a> {
         Ok(u16::from_le_bytes(self.fixed()?))
     }
 
-    fn u64(&mut self) -> Result<u64, CompilerExecutionServiceProtocolErrorV1> {
+    pub(super) fn u64(&mut self) -> Result<u64, CompilerExecutionServiceProtocolErrorV1> {
         Ok(u64::from_le_bytes(self.fixed()?))
     }
 

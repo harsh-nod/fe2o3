@@ -632,12 +632,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "67e01952b68abc12098ac45c1d24a1b4289602aa3d065709f1b629c8dd348e44")
+                         "8a8ffe12d9dc65ea75ebe63582f21efda253e3f0513dc7d8230e59775a62eb18")
         self.assertEqual(len(inventory["kernels"]), 60)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 74, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 27, "source-driver-contract": 13, "fixture-source-contract": 37,
+                         {"pending": 28, "source-driver-contract": 13, "fixture-source-contract": 36,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
@@ -652,7 +652,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                    for row in inventory["displayItems"]}
         fill = display[("first-fill", 0, "fill")]
         self.assertEqual(fill["kernelIds"], ["fixture:gfx942-fill-simulation:fill"])
-        self.assertEqual(fill["bindingStatus"], "fixture-source-contract")
+        self.assertEqual(fill["bindingStatus"], "pending")
         self.assertEqual(display[("typed-vecadd", 3, "vecadd")]["bindingStatus"], "pending")
         for row in inventory["displayItems"]:
             if row["lessonId"] == "typed-vecadd" and row["classification"] == "kernel":
@@ -874,6 +874,42 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertIs(report["inventoryComplete"], False)
         self.assertIsNone(report["requiredPairCount"])
         self.assertEqual(kernel["variants"][1]["status"], "pending")
+
+    def test_historical_fill_display_does_not_bind_the_migrated_source(self):
+        lesson = self.curriculum_lesson()
+        tab = lesson["codeTabs"][0]
+        self.assertEqual(tab["sourceCommit"], "7a536e0a001202ac0bb9d8647c5395661f8fa1ec")
+        self.assertEqual(tab["displayedUtf8Bytes"], 308)
+        self.assertEqual(tab["sourceSha256"], tab["displayedSha256"])
+        current = (ROOT / "examples/fill/src/lib.rs").read_bytes()
+        self.assertNotEqual(hashlib.sha256(current).hexdigest(), tab["sourceSha256"])
+        display = next(row for row in self.manifest["kernelInventory"]["displayItems"]
+                       if row["lessonId"] == "first-fill" and row["tabOrdinal"] == 0
+                       and row["kernelSymbol"] == "fill")
+        self.assertEqual(display["bindingStatus"], "pending")
+        self.validator.validate_kernel_inventory(self.manifest, None, repo_root=ROOT)
+        display["bindingStatus"] = "fixture-source-contract"
+        with self.assertRaisesRegex(SystemExit, "fixture display differs from the exact current source occurrence"):
+            self.validator.validate_kernel_inventory(self.manifest, None, repo_root=ROOT)
+
+    def test_fill_reference_proof_is_opt_in_not_a_replacement_manifest_selection(self):
+        fill = next(row for row in self.manifest["compilerFixtures"]
+                    if row["fixtureId"] == "gfx942-fill-simulation")
+        inputs = fill["compilerInput"]
+        self.assertEqual(inputs["features"], [])
+        self.assertIs(inputs["defaultFeatures"], True)
+        cargo, name, _ = self.validator.parse_package_identity(
+            ROOT / inputs["packageManifest"], "fill opt-in proof")
+        self.assertEqual(name, "fe2o3-fill")
+        self.assertEqual(self.validator.cargo_feature_closure(cargo, [], True, "default fill"), [])
+        self.assertEqual(self.validator.cargo_feature_closure(
+            cargo, ["reference-proof"], True, "auxiliary proof fill"), ["reference-proof"])
+        self.assertEqual(inputs["kernelSymbols"], ["fill"])
+        self.assertEqual(inputs["sourcePaths"], ["examples/fill/src/lib.rs"])
+        items = self.validator.ordinary_rust_function_items(
+            (ROOT / inputs["sourcePaths"][0]).read_text(encoding="utf-8"))
+        self.assertEqual([item["kernelSymbol"] for item in items
+                          if item["attributedKernel"]], ["fill"])
 
     def test_real_source_bound_variant_report_does_not_qualify_or_complete_census(self):
         # A physical source association, not a new tile implementation or receipt.

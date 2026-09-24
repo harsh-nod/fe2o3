@@ -106,7 +106,10 @@ fn actual_reference_fill_retains_pending_checks_after_proof_binding() {
         fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
     ] {
         ordinary_rust_source_cases(
-            &[OrdinarySourceCase::ReferenceFill],
+            &[
+                OrdinarySourceCase::ReferenceFill,
+                OrdinarySourceCase::ProofFill,
+            ],
             profile,
             false,
             Some(SourceObserver {
@@ -142,7 +145,7 @@ fn actual_reference_fill_retains_pending_checks_after_proof_binding() {
 #[ignore = "requires pinned nightly rust-src and actual unannotated source compilation; no GPU or Verus"]
 fn unannotated_source_cannot_escape_the_post_bind_observation() {
     ordinary_rust_source_cases(
-        &[OrdinarySourceCase::Fill],
+        &[OrdinarySourceCase::UnannotatedFill],
         fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
         false,
         Some(SourceObserver {
@@ -164,7 +167,10 @@ fn missing_runtime_cannot_be_counted_as_a_post_bind_observation() {
             .exists()
     );
     ordinary_rust_source_cases(
-        &[OrdinarySourceCase::ReferenceFill],
+        &[
+            OrdinarySourceCase::ReferenceFill,
+            OrdinarySourceCase::ProofFill,
+        ],
         fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
         false,
         Some(SourceObserver {

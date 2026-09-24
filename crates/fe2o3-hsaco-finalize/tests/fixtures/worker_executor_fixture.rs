@@ -1,5 +1,9 @@
-use std::io::{self, Read, Write};
+use std::{
+    fs::File,
+    io::{self, Read, Seek, SeekFrom, Write},
+};
 
+use fe2o3_hsaco_finalize::InertDecodedWorkerExchangeV2;
 use sha2::{Digest, Sha256};
 
 mod worker_derivation_fixture_support;
@@ -10,9 +14,38 @@ use worker_derivation_fixture_support::{
 const WORKER_ID: &str = "fixture-worker-v3";
 const OUTPUT: &[u8] = b"fixture-output";
 const MISMATCH_OUTPUT: &[u8] = b"changed-output";
+const APPENDED_HSACO_MAGIC: &[u8; 16] = b"F3NATIVEHSACO01\0";
+const MAX_APPENDED_HSACO: u64 = 64 * 1024;
+const MAX_NATIVE_REQUEST: u64 = 16 * 1024 * 1024;
 
 fn main() {
+    let appended = appended_hsaco().expect("bounded test Worker trailer");
     let mut request = Vec::new();
+    if let Some(output) = appended {
+        io::stdin()
+            .take(MAX_NATIVE_REQUEST + 1)
+            .read_to_end(&mut request)
+            .unwrap();
+        assert!(request.len() as u64 <= MAX_NATIVE_REQUEST);
+        // A failure envelope lets the public strict exchange decoder validate
+        // the request without a second request parser or signed-module edits.
+        let refusal = response_with_diagnostics(&request, WORKER_ID, false, false, &[], &[], &[]);
+        let decoded = InertDecodedWorkerExchangeV2::decode(&request, &refusal).unwrap();
+        assert!(decoded.request().external_providers().is_empty());
+        assert!(output.len() as u64 <= decoded.request().output_constraints().max_bytes());
+        io::stdout()
+            .write_all(&response_with_diagnostics(
+                &request,
+                WORKER_ID,
+                true,
+                false,
+                &output,
+                &[],
+                &[],
+            ))
+            .unwrap();
+        return;
+    }
     io::stdin().read_to_end(&mut request).unwrap();
     if !request.starts_with(b"F3LREQ02") || !contains(&request, b"workflow_kernel") {
         std::process::exit(64);
@@ -56,6 +89,37 @@ fn main() {
             stage_salt,
         ))
         .unwrap();
+}
+
+// The private executable copy, payload, length and footer are measured together
+// by PinnedWorkerV1. There is no mutable sidecar or external-provider loophole.
+fn appended_hsaco() -> io::Result<Option<Vec<u8>>> {
+    // The executor runs a sealed memfd, whose readlink target is not a pathname.
+    #[cfg(target_os = "linux")]
+    let mut file = File::open("/proc/self/exe")?;
+    #[cfg(not(target_os = "linux"))]
+    let mut file = File::open(std::env::current_exe()?)?;
+    let length = file.metadata()?.len();
+    let Some(footer_start) = length.checked_sub(24) else {
+        return Ok(None);
+    };
+    file.seek(SeekFrom::Start(footer_start))?;
+    let mut footer = [0; 24];
+    file.read_exact(&mut footer)?;
+    if &footer[8..] != APPENDED_HSACO_MAGIC {
+        return Ok(None);
+    }
+    let payload_length = u64::from_le_bytes(footer[..8].try_into().unwrap());
+    if !(1..=MAX_APPENDED_HSACO).contains(&payload_length) || payload_length > footer_start {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "test HSACO trailer length",
+        ));
+    }
+    file.seek(SeekFrom::Start(footer_start - payload_length))?;
+    let mut payload = vec![0; payload_length as usize];
+    file.read_exact(&mut payload)?;
+    Ok(Some(payload))
 }
 
 fn response_with_diagnostics(

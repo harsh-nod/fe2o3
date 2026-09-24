@@ -140,8 +140,8 @@ canonical-byte, and reduced-closure fields are inaccessible. It cannot construct
 
 The standalone Worker V1 request, response, output, constructor, and execution APIs are retired.
 Worker Protocol V2 remains an internal supervised LLVM/LLD wire format, and its decoder rejects
-retired V1 bytes. It can only be constructed through the protected Worker V3 transaction; successful
-protocol validation grants no publication, loading, or launch authority.
+retired V1 bytes. Construction uses the V3 transaction or the native consumed-source
+adapter described below; protocol validation grants no publication, loading, or launch authority.
 
 ## Worker V3 HSACO admission and publication
 
@@ -230,11 +230,49 @@ buffers.
 
 CPU integration fixtures exercise direct and erased source routes on both
 target profiles with public test signing keys and a synthetic Worker. They
-test custody and structural reproducibility, not protected origin, LLVM/HSACO
-correctness or GPU execution. Native Cargo/service admission, finalizer
-publication/restart, host currentness and independent machine refinement still
-need to be connected before this adapter can participate in safe GPU launch.
-The default production producer is unchanged.
+test custody and structural reproducibility, not protected origin, LLVM/ISA
+semantic correctness or GPU execution. The default production producer is
+unchanged.
+
+### Native finalization and replay
+
+`finalize_native_worker_hsaco_v1` retains the original native source/F owner
+through the existing Worker/provider checks, independent ELF/AMDHSA inspection,
+and canonical descriptor finalizer. The descriptor schema comes from the retained
+ABI receipt, whose exact bytes must agree with the physical artifact. Target,
+launch, symbol closure and provider checks are shared with the existing V3
+adapter. A native outer is never converted into an admitted V3 owner.
+
+The compact native replay transcript reuses the existing Worker metadata tail,
+with separate outer-coordinate, checksum and identity domains. It stores neither
+a replacement source graph nor copies of large payloads. On recovery,
+`revalidate_native_worker_finalizer_v1` requires the independently recovered
+native source/F, rederives the original producer/attempt transaction identity,
+reconstructs both requests and responses with the shared replay engine, and
+reruns finalization. Source, binding and finalization identities and every final
+artifact byte must agree. `NativeWorkerEvidenceCustodyV1` distinguishes this
+recovered transcript from a freshly consumed publication; replay creates no
+consumption token or fresh process evidence.
+
+`prepare_native_worker_hsaco_publication_v1` retains the finalized owner while
+deriving a native-domain plan. Persistence and recovery reuse the existing opaque
+journal and its unchanged attachment limits, then require the native replay above.
+Fresh persistence compares the independently reconstructed owner before releasing
+the original. These are inert restart records, not authorized publication.
+
+Native owner/header, source and Worker replay reservations stay on the original
+ledger. Existing artifact parsing/finalization and durable storage keep their
+separate bounded accounting domains. These APIs do not claim aggregate artifact
+work, filesystem resource accounting or an RSS bound. Opt-in finalizer tests use
+synthetic ELF payloads appended to a measured fixture executable, not real LLVM
+compilation; no extra provider or signed-module mutation is needed for a positive
+fixture.
+
+Native protected issuance/currentness, Cargo intake, authorized publication,
+runtime/generated-host admission and independent machine refinement still need
+to be connected and qualified before this continuation can authorize safe GPU
+launch. Replaying content or finalizing a structurally valid ELF is not such
+authority, and does not qualify a tutorial kernel.
 
 ## Production semantic debug attachment
 

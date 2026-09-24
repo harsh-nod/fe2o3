@@ -28,6 +28,11 @@ mod first_build_worker_native_binding;
 mod first_build_worker_native_resources;
 mod first_build_worker_v3;
 mod link_plan;
+mod native_worker_compact_replay;
+mod native_worker_finalization;
+mod native_worker_publication;
+mod native_worker_replay;
+mod native_worker_replay_resources;
 mod nominal_descriptor_finalization_v3;
 mod nominal_descriptor_physical_v3;
 mod nominal_worker_finalization_v3;
@@ -42,6 +47,8 @@ mod request_construction;
 mod semantic_debug_instance_custody_v1;
 mod semantic_debug_map_v1;
 mod worker_executor;
+mod worker_finalizer_replay_engine;
+mod worker_hsaco_lineage;
 mod worker_protocol;
 mod worker_protocol_v2;
 mod worker_v3_compact_finalizer_replay;
@@ -93,7 +100,7 @@ pub use fe2o3_compiler_ffi::{
 pub use first_build_worker_native::{
     InertNativeFirstBuildWorkerEvidenceV1, NativeFirstBuildWorkerErrorV1,
     NativeFirstBuildWorkerIdentityV1, NativeFirstBuildWorkerStorageV1, NativeWorkerDiagnosticV1,
-    PreparedNativeFirstBuildWorkerV1,
+    NativeWorkerEvidenceCustodyV1, PreparedNativeFirstBuildWorkerV1,
     execute_preflighted_native_reproducible_first_build_worker_v1,
     preflight_native_reproducible_first_build_worker_v1,
 };
@@ -115,6 +122,28 @@ pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
+};
+pub use native_worker_compact_replay::{
+    MAX_NATIVE_WORKER_COMPACT_FINALIZER_REPLAY_BYTES_V1,
+    NativeWorkerCompactFinalizerReplayIdentityV1, NativeWorkerCompactFinalizerReplayV1,
+    NativeWorkerCompactReplayErrorV1, NativeWorkerCompactReplayResourcesV1,
+    NativeWorkerCompactReplayStorageV1, NativeWorkerReplayCoordinatesV1,
+    prepare_native_worker_compact_finalizer_replay_v1,
+};
+pub use native_worker_finalization::{
+    NativeWorkerFinalizationErrorV1, NativeWorkerFinalizationIdentityV1,
+    NativeWorkerFinalizationStorageV1, PreparedFinalizedNativeWorkerHsacoV1,
+    finalize_native_worker_hsaco_v1,
+};
+pub use native_worker_publication::{
+    NativeWorkerHsacoPublicationErrorV1, NativeWorkerHsacoPublicationStorageV1,
+    NativeWorkerPublicationIntentIdentityV1, NativeWorkerPublicationIntentV1,
+    NativeWorkerPublicationPlanIdentityV1, PreparedNativeWorkerHsacoPublicationV1,
+    RecoveredNativeWorkerHsacoPublicationV1, persist_prepared_native_worker_hsaco_publication_v1,
+    prepare_native_worker_hsaco_publication_v1, recover_native_worker_hsaco_publication_v1,
+};
+pub use native_worker_replay::{
+    NativeWorkerReplayErrorV1, NativeWorkerReplayStorageV1, revalidate_native_worker_finalizer_v1,
 };
 pub use nominal_descriptor_finalization_v3::{
     FinalizedNominalHsacoV3, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3, NominalDescriptorInspectionV3,
@@ -750,12 +779,6 @@ pub fn finalize_unfinalized(bytes: &[u8]) -> Result<FinalizedHsaco, Finalization
     finalize_unfinalized_with_placement(bytes, DescriptorPlacementV1::Detached)
 }
 
-pub(crate) fn finalize_allocated_read_only_unfinalized(
-    bytes: &[u8],
-) -> Result<FinalizedHsaco, FinalizationError> {
-    finalize_unfinalized_with_placement(bytes, DescriptorPlacementV1::AllocatedReadOnly)
-}
-
 fn finalize_unfinalized_with_placement(
     bytes: &[u8],
     placement: DescriptorPlacementV1,
@@ -874,12 +897,6 @@ pub fn derive_unfinalized_hsaco_from_finalized_v1(
         ));
     }
     Ok(raw)
-}
-
-pub(crate) fn verify_allocated_read_only_finalized(
-    bytes: &[u8],
-) -> Result<FinalizedDescriptorInspection, FinalizationError> {
-    inspect_finalized_with_placement(bytes, DescriptorPlacementV1::AllocatedReadOnly)
 }
 
 struct ParsedEmbeddedTable {

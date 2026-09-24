@@ -90,7 +90,7 @@ the conditions in the [release process](docs/release-process.md) and
 
 ## Kernel example
 
-This is the complete kernel body from
+This is the default kernel selection from
 [`examples/fill`](examples/fill/src/lib.rs):
 
 ```rust
@@ -111,7 +111,11 @@ pub fn fill(mut out: DisjointSlice<f32>) {
 
 `DisjointSlice` makes the output partition explicit. `thread::index_1d()` is a
 typed logical index, and the bounds check remains part of the admitted kernel
-semantics.
+semantics. The optional `reference-proof` feature attaches an independent CPU
+reference to this same body. That selection requests a protected semantic proof;
+its [proof boundary](examples/fill/README.md) still requires conditional ownership
+continuation. The default learning workflow does not select this feature and
+does not claim compiler-proved CPU/GPU equivalence.
 
 Namespace-free `#[kernel(typed)]` packages are wrapper-managed. Raw Cargo does
 not synthesize their compiler-owned crate binding, so use `cargo fe2o3` or the
@@ -148,7 +152,8 @@ evidence record says otherwise.
   components in [`rust-toolchain.toml`](rust-toolchain.toml)
 - Enough disk space for a Rust compiler workspace build
 
-Clone the repository and run the source-to-CPU quick start:
+Clone the repository and run the default fill source-to-CPU quickstart. This
+selection does not require the optional protected reference-proof runtime.
 
 ```console
 git clone https://github.com/harsh-nod/fe2o3.git
@@ -156,11 +161,11 @@ cd fe2o3
 bash scripts/quickstart.sh no-gpu
 ```
 
-The command exports the ordinary Rust `fill` kernel through the production
-source/MIR/KIR stages, creates a temporary authority-free simulation bundle,
-executes its embedded KIR on the CPU, and removes the bundle. The result is
-deterministic JSON with `"status":"ok"`, copied-back argument bytes, execution
-counts, and an explicit statement that no hardware was observed or validated.
+This command exports the actual `fill` source through the production source/MIR/KIR
+stages and checks its CPU simulation against an independent expectation,
+including untouched canaries. No replacement fixture or proof fallback is used.
+The getting-started guide also provides an exact-KIR fixture workflow that does
+not compile this source.
 
 Bundle export and simulation do not load a GPU, silently fall back from a
 hardware command, authenticate compiler execution, or establish equivalence

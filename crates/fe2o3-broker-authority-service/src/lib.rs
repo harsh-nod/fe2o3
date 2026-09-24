@@ -210,7 +210,8 @@ pub use linux::{
     LiveClientPidfdIdentityV1, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2,
     ProtectedExternalAnchorServiceAdmissionV1, ProtectedExternalAnchorServiceAdmissionV2,
     ProtectedExternalAnchorServiceErrorV2, ProtectedExternalAnchorServiceStorageV2,
-    ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,
+    ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionErrorV2,
+    ProtectedServiceAdmissionV1, ProtectedServiceAdmissionV2, ProtectedServiceStorageV2,
     current_process_start_time_ticks_v1, current_process_start_time_ticks_v2,
 };
 #[cfg(target_os = "linux")]

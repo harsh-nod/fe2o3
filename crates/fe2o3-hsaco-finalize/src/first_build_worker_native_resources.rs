@@ -79,6 +79,8 @@ pub(crate) struct NativeWorkerResourceQuote {
     response_capture_bytes: usize,
     response_decode_output_bytes: usize,
     successful_response_bytes: usize,
+    response_metadata_work: usize,
+    response_metadata_storage: usize,
     total_worker_timeout: Duration,
 }
 
@@ -215,6 +217,11 @@ impl NativeWorkerResourceQuote {
     /// Excludes the original source and prepared-owner reservations.
     pub(crate) const fn returned_retained_storage(&self) -> usize {
         self.returned_retained_storage
+    }
+
+    /// One audited metadata decode; replay framing validates it once more.
+    pub(crate) const fn response_metadata_resources(&self) -> (usize, usize) {
+        (self.response_metadata_work, self.response_metadata_storage)
     }
 
     fn from_dimensions(d: Dimensions) -> QuoteResult<Self> {
@@ -511,6 +518,8 @@ impl NativeWorkerResourceQuote {
             response_capture_bytes: d.stdout,
             response_decode_output_bytes,
             successful_response_bytes,
+            response_metadata_work: 0,
+            response_metadata_storage: 0,
             total_worker_timeout,
         };
         quote.add_metadata_schedule(d)?;
@@ -522,6 +531,8 @@ impl NativeWorkerResourceQuote {
         let request = request_metadata(d)?;
         let plan = plan_metadata(d)?;
         let response = response_metadata(d)?;
+        self.response_metadata_work = response.work;
+        self.response_metadata_storage = response.storage;
         let n = sum([d.provider_count, 1], "all input rows")?;
         let option_width = MAX_LINK_OPTION_NAME_BYTES + MAX_LINK_OPTION_VALUE_BYTES;
         let engine_collections = sum(

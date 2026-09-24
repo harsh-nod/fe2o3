@@ -2,7 +2,7 @@
 //!
 //! The current caller is the explicitly selected post-bind observer. Normal
 //! compilation retains every existing gate until conditional discharge exists.
-//! The initial reference fragment is one flat u32 output, one usize point axis,
+//! The reference fragment is one flat u32 or f32 output, one usize point axis,
 //! and an unconditional constant store. Unsupported shapes fail closed. Runtime
 //! N <= G, inactive-axis and address-representation premises remain external,
 //! including when N is zero; this join does not grant unconditional TotalView.
@@ -238,12 +238,59 @@ fn cpu_require(ok: bool, why: &'static str) -> Result<(), Error> {
     }
 }
 
-fn cpu_u32(value: &Rvalue) -> Option<u128> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConstantScalarV1 {
+    U32,
+    F32,
+}
+
+impl ConstantScalarV1 {
+    fn from_reference(scalar: Scalar) -> Option<Self> {
+        match scalar {
+            Scalar::U32 => Some(Self::U32),
+            Scalar::F32 => Some(Self::F32),
+            _ => None,
+        }
+    }
+
+    fn reference(self) -> Scalar {
+        match self {
+            Self::U32 => Scalar::U32,
+            Self::F32 => Scalar::F32,
+        }
+    }
+
+    fn canonical(self) -> ScalarType {
+        match self {
+            Self::U32 => ScalarType::U32,
+            Self::F32 => ScalarType::F32,
+        }
+    }
+
+    fn ranked(self) -> Ty {
+        match self {
+            Self::U32 => Ty::Integer {
+                signed: false,
+                bits: 32,
+            },
+            Self::F32 => Ty::Float { bits: 32 },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TypedConstantV1 {
+    scalar: ConstantScalarV1,
+    // Representation bits, never a float-to-integer conversion.
+    bits: u32,
+}
+
+fn cpu_constant_bits(value: &Rvalue, scalar: ConstantScalarV1) -> Option<u128> {
     match value {
         Rvalue::Use(Operand::Constant(Const::Scalar {
-            scalar: Scalar::U32,
+            scalar: actual,
             bits,
-        })) => Some(*bits),
+        })) if *actual == scalar.reference() => Some(*bits),
         _ => None,
     }
 }
@@ -319,6 +366,7 @@ fn check_cpu_reference<'a>(
             && !matches!(ty.rust_type_kind(), SemanticRustTypeKindV1::Execution(_)),
         "output type",
     )?;
+    let (reference, constant) = check_constant_point_effect(binding, budget)?;
     let physical = bound
         .coverage()
         .function()
@@ -328,10 +376,9 @@ fn check_cpu_reference<'a>(
     cpu_require(
         matches!(physical, Some(Type::Slice(slice))
         if slice.address_space == AddressSpace::Global && slice.access == AccessMode::ReadWrite
-        && matches!(slice.element.as_ref(), Type::Scalar(ScalarType::U32))),
+        && matches!(slice.element.as_ref(), Type::Scalar(scalar) if *scalar == constant.scalar.canonical())),
         "physical output",
     )?;
-    let (reference, bits) = check_constant_point_effect(binding, budget)?;
     let write = reference.write;
     let contract = output.contract();
     let site = contract.reference_output_site();
@@ -361,21 +408,21 @@ fn check_cpu_reference<'a>(
         DigestV1::from_untrusted_bytes(k.rustc_mir_body_sha256),
     )
     .map_err(|_| Error::Reference("subjects"))?;
-    check_constant_u32_operands_v1(
+    check_constant_operands_v1(
         output.candidate().kernel().blocks(),
         contract,
         subjects,
-        bits as u32,
+        constant,
         budget,
     )?;
     Ok(reference)
 }
 
-fn check_constant_u32_operands_v1(
+fn check_constant_operands_v1(
     blocks: &[Block],
     contract: &Contract,
     subjects: FunctionalRefinementSubjectsV2,
-    bits: u32,
+    constant: TypedConstantV1,
     budget: &mut Budget<'_>,
 ) -> Result<(), Error> {
     let [coordinate] = contract.reference_coordinates() else {
@@ -428,11 +475,8 @@ fn check_constant_u32_operands_v1(
         (
             [contract.reference_value(), contract.gpu_value()],
             Expr::Constant {
-                scalar: Ty::Integer {
-                    signed: false,
-                    bits: 32,
-                },
-                bits: u64::from(bits),
+                scalar: constant.scalar.ranked(),
+                bits: u64::from(constant.bits),
             },
         ),
     ];
@@ -475,7 +519,7 @@ fn check_constant_u32_operands_v1(
                         ["reference definition", "GPU definition"][i % 2],
                     )?;
                     cpu_require(
-                        *numerical_contract == Numerical::ExactBitVectorOperatorCongruence
+                        *numerical_contract == Numerical::exact_for_expression(wanted)
                             && expression == wanted,
                         ["reference expression", "GPU expression"][i % 2],
                     )?;
@@ -496,21 +540,23 @@ fn check_constant_u32_operands_v1(
 fn check_constant_point_effect<'a>(
     binding: &'a AuthenticatedReferenceEffectBindingV1,
     budget: &mut Budget<'_>,
-) -> Result<(CpuReferenceOutputV1<'a>, u128), Error> {
+) -> Result<(CpuReferenceOutputV1<'a>, TypedConstantV1), Error> {
     // Shape checks bound all nested data before equality or canonical hashing.
     // At most two inputs, assignments and output observations are visited.
     budget.charge_work(1024)?;
     let sig = &binding.signature_preimage;
-    cpu_require(
-        matches!(
-            sig.kernel_inputs(),
-            [Input::NominalOutput {
-                carrier: Carrier::DisjointSlice,
-                element: Scalar::U32
-            }]
-        ) && sig.reference_inputs().len() == 2,
-        "signature fragment",
-    )?;
+    let [
+        Input::NominalOutput {
+            carrier: Carrier::DisjointSlice,
+            element,
+        },
+    ] = sig.kernel_inputs()
+    else {
+        return Err(Error::Reference("signature fragment"));
+    };
+    let scalar =
+        ConstantScalarV1::from_reference(*element).ok_or(Error::Reference("signature fragment"))?;
+    cpu_require(sig.reference_inputs().len() == 2, "signature fragment")?;
     // Derivation borrows without allocating; the fixed debit covers both slots.
     let derived = sig
         .derive_relations_v1()
@@ -536,7 +582,7 @@ fn check_constant_point_effect<'a>(
         derived.relation_at_raw_argument_v1(raw_argument)
             == Some(Rel::DisjointOutputCoordinate {
                 argument: 0,
-                element: Scalar::U32,
+                element: scalar.reference(),
             }),
         "output role",
     )?;
@@ -573,7 +619,7 @@ fn check_constant_point_effect<'a>(
         }
     }
     let store = store.ok_or(Error::Reference("missing CPU store"))?;
-    let bits = cpu_u32(&store.value).ok_or(Error::Reference("CPU value"))?;
+    let bits = cpu_constant_bits(&store.value, scalar).ok_or(Error::Reference("CPU value"))?;
     cpu_require(bits <= u128::from(u32::MAX), "CPU constant width")?;
     let [write] = binding.observable_output_writes.as_ref() else {
         return Err(Error::Reference("output count"));
@@ -586,7 +632,7 @@ fn check_constant_point_effect<'a>(
             w.argument == 0
                 && w.block == 0
                 && w.statement == store.statement
-                && cpu_u32(&w.value) == Some(bits),
+                && cpu_constant_bits(&w.value, scalar) == Some(bits),
             "CPU write identity/value",
         )?;
         cpu_require(
@@ -599,8 +645,8 @@ fn check_constant_point_effect<'a>(
             "CPU guard",
         )?;
         cpu_require(
-            matches!(&w.rhs, CpuExpr::Constant(Const::Scalar { scalar: Scalar::U32, bits: b })
-            if *b == bits),
+            matches!(&w.rhs, CpuExpr::Constant(Const::Scalar { scalar: actual, bits: b })
+            if *actual == scalar.reference() && *b == bits),
             "CPU RHS",
         )?;
     }
@@ -617,7 +663,10 @@ fn check_constant_point_effect<'a>(
             write,
             raw_argument,
         },
-        bits,
+        TypedConstantV1 {
+            scalar,
+            bits: bits as u32,
+        },
     ))
 }
 
