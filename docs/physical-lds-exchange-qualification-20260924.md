@@ -148,3 +148,34 @@ protected finalization or launch admission was observed in these LDS gates. Runt
 allocation/kernarg conditions remain unresolved. CPU short-output controls do not
 relax the formal512-byte output requirement. This finite two-wave LDS slice does
 not close the wider memory/synchronization or hardware debugger milestones.
+
+## Merged-tree regression
+
+The September 24 R6 gate passed on functional commit
+`bf86faa9e531bb2932c77f2a851649bd5cef00b3`, preserving all 56 paths from the
+concurrent conditional-formula/native-issuer update. The compiler and mirror
+had identical trees. The completed gate is 31,749 bytes, SHA-256
+`a959fc2298bf717d0822021d7d75f3c90a47d9d4e019e61850ecc09c2b87c368`.
+
+The source census stayed unchanged: 7,659 files, 112,355,765 bytes, SHA-256
+`f4bbc0f66736b6a2c67f1d574710ed4f85ec0d27ec84e2536ea8900b2cc736ba`.
+It reported 10,823 passing Rust test executions over 239 result groups,
+zero failures and 238 explicit ignored tests. These are overlapping executions,
+not 10,823 distinct tests, and ignored actual-source/native gates are not implied
+to have run. Separate Node/Python checks and the documented focused, actual-source,
+CPU-recording and static-native gates retain their own scope. Existing compiler
+warnings remain; this is not a workspace-wide warning-free claim.
+
+The earlier R5 gate remains failed: two compiler-execution-client socket tests
+exceeded Linux's Unix-domain pathname limit under the long task TMPDIR. R6 gave
+only that package a short, private /tmp alias to the same task-owned scratch
+directory; it did not alter the socket protocol, tests, deadlines or assertions.
+All five client library tests passed, alongside its remaining targets.
+
+Publication policy is checked against the already-published main base, not
+rewritten historical commits. The earlier wide-range DCO attempt reported seven
+inherited commits without this repository's exact trailer; those historical
+commits were preserved unchanged. The incoming commits are signed off.
+Stored unified patches preserve their required context-prefix whitespace via
+three exact .gitattributes paths; their bytes and qualified reconstructed debugger
+sources are unchanged. No source-code whitespace rule is disabled.
