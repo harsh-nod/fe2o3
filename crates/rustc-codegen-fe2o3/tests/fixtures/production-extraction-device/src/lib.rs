@@ -51,6 +51,9 @@ mod guarded_loop_read;
 #[cfg(feature = "conditional-descriptor-pair")]
 mod conditional_descriptor_pair;
 
+#[cfg(feature = "conditional-vecadd")]
+mod conditional_vecadd;
+
 #[cfg(any(
     feature = "loop-capture-exact",
     feature = "loop-capture-renamed",
@@ -290,6 +293,7 @@ mod physical_entry_v20;
     feature = "wrapped-fill",
     feature = "unannotated-fill",
     feature = "conditional-descriptor-pair",
+    feature = "conditional-vecadd",
     feature = "private-unit-helper",
     feature = "f32-negate",
     feature = "f32-divide",

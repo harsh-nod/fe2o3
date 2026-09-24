@@ -209,6 +209,26 @@ impl ProductionConditionalRankedAnalysisV1 {
             return Err(ProductionSessionErrorV1::RankedGraphChanged);
         }
 
+        // Also reached by require_current_graph_v1, on the caller's original
+        // canonical account. Exact recipe identity alone does not replay reads.
+        let replay =
+            super::conditional_read_occurrences_v1::replay_bound_v1(census).map_err(resource)?;
+        if let Some(account) = canonical {
+            account
+                .borrow_mut()
+                .charge_work(replay.work_upper_bound())
+                .map_err(|_| resource(canonical_limit_v1(phase)))?;
+        }
+        resources.admit_retained(phase, replay).map_err(resource)?;
+        super::conditional_read_occurrences_v1::replay_read_occurrences_v1(
+            &self._session.inner.context,
+            &function,
+            recipe,
+            &record.read_occurrences,
+            self.analysis._mutation_epoch,
+            census,
+        )?;
+
         let mut occurrences = Vec::new();
         occurrences
             .try_reserve_exact(requests.len())

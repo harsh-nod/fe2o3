@@ -93,6 +93,76 @@ fn nonzero(identity: Option<[u64; 4]>) -> bool {
 }
 
 impl<'a> LiveReader<'a> {
+    pub(super) fn prepare_inputs<M: Meter>(
+        &self,
+        selected: Selection<Value>,
+        output: Value,
+        reads: &[super::LiveReadBoundV1],
+        meter: &mut M,
+    ) -> CheckResult<Vec<super::InputBound<Value>>, M::Error> {
+        use super::InputBound;
+        self.check_epoch(meter)?;
+        meter.charge(4)?;
+        let mut inputs = Vec::new();
+        inputs
+            .try_reserve_exact(reads.len())
+            .map_err(|_| Fault::Arithmetic)?;
+        require(inputs.capacity() == reads.len())?;
+        let mut count = 0usize;
+        for site in self.inventory.operations().iter().copied() {
+            meter.charge(8)?;
+            let raw = self.raw(site, meter)?;
+            let Some(access) = Operation::get_op::<RankedAccessOp>(site.pointer(), self.context)
+            else {
+                continue;
+            };
+            if access.kind(self.context) != Some(AccessKindAttr::Read) {
+                continue;
+            }
+            self.operation(site.block(), site.operation(), meter)?;
+            require(raw.get_num_operands() == 2)?;
+            let mut matched = None;
+            for read in reads {
+                meter.charge(8)?;
+                if read.operation == site.pointer() {
+                    require(matched.replace(read).is_none())?;
+                }
+            }
+            let read = matched.ok_or(Fault::Coordinate)?;
+            require(
+                read.view == raw.get_operand(0)
+                    && read.index == raw.get_operand(1)
+                    && read.index == selected.index
+                    && read.view != output,
+            )?;
+            let view = self.view_info(read.view, meter)?;
+            require(
+                !view.writable
+                    && view.space == MemorySpaceAttr::Global
+                    && view.rank == 1
+                    && view.single_dynamic,
+            )?;
+            let view_raw = self.raw(view.definition, meter)?;
+            require(
+                view_raw.get_operand(0) == read.extent
+                    && read.extent.defining_block() == self.inventory.blocks().first().copied(),
+            )?;
+            count = count.checked_add(1).ok_or(Fault::Arithmetic)?;
+            inputs.push(InputBound {
+                site: Site {
+                    block: ordinal(site.block())?,
+                    operation: ordinal(site.operation())?,
+                },
+                index: read.index,
+                extent: read.extent,
+                domain: read.domain,
+            });
+        }
+        require(count == reads.len())?;
+        self.check_epoch(meter)?;
+        Ok(inputs)
+    }
+
     pub(super) fn check_epoch<M: Meter>(&self, meter: &mut M) -> CheckResult<(), M::Error> {
         meter.charge(1)?;
         let current = self

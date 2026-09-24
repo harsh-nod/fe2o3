@@ -26,6 +26,7 @@ use super::{
 };
 
 mod conditional_ranked_v1;
+mod conditional_read_occurrences_v1;
 mod middle_end_evidence_v4;
 mod middle_end_evidence_v5;
 mod mir_pliron_semantic_contract_derivation_v1;
@@ -638,6 +639,7 @@ impl ProductionPlironSessionV1 {
                 ranked_kernel: materialized.ranked_kernel,
                 ranked_view_names: materialized.ranked_view_names,
                 ownership_occurrences: materialized.ownership_occurrences,
+                read_occurrences: materialized.read_occurrences,
                 policy_checked_refinement_staging: materialized.policy_checked_refinement_staging,
                 production_pipeline_report: None,
                 production_analysis_resource_upper_bound: None,

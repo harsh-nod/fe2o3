@@ -194,6 +194,24 @@ impl<'budget, 'work> CompilerExecutionClientV2<'budget, 'work> {
         Ok((carriage, charge))
     }
 
+    /// Consumes a ready session by exchanging one exact acknowledged Cancel.
+    /// This does not authenticate readiness or a compiler result. The caller
+    /// must first validate the supervisor's readiness/launch binding. Policy
+    /// and request joins, framing, deadline and all I/O use the retained budget.
+    pub fn cancel(self, policy: &Policy) -> Result<()> {
+        let floor = input_floor(self.retained, policy.retained_storage(), 0)?;
+        let peer = self
+            .peer
+            .as_ref()
+            .ok_or(ClientError::Mismatch("closed native peer"))?;
+        let deadline = self.deadline;
+        self.budget
+            .with_prepaid_scope(floor, 8, 8, Self::SESSION_SCRATCH, |b| {
+                let response = Session::new(peer, deadline, b).exchange(policy, Payload::Cancel)?;
+                require_kind(&response, Kind::Cancelled)
+            })
+    }
+
     /// Generates a fresh OS challenge and authenticates both signatures over the
     /// exact native carriage. This is terminal even when the peer refuses it.
     pub fn verify_current_only(

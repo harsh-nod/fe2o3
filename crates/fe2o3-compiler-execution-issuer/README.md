@@ -39,10 +39,24 @@ operations share one resource ledger. It never upgrades or retries a V1 policy.
 The launch manifest retains the identity-only V1 wire; decoding that frame alone
 does not establish a native policy match.
 
-This reader is inert and is not yet called by the serving entrypoint. Native
-program custody now exists in the supervisor, with separate native key custody,
-but program/key authority binding, supervisor launch, service/durable-state
-admission and readiness must be integrated before activation. A subprocess test covers actual
-post-exec input readback and refusal cleanup, not the protected static-launcher
-path, proof execution, or GPU qualification. See the
+`run_inherited_compiler_execution_issuer_v2` consumes these inputs through native
+client/service/anchor/key and running-image admission on one original budget.
+Its separate `fe2o3-compiler-execution-issuer-native` binary uses the same fixed
+descriptor ABI. The default executable and V1 entrypoint are unchanged; neither
+wire decoding nor admission failure selects or retries the other version.
+
+Native readiness is published only after singleton journal recovery, retained
+anchor admission, exact manifest/client/policy joins and fresh custody checks.
+The consumed pipe writer is closed after its single bounded atomic write. The
+same native service then handles requests, including acknowledged cancellation
+through `CompilerExecutionClientV2::cancel`. Readiness is not compiler-origin
+proof, a successful anchor observation, or GPU authority. Prepare/Issue still
+require independent pidfd inspection; permission denial is terminal.
+
+The native binary still needs a separately measured sealed-static build and
+trusted supervisor provisioning. The existing static build/deployment scripts
+remain V1. An opt-in isolated static test stages public admission/readiness and
+Cancel, plus refusal cases; it is not evidence of inherited-entrypoint launch,
+protected compiler-source observation, proof execution, or GPU qualification.
+See the
 [native capability contract](../../docs/compiler-execution-capabilities-v2.md).

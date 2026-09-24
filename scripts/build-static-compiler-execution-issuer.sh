@@ -3,9 +3,20 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly repo_root
-readonly target_dir="${FE2O3_STATIC_ISSUER_TARGET_DIR:-${repo_root}/target/static-issuer}"
+case "$#:${1-}" in
+  0:) binary=fe2o3-compiler-execution-issuer
+      target_dir="${FE2O3_STATIC_ISSUER_TARGET_DIR:-${repo_root}/target/static-issuer}"
+      image_env=FE2O3_STATIC_COMPILER_EXECUTION_ISSUER
+      image_test=release_image_is_loader_independent_static_elf ;;
+  1:--native) binary=fe2o3-compiler-execution-issuer-native
+      target_dir="${FE2O3_STATIC_NATIVE_ISSUER_TARGET_DIR:-${repo_root}/target/static-native-issuer}"
+      image_env=FE2O3_STATIC_COMPILER_EXECUTION_ISSUER_NATIVE
+      image_test=native_release_image_is_loader_independent_static_elf ;;
+  *) printf 'usage: %s [--native]\n' "$0" >&2; exit 2 ;;
+esac
+readonly binary target_dir image_env image_test
 readonly target="x86_64-unknown-linux-musl"
-readonly executable="${target_dir}/${target}/release/fe2o3-compiler-execution-issuer"
+readonly executable="${target_dir}/${target}/release/${binary}"
 
 cd -- "${repo_root}"
 CARGO_TARGET_DIR="${target_dir}" cargo rustc \
@@ -13,7 +24,7 @@ CARGO_TARGET_DIR="${target_dir}" cargo rustc \
   --release \
   --target "${target}" \
   -p fe2o3-compiler-execution-issuer \
-  --bin fe2o3-compiler-execution-issuer \
+  --bin "${binary}" \
   -- \
   -C target-feature=+crt-static \
   -C relocation-model=static \
@@ -21,36 +32,13 @@ CARGO_TARGET_DIR="${target_dir}" cargo rustc \
   -C link-arg=-no-pie \
   -C link-arg=-Wl,-e,fe2o3_secure_start_v1
 
-readonly report="${target_dir}/fe2o3-compiler-execution-issuer.readelf.txt"
-/usr/bin/readelf -hW -lW -dW -sW -- "${executable}" >"${report}"
-/usr/bin/grep -Eq 'Class:[[:space:]]+ELF64' "${report}"
-/usr/bin/grep -Eq 'Type:[[:space:]]+EXEC' "${report}"
-entry_address="$(/usr/bin/awk '/Entry point address:/ { print $4 }' "${report}")"
-secure_start_address="$(
-  /usr/bin/nm -n --defined-only -- "${executable}" \
-    | /usr/bin/awk '$3 == "fe2o3_secure_start_v1" { print "0x" $1 }'
-)"
-if [[ -z "${entry_address}" || -z "${secure_start_address}" \
-  || $((entry_address)) -ne $((secure_start_address)) ]]; then
-  printf 'compiler-execution issuer does not enter through its secure pre-runtime shim\n' >&2
-  exit 1
-fi
-if /usr/bin/grep -Eq 'INTERP|DYNAMIC|\(NEEDED\)|\(RPATH\)|\(RUNPATH\)' "${report}"; then
-  printf 'compiler-execution issuer contains a dynamic-loader dependency\n' >&2
-  exit 1
-fi
-/usr/bin/grep -Eq 'GNU_STACK.*RW[[:space:]]' "${report}"
-undefined_symbols="$(/usr/bin/nm -u -- "${executable}")"
-if [[ -n "${undefined_symbols}" ]]; then
-  printf 'compiler-execution issuer contains undefined symbols\n' >&2
-  exit 1
-fi
+readonly report="${target_dir}/${binary}.readelf.txt"
+bash "${repo_root}/scripts/check-static-compiler-execution-issuer-image.sh" "${executable}" "${report}"
 
-FE2O3_STATIC_COMPILER_EXECUTION_ISSUER="${executable}" \
-  CARGO_TARGET_DIR="${target_dir}/profile-test" \
+env "${image_env}=${executable}" CARGO_TARGET_DIR="${target_dir}/profile-test" \
   cargo test --locked -p fe2o3-compiler-execution-issuer \
     --test static_image \
-    release_image_is_loader_independent_static_elf \
+    "${image_test}" \
     -- --exact --ignored
 
 set +e

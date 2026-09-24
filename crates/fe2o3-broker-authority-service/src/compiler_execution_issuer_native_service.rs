@@ -7,6 +7,7 @@ use crate::compiler_execution_service::{
     receive_packet_metered, send_packet_metered,
 };
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV2 as Subject;
+use fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestV2 as Manifest;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV2 as Challenge,
     CompilerExecutionAttestationReceiptV2 as Receipt,
@@ -22,7 +23,10 @@ use fe2o3_compiler_execution_protocol::{
     MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V2 as REQUEST_BYTES,
     MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V2 as RESPONSE_BYTES,
 };
-use std::time::Instant;
+use std::{os::fd::OwnedFd, time::Instant};
+
+#[path = "compiler_execution_issuer_native_readiness.rs"]
+mod readiness;
 
 #[path = "compiler_execution_issuer_native_error.rs"]
 mod error;
@@ -66,9 +70,54 @@ impl<'work> Admission<'work> {
     /// }
     /// ```
     pub fn serve_native_preparation(self, b: &mut Budget<'_>) -> Result<()> {
+        self.serve_native(None, b)
+    }
+
+    /// Prepaid input charge for the consumed private readiness pipe writer.
+    pub const READINESS_WRITER_STORAGE: usize = readiness::WRITER_STORAGE;
+
+    /// Serves the same native protocol after publishing exact V2 launch readiness.
+    /// The manifest must name the admitted client, anchor and policy. Publication
+    /// follows singleton recovery, anchor retention and fresh custody/journal
+    /// validation. The writer is consumed and closed, including on refusal.
+    /// Readiness is not proof of compiler execution or permission to inspect a
+    /// future occurrence; Prepare/Issue still require independent observation.
+    /// Keep the manifest and READINESS_WRITER_STORAGE prepaid on the original
+    /// ledger. The launch supervisor must retain exclusive pipe-reader custody.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_broker_authority_service::ProtectedCompilerExecutionIssuerAdmissionV2 as A;
+    /// use fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestV1 as M;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+    /// fn mix(a: A<'_>, m: &M, fd: std::os::fd::OwnedFd, b: &mut B<'_>) {
+    ///     a.serve_native_with_readiness(m, fd, b);
+    /// }
+    /// ```
+    pub fn serve_native_with_readiness(
+        self,
+        manifest: &Manifest,
+        writer: OwnedFd,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.serve_native(Some((manifest, writer)), b)
+    }
+
+    fn serve_native(self, ready: Option<(&Manifest, OwnedFd)>, b: &mut Budget<'_>) -> Result<()> {
         // Reject a foreign ledger before any directory or transport I/O.
         self.validate_continuity(b)?;
-        b.with_prepaid_scope(self.retained_storage(), 8, FIXED_WORK, FRAME, |b| {
+        let floor = self
+            .retained_storage()
+            .checked_add(
+                ready
+                    .as_ref()
+                    .map_or(0, |(m, _)| m.retained_storage() + readiness::WRITER_STORAGE),
+            )
+            .ok_or(Resource::Arithmetic)?;
+        b.with_prepaid_scope(floor, 8, FIXED_WORK, FRAME, |b| {
+            if let Some((manifest, writer)) = &ready {
+                readiness::check_binding(&self, manifest, b)?;
+                readiness::check_writer(writer, b)?;
+            }
             let mut ledger = Ledger::recover(
                 self.service.service_root(),
                 &self.policy,
@@ -83,6 +132,16 @@ impl<'work> Admission<'work> {
                 .checked_add(COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1)
                 .ok_or_else(|| Error::rejected("native service deadline overflow"))?;
             let mut attempts = 0;
+            if let Some((manifest, writer)) = ready {
+                readiness::publish(manifest, &self.policy, writer, b, |b| {
+                    self.validate_continuity(b)?;
+                    ledger.validate(b)?;
+                    if Instant::now() >= deadline {
+                        return Err(Error::rejected("native readiness session deadline expired"));
+                    }
+                    Ok(())
+                })?;
+            }
             for _ in 0..MAX_COMPILER_EXECUTION_SERVICE_PACKETS_V1 {
                 let cancelled = b.with_prepaid_scope(
                     self.retained_storage() + Ledger::STORAGE + anchor.retained_storage(),

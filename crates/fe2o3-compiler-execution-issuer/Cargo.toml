@@ -7,6 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Sealed-static protected compiler-execution issuer entrypoint for fe2o3."
 publish = false
+default-run = "fe2o3-compiler-execution-issuer"
 
 [dependencies]
 fe2o3-broker-authority-service = { path = "../fe2o3-broker-authority-service" }
@@ -18,6 +19,7 @@ libc.workspace = true
 rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
+fe2o3-compiler-execution-client.workspace = true
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-runtime-protocol.workspace = true
 
@@ -27,5 +29,11 @@ name = "fe2o3_compiler_execution_issuer"
 [[bin]]
 name = "fe2o3-compiler-execution-issuer"
 path = "src/main.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-issuer-native"
+path = "src/bin/fe2o3-compiler-execution-issuer-native.rs"
 test = false
 bench = false

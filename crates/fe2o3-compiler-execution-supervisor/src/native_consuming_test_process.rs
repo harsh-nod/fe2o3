@@ -35,6 +35,9 @@ const CHILD_TIMEOUT: Duration = Duration::from_secs(45);
 pub(crate) const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
 
+#[path = "native_issuer_test_process.rs"]
+mod native_issuer;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Case {
     Ready,
@@ -262,7 +265,14 @@ fn spawn_locked_supervisor(case: Case, cap_last: u32, control: OwnedFd) -> Child
         .env(ROLE, "native-consuming-supervisor")
         .env(CASE, case.id().to_string())
         .env_remove(OPT_IN)
-        .env_remove("FE2O3_RUN_PRIVILEGED_SUPERVISOR_V2_TEST")
+        .env_remove("FE2O3_RUN_PRIVILEGED_SUPERVISOR_V2_TEST");
+    spawn_locked_role(command, cap_last, control)
+}
+
+// The real native issuer fixture shares the same exact bootstrap. Only the
+// private libtest role changes; no credential/profile predicate is relaxed.
+fn spawn_locked_role(mut command: Command, cap_last: u32, control: OwnedFd) -> ChildGuard {
+    command
         .env("TMPDIR", "/tmp")
         .current_dir("/tmp")
         .stdin(Stdio::from(control))

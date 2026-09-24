@@ -4230,6 +4230,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
     pub(super) ownership_occurrences: Vec<super::conditional_ranked_v1::OwnershipOccurrenceV1>,
+    pub(super) read_occurrences: Vec<super::conditional_read_occurrences_v1::ReadOccurrenceV1>,
     pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV2>,
     pub(super) production_analysis_resource_upper_bound:
@@ -4249,6 +4250,7 @@ pub(super) struct MaterializedConstructionV1 {
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
     pub(super) ownership_occurrences: Vec<super::conditional_ranked_v1::OwnershipOccurrenceV1>,
+    pub(super) read_occurrences: Vec<super::conditional_read_occurrences_v1::ReadOccurrenceV1>,
     pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
 }
 
@@ -4452,6 +4454,7 @@ impl ProductionPlironSessionV1 {
                     ranked_kernel: None,
                     ranked_view_names: BTreeMap::new(),
                     ownership_occurrences: Vec::new(),
+                    read_occurrences: Vec::new(),
                     policy_checked_refinement_staging: Vec::new(),
                 })
                 .map_err(ProductionSessionErrorV1::Operation),
@@ -4535,6 +4538,8 @@ impl ProductionPlironSessionV1 {
         }
         let mut ownership_occurrences =
             self.prepare_ownership_occurrence_storage_v1(&kernel, kernel.tree_work)?;
+        let mut read_occurrences =
+            self.prepare_read_occurrence_storage_v1(&kernel, kernel.tree_work)?;
         let operation = self
             .inner
             .create_module(root_name)
@@ -4617,6 +4622,14 @@ impl ProductionPlironSessionV1 {
                     &policy_checked_refinement_staging,
                 )
                 .map_err(ProductionSessionErrorV1::RankedRecipe)?;
+                super::conditional_read_occurrences_v1::record_read_occurrence_v1(
+                    &mut read_occurrences,
+                    &self.inner.context,
+                    block_index,
+                    recipe_index,
+                    recipe,
+                    emitted,
+                )?;
                 if let ProductionRankedOperationV1::OwnershipContract { view, .. } = recipe {
                     ownership_occurrences.push(
                         super::conditional_ranked_v1::OwnershipOccurrenceV1 {
@@ -4643,6 +4656,7 @@ impl ProductionPlironSessionV1 {
             )
             .map_err(ProductionSessionErrorV1::RankedRecipe)?;
         }
+        super::conditional_read_occurrences_v1::require_complete_v1(&read_occurrences)?;
         self.inner
             .finish_internal_root_construction(&operation, transaction)
             .map_err(ProductionSessionErrorV1::Operation)?;
@@ -4685,6 +4699,7 @@ impl ProductionPlironSessionV1 {
             ranked_kernel: Some(kernel),
             ranked_view_names,
             ownership_occurrences,
+            read_occurrences,
             policy_checked_refinement_staging,
         })
     }

@@ -12,6 +12,8 @@ enum Failure {
     Attestation(fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV2),
     Publication(fe2o3_compiler_execution_protocol::CompilerExecutionReceiptPublicationErrorV2),
     Protocol(fe2o3_compiler_execution_protocol::CompilerExecutionServiceProtocolErrorV2),
+    Manifest(fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestErrorV2),
+    Readiness(fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyErrorV2),
     Subject(fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV2),
     Journal(fe2o3_compiler_execution_protocol::CompilerExecutionNativeJournalErrorV2),
     Worker(fe2o3_compiler_execution_protocol::CompilerExecutionWorkerAnchorJournalErrorV2),
@@ -36,6 +38,14 @@ macro_rules! from_error {
     };
 }
 from_error!(Resource, Resource);
+from_error!(
+    fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestErrorV2,
+    Manifest
+);
+from_error!(
+    fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyErrorV2,
+    Readiness
+);
 from_error!(super::super::Error, Admission);
 from_error!(KeyError, Key);
 from_error!(
@@ -96,6 +106,8 @@ impl NativeIssuerServiceError {
     pub fn resource(&self) -> Option<Resource> {
         match &self.0 {
             Failure::Resource(e) => Some(*e),
+            Failure::Manifest(fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestErrorV2::Resource(e)) => Some(*e),
+            Failure::Readiness(fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyErrorV2::Resource(e)) => Some(*e),
             Failure::Admission(e) => e.resource(),
             Failure::AnchorAdmission(e) => e.resource(),
             Failure::AnchorTransport(crate::ProtectedCompilerExecutionExternalAnchorErrorV1::Resource(e)) => Some(*e),
@@ -119,6 +131,8 @@ impl std::fmt::Display for NativeIssuerServiceError {
             Failure::Attestation(e) => write!(f, "{e}"),
             Failure::Publication(e) => write!(f, "{e}"),
             Failure::Protocol(e) => write!(f, "{e}"),
+            Failure::Manifest(e) => write!(f, "{e}"),
+            Failure::Readiness(e) => write!(f, "{e}"),
             Failure::Subject(e) => write!(f, "{e}"),
             Failure::Journal(e) => write!(f, "{e}"),
             Failure::Worker(e) => write!(f, "{e}"),

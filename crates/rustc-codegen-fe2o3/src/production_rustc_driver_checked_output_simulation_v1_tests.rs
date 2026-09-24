@@ -15,6 +15,8 @@ const CHILD_CASE: &str = "FE2O3_TEST_CHECKED_OUTPUT_SIMULATION_V1";
 const GUARD_ELEMENTS: usize = 4;
 const SENTINEL: f32 = -1234.5;
 const TARGET: SimulationTargetV1 = SimulationTargetV1::amdgpu_64();
+#[path = "production_rustc_driver_conditional_vecadd_simulation_v1_tests.rs"]
+pub(super) mod conditional_vecadd;
 #[path = "production_rustc_driver_checked_output_shift_simulation_v1_tests.rs"]
 pub(super) mod constant_shift;
 #[path = "production_rustc_driver_checked_output_f32_simulation_v1_tests.rs"]

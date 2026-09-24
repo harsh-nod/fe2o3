@@ -96,6 +96,9 @@ const CASES: &[&str] = &[
     "anchor-after",
 ];
 
+#[path = "native_service_v2/mod.rs"]
+mod native_service;
+
 fn require_container() {
     assert_eq!(
         std::env::var(OPT_IN).as_deref(),
@@ -250,7 +253,7 @@ fn receive_fd(control: &OwnedFd) -> OwnedFd {
 fn native_admission_peer_child() {
     require_container();
     let expected = match std::env::var(PEER_ENV).as_deref() {
-        Ok("client") => CLIENT_ID,
+        Ok("client" | "client-service") => CLIENT_ID,
         Ok("anchor") => ANCHOR_ID,
         _ => panic!("explicit peer role required"),
     };
@@ -262,6 +265,9 @@ fn native_admission_peer_child() {
     let (endpoint, held_peer) = pair();
     send_fd(&control, &endpoint);
     drop(endpoint);
+    if std::env::var(PEER_ENV).as_deref() == Ok("client-service") {
+        send_fd(&control, &held_peer);
+    }
     let mut stop = [0];
     let count = wait_io(Duration::from_secs(120), || {
         rustix::io::read(&control, &mut stop)
@@ -536,6 +542,10 @@ fn expect_refusal(error: &Error, case: &str) {
 fn native_admission_case_child() {
     require_root();
     let case = std::env::var(CASE_ENV).expect("explicit case role required");
+    if native_service::CASES.contains(&case.as_str()) {
+        native_service::run(&case);
+        return;
+    }
     assert!(CASES.contains(&case.as_str()));
     // Validates the real running image; a dynamic test binary fails, never skips.
     let measurements =
@@ -696,4 +706,22 @@ fn isolated_static_public_admission_matrix() {
         );
     }
     println!("FE2O3_NATIVE_ISSUER_PUBLIC_MATRIX_OK cases={}", CASES.len());
+}
+
+#[test]
+#[ignore = "explicit isolated root container and real musl-static executable required"]
+fn isolated_static_public_native_service_matrix() {
+    require_root();
+    current_static_issuer_measurements_v1().expect("real sealed-static executable required");
+    for case in native_service::CASES {
+        let mut cmd = command(CASE_TEST);
+        cmd.env(CASE_ENV, case);
+        let mut child = ChildGuard(cmd.spawn().unwrap());
+        drop(cmd);
+        assert!(child.wait(CASE_TIMEOUT).unwrap().success(), "{case}");
+    }
+    println!(
+        "FE2O3_NATIVE_SERVICE_READINESS_MATRIX_OK cases={}",
+        native_service::CASES.len()
+    );
 }

@@ -117,6 +117,46 @@ fn assert_closed(peer: &OwnedFd) {
     );
 }
 
+#[test]
+fn native_cancel_requires_exact_acknowledgment_and_preserves_original_account() {
+    for wrong_kind in [false, true] {
+        let (peer, server) = pair();
+        let worker = thread::spawn(move || {
+            let mut work = Work::new(WORK);
+            let mut b = Budget::new(&mut work, STORAGE);
+            b.reserve_storage(FIXTURE_STORAGE).unwrap();
+            let p = policy(&mut b);
+            let query = receive(&server, &mut b);
+            assert_eq!(query.kind(), QueryKind::Cancel);
+            let reply = if wrong_kind {
+                Reply::Ready {
+                    sequence: 1,
+                    prior_rollback_anchor: [0; 32],
+                }
+            } else {
+                Reply::Cancelled {
+                    sequence: 1,
+                    prior_rollback_anchor: [0; 32],
+                }
+            };
+            respond(&server, &query, &p, reply, &mut b);
+            assert_closed(&server);
+        });
+        let mut work = Work::new(WORK);
+        let mut b = Budget::new(&mut work, STORAGE);
+        b.reserve_storage(FIXTURE_STORAGE).unwrap();
+        let p = policy(&mut b);
+        let floor = b.storage();
+        let original = b.work_ledger_identity_v1();
+        b.reserve_storage(Client::PEER_STORAGE).unwrap();
+        let client = Client::admit(peer, TIMEOUT, &mut b).unwrap();
+        assert_eq!(client.cancel(&p).is_err(), wrong_kind);
+        assert_eq!(b.storage(), floor);
+        assert!(b.work_ledger_identity_v1() == original);
+        worker.join().unwrap();
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Stage {
     Ready,

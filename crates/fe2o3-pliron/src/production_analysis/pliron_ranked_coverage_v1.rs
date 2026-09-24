@@ -14,7 +14,9 @@ use fe2o3_kernel_ir::{
 };
 use std::fmt;
 
+mod live_inputs_v1;
 mod live_v1;
+pub(crate) use live_inputs_v1::LiveReadBoundV1;
 
 use super::pliron_pipeline::invocation_receipt_v1::{
     AdditionalObservationV1, observe_additional_admission_v1,
@@ -293,6 +295,52 @@ pub(super) fn check_conditional_ownership_live_rule_with_observation_v1(
     am: &mut Manager,
     additional: AdditionalObservationV1<'_, '_, '_>,
 ) -> LiveResultV1 {
+    check_conditional_ownership_live_rule_scoped_v1(
+        endpoint,
+        inv,
+        census,
+        expected_epoch,
+        selection,
+        None,
+        am,
+        additional,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn check_conditional_ownership_live_rule_with_input_bounds_v1(
+    endpoint: (&Context, &FuncOp),
+    inv: &Inventory,
+    census: Census,
+    expected_epoch: u64,
+    selection: (Ptr<Operation>, LiveValue),
+    reads: &[LiveReadBoundV1],
+    am: &mut Manager,
+    additional: AdditionalObservationV1<'_, '_, '_>,
+) -> LiveResultV1 {
+    check_conditional_ownership_live_rule_scoped_v1(
+        endpoint,
+        inv,
+        census,
+        expected_epoch,
+        selection,
+        Some(reads),
+        am,
+        additional,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_conditional_ownership_live_rule_scoped_v1(
+    endpoint: (&Context, &FuncOp),
+    inv: &Inventory,
+    census: Census,
+    expected_epoch: u64,
+    selection: (Ptr<Operation>, LiveValue),
+    reads: Option<&[LiveReadBoundV1]>,
+    am: &mut Manager,
+    additional: AdditionalObservationV1<'_, '_, '_>,
+) -> LiveResultV1 {
     match additional {
         None => check_conditional_ownership_live_rule_inner_v1(
             endpoint,
@@ -300,6 +348,7 @@ pub(super) fn check_conditional_ownership_live_rule_with_observation_v1(
             census,
             expected_epoch,
             selection,
+            reads,
             am,
             None,
         ),
@@ -311,6 +360,7 @@ pub(super) fn check_conditional_ownership_live_rule_with_observation_v1(
                     census,
                     expected_epoch,
                     selection,
+                    reads,
                     am,
                     additional,
                 )
@@ -319,18 +369,23 @@ pub(super) fn check_conditional_ownership_live_rule_with_observation_v1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_conditional_ownership_live_rule_inner_v1(
     endpoint: (&Context, &FuncOp),
     inv: &Inventory,
     census: Census,
     expected_epoch: u64,
     selection: (Ptr<Operation>, LiveValue),
+    reads: Option<&[LiveReadBoundV1]>,
     am: &mut Manager,
     additional: AdditionalObservationV1<'_, '_, '_>,
 ) -> LiveResultV1 {
     let (ctx, function) = endpoint;
     let (ownership, original_view) = selection;
-    let bound = live_preflight(census)?;
+    let bound = match reads {
+        None => live_preflight(census)?,
+        Some(reads) => live_inputs_v1::preflight(census, reads.len())?,
+    };
     if additional.is_some() {
         let phase = Phase::HierarchicalOwnership;
         let limits = am.remaining_resource_limits(phase)?;
@@ -364,7 +419,13 @@ fn check_conditional_ownership_live_rule_inner_v1(
             original_view,
             &mut m,
         )?;
-        let exits = check_paths(&p.reader, p.selected, &mut m)?;
+        let exits = match reads {
+            None => check_paths(&p.reader, p.selected, &mut m)?,
+            Some(reads) => {
+                let inputs = p.reader.prepare_inputs(p.selected, p.view, reads, &mut m)?;
+                check_paths_with_inputs(&p.reader, p.selected, &inputs, &mut m)?
+            }
+        };
         p.reader.check_epoch(&mut m)?;
         let view = live_key(ctx, inv, p.view, &mut m)?;
         let index = live_key(ctx, inv, p.selected.index, &mut m)?;

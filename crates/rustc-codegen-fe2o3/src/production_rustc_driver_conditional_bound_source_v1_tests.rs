@@ -2,6 +2,9 @@
 use super::*;
 use crate::production_ranked_projection_v1::conditional_bound_observation_v1_tests as observed;
 
+#[path = "production_rustc_driver_conditional_vecadd_source_v1_tests.rs"]
+mod vecadd;
+
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::conditional_bound_source::conditional_bound_source_child";
 const ABSENT_RUNTIME_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::conditional_bound_source::absent_runtime_child";
 

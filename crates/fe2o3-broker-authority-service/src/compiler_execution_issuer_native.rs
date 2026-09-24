@@ -63,7 +63,9 @@ use ProtectedCompilerExecutionIssuerStorageV2 as Storage;
 /// consumes this owner into singleton recovery, independently observed issuance,
 /// and durable native Worker publication/currentness exchanges. It verifies the
 /// separately pinned anchor response and exact journal joins before replying.
-/// It does not publish readiness or alter deployment. Raw signing,
+/// `serve_native_with_readiness` additionally consumes a private launch pipe,
+/// publishing only after recovery and exact manifest/custody checks. Neither
+/// entrypoint alters deployment. Raw signing,
 /// descriptor extraction and V1 conversions remain unavailable. The V1 serving
 /// entrypoint is unchanged.
 ///
