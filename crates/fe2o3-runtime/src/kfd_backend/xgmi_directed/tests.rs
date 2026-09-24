@@ -1,5 +1,7 @@
 use super::*;
 
+mod shared_sources;
+
 #[derive(Clone, Copy, Debug)]
 enum Fault {
     Rejected,

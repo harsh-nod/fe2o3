@@ -115,15 +115,16 @@ not publish deferred native work or replace explicit `flush_stream`.
 The exact two-device XGMI copy-only backend retains successful peer mappings
 until host access or allocation release and publishes directional copies from a
 deterministic FIFO readiness queue in batches of at most 63 with caller-driven
-fairness. Ready selection is O(batch), bounded by 63, and focused in-flight
-selection is O(log batch), independent of the total active set. It remains
+fairness. Disjoint ready selection compares O(batch squared) pairs, bounded by
+63 entries, with exact directed provenance checks for shared sources. Focused
+in-flight selection is O(log batch), independent of the total active set. It remains
 separate from the single-device compute owner; there is no unified native
 multi-device compute backend.
 
 The additive in-process scalar `flush_stream` extension snapshots the complete
-ready XGMI directional set and publishes it in one batch of at most 63. It
-rejects a larger ready set before native publication, or a nonempty ready set
-with a busy publication window without waiting. An empty ready set succeeds
+ready XGMI directional set and publishes it in one allocation-disjoint batch of
+at most 63. It rejects a larger or non-disjoint ready set before native publication,
+or a nonempty ready set with a busy publication window without waiting. An empty ready set succeeds
 without observing completion. Earlier scalar prefix-draining behavior violated the
 nonwaiting SPI contract and has been removed; separately bounded progress
 through larger backlogs remains an integration requirement. Ordinary poll and wait

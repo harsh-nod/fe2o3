@@ -44,6 +44,23 @@ pub(super) struct Admission {
     pub(super) published: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Selection {
+    admission: Admission,
+    shared_source: bool,
+}
+
+fn qualify_selection(selection: Selection, custody: bool) -> Result<Admission, AdmissionError> {
+    if !custody {
+        Err(AdmissionError::Corrupt)
+    } else if selection.shared_source {
+        Err(AdmissionError::Busy)
+    } else {
+        Ok(selection.admission)
+    }
+}
+
+#[cfg(test)]
 fn admit(
     requested: &[u64],
     active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
@@ -61,6 +78,7 @@ fn admit(
     )
 }
 
+#[cfg(test)]
 fn admit_with_reservation(
     requested: &[u64],
     active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
@@ -69,6 +87,27 @@ fn admit_with_reservation(
     completed: &HashMap<u64, SubmissionRecordV1>,
     mut reserve: impl FnMut(&mut Vec<u64>, usize) -> Result<(), std::collections::TryReserveError>,
 ) -> Result<Admission, AdmissionError> {
+    admit_with_sharing(
+        requested,
+        active,
+        ready,
+        in_flight,
+        completed,
+        &mut reserve,
+        |_, _, _| Ok(false),
+    )
+    .map(|selection| selection.admission)
+}
+
+fn admit_with_sharing(
+    requested: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    ready: &[VecDeque<u64>; 2],
+    in_flight: &[Vec<u64>; 2],
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    mut reserve: impl FnMut(&mut Vec<u64>, usize) -> Result<(), std::collections::TryReserveError>,
+    shared_read: impl Fn(u64, u64, u64) -> Result<bool, xgmi_directed::OwnerError>,
+) -> Result<Selection, AdmissionError> {
     if requested.is_empty() || requested.len() > MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1 {
         return Err(AdmissionError::Invalid);
     }
@@ -79,6 +118,7 @@ fn admit_with_reservation(
     }) {
         return Err(AdmissionError::Invalid);
     }
+    let mut shared_source = false;
     for (index, id) in requested.iter().enumerate() {
         if requested[..index].contains(id) {
             return Err(AdmissionError::Invalid);
@@ -176,16 +216,61 @@ fn admit_with_reservation(
         }
         for earlier in &requested[..index] {
             let previous = active.get(earlier).ok_or(AdmissionError::Corrupt)?;
-            if previous.stream == record.stream
-                || [previous.source, previous.destination]
-                    .iter()
-                    .any(|id| *id == record.source || *id == record.destination)
-            {
+            if previous.stream == record.stream {
                 return Err(AdmissionError::Corrupt);
+            }
+            if [previous.source, previous.destination]
+                .iter()
+                .any(|id| *id == record.source || *id == record.destination)
+            {
+                if admission.published
+                    || previous.source != record.source
+                    || previous.destination == record.destination
+                    || !shared_read(*earlier, *id, record.source)
+                        .map_err(|_| AdmissionError::Corrupt)?
+                {
+                    return Err(AdmissionError::Corrupt);
+                }
+                shared_source = true;
             }
         }
     }
-    Ok(admission)
+    Ok(Selection {
+        admission,
+        shared_source,
+    })
+}
+
+fn compatible_owner(
+    id: u64,
+    other: &XgmiRuntimeSubmissionV1,
+    allocation: u64,
+    shared_read: impl Fn(u64, u64, u64) -> Result<bool, xgmi_directed::OwnerError>,
+) -> bool {
+    other.id == id
+        || other.ticket.is_none()
+            && (other.id > id && other.dependencies.contains(&id)
+                || shared_read(id, other.id, allocation).unwrap_or(false))
+}
+
+fn valid_owner_roster(
+    id: u64,
+    allocation: u64,
+    owners: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    shared_read: impl Fn(u64, u64, u64) -> Result<bool, xgmi_directed::OwnerError>,
+) -> bool {
+    if owners.len() > MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1 || !owners.contains(&id) {
+        return false;
+    }
+    owners.iter().enumerate().all(|(index, owner)| {
+        active.get(owner).is_some_and(|other| {
+            other.id == *owner
+                && !owners[..index].contains(owner)
+                && [other.source, other.destination].contains(&allocation)
+                && compatible_owner(id, other, allocation, &shared_read)
+        })
+    })
 }
 
 enum Input<R, T> {
@@ -649,24 +734,18 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 let Some(owners) = self.active_allocation_owners.get(&allocation) else {
                     return Ok(false);
                 };
-                if !owners.contains(id) {
+                // Unpublished directed readers and later dependency-blocked
+                // copies may retain this allocation outside the native frontier.
+                if !valid_owner_roster(
+                    *id,
+                    allocation,
+                    owners,
+                    &self.active,
+                    |left, right, allocation| {
+                        xgmi_directed::shared_read(self, left, right, allocation)
+                    },
+                ) {
                     return Ok(false);
-                }
-                // Later dependency-blocked copies may share this allocation.
-                // They are not part of the admitted native frontier.
-                for (index, owner) in owners.iter().enumerate() {
-                    let Some(other) = self.active.get(owner) else {
-                        return Ok(false);
-                    };
-                    if owners[..index].contains(owner)
-                        || ![other.source, other.destination].contains(&allocation)
-                        || *owner != *id
-                            && (*owner < *id
-                                || other.ticket.is_some()
-                                || !other.dependencies.contains(id))
-                    {
-                        return Ok(false);
-                    }
                 }
             }
         }
@@ -984,12 +1063,14 @@ impl KfdNativeXgmiRuntimeBackendV1 {
     ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let admission_start = timer.start();
         self.require_live()?;
-        let admission = admit(
+        let selection = admit_with_sharing(
             requested,
             &self.active,
             &self.ready_by_direction,
             &self.in_flight_by_direction,
             &self.submissions,
+            Vec::try_reserve_exact,
+            |left, right, allocation| xgmi_directed::shared_read(self, left, right, allocation),
         )
         .map_err(|error| match error {
             AdmissionError::Invalid => Self::rejected(
@@ -1007,16 +1088,21 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             ),
         })?;
         let custody_is_valid = self
-            .batch_custody_is_valid(requested, admission)
+            .batch_custody_is_valid(requested, selection.admission)
             .map_err(|_| {
                 Self::rejected(
                     KfdRuntimeBackendErrorKindV1::Capacity,
                     "XGMI aggregate dependency-index storage",
                 )
             })?;
-        if !custody_is_valid {
-            return Err(self.terminal_error("XGMI aggregate custody corruption"));
-        }
+        let admission =
+            qualify_selection(selection, custody_is_valid).map_err(|error| match error {
+                AdmissionError::Busy => Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "XGMI aggregate requires disjoint allocation mappings",
+                ),
+                _ => self.terminal_error("XGMI aggregate custody corruption"),
+            })?;
         let mut ids = Vec::new();
         let mut requests = Vec::new();
         let mut tickets = Vec::new();

@@ -7,6 +7,70 @@ use super::*;
 #[cfg(test)]
 mod tests;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PrefixError {
+    Corrupt,
+    Shared,
+}
+
+pub(super) fn publication_len(
+    direction: usize,
+    ready: &VecDeque<u64>,
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    complete_ready_set: bool,
+    shared_read: impl Fn(u64, u64, u64) -> Result<bool, xgmi_directed::OwnerError>,
+) -> Result<usize, PrefixError> {
+    if direction > 1 {
+        return Err(PrefixError::Corrupt);
+    }
+    let window = ready.len().min(GFX942_SDMA_MAX_IN_FLIGHT_V1);
+    let mut prefix = window;
+    // Validate the entire bounded window, including entries after the first
+    // healthy read/read collision, so Busy cannot conceal a corrupt writer.
+    for (index, id) in ready.iter().take(window).enumerate() {
+        let record = active.get(id).ok_or(PrefixError::Corrupt)?;
+        if record.id != *id
+            || *id == 0
+            || record.source == 0
+            || record.destination == 0
+            || record.source == record.destination
+            || record.sequence.is_some()
+            || !record.ready_indexed
+            || completed.contains_key(id)
+            || !xgmi_submission_is_ready_v1(record, completed, direction)
+        {
+            return Err(PrefixError::Corrupt);
+        }
+        for earlier in ready.iter().take(index) {
+            let previous = &active[earlier];
+            if earlier == id || previous.stream == record.stream {
+                return Err(PrefixError::Corrupt);
+            }
+            let overlaps = [previous.source, previous.destination]
+                .iter()
+                .any(|allocation| {
+                    *allocation == record.source || *allocation == record.destination
+                });
+            if overlaps {
+                if previous.source != record.source
+                    || previous.destination == record.destination
+                    || !shared_read(*earlier, *id, record.source)
+                        .map_err(|_| PrefixError::Corrupt)?
+                {
+                    return Err(PrefixError::Corrupt);
+                }
+                prefix = prefix.min(index);
+            }
+        }
+    }
+    if complete_ready_set && prefix != ready.len() {
+        Err(PrefixError::Shared)
+    } else {
+        Ok(prefix)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Node<'a> {
     id: u64,
@@ -335,7 +399,7 @@ impl Driver for KfdNativeXgmiRuntimeBackendV1 {
     }
 
     fn publish(&mut self, direction: usize) -> Result<(), Self::Error> {
-        match self.publish_ready_peer_batch(direction)? {
+        match self.publish_ready_peer_batch(direction, false)? {
             XgmiBatchPublicationOutcomeV1::Published
             | XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure => Ok(()),
             XgmiBatchPublicationOutcomeV1::NoReadyWork

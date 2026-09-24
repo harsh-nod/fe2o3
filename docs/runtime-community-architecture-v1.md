@@ -309,13 +309,15 @@ ambiguity.
   notification are each one release operation per batch.
 - Native XGMI facade batches are direction-local and FIFO readiness ordered,
   reuse exact-roster mappings after successful completion, and use the same
-  63-ticket ring bound. Ready dequeue and publication selection are O(batch),
-  with `batch <= 63`; focused in-flight selection is O(log batch), while
+  63-ticket ring bound. Ready dequeue is O(batch); allocation-disjoint publication
+  selection compares O(batch squared) pairs with bounded directed provenance
+  checks for shared sources, with `batch <= 63`. Focused in-flight selection is O(log batch), while
   completed-ticket removal is O(batch) within that fixed bound and does not
   inspect the ready backlog. Dependency
   wakeup is O(waiters for the completed dependency times the bounded 256-entry
   dependency roster). Prepublication cancellation may remove an arbitrary
-  ready entry in O(ready), and allocation-overlap admission remains O(active).
+  ready entry in O(ready). Allocation-overlap admission inspects only the two
+  selected owner rosters, each bounded to 256, with directed provenance validation.
   A poll focused beyond the published batch may observe its earliest published
   predecessor but does not publish deferred work. Explicit flush remains the
   publication mechanism and synchronously drains fixed-size prefixes when the

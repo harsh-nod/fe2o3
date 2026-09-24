@@ -1,0 +1,11 @@
+
+running 6 tests
+test tests::arguments_reject_wrong_count_zero_duplicate_and_overflow ... ok
+test tests::cleanup_failure_does_not_replace_original_workload_error ... ok
+test tests::dropped_gate_sender_unblocks_receiver ... ok
+test tests::expired_deadline_rejects_even_ready_observation ... ok
+test tests::plan_has_exact_routes_ranges_and_byte_accounting ... ok
+test tests::oracle_detects_payload_guard_and_source_boundary_mutations ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

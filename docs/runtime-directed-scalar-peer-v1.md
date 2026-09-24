@@ -12,7 +12,10 @@ handles, both allocation-relative regions (including access), and the original
 ordered event/expected-producer pairs. The native XGMI implementation checks
 these against its own stream, allocation and event records before calling the
 existing scalar admission path. That path retains its depth, overlap, owner,
-queue and capacity checks. No caller-supplied digest grants execution authority.
+queue and capacity checks. The [shared-source correction](runtime-xgmi-shared-source-v1.md)
+adds only exact directed `Read`/`Read` source sharing without a sibling dependency;
+legacy and ordered profiles receive no new exception. No caller-supplied digest
+grants execution authority.
 
 Every dependency must itself have retained directed-profile metadata. This
 includes completed producers: the old completion record cannot distinguish a

@@ -21,6 +21,16 @@ pub(super) struct Root {
     admitted: bool,
 }
 
+impl Root {
+    fn shares_read_source(&self, other: &Self, allocation: u64) -> bool {
+        self.route.source.allocation == allocation
+            && other.route.source.allocation == allocation
+            && self.route.source.access == RuntimeAccessV1::Read
+            && other.route.source.access == RuntimeAccessV1::Read
+            && self.route.source_device == other.route.source_device
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Error {
     Unknown,
@@ -31,6 +41,13 @@ enum Error {
 }
 
 type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum OwnerError {
+    Busy,
+    Capacity,
+    Corrupt,
+}
 
 struct View<'a> {
     devices: [u64; 2],
@@ -43,6 +60,90 @@ struct View<'a> {
 }
 
 impl View<'_> {
+    fn read_root(&self, id: u64) -> Result<Option<&Root>, OwnerError> {
+        if !self.roots.contains_key(&id) {
+            return Ok(None);
+        }
+        self.retained(id).map(Some).map_err(|_| OwnerError::Corrupt)
+    }
+
+    fn shared_read(&self, left: u64, right: u64, allocation: u64) -> Result<bool, OwnerError> {
+        let left = self.read_root(left)?;
+        let right = self.read_root(right)?;
+        Ok(matches!((left, right), (Some(left), Some(right))
+            if left.shares_read_source(right, allocation)))
+    }
+
+    fn admit_owners(
+        &self,
+        owners: &HashMap<u64, Vec<u64>>,
+        id: u64,
+        route: BackendDirectedPeerRouteV1,
+        events: &[u64],
+        dependencies: &[u64],
+    ) -> Result<(), OwnerError> {
+        if id == 0 || self.active.contains_key(&id) || self.completed.contains_key(&id) {
+            return Err(OwnerError::Corrupt);
+        }
+        let incoming = self.roots.get(&id);
+        if let Some(root) = incoming
+            && (root.admitted
+                || root.route != route
+                || validate_roster(&root.dependencies, id).is_err()
+                || self
+                    .route(route, root.source_extent, root.destination_extent, true)
+                    .is_err()
+                || !root
+                    .dependencies
+                    .iter()
+                    .map(|entry| entry.event)
+                    .eq(events.iter().copied())
+                || !root
+                    .dependencies
+                    .iter()
+                    .map(|entry| entry.producer_submission)
+                    .eq(dependencies.iter().copied()))
+        {
+            return Err(OwnerError::Corrupt);
+        }
+        let mut busy = false;
+        let mut capacity = false;
+        // Only the two bounded selected owner rosters are inspected. Complete
+        // index coverage remains an invariant of admission and settlement.
+        for allocation in [route.source.allocation, route.destination.allocation] {
+            let Some(roster) = owners.get(&allocation) else {
+                continue;
+            };
+            if roster.is_empty() || roster.len() > MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1 {
+                return Err(OwnerError::Corrupt);
+            }
+            capacity |= roster.len() == MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1;
+            for (index, owner) in roster.iter().enumerate() {
+                let record = self.active.get(owner).ok_or(OwnerError::Corrupt)?;
+                if *owner == 0
+                    || *owner >= id
+                    || record.id != *owner
+                    || self.completed.contains_key(owner)
+                    || roster[..index].contains(owner)
+                    || ![record.source, record.destination].contains(&allocation)
+                {
+                    return Err(OwnerError::Corrupt);
+                }
+                let retained = self.read_root(*owner)?;
+                let shared_read = matches!((incoming, retained), (Some(left), Some(right))
+                    if left.shares_read_source(right, allocation));
+                busy |= !dependencies.contains(owner) && !shared_read;
+            }
+        }
+        if busy {
+            Err(OwnerError::Busy)
+        } else if capacity {
+            Err(OwnerError::Capacity)
+        } else {
+            Ok(())
+        }
+    }
+
     fn devices(&self, route: BackendDirectedPeerRouteV1) -> Result<(usize, usize), Error> {
         let source = self
             .devices
@@ -233,6 +334,40 @@ impl View<'_> {
         }
         Ok(())
     }
+}
+
+pub(super) fn admit_scalar_owners(
+    backend: &KfdNativeXgmiRuntimeBackendV1,
+    stream: u64,
+    direction: usize,
+    source: BackendMemoryRegionV1,
+    destination: BackendMemoryRegionV1,
+    events: &[u64],
+    dependencies: &[u64],
+) -> Result<(), OwnerError> {
+    let view = backend.view();
+    view.admit_owners(
+        &backend.active_allocation_owners,
+        backend.next_handle,
+        BackendDirectedPeerRouteV1 {
+            stream,
+            source_device: view.devices[direction],
+            destination_device: view.devices[1 - direction],
+            source,
+            destination,
+        },
+        events,
+        dependencies,
+    )
+}
+
+pub(super) fn shared_read(
+    backend: &KfdNativeXgmiRuntimeBackendV1,
+    left: u64,
+    right: u64,
+    allocation: u64,
+) -> Result<bool, OwnerError> {
+    backend.view().shared_read(left, right, allocation)
 }
 
 fn validate_roster(dependencies: &[BackendDirectedPeerDependencyV1], id: u64) -> Result<(), Error> {

@@ -1,5 +1,19 @@
 # Current Runtime Swarm Work Orders
 
+Latest native-gap correction (2026-09-24): the
+[shared-source CPU packet](evidence/dev-xgmi-shared-source-cpu-2026-09-24/README.md)
+jointly admits exact directed read/read sharing and selects allocation-disjoint
+FIFO publication prefixes. Complete-ready-set flush and exact aggregate requests
+reject shared mappings before publication without terminalizing healthy custody.
+Sixteen new regressions cover production owner admission, prefix/roster helpers,
+both directions, capacity/precedence and Pending/recovered-publication progress.
+GNU and musl each pass 1,341 runtime tests with twenty hardware-only ignores;
+46 doctests, six example tests per target, fourteen Python tests, formatting,
+strict Clippy and 3,904 unchanged inputs pass. Two source reviews find no blocker.
+The diamond witness is unchanged and awaits a fresh signed native campaign.
+The historical refusal below remains failed. Native R125, Admission R118B,
+Resources R116/V3, A1/A2, formal-refinement and performance acceptance are unchanged.
+
 Latest native result (2026-09-24): the
 [directed owner attempt](evidence/dev-xgmi-directed-owner-refused-mi300x-2026-09-24/README.md)
 fails graph qualification on GPUs 5/6. Root and left are admitted, but right is

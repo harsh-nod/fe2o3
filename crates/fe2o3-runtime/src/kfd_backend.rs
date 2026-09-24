@@ -7293,22 +7293,6 @@ fn collect_xgmi_dependencies_v1(
 }
 
 #[cfg(test)]
-fn has_unordered_xgmi_overlap_v1<'a>(
-    active: impl Iterator<Item = &'a XgmiRuntimeSubmissionV1>,
-    source: u64,
-    destination: u64,
-    dependencies: &[u64],
-) -> bool {
-    active.into_iter().any(|submission| {
-        (submission.source == source
-            || submission.destination == source
-            || submission.source == destination
-            || submission.destination == destination)
-            && !dependencies.contains(&submission.id)
-    })
-}
-
-#[cfg(test)]
 fn xgmi_allocation_is_active_v1<'a>(
     active: impl Iterator<Item = &'a XgmiRuntimeSubmissionV1>,
     allocation: u64,
@@ -9877,13 +9861,13 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         Ok(())
     }
 
-    /// Publishes one ready FIFO prefix of at most 63 for one direction in a
-    /// single native SDMA reservation and doorbell store. The maintained
-    /// FIFO ready queue makes selection O(batch) and independent of total
-    /// active work; the ordered in-flight index remains bounded to 63 tickets.
+    /// Publishes an allocation-disjoint FIFO prefix of at most 63. Pairwise
+    /// selection is bounded by that window, independent of the active backlog.
+    /// Exact flushes reject shared mappings before any native effect.
     fn publish_ready_peer_batch(
         &mut self,
         direction: usize,
+        complete_ready_set: bool,
     ) -> Result<XgmiBatchPublicationOutcomeV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
     {
         if self.sequence_by_direction[direction].is_some() {
@@ -9895,9 +9879,23 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         if !self.in_flight_by_direction[direction].is_empty() {
             return Ok(XgmiBatchPublicationOutcomeV1::AlreadyInFlight);
         }
-        let batch_len = self.ready_by_direction[direction]
-            .len()
-            .min(GFX942_SDMA_MAX_IN_FLIGHT_V1);
+        let batch_len = xgmi_progress::publication_len(
+            direction,
+            &self.ready_by_direction[direction],
+            &self.active,
+            &self.submissions,
+            complete_ready_set,
+            |left, right, allocation| xgmi_directed::shared_read(self, left, right, allocation),
+        )
+        .map_err(|error| match error {
+            xgmi_progress::PrefixError::Corrupt => {
+                self.terminal_error("native XGMI ready mapping custody is inconsistent")
+            }
+            xgmi_progress::PrefixError::Shared => Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "native XGMI ready flush requires disjoint allocation mappings",
+            ),
+        })?;
         if batch_len == 0 {
             return Ok(XgmiBatchPublicationOutcomeV1::NoReadyWork);
         }
@@ -10811,36 +10809,28 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 "native XGMI preserves stream order by admitting one pending copy per stream",
             ));
         }
-        if [source.allocation, destination.allocation]
-            .into_iter()
-            .any(|allocation| {
-                self.active_allocation_owners
-                    .get(&allocation)
-                    .is_some_and(|owners| {
-                        owners
-                            .iter()
-                            .any(|owner| !dependency_submissions.contains(owner))
-                    })
-            })
-        {
-            return Err(Self::rejected(
+        xgmi_directed::admit_scalar_owners(
+            self,
+            stream,
+            direction,
+            source,
+            destination,
+            dependencies,
+            &dependency_submissions,
+        )
+        .map_err(|error| match error {
+            xgmi_directed::OwnerError::Busy => Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "overlapping XGMI copies require dependency",
-            ));
-        }
-        if [source.allocation, destination.allocation]
-            .into_iter()
-            .any(|allocation| {
-                self.active_allocation_owners
-                    .get(&allocation)
-                    .is_some_and(|owners| owners.len() >= MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1)
-            })
-        {
-            return Err(Self::rejected(
+            ),
+            xgmi_directed::OwnerError::Capacity => Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Capacity,
                 "native XGMI allocation custody capacity exceeded",
-            ));
-        }
+            ),
+            xgmi_directed::OwnerError::Corrupt => {
+                self.terminal_error("native XGMI allocation-owner custody is inconsistent")
+            }
+        })?;
         self.active_stream_owners.try_reserve(1).map_err(|_| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Capacity,
@@ -11214,7 +11204,7 @@ impl RuntimeFlushBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         match publish_xgmi_flush_v1(
             ready_at_entry,
             !self.in_flight_by_direction[direction].is_empty(),
-            || self.publish_ready_peer_batch(direction),
+            || self.publish_ready_peer_batch(direction, true),
         )? {
             XgmiBatchPublicationOutcomeV1::NoReadyWork if ready_at_entry == 0 => Ok(()),
             XgmiBatchPublicationOutcomeV1::Published => Ok(()),
@@ -23614,19 +23604,6 @@ mod tests {
         assert!(!xgmi_allocation_is_active_v1([&active].into_iter(), 22));
         assert!(has_active_xgmi_stream_v1([&active].into_iter(), 7));
         assert!(!has_active_xgmi_stream_v1([&active].into_iter(), 8));
-        assert!(has_unordered_xgmi_overlap_v1(
-            [&active].into_iter(),
-            22,
-            20,
-            &[]
-        ));
-        assert!(!has_unordered_xgmi_overlap_v1(
-            [&active].into_iter(),
-            22,
-            20,
-            &[100]
-        ));
-
         let mut depths = HashMap::from([(100, 1), (101, 255)]);
         assert_eq!(next_xgmi_dependency_depth_v1(&depths, &[100]), Ok(2));
         assert_eq!(next_xgmi_dependency_depth_v1(&depths, &[101]), Ok(256));

@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/benchmarks/runtime_gfx942/test_xgmi_directed_owner_campaign.py"
+  ],
+  "started_ns": 1790240769121112912,
+  "process_group": 878513,
+  "group_absent": true,
+  "finished_ns": 1790240769261018487,
+  "status": 0
+}

@@ -42,6 +42,7 @@ enum Error {
 
 struct Rig {
     records: Records,
+    allocation_pairs: HashMap<u64, (u64, u64)>,
     calls: Vec<Action>,
     batches: Vec<Vec<u64>>,
     observe_status: BackendPollV1,
@@ -63,6 +64,7 @@ impl Rig {
                 depths: HashMap::new(),
                 reservations: 0,
             },
+            allocation_pairs: HashMap::new(),
             calls: Vec::new(),
             batches: Vec::new(),
             observe_status: BackendPollV1::Succeeded,
@@ -253,9 +255,65 @@ impl Driver for Rig {
     fn publish(&mut self, direction: usize) -> Result<(), Error> {
         self.calls.push(Action::Publish(direction));
         self.inject()?;
-        let ids: Vec<_> = self.records.ready[direction]
+        // Materialize address-free records for the production mapping selector.
+        // Provenance/native publication remain scripted by this fixture.
+        let active = self.records.ready[direction]
             .iter()
             .take(63)
+            .map(|id| {
+                let node = &self.records.active[id];
+                let (source, destination) = self
+                    .allocation_pairs
+                    .get(id)
+                    .copied()
+                    .unwrap_or((*id * 2, *id * 2 + 1));
+                (
+                    *id,
+                    XgmiRuntimeSubmissionV1 {
+                        id: *id,
+                        stream: *id + 1000,
+                        direction: node.direction,
+                        source,
+                        destination,
+                        source_offset: 0,
+                        destination_offset: 0,
+                        byte_len: 32,
+                        dependencies: node.dependencies.clone(),
+                        dependency_cursor: node.cursor,
+                        ready_indexed: node.ready_indexed,
+                        ticket: None,
+                        sequence: None,
+                    },
+                )
+            })
+            .collect();
+        let completed = self
+            .records
+            .completed
+            .iter()
+            .map(|(id, status)| {
+                (
+                    *id,
+                    SubmissionRecordV1 {
+                        stream: *id + 1000,
+                        status: *status,
+                        profile_dispatch_published: false,
+                    },
+                )
+            })
+            .collect();
+        let prefix = publication_len(
+            direction,
+            &self.records.ready[direction],
+            &active,
+            &completed,
+            false,
+            |_, _, _| Ok(true),
+        )
+        .unwrap();
+        let ids: Vec<_> = self.records.ready[direction]
+            .iter()
+            .take(prefix)
             .copied()
             .collect();
         assert!(!ids.is_empty());
@@ -278,6 +336,39 @@ impl Driver for Rig {
                 code: COOPERATIVE_COPY_FAILURE_CODE_V1,
             },
         );
+    }
+}
+
+#[test]
+fn shared_source_progress_waits_for_the_first_reader_and_retries_after_recovery() {
+    for direction in 0..2 {
+        for recover in [false, true] {
+            let mut rig = Rig::new();
+            rig.add(1, direction, &[]);
+            rig.add(2, direction, &[]);
+            rig.allocation_pairs
+                .extend([(1, (100, 101)), (2, (100, 102))]);
+            rig.recover_publication = recover;
+            assert_eq!(progress(&mut rig, 2), Ok(BackendPollV1::Pending));
+            assert_eq!(rig.batches, [vec![1]]);
+            assert_eq!(rig.records.ready[direction], [2]);
+            if !recover {
+                rig.observe_status = BackendPollV1::Pending;
+                for _ in 0..3 {
+                    assert_eq!(progress(&mut rig, 2), Ok(BackendPollV1::Pending));
+                    assert_eq!(rig.records.ready[direction], [2]);
+                    assert!(!rig.records.active[&2].published);
+                }
+                rig.observe_status = BackendPollV1::Succeeded;
+                assert_eq!(progress(&mut rig, 2), Ok(BackendPollV1::Pending));
+            }
+            rig.recover_publication = false;
+            assert_eq!(progress(&mut rig, 2), Ok(BackendPollV1::Pending));
+            assert_eq!(rig.batches, [vec![1], vec![2]]);
+            assert_eq!(progress(&mut rig, 2), Ok(BackendPollV1::Succeeded));
+            assert_eq!(rig.records.reservations, 0);
+            assert!(rig.records.active.is_empty());
+        }
     }
 }
 
