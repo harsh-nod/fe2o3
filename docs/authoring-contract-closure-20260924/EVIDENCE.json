@@ -1,0 +1,1235 @@
+{
+  "schema": "private-m0-v0-u0-closure-evidence-map-v1",
+  "status": "proposed-not-accepted",
+  "basis": [
+    {
+      "repo": "harsh-nod/fe2o3",
+      "fetched": "2026-09-24T22:37:37.398Z",
+      "status": 200,
+      "sha": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "tree": "898336d5d6184d093e818399660bb75b256fce0a",
+      "date": "2026-09-24T22:31:36Z",
+      "subject": "Document conditional proof retention validation and remaining gates"
+    },
+    {
+      "repo": "powderluv/fe2o3",
+      "fetched": "2026-09-24T22:37:37.596Z",
+      "status": 200,
+      "sha": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "tree": "898336d5d6184d093e818399660bb75b256fce0a",
+      "date": "2026-09-24T22:31:36Z",
+      "subject": "Document conditional proof retention validation and remaining gates"
+    },
+    {
+      "repo": "harsh-nod/fe2o3-kernels",
+      "fetched": "2026-09-24T22:37:37.822Z",
+      "status": 200,
+      "sha": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "tree": "e5cb598c604542fc0b479b158ba39753e6ce994d",
+      "date": "2026-09-24T22:16:27Z",
+      "subject": "Document same-owner BF16 normal compilation continuation"
+    }
+  ],
+  "predecessor_manifest": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/m0-v0-u0-exit-audit-20260924-r1/MANIFEST.json",
+    "bytes": 686,
+    "sha256": "c6d313e9db7deced4da9e6ed7f829ac4bc0ee6800adba4781f672f7372011d49",
+    "manifest": {
+      "schema": "private-read-only-exit-audit-manifest-v1",
+      "frozen_at_utc": "2026-09-24T22:41:34.426Z",
+      "files": [
+        {
+          "path": "GAPS.md",
+          "bytes": 16352,
+          "sha256": "095997b1bdc1e0d3757632f0ec72c9f1189c74035f5a04030915f4e8f9231043"
+        },
+        {
+          "path": "AUDIT.json",
+          "bytes": 30564,
+          "sha256": "8b24aea636904e997ff82ea4b2988dcf7216dde6c309fb0c89e006442cc96a5e"
+        }
+      ],
+      "total_bytes": 46916,
+      "compiler_published_commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "site_published_commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "candidate_edits": false,
+      "tests_builds_or_native_execution": false,
+      "milestone_approval": false
+    }
+  },
+  "method": "Exact immutable published git objects read and hashed; qualification outcomes/hashes transcribed from these shipped records and the already-frozen read-only audit. No tests, builds, native runs or complete new gate/artifact re-audit. Current fixture pins describe membership at the stated published basis, not the bytes used by every historical run.",
+  "normalization": "Original reports and newline-normalized website copies are distinct byte domains; use the original report hashes below only for their original records. No cross-domain hash equality is asserted.",
+  "document_and_current_fixture_pins": [
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/assembly-authoring-contract-review-20260919.md",
+      "bytes": 30290,
+      "sha256": "e45e4c82f17472d33629e11702478418de69a2c51cd6378257789bbeebfc4c5e",
+      "lines": 326
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/assembly-authoring-contract-review-20260920.md",
+      "bytes": 9668,
+      "sha256": "b34551380cbac354d3c1f7a152e0edd6af974f8b76bec48a9bb93ea58058de48",
+      "lines": 122
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/assembly-authoring-contract-review-20260922.md",
+      "bytes": 11990,
+      "sha256": "32ac3fd76a3957e192fdac0db0648b171963821605744f689770da9cd18b8d35",
+      "lines": 123
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/assembly-authoring-integration-contract-v1.md",
+      "bytes": 31450,
+      "sha256": "235eae3225e2576ab011b6c40c7f2c5bfeec922d9ab405c9f7708484e814dd21",
+      "lines": 348
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/assembly-authoring-implementation-status.md",
+      "bytes": 87408,
+      "sha256": "edc6068db0fc8f24284c8b5ebf2c38b807bb02cefd90d417bc49b977f00341a0",
+      "lines": 989
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/amd-isa-spec-catalog-v1.md",
+      "bytes": 8433,
+      "sha256": "d4cf718b3e9d2e292c53c5de4cd954783c9596f7fb5c103f253491ff956f1ede",
+      "lines": 160
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/runtime-observations-source-v1.md",
+      "bytes": 7289,
+      "sha256": "3315fb5a86307d50290383f26ca056872fd4381ce87479c4756fa67d85b02e79",
+      "lines": 69
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/debugger-profiler-architecture-v1.md",
+      "bytes": 29172,
+      "sha256": "8ac58d77f5d348d2b47f80a891e5ab0882e6e00f7f9679831141abaaa291c9e7",
+      "lines": 393
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/source-isa-observation-collection-v1.md",
+      "bytes": 10274,
+      "sha256": "acebbdb41140d9ca0b1ecac41c6b3fab0ec1c5440d199f33d79b28416cbfd0d9",
+      "lines": 194
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/evidence/source-local-order-recipes-20260923.md",
+      "bytes": 9509,
+      "sha256": "d7bc7e78d66f042b98c9a67140b35e6f6cb2a3c76550e257228b1b36a0d75635",
+      "lines": 167
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-entry-source-v20.md",
+      "bytes": 5058,
+      "sha256": "87220c0573505b09ed0e6c4b424e22ab758167e655cf8311ec7e667c2eb08b0e",
+      "lines": 92
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-entry-checked-v20.md",
+      "bytes": 5418,
+      "sha256": "aa192b298ca2d9d4f0aa8b16efe2c1b4c6c8f0aa57b0ef7859ae45087bd3cb31",
+      "lines": 95
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-global-copy-source-v21.md",
+      "bytes": 6133,
+      "sha256": "6971e33283d50f902e4d2d885db7a06e57f8dd62e48e426fcc6e8e237befef1e",
+      "lines": 117
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-global-copy-checked-v21.md",
+      "bytes": 5006,
+      "sha256": "3155ca4afe6b98db6383c519d0ad25d579e7537ee9a94df00c88aecd80bd3375",
+      "lines": 86
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-lds-exchange-source-v22.md",
+      "bytes": 6664,
+      "sha256": "4169c2693a85d02738b8d12ed0c34fd4367015bc1738a34cb4c3c6215132544b",
+      "lines": 132
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-lds-exchange-checked-v22.md",
+      "bytes": 5424,
+      "sha256": "738ef7b2ec62eb66ad4dee13b4343f0a5ba9f7fe386dce3aa2200fb7cdcb97d0",
+      "lines": 98
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-lds-exchange-cpu-debug-v22.md",
+      "bytes": 6113,
+      "sha256": "97f2db3dc5bae60dffd93906675051994e9a0e66ccaa7ba8c750f4231f9b5e54",
+      "lines": 60
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/source-transport-tiled-debugger-qualification-20260924.md",
+      "bytes": 12103,
+      "sha256": "8ba17ed8ee154684d6adb4d9924d6760a8efd2f9de1a54f847d485d21c61fad4",
+      "lines": 208
+    },
+    {
+      "repository": "site",
+      "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "path": "docs/authoring-ui-production-baseline-20260919.md",
+      "bytes": 4461,
+      "sha256": "654594e31b99b0842916688efb655bb171dca6b2a7fdd49e9bd067d9f05b7d3d",
+      "lines": 85
+    },
+    {
+      "repository": "site",
+      "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "path": "docs/physical-entry-cpu-live-v20.md",
+      "bytes": 8949,
+      "sha256": "cfa642c7916f1a478924771d16e4ec13f2ae69019d3b4d04133641f18841acdd",
+      "lines": 81
+    },
+    {
+      "repository": "site",
+      "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "path": "docs/physical-global-copy-recorded-viewer-v21.md",
+      "bytes": 9579,
+      "sha256": "038e1643a9e7a3da0ee82e0d57f20ee88e6eca8a475e67f31a8f78c8da468a80",
+      "lines": 160
+    },
+    {
+      "repository": "site",
+      "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "path": "docs/physical-lds-recorded-debug-v22.md",
+      "bytes": 6307,
+      "sha256": "6fff2e1e008b2bc4ecb64a6baf31cb5f10bdf6b77f9815907eb194a8fef23d43",
+      "lines": 113
+    },
+    {
+      "repository": "site",
+      "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "path": "docs/tiled-region-normal-continuation-v1.md",
+      "bytes": 7478,
+      "sha256": "3e4c5cdd173dba9987a2aac0d022ae00996eee0558869c7c95d662cd6daf0344",
+      "lines": 142
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-entry-source-qualification-20260924.md",
+      "bytes": 7015,
+      "sha256": "e9ed2a97d07e95f4c18d2bfc642b28900f4d2acedea71afc2c4697fadf1ea9d7"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-global-copy-cpu-debug-qualification-20260924.md",
+      "bytes": 4120,
+      "sha256": "45bad291dfe5d1eb9549903ee1e738765a06c7311e110767d3c419e6eb3505f0"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/physical-lds-exchange-qualification-20260924.md",
+      "bytes": 10049,
+      "sha256": "ea7a22824554ecd416c775c70e5e9a83a434bd46be2956547613b4b9d10fe220"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/ordered-composition-qualification-20260924.md",
+      "bytes": 10216,
+      "sha256": "afc7549930e6c47c476a309113359dc2631b569289513586781a4f0c1017058c"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/ordered-composition-promoted-qualification-20260924.md",
+      "bytes": 7346,
+      "sha256": "5027e2c709bbe3aa8371dc0575db72e3edac6292d684a9fb553780b8eab6fc1e"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/evidence/runtime-identity-storage-20260923.md",
+      "bytes": 17185,
+      "sha256": "0d8e271e360237d278d748ffe46d6374a457dd046bd1e2d3946acade43127a6a"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/ordered-program-authoring-v1.md",
+      "bytes": 7209,
+      "sha256": "bb601e52394e26bb75feee3303ecd2a8b1011542e1123ac012a3a59f8330817f"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/ordered-composition-source-promotion-v1.md",
+      "bytes": 6851,
+      "sha256": "49231fd725afda0d05257f16d09be353721207347b04062053d671782f11e9d4"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "docs/assembly-authoring-first-slice.md",
+      "bytes": 25526,
+      "sha256": "21501cdf48ac675aab43f962e0863f0305c6f54c4f0302a220a09483d1296894"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "crates/rustc-codegen-fe2o3/tests/fixtures/assembly-authoring-v30/src/lib.rs",
+      "bytes": 957,
+      "sha256": "f6cdd5fc4a937979fd5d12e7fa199fd3590fae9cb8f303b680781f9ca5b7df5e"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "crates/rustc-codegen-fe2o3/tests/fixtures/ordinary-bitwise-promotion-v1/src/lib.rs",
+      "bytes": 453,
+      "sha256": "cf7485d9f4ad6d892530ef9787a3ffd3ec9ab279c9900d90d7e05cc80c855c3d"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/ordered_region_v31.rs",
+      "bytes": 2052,
+      "sha256": "324440d39553dc9f4517f03b4043aee5957b84042a9835142fdd30a060c84903"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/ordered_program_v32.rs",
+      "bytes": 4220,
+      "sha256": "7d219f07461b8eb75d8981b01f680f1b4fa59bee6314b2eff5c501778ed99f31"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/ordered_composition_v1.rs",
+      "bytes": 5334,
+      "sha256": "03f54f05cd0f0666a1740dbd2fbaae1e705ede2511fd7349e22be0122d238915"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/physical_entry_v20.rs",
+      "bytes": 10657,
+      "sha256": "1347ad8de9e41addc7270e609efd0827fe2095774a8facb751f37ca800103f00"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/physical_global_copy_v21.rs",
+      "bytes": 12196,
+      "sha256": "023a5ab2c8b9513a171f82aac882a71f17fce2ebe1da31d019e23f0cd39ee70a"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/physical_lds_exchange_v22.rs",
+      "bytes": 32016,
+      "sha256": "cafa481d9e6a7a780c27921f276476bbded31b03ed40067c48b87204d028f870"
+    },
+    {
+      "repository": "compiler",
+      "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d",
+      "path": "crates/rustc-codegen-fe2o3/tests/fixtures/tiled-region-inspection-v1/src/lib.rs",
+      "bytes": 3950,
+      "sha256": "fcb26135ad4f931bb8dda63d631639a34dd8461e7801c22a1f6a383e0e735a3e"
+    },
+    {
+      "repository": "site",
+      "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "path": "docs/physical-global-copy-source-v21.md",
+      "bytes": 12204,
+      "sha256": "6dfd95268bdb7ba341d67b6efbb951228306ab415a02270d3c2e2aad3d1aa75e"
+    },
+    {
+      "repository": "site",
+      "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "path": "docs/evidence/physical-global-copy-checked-v21-20260924/index.json",
+      "bytes": 5548,
+      "sha256": "aa7ffc02293ead141727d0ebc947ded1e797ef97d57c2356b16347d1d719c503"
+    },
+    {
+      "repository": "site",
+      "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f",
+      "path": "docs/evidence/physical-entry-checked-v20-20260924/index.json",
+      "bytes": 5094,
+      "sha256": "7b42cfbc64db9b5fac738ad7fc88339133440e6ef2a362e5efe85385b4c2a39f"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E0",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/amd-isa-spec-catalog-v1.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        }
+      ],
+      "scope": "Metadata-only exact bare gfx942/gfx950 catalog; executable six-u32 overlay separate.",
+      "facts": {
+        "archive_bytes": 2294639,
+        "archive_sha256": "82404f1126761b7877595b622afa7e1f311f2f41e89a3abe9aaf8ad045c082e2",
+        "cdna3_instructions": 1150,
+        "cdna3_encodings": 32,
+        "cdna4_instructions": 1240,
+        "cdna4_encodings": 33
+      },
+      "negative_classes": [
+        "unknown target",
+        "unsupported/unreviewed executable cell"
+      ],
+      "not_claimed": [
+        "ISA presence as executable support",
+        "hardware execution"
+      ]
+    },
+    {
+      "id": "E1",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/assembly-authoring-first-slice.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "compiler",
+          "path": "docs/ordered-program-authoring-v1.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        }
+      ],
+      "fixtures": [
+        "assembly-authoring-v30/src/lib.rs",
+        "production-extraction-device/src/ordered_region_v31.rs",
+        "production-extraction-device/src/ordered_program_v32.rs"
+      ],
+      "scope": "Existing bounded six-u32 source slice and old fixed-pair/1–16-step ordered program routes; real source/canonical/CPU/static qualification described in pinned shipped records, not newly executed here.",
+      "positive_classes": [
+        "admitted source markers",
+        "ordered dependent program",
+        "physical-role edits within the closed roster"
+      ],
+      "negative_classes": [
+        "undefined input/result",
+        "wrong register role",
+        "unsupported target/wave",
+        "foreign or malformed marker"
+      ],
+      "not_claimed": [
+        "arbitrary inline assembly",
+        "memory or general CFG",
+        "whole-kernel physical ABI"
+      ]
+    },
+    {
+      "id": "E2",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/ordered-composition-qualification-20260924.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "compiler",
+          "path": "docs/ordered-composition-source-promotion-v1.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        }
+      ],
+      "fixtures": [
+        "production-extraction-device/src/ordered_composition_v1.rs"
+      ],
+      "positive_classes": [
+        "root",
+        "helper",
+        "two-calls",
+        "root-helper",
+        "const-monos",
+        "scalar-helper",
+        "wrapping"
+      ],
+      "normal": {
+        "sessions": 36,
+        "dynamic_launch_refusals": 7,
+        "malformed_source_refusals": 8,
+        "descriptor_controls": 21,
+        "receipt_sha256": "5cbd40515467b3648420bc30fa1b52ab36508678fdc0bf7a39bd002e5f276daa",
+        "report_sha256": "c8e17d4b530e6a742bdda90fe1251bd217b4631afcdfe952fef8d7d505810d6a"
+      },
+      "native": {
+        "cases": 14,
+        "metadata_controls": 252,
+        "decoded_controls": 154,
+        "receipt_sha256": "7b0c6f2fd5f9039adb8d417ae656e245ee2dd6a214bb42e90b9bf6f12400f329",
+        "report_sha256": "19d99e0aa43d76e07946c46c947eeb08c01bc200c6e1c3058e07763262e848a8"
+      },
+      "bounds": "max_grid[2,1,1], WG64; <=2 direct helpers, <=8 static calls/regions, <=128 expanded instructions. Repeated actual callsites remain distinct from unique reachability edges.",
+      "negative_classes": [
+        "nested/conditional helpers",
+        "wrong ABI",
+        "foreign/mixed marker",
+        "excess regions",
+        "wrong/dynamic launch",
+        "dynamic register",
+        "descriptor identity"
+      ],
+      "not_claimed": [
+        "native helper argument/result transport",
+        "root native functional equivalence",
+        "runtime host condition discharge",
+        "GPU"
+      ]
+    },
+    {
+      "id": "E3",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/ordered-composition-promoted-qualification-20260924.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        }
+      ],
+      "fixtures": [
+        "production-extraction-device/src/ordered_composition_v1.rs"
+      ],
+      "scope": "Actual source promotion and fresh copy/preserve/edit descendants; equal bytes do not erase distinct owners.",
+      "normal": {
+        "children": 23,
+        "extractor_children": 13,
+        "normal_children": 10,
+        "publications": 3,
+        "cpu_cases": 128,
+        "source_refusals": 6,
+        "descriptor_controls": 12,
+        "cross_candidate_controls": 3,
+        "receipt_sha256": "b2ecfb606c2a6631974079c8f4d25ae192bede131be8065abc042ca98e2a964a",
+        "report_bytes": 196545,
+        "report_sha256": "2b91e1b35768f0e0de4a3b7e37bc5e29cbf82469ee1f3f2fa548751ad4b69d46"
+      },
+      "native": {
+        "cases": 6,
+        "llvm_controls": 42,
+        "metadata_controls": 108,
+        "decoded_controls": 66,
+        "receipt_sha256": "81b6aace043ce9de9028db79e596eb807879254cebd90142fd4cf9116dd0c356",
+        "report_bytes": 741031,
+        "report_sha256": "0843395619b697cef25747ea6608418396bde58fb967fc85f5e852aaab97f1bf"
+      },
+      "not_claimed": [
+        "old proof reuse",
+        "caller ABI/full functional/native transport proof",
+        "arbitrary transformations"
+      ]
+    },
+    {
+      "id": "E4",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/physical-entry-source-qualification-20260924.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "compiler",
+          "path": "docs/physical-entry-checked-v20.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "site",
+          "path": "docs/evidence/physical-entry-checked-v20-20260924/index.json",
+          "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f"
+        }
+      ],
+      "fixtures": [
+        "production-extraction-device/src/physical_entry_v20.rs"
+      ],
+      "positive_classes": [
+        "one",
+        "diamond",
+        "register-edited"
+      ],
+      "negative_classes": [
+        "wrong launch",
+        "foreign input",
+        "undefined merge",
+        "missing kernarg wait",
+        "wrong carry",
+        "ABI/descriptor/resource mismatches"
+      ],
+      "source": {
+        "sessions": 16,
+        "fixtures": 8,
+        "routes": 2,
+        "cpu_cases": 576,
+        "refusals": 10,
+        "receipt_sha256": "5f7d5f0e54e3427a0540c78bd25d55e3c18fd88ef2fdc585ae2d81a416f2f773"
+      },
+      "normal_records": [
+        {
+          "kind": "gate",
+          "path": "logs/phase28-resume-r9-compiler-physical-checked-source-public-r1/receipt.json",
+          "sha256": "8531f3d27144a3472ea2c44fafaca0f05c5ac7564ea4de76dbf1e9bf226883f1",
+          "bytes": 30449
+        },
+        {
+          "kind": "original-report",
+          "path": "phase28-physical-checked-source-ladder-r1/observation.json",
+          "sha256": "540eba5096c0dbdbba583412589b66a54ae0a252a04c4271c66db4299c3dbac1",
+          "bytes": 96265
+        }
+      ],
+      "native": {
+        "cases": 6,
+        "entry_instructions": [
+          21,
+          25
+        ],
+        "native_controls": 246,
+        "sidecar_controls": 66,
+        "worker_controls": 12,
+        "receipt_sha256": "08ac6cba88764585d44ce41d166a23f22489b8ac5b3bc7dfdc8f12318f1e1892"
+      },
+      "unresolved": [
+        "output allocation conservative 512-byte bound",
+        "compiler kernarg immutability/output nonalias",
+        "actual host pointer/permission premises"
+      ],
+      "not_claimed": [
+        "input memory read",
+        "hardware launch",
+        "symbolic pointer bits"
+      ]
+    },
+    {
+      "id": "E5",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/physical-global-copy-source-v21.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "compiler",
+          "path": "docs/physical-global-copy-checked-v21.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "site",
+          "path": "docs/physical-global-copy-source-v21.md",
+          "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f"
+        },
+        {
+          "repository": "site",
+          "path": "docs/evidence/physical-global-copy-checked-v21-20260924/index.json",
+          "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f"
+        }
+      ],
+      "fixtures": [
+        "production-extraction-device/src/physical_global_copy_v21.rs"
+      ],
+      "positive_classes": [
+        "one",
+        "register-edited"
+      ],
+      "negative_classes": [
+        "wrong launch",
+        "missing LGKM",
+        "missing VM",
+        "wrong carry",
+        "wrong store",
+        "wrong offset",
+        "reserved register",
+        "CPU input init/alias/bounds"
+      ],
+      "source": {
+        "sessions": 18,
+        "cpu_cases": 128,
+        "cpu_refusals": 6,
+        "source_refusals": 14
+      },
+      "normal": {
+        "sessions": 27,
+        "cpu_cases": 128,
+        "cpu_refusals": 6,
+        "source_refusals": 21,
+        "abi_controls": 88,
+        "resource_controls": 8,
+        "descriptor_extension_controls": 6,
+        "public_cases": 9,
+        "records": [
+          {
+            "kind": "gate",
+            "path": "logs/phase28-resume-r10-compiler-global-copy-handoff-r2/receipt.json",
+            "sha256": "a6470260dfa3cfe3b47d871a48e71f74fa49a8f9c4f9a731103a5a5e74794b2f",
+            "bytes": 30431
+          },
+          {
+            "kind": "original-report",
+            "path": "phase28-global-copy-production-ladder-r1/observation.json",
+            "sha256": "264a2294514ae6ad27e16e6bb288ba852b9f31f0ef799fead17ffcf9c108d6b6",
+            "bytes": 106791
+          }
+        ]
+      },
+      "native": {
+        "cases": 4,
+        "instructions": 24,
+        "entry_bytes": 128,
+        "per_case_native_controls": 71,
+        "per_case_sidecar_controls": 12,
+        "per_case_input_controls": 2
+      },
+      "unresolved": [
+        "full-EXEC initialized input read even output mask0",
+        "512-byte input/output ranges and permissions",
+        "input/output nonalias",
+        "kernarg immutability and output/kernarg disjointness"
+      ],
+      "not_claimed": [
+        "input/kernarg nonalias requirement invented here",
+        "masked input loads",
+        "GPU"
+      ]
+    },
+    {
+      "id": "E6",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/physical-lds-exchange-qualification-20260924.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "compiler",
+          "path": "docs/physical-lds-exchange-source-v22.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "compiler",
+          "path": "docs/physical-lds-exchange-checked-v22.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "compiler",
+          "path": "docs/physical-lds-exchange-cpu-debug-v22.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "site",
+          "path": "docs/physical-lds-recorded-debug-v22.md",
+          "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f"
+        }
+      ],
+      "fixtures": [
+        "production-extraction-device/src/physical_lds_exchange_v22.rs"
+      ],
+      "positive_classes": [
+        "one",
+        "register-edited",
+        "actual two-wave peer exchange",
+        "reverse pending/ready/publication snapshots"
+      ],
+      "negative_classes": [
+        "wrong/dynamic launch",
+        "frame base/size/alignment/epoch",
+        "missing write wait/barrier/read wait/VM",
+        "wrong peer/LDS address/store/carry",
+        "foreign/mixed marker",
+        "allocation/readiness/CPU barrier controls"
+      ],
+      "source": {
+        "sessions": 38,
+        "variants": 19,
+        "cpu_cases": 64,
+        "cpu_refusals": 12,
+        "barrier_controls": 2,
+        "source_refusals": 34,
+        "receipt_sha256": "d311b73aa2eb8283fe0212299103ac40febd8c4a2037f0294e30fc025bdc30df",
+        "report_bytes": 143142,
+        "report_sha256": "f27f7a09778a5b55e0cb44b1bf913085b9c7428681cd6189c5b0d7bc984dd243"
+      },
+      "normal": {
+        "sessions": 57,
+        "cpu_cases": 64,
+        "cpu_refusals": 12,
+        "source_refusals": 51,
+        "abi_controls": 142,
+        "resource_controls": 8,
+        "receipt_sha256": "4813c0c3e138f4b51c28513700c0a18df3208928b3fd9a839ae19142caa23016",
+        "report_bytes": 219162,
+        "report_sha256": "d2baf19b2687508230e27dffd98ce85d4fd0d23d27627817fec7c95c5d931760"
+      },
+      "native": {
+        "cases": 4,
+        "instructions": 32,
+        "entry_bytes": 168,
+        "lds_bytes": 512,
+        "input_controls": 16,
+        "native_controls": 280,
+        "receipt_sha256": "92cb4af1f6322061cb563e72f8460621e7ce4b017eb38931adfa963cdbe66f0a",
+        "report_bytes": 250657,
+        "report_sha256": "45311b9538f5293c39e2ed2f0fcff3c2bfa49b9e6b4df11a706546a4c3d34c48"
+      },
+      "cpu_cli": {
+        "children": 28,
+        "sessions": 6,
+        "transactional_refusals": 96,
+        "bootstrap_refusals": 13,
+        "legacy_sessions": 8,
+        "budget_children": 1,
+        "receipt_sha256": "4b98d3542ad5758f70ee24c12cd9d1ee230e323302cc21cd11b4eb7f0b92a5c6",
+        "report_bytes": 41158,
+        "report_sha256": "e1042fbc3e0b97afafa0f0aef734556ecdea7bea1baaa5427cf914a9ba40efb8"
+      },
+      "not_claimed": [
+        "source removed-row controls reaching later formal wait checks",
+        "live V22",
+        "physical GPU snapshot",
+        "general barriers/epochs"
+      ]
+    },
+    {
+      "id": "E7",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/evidence/runtime-identity-storage-20260923.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "compiler",
+          "path": "docs/assembly-authoring-contract-review-20260922.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "compiler",
+          "path": "docs/runtime-observations-source-v1.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        }
+      ],
+      "scope": "Actual ordinary loop/helper and two-wave reduction runtime captures plus separately attributed source-variable V2 evidence.",
+      "facts": {
+        "loop_bundle": 6,
+        "loop_kir": 11,
+        "loop_rounds": [
+          0,
+          1,
+          3
+        ],
+        "actual_helper_activations": 32,
+        "workgroup_bundle": 5,
+        "workgroup_kir": 10,
+        "workgroup_invocations": 128,
+        "actual_same_backing_generations": [
+          1,
+          2
+        ],
+        "loop_http_requests": 110,
+        "loop_cli_commands": 97,
+        "workgroup_http_requests": 143,
+        "workgroup_cli_commands": 142
+      },
+      "records": [
+        {
+          "kind": "source-gate",
+          "path": "logs/phase28-resume-r2-compiler-observed-resident-fix-source-r2/receipt.json",
+          "sha256": "3f8b0f6c87f0a9d182c5ec706c7f8cb2481d98cb137c0cea85b2c6d617c65705",
+          "bytes": 21585
+        },
+        {
+          "kind": "http-gate",
+          "sha256": "d93079abe96240612da124e7a11f940ff4c2d5f3e88be5669e29d3ec541c39fb",
+          "bytes": 121876,
+          "record_label": "phase28-resume-r2-compiler-observed-resident-fix-http-r1"
+        },
+        {
+          "kind": "browser-gate",
+          "sha256": "74de372601d276435b27e639f391d1cce1fe477e91768bbfdb79ab14d195ae66",
+          "bytes": 153717,
+          "record_label": "phase28-resume-r2-site-observed-resident-fix-actual-browser-r1"
+        }
+      ],
+      "negative_classes": [
+        "stale activation/attempt/generation/page",
+        "uncaptured source variable",
+        "raw-KIR bounds fault separately labelled"
+      ],
+      "not_claimed": [
+        "raw-KIR fault is ordinary-source fault",
+        "legacy frame occurrence is dynamic activation",
+        "terminal release checkpoint",
+        "physical memory/registers"
+      ]
+    },
+    {
+      "id": "E8",
+      "documents": [
+        {
+          "repository": "site",
+          "path": "docs/physical-entry-cpu-live-v20.md",
+          "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f"
+        }
+      ],
+      "scope": "Actual typed V20 source-derived local CPU JSONL-to-HTTP replay; bounded read-only live workbench.",
+      "facts": {
+        "sessions": 4,
+        "matched_actual_responses": 380,
+        "http_auth_origin_schema_refusals": 12,
+        "transactional_refusals": 16,
+        "output_allocation": 1,
+        "generation": 0
+      },
+      "records": [
+        {
+          "kind": "gate",
+          "sha256": "6631562ebd07e793f0b6c71699a0c63f4f38b42612a32ef1de8b75a03c6ee8cb",
+          "bytes": 102954,
+          "record_label": "documented-live-bridge-root-receipt"
+        },
+        {
+          "kind": "report",
+          "sha256": "ea8b4fce7ff34eb927750990a41a27cf4eb6495e94dd2286e5d407ba231b63f2",
+          "bytes": 62732,
+          "record_label": "documented-live-bridge-report"
+        }
+      ],
+      "not_claimed": [
+        "successful continued-page live case",
+        "second input allocation",
+        "source map",
+        "physical register/captured hardware state"
+      ]
+    },
+    {
+      "id": "E9",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/physical-global-copy-cpu-debug-qualification-20260924.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "site",
+          "path": "docs/physical-global-copy-recorded-viewer-v21.md",
+          "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f"
+        }
+      ],
+      "scope": "Six actual V21 source-derived CPU sessions and separate recorded viewer; no live V21.",
+      "facts": {
+        "children": 31,
+        "main_sessions": 6,
+        "transactional_refusals": 84,
+        "terminal_parser_refusals": 6,
+        "bootstrap_refusals": 8,
+        "budget_child": 1,
+        "v20_replay_sessions": 4,
+        "recorded_pairs_per_case": 48,
+        "actual_largest_container_bytes": 119035
+      },
+      "records": [
+        {
+          "kind": "gate",
+          "path": "logs/phase28-resume-r11-compiler-global-copy-cpu-cli-source-v21-r2/receipt.json",
+          "sha256": "ab3b199347b601ae81480eb3c66a575104817571a1820bd187a4c4e1a956bf20",
+          "bytes": 71926
+        },
+        {
+          "kind": "report",
+          "path": "phase28-global-copy-cpu-debug-cli-source-r2/report.json",
+          "sha256": "c75e81d345805893adeb3b6f1842b882ad4de257504f7a92fb5653a00cb62c59",
+          "bytes": 28344
+        }
+      ],
+      "negative_classes": [
+        "stale cursor/page",
+        "wrong allocation/range/site/anchor",
+        "pending SSA unavailable",
+        "zero-length terminal parser refusal",
+        "bootstrap domain/version"
+      ],
+      "not_claimed": [
+        "host conditions discharged",
+        "native addresses",
+        "resumable reverse",
+        "live V21"
+      ]
+    },
+    {
+      "id": "E10",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/source-transport-tiled-debugger-qualification-20260924.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        },
+        {
+          "repository": "site",
+          "path": "docs/tiled-region-normal-continuation-v1.md",
+          "commit": "333dd4169db025f3b6a3d1f3fd98acc85764212f"
+        }
+      ],
+      "fixtures": [
+        "tiled-region-inspection-v1/src/lib.rs"
+      ],
+      "scope": "Original live V12 owner retained through same-owner BF16 inspect→checked normal continuation; published compiler2af2a8d7 extension, not target-V8 replacement.",
+      "facts": {
+        "actual_sessions": 2,
+        "successes": 1,
+        "wrong_launch_early_refusals": 1,
+        "llvm_bytes": 52795,
+        "worker_bytes": 61355,
+        "handoff_bytes": 61654,
+        "blocks": 20,
+        "allocations": 3,
+        "accesses": 9,
+        "discharged_access_requirements": 8,
+        "unresolved_bounds": 1,
+        "unresolved_alias": 2
+      },
+      "records": [
+        {
+          "kind": "gate",
+          "path": "logs/phase28-resume-r14-compiler-tiled-normal-continuation-actual-r1/receipt.json",
+          "sha256": "ce2b72e8d05a6d5850e91bc39ee6912448cf78603d33dabe96cd892de3ad181e",
+          "bytes": 180348
+        },
+        {
+          "kind": "report",
+          "path": "phase28-tiled-normal-continuation-actual-r1/observation.json",
+          "sha256": "9ba72e9b492666b3be9dea5c490710b5f9d988a1821dc92aa19efd76bfc60cd7",
+          "bytes": 26791
+        }
+      ],
+      "not_claimed": [
+        "public tiled CLI",
+        "region promotion",
+        "numerical simulation",
+        "native/GPU",
+        "source alias erased by actual producer accepted"
+      ]
+    },
+    {
+      "id": "E11",
+      "documents": [
+        {
+          "repository": "compiler",
+          "path": "docs/evidence/source-local-order-recipes-20260923.md",
+          "commit": "5a2d4043c64cdf09ab798587ce54fc51f0d3f24d"
+        }
+      ],
+      "scope": "Existing source-local-order-policy6-v1 for (a^b)&(c|d), four distinct immutable u32 formals; two genuine ready schedules and fresh edited-source applicability.",
+      "facts": {
+        "orders": [
+          [
+            14,
+            15,
+            16
+          ],
+          [
+            15,
+            14,
+            16
+          ]
+        ],
+        "main_callbacks": 25,
+        "successes": 15,
+        "refusals": 10,
+        "fault_probes": 3,
+        "cpu_cases": 450,
+        "simulation_steps": 470700,
+        "max_logical_storage_bytes": 67797289,
+        "max_logical_work": 91681379
+      },
+      "records": [
+        {
+          "kind": "report",
+          "sha256": "fc9c289b0501e423474605b5c8b5cdf96369672346c047fc4bbaef00e012612e",
+          "bytes": 514275,
+          "path": "phase28-source-local-order-release-actual-r1/observation.json"
+        },
+        {
+          "kind": "source-gate",
+          "sha256": "6de85e54c7afb63d319052c8fe17e9dd5951243db6c01c3aec4f4cd667ea4e57",
+          "bytes": 22324,
+          "record_label": "documented-source-recipe-gate"
+        },
+        {
+          "kind": "normal-example-gate",
+          "sha256": "4ba3fd2f0cce25f5cd306658dda453149d8baa3900e0cf515b152a60b0d98d0c",
+          "bytes": 74759,
+          "record_label": "documented-normal-example-gate"
+        }
+      ],
+      "negative_classes": [
+        "unknown/duplicate recipe field",
+        "version/identity mismatch",
+        "inapplicable exact recipe",
+        "stale/rebind failures",
+        "injected resource/publication errors"
+      ],
+      "not_claimed": [
+        "arbitrary pass selection",
+        "current 64-MiB action compliance",
+        "latency/RSS measurements",
+        "new whole M0/U0 acceptance"
+      ]
+    }
+  ],
+  "issue_exit_readbacks": [
+    {
+      "issue": 280,
+      "url": "https://github.com/harsh-nod/fe2o3/issues/280",
+      "state": "open",
+      "updated": "2026-09-24T21:58:43Z",
+      "comments": 90,
+      "exit": "| M0: contracts and ownership | Architecture decision, source form, exact-region semantics, inline-region versus whole-body emission prototype, region ownership/extraction and typed-Rust materialization/reimport contract for #282 U0/U2, bug-detection/coverage matrix, initial operation/target matrix, ABI/resource contract, shared observation handoff, disjoint write sets | Owner review across #134/#271/#272/#216/#215 and LLVM/finalizer owners; exact base and schema allocations; representative positive/negative source cases; agreed generation and validation budgets |",
+      "body_utf8_bytes": 39321,
+      "body_sha256": "1354bf6aeeed52b074fed3087009b743acb7b5c75bdbe1d566fb77f7c99f5f4c"
+    },
+    {
+      "issue": 281,
+      "url": "https://github.com/harsh-nod/fe2o3/issues/281",
+      "state": "open",
+      "updated": "2026-09-24T21:58:45Z",
+      "comments": 112,
+      "exit": "| V0: contract and inventory | Capture/backend capability matrix, resource projection, shared selection/provenance contract, fixture ownership and measured UI budgets | Agreement with #215/#216/compiler and tutorial owners; real available captures identified; explicit missing data and exact schema/version dependencies |",
+      "body_utf8_bytes": 28928,
+      "body_sha256": "4b4691af13c44a4af7438e841002aebf565f0b9ff71eaee3abeefd87d23af6fb"
+    },
+    {
+      "issue": 282,
+      "url": "https://github.com/harsh-nod/fe2o3/issues/282",
+      "state": "open",
+      "updated": "2026-09-24T21:58:46Z",
+      "comments": 80,
+      "exit": "### U0: Editing and ownership contract\n\n- [ ] Agree the per-level read/select/materialize/edit/re-admit capability matrix and initial targets/operation profiles with #134/#271/#272/#280 owners.\n- [ ] Specify source ownership, region extraction boundaries, specialization handling, required source materialization and stale-source conflict behavior.\n- [ ] Specify fixed-policy recipe semantics, identity/evidence invalidation, snapshot bounds and the compiler/viewer mutation boundary.\n- [ ] Freeze independent positive/negative acceptance fixtures and disjoint implementation write sets.\n- [ ] Confirm first delivery uses source promotion; raw intermediate resume has no production authority.\n\nExit: an agreed contract and representative inputs demonstrate what is supported and what must reject. No new executable authority or unrestricted pass selection is introduced.",
+      "body_utf8_bytes": 29463,
+      "body_sha256": "5e4aa71a0be3e2ca110109831c51ce27cc651c4730b7b220466d11d486aa38c4"
+    }
+  ],
+  "owner_decisions": [
+    {
+      "id": 5738337307,
+      "url": "https://github.com/harsh-nod/fe2o3/issues/280#issuecomment-5738337307",
+      "created": "2026-09-19T01:41:11Z",
+      "updated": "2026-09-19T01:41:11Z",
+      "body_sha256": "2a5762e735f927c066818fc6d9bba1746f233193a32b4769324e04e330897d3d",
+      "body_utf8_bytes": 3044,
+      "decision_scope": "#271 architectural direction only; explicit full M0/V0/U0/budget/mechanism exclusion"
+    },
+    {
+      "id": 5770232406,
+      "url": "https://github.com/harsh-nod/fe2o3/issues/271#issuecomment-5770232406",
+      "created": "2026-09-22T02:10:20Z",
+      "updated": "2026-09-22T02:10:20Z",
+      "body_sha256": "1f4574fa474c9415cbc7a66139eaa46372238bcf7484aab0411c7dad8ec0e46f",
+      "body_utf8_bytes": 4834,
+      "decision_scope": "Primary bounded Linux public source-promotion API only; no attributed other-owner approval/full M0/U0 closure"
+    }
+  ],
+  "owner_search_scope": {
+    "method": "Read-only GitHub API complete comment pagination; bounded targeted contract/review text search; full read of selected explicit acceptance decisions. Unrelated comments were not each manually audited.",
+    "interval": [
+      "2026-09-24T22:35:37Z",
+      "2026-09-24T22:36:20.235Z"
+    ],
+    "coverage": [
+      {
+        "repo": "harsh-nod/fe2o3",
+        "issue": 271,
+        "pages": 10,
+        "count": 930
+      },
+      {
+        "repo": "harsh-nod/fe2o3",
+        "issue": 272,
+        "pages": 5,
+        "count": 417
+      },
+      {
+        "repo": "harsh-nod/fe2o3",
+        "issue": 134,
+        "pages": 1,
+        "count": 26
+      },
+      {
+        "repo": "harsh-nod/fe2o3",
+        "issue": 145,
+        "pages": 1,
+        "count": 7
+      },
+      {
+        "repo": "harsh-nod/fe2o3",
+        "issue": 146,
+        "pages": 1,
+        "count": 5
+      },
+      {
+        "repo": "harsh-nod/fe2o3",
+        "issue": 215,
+        "pages": 1,
+        "count": 60
+      },
+      {
+        "repo": "harsh-nod/fe2o3",
+        "issue": 216,
+        "pages": 1,
+        "count": 42
+      },
+      {
+        "repo": "harsh-nod/fe2o3",
+        "issue": 275,
+        "pages": 3,
+        "count": 300
+      },
+      {
+        "repo": "harsh-nod/fe2o3-kernels",
+        "issue": 3,
+        "pages": 1,
+        "count": 27
+      }
+    ]
+  },
+  "exclusions": [
+    "no approval from silence",
+    "no new schema allocation",
+    "no later milestone closure",
+    "no current private gate transferred into published baseline",
+    "no source/native/hardware authority from report bytes"
+  ]
+}
