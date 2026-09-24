@@ -9,6 +9,7 @@ use fe2o3_runtime_model::{
 };
 
 mod generated;
+mod producer_readers;
 mod readers;
 mod submission_disposal;
 mod submissions;
@@ -64,6 +65,7 @@ pub(super) struct ContextVersionsV1 {
     phases: Vec<Option<AllocationPhaseV1>>,
     submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
     submission_readers: HashMap<RuntimeSubmissionIdV1, readers::RetainedSubmissionReadersV1>,
+    producer_readers: HashMap<RuntimeSubmissionIdV1, producer_readers::RetainedProducerReadV1>,
 }
 
 // Dropping this move-only ticket never removes its Context-owned record.
@@ -130,11 +132,16 @@ impl ContextVersionsV1 {
         submission_readers
             .try_reserve(writers)
             .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
+        let mut producer_readers = HashMap::new();
+        producer_readers
+            .try_reserve(writers)
+            .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
         Ok(Self {
             journal,
             phases,
             submission_writers,
             submission_readers,
+            producer_readers,
         })
     }
 

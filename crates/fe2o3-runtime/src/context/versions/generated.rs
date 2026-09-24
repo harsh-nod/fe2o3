@@ -166,6 +166,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         {
             return Err(E::InvalidReference);
         }
+        if self.submissions.get(&id).is_some_and(|record| {
+            record.directed_peer_copy || record.journal_producer_read.is_some()
+        }) || self
+            .versions
+            .as_ref()
+            .is_some_and(|versions| versions.producer_readers.contains_key(&id))
+        {
+            return Err(E::InvalidReference);
+        }
         let root = self.validate_submission_readers_v1(id, domain)?;
         if root.and_then(|root| root.marker) != expected {
             return Err(E::InvalidReference);
@@ -294,14 +303,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if let Some(attempt) = attempt {
             let (id, domain) = attempt.writer_binding_v1();
             if attempt.expected_reader.is_some()
-                || self
-                    .submissions
-                    .get(&id)
-                    .is_some_and(|record| record.journal_read.is_some())
-                || self
-                    .versions
-                    .as_ref()
-                    .is_some_and(|versions| versions.submission_readers.contains_key(&id))
+                || self.submissions.get(&id).is_some_and(|record| {
+                    record.journal_read.is_some() || record.journal_producer_read.is_some()
+                })
+                || self.versions.as_ref().is_some_and(|versions| {
+                    versions.submission_readers.contains_key(&id)
+                        || versions.producer_readers.contains_key(&id)
+                })
             {
                 return Err(E::AllocationBusy);
             }

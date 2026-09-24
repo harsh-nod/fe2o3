@@ -24,6 +24,8 @@ mod peer_custody;
 use peer_custody::{PreparedPeerSubmissionV1, ScalarPeerCopyRootV1};
 mod peer_directed;
 pub use peer_directed::*;
+mod peer_directed_context;
+mod peer_reconciliation;
 mod peer_segments;
 pub use peer_segments::*;
 mod unpublished;
@@ -1042,7 +1044,9 @@ struct SubmissionRecordV1 {
     status: RuntimeCompletionStatusV1,
     journal_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
     journal_read: Option<SubmissionReaderMarkerV1>,
+    journal_producer_read: Option<fe2o3_runtime_model::ContextProducerReadReferenceV1>,
     scalar_peer_copy: bool,
+    directed_peer_copy: bool,
     dependency_retains: usize,
 }
 
@@ -1592,6 +1596,20 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         submission: RuntimeSubmissionIdV1,
         status: RuntimeCompletionStatusV1,
     ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
+        let outcome = if status == RuntimeCompletionStatusV1::Succeeded {
+            SubmissionWriterOutcomeV1::Success
+        } else {
+            SubmissionWriterOutcomeV1::Unknown
+        };
+        self.settle_terminal_submission_v1(submission, status, outcome)
+    }
+
+    fn settle_terminal_submission_v1(
+        &mut self,
+        submission: RuntimeSubmissionIdV1,
+        status: RuntimeCompletionStatusV1,
+        outcome: SubmissionWriterOutcomeV1,
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
         self.require_ordinary_submission_v1(submission)?;
         let Some(record) = self.submissions.get(&submission) else {
             return Ok(status);
@@ -1600,12 +1618,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Ok(record.status);
         }
         self.check_scalar_peer_custody_v1(submission)?;
-        let outcome = if status == RuntimeCompletionStatusV1::Succeeded {
-            SubmissionWriterOutcomeV1::Success
-        } else {
-            SubmissionWriterOutcomeV1::Unknown
-        };
-        self.release_submission_readers_v1(submission)?;
+        if status == RuntimeCompletionStatusV1::Succeeded {
+            self.require_directed_success_v1(submission)?;
+        }
+        self.release_submission_inputs_v1(submission)?;
         self.settle_submission_writer_v1(submission, outcome)?;
         self.release_scalar_peer_dependencies_v1(submission)?;
         self.publish_submission_status_v1(submission, status)
@@ -1652,6 +1668,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         submission: RuntimeSubmissionIdV1,
         observation: BackendPollV1,
     ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
+        if self.retain_directed_observation_v1(submission, observation)?
+            && observation == BackendPollV1::Succeeded
+        {
+            return self.reconcile_directed_success_v1(submission);
+        }
         let status = match observation {
             BackendPollV1::Pending => RuntimeCompletionStatusV1::Pending,
             BackendPollV1::Succeeded => RuntimeCompletionStatusV1::Succeeded,
@@ -1675,10 +1696,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 Err(RuntimeErrorV1::BackendRejected(error))
             }
             Err(RuntimeBackendFailureV1::Quiescent(error)) => {
-                let _ = self.transition_submission_status(
-                    submission,
-                    RuntimeCompletionStatusV1::QuiescentWithoutResult,
-                );
+                if self
+                    .transition_submission_status(
+                        submission,
+                        RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                    )
+                    .is_err()
+                {
+                    self.quarantine_after_async_command_panic_v1();
+                }
                 Err(RuntimeErrorV1::BackendQuiescent(error))
             }
             Err(RuntimeBackendFailureV1::Terminal(error)) => {
@@ -2677,9 +2703,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.status.is_terminal() {
             return Ok(submission.observe_status(record.status));
         }
-        let result =
-            self.invoke_journal_backend_v1(|backend| backend.poll_v1(record.backend_submission));
-        let status = self.completion_backend_result(submission.id, result)?;
+        let status =
+            self.observe_completion_step_v1(submission.id, |backend, id| backend.poll_v1(id))?;
         Ok(submission.observe_status(status))
     }
 
@@ -2697,10 +2722,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(RuntimeValidationErrorV1::InvalidDeadline)?;
-        let result = self.invoke_journal_backend_v1(|backend| {
-            backend.wait_v1(record.backend_submission, deadline)
-        });
-        let status = self.completion_backend_result(submission.id, result)?;
+        let status = self.observe_completion_step_v1(submission.id, |backend, id| {
+            backend.wait_v1(id, deadline)
+        })?;
         Ok(submission.observe_status(status))
     }
 
@@ -2791,10 +2815,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }));
         pending.sort_unstable_by_key(|(id, _)| *id);
         let mut first_error = None;
-        for (submission, backend_submission) in pending {
-            let result = self
-                .invoke_journal_backend_v1(|backend| backend.wait_v1(backend_submission, deadline));
-            match self.completion_backend_result(submission, result) {
+        for (submission, _) in pending {
+            match self
+                .observe_completion_step_v1(submission, |backend, id| backend.wait_v1(id, deadline))
+            {
                 Ok(_) => {}
                 Err(error) if self.terminal => return Err(error),
                 Err(error) => {
@@ -2997,9 +3021,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if submission.status.is_terminal() {
             return Ok(submission.status);
         }
-        let result = self
-            .invoke_journal_backend_v1(|backend| backend.poll_v1(submission.backend_submission));
-        self.completion_backend_result(event.submission, result)
+        self.observe_completion_step_v1(event.submission, |backend, id| backend.poll_v1(id))
     }
 
     /// Waits until an event's source submission completes or `timeout` expires.
@@ -3023,10 +3045,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(RuntimeValidationErrorV1::InvalidDeadline)?;
-        let result = self.invoke_journal_backend_v1(|backend| {
-            backend.wait_v1(submission.backend_submission, deadline)
-        });
-        self.completion_backend_result(event.submission, result)
+        self.observe_completion_step_v1(event.submission, |backend, id| {
+            backend.wait_v1(id, deadline)
+        })
     }
 
     pub fn release_event(
@@ -3353,7 +3374,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.require_live()?;
         let record = self.submission_record(submission)?;
         self.require_retained_submission_unheld_v1(&record)?;
-        if record.quiescent {
+        self.check_scalar_peer_custody_v1(submission.id)?;
+        if !record.quiescent && record.directed_peer_copy {
+            let result = self.validate_pending_peer_copy_roots_v1(submission.id);
+            self.journal_result_v1(result)?;
+        }
+        if record.quiescent || self.retained_directed_success_v1(submission.id) {
             return Ok(RuntimeCancellationV1::TooLate);
         }
         let result =
@@ -3364,10 +3390,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(RuntimeErrorV1::BackendRejected(error));
             }
             Err(RuntimeBackendFailureV1::Quiescent(error)) => {
-                let _ = self.transition_submission_status(
-                    submission.id,
-                    RuntimeCompletionStatusV1::QuiescentWithoutResult,
-                );
+                if self
+                    .transition_submission_status(
+                        submission.id,
+                        RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                    )
+                    .is_err()
+                {
+                    self.quarantine_after_async_command_panic_v1();
+                }
                 return Err(RuntimeErrorV1::BackendQuiescent(error));
             }
             Err(RuntimeBackendFailureV1::Terminal(error)) => {
@@ -3377,15 +3408,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         match cancellation {
             BackendCancellationV1::Cancelled => {
-                self.check_scalar_peer_custody_v1(submission.id)?;
-                self.release_submission_readers_v1(submission.id)?;
-                self.settle_submission_writer_v1(
-                    submission.id,
-                    SubmissionWriterOutcomeV1::NoEffect,
-                )?;
-                let status = self.transition_submission_status(
+                let status = self.settle_terminal_submission_v1(
                     submission.id,
                     RuntimeCompletionStatusV1::Failed(RuntimeCompletionFailureV1::Cancelled),
+                    SubmissionWriterOutcomeV1::NoEffect,
                 )?;
                 submission.observe_status(status);
                 Ok(RuntimeCancellationV1::Cancelled)
@@ -3412,10 +3438,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.status.is_terminal() {
             return Ok(submission.observe_status(record.status));
         }
-        let result = self.invoke_journal_backend_v1(|backend| {
-            backend.drain_v1(record.backend_submission, deadline)
-        });
-        let status = self.completion_backend_result(submission.id, result)?;
+        let status = self.observe_completion_step_v1(submission.id, |backend, id| {
+            backend.drain_v1(id, deadline)
+        })?;
         Ok(submission.observe_status(status))
     }
 }
@@ -3627,6 +3652,7 @@ mod tests {
     mod kernel_read_lease_tests;
     mod peer_batch_tests;
     mod peer_custody_tests;
+    mod peer_directed_tests;
     mod peer_segments_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
@@ -3779,6 +3805,15 @@ mod tests {
         batch_calls: Vec<(Vec<u64>, Instant)>,
         batch_pending: bool,
         batch_failure: MockMemoryFailure,
+        directed_routes: HashMap<
+            u64,
+            (
+                BackendDirectedPeerRouteV1,
+                Vec<BackendDirectedPeerDependencyV1>,
+            ),
+        >,
+        directed_calls: Vec<(&'static str, u64)>,
+        directed_observations: HashMap<u64, peer_directed_tests::Observation>,
     }
 
     #[test]
@@ -4244,6 +4279,9 @@ mod tests {
             submission: u64,
         ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
             self.poll_call_count += 1;
+            if self.directed_routes.contains_key(&submission) {
+                return self.observe_directed_test_v1("poll", submission);
+            }
             let polls = self.polls.get_mut(&submission).unwrap();
             *polls += 1;
             Ok(if *polls == 1 {
@@ -4260,6 +4298,9 @@ mod tests {
             deadline: Instant,
         ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
             self.wait_call_count += 1;
+            if self.directed_routes.contains_key(&submission) {
+                return self.observe_directed_test_v1("wait", submission);
+            }
             self.last_waited_submission = Some(submission);
             self.wait_deadlines.push(deadline);
             if self.wait_call_count == 1 {

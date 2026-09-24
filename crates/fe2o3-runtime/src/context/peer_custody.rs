@@ -7,7 +7,7 @@ pub(super) struct PreparedPeerSubmissionV1 {
     pub(super) scalar: Option<ScalarPeerCopyRootV1>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ScalarPeerDependencyV1 {
     pub(super) ordinal: usize,
     pub(super) event: RuntimeEventIdV1,
@@ -27,6 +27,7 @@ pub(super) struct ScalarPeerCopyRootV1 {
     pub(super) dependencies: Vec<ScalarPeerDependencyV1>,
     pub(super) backend_submission: Option<u64>,
     pub(super) dependencies_held: bool,
+    pub(super) directed: Option<super::peer_reconciliation::DirectedPeerStateV1>,
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
@@ -105,6 +106,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             dependencies: roster,
             backend_submission: None,
             dependencies_held: true,
+            directed: None,
         })
     }
 
@@ -147,7 +149,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let invalid = RuntimeValidationErrorV1::InvalidBackendDescription;
         let record = self.submissions.get(&id);
         let Some(root) = self.scalar_peer_copies.get(&id) else {
-            return if record.is_some_and(|record| record.scalar_peer_copy) {
+            return if record
+                .is_some_and(|record| record.scalar_peer_copy || record.directed_peer_copy)
+            {
                 Err(invalid)
             } else {
                 Ok(())
@@ -187,6 +191,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         match record {
             Some(record)
                 if record.scalar_peer_copy
+                    && record.directed_peer_copy == root.directed.is_some()
                     && root.backend_submission == Some(record.backend_submission)
                     && root.stream == record.stream
                     && root.destination.record.device == record.device
@@ -194,14 +199,26 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             None if root.backend_submission.is_none() && root.dependencies_held => {}
             _ => return Err(invalid),
         }
+        if let Some(directed) = &root.directed
+            && (directed.depth == 0
+                || directed.depth > MAX_RUNTIME_DEPENDENCIES_V1
+                || directed.cursor > root.dependencies.len()
+                || directed.terminal == Some(BackendPollV1::Pending)
+                || directed.terminal.is_none() && directed.cursor != 0)
+        {
+            return Err(invalid);
+        }
         if !root.dependencies_held {
             return Ok(());
         }
         let mut ordinals = [false; MAX_RUNTIME_DEPENDENCIES_V1];
-        let mut previous = None;
-        for dependency in &root.dependencies {
+        let mut previous: Option<(RuntimeSubmissionIdV1, RuntimeEventIdV1)> = None;
+        let mut depth = 1;
+        for (index, dependency) in root.dependencies.iter().enumerate() {
             let key = (dependency.submission, dependency.event);
             if previous.is_some_and(|previous| previous >= key)
+                || root.directed.is_some()
+                    && previous.is_some_and(|previous| previous.0 == dependency.submission)
                 || dependency.ordinal >= root.dependencies.len()
                 || ordinals[dependency.ordinal]
                 || dependency.event.context_generation != self.context_generation
@@ -228,6 +245,29 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             {
                 return Err(invalid);
             }
+            if let Some(directed) = &root.directed {
+                let predecessor = self
+                    .scalar_peer_copies
+                    .get(&dependency.submission)
+                    .and_then(|root| root.directed.as_ref())
+                    .ok_or(invalid)?;
+                if !producer.directed_peer_copy
+                    || predecessor.depth == 0
+                    || predecessor.depth >= directed.depth
+                    || index < directed.cursor
+                        && producer.status != RuntimeCompletionStatusV1::Succeeded
+                {
+                    return Err(invalid);
+                }
+                depth = depth.max(predecessor.depth + 1);
+            }
+        }
+        if root
+            .directed
+            .as_ref()
+            .is_some_and(|directed| directed.depth != depth)
+        {
+            return Err(invalid);
         }
         for group in root
             .dependencies

@@ -39,6 +39,11 @@ impl ContextVersionsV1 {
                 .values()
                 .filter(|root| root.marker.is_none())
                 .count()
+            + self
+                .producer_readers
+                .values()
+                .filter(|root| root.reference.is_none())
+                .count()
     }
 
     #[cfg(test)]
@@ -216,6 +221,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .as_mut()
                     .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
                 if versions.submission_readers.contains_key(&id)
+                    || versions.producer_readers.contains_key(&id)
                     || versions
                         .submission_writers
                         .get(&id)
@@ -289,6 +295,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let Some(root) = versions.submission_readers.get(&id) else {
             return absent;
         };
+        if versions.producer_readers.contains_key(&id)
+            || record.is_some_and(|record| record.journal_producer_read.is_some())
+        {
+            return Err(E::InvalidReference);
+        }
         let marker = root.marker.ok_or(E::InvalidReference)?;
         let consumer = ContextWriterKeyV1 {
             context_generation: id.context_generation,

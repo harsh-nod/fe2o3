@@ -2,6 +2,10 @@
 
 use super::{BackendMemoryRegionV1, BackendPollV1, RuntimeBackendFailureV1, RuntimeBackendV1};
 
+/// Context-owned directed scalar copy, distinct from legacy and ordered batches.
+#[derive(Debug)]
+pub struct RuntimeDirectedScalarPeerCopyV1;
+
 /// The complete directed route of one scalar peer copy, using backend handles.
 ///
 /// These fields are untrusted requests, not execution authority. The backend

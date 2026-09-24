@@ -42,6 +42,15 @@ impl<B: RuntimePeerCopyBatchBackendV1> RuntimeContextV1<B> {
     ) -> Result<(), RuntimeValidationErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
             for submission in submissions {
+                if self
+                    .submissions
+                    .get(&submission.id)
+                    .is_some_and(|record| record.directed_peer_copy)
+                {
+                    return Err(
+                        fe2o3_runtime_model::ContextVersionJournalErrorV1::InvalidReference,
+                    );
+                }
                 self.validate_pending_peer_copy_roots_v1(submission.id)?;
             }
             Ok::<_, fe2o3_runtime_model::ContextVersionJournalErrorV1>(())

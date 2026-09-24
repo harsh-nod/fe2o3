@@ -50,8 +50,8 @@ they do not establish the requested operation's completed state.
 Success gating uses the native producer result. Every dependency must have
 `Succeeded` before consumer publication; failure and cancellation do not qualify.
 Ordinary flush/poll/wait and incidental FIFO progress remain valid. A host journal
-may lag actual device completion: the forthcoming Context adapter must retain
-the consumer's backend result and reconcile producer outcomes before publishing
+may lag actual device completion: the [Context adapter](runtime-directed-context-peer-v1.md) retains
+the consumer's backend result and reconciles producer outcomes before publishing
 Context success. Suppressing native readiness until host observation is not
 required for that invariant and would unnecessarily change strict flush.
 
@@ -78,27 +78,18 @@ exercise shared admission/rooting/matching/failure logic using scripted leaves.
 They are not native mapping, currentness, ticket or physical-copy evidence and
 do not establish executable/formal correspondence or HIP/HSA performance.
 
-## Next Integration
+## Context Integration
 
-Context must add a distinct directed-copy kind, exact pending-writer/member and
-event bindings, producer-read reservations alongside stable readers, and
-producer-first bounded progress. Every completion ingress, including ordinary
-poll/wait/events/drain/cleanup, must retain an early consumer terminal observation
-until exact producer reconciliation permits logical settlement. Release,
-cancellation, Unknown disposal, generated-domain exclusion, accounting and
-callbacks must preserve those roots. Async integration must avoid an extra
-generic flush in the same targeted-progress quantum. Native chain, canary,
-fault and owned-cleanup campaigns follow; none is supplied by this SPI alone.
+The separate [Context integration](runtime-directed-context-peer-v1.md) adds a
+distinct directed-copy kind, exact pending-writer/member/event binding,
+producer-read reservations and bounded producer-first reconciliation. Generic
+observations select the requested backend action, an ordinary poll of an exact
+retained producer, or local finalization without a stored capability function
+pointer. Early native Success remains logically Pending until reconciled.
+Failure, cancellation and exact quiescence release consumer inputs without
+waiting on unrelated producers; previously discarded results remain Unknown.
 
-The generic Context observation paths need no new backend trait bound or stored
-capability function pointer. A private planner can select the requested
-observation, one ordinary poll of an exact retained producer on another stream,
-or local finalization. Retained terminal observations must precede fallible
-journal settlement. Producer chains require iterative, bounded reconciliation,
-including shared predecessors; repeated observations must agree with the first
-terminal fact. Native success paired with an incompatible retained producer
-result must not mint logical success. Previously discarded producer results
-remain unknown, even if the consumer later reports native success. Definite
-cancellation and other exact quiescence exits must still release consumer input
-reservations without requiring unrelated producers to finish. This is the next
-implementation design, not behavior enabled by this backend-only checkpoint.
+The Context packet supplies CPU evidence, not native or formal refinement of
+this SPI. Dedicated async integration must avoid an extra implicit operation
+flush in the same targeted-progress quantum. Native chain, canary, fault and
+owned-cleanup campaigns remain required.

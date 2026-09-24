@@ -106,22 +106,27 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(E::InvalidState);
         }
         let Some(versions) = self.versions.as_ref() else {
-            return if record.journal_writer.is_none() && record.journal_read.is_none() {
+            return if record.journal_writer.is_none()
+                && record.journal_read.is_none()
+                && record.journal_producer_read.is_none()
+            {
                 Ok(())
             } else {
                 Err(E::InvalidReference)
             };
         };
-        let readers = self
-            .validate_submission_readers_v1(id, SubmissionWriterDomainV1::Ordinary)?
-            .ok_or(E::InvalidReference)?;
+        let readers =
+            self.validate_submission_readers_v1(id, SubmissionWriterDomainV1::Ordinary)?;
+        let producer = self.validate_producer_read_v1(id)?;
         let root = versions
             .submission_writers
             .get(&id)
             .ok_or(E::InvalidReference)?;
         let writer = root.writer;
-        if readers.sources.len() != 1
-            || record.journal_writer != Some(writer)
+        if !matches!(
+            (readers.map(|readers| readers.sources.len()), producer),
+            (Some(1), None) | (None, Some(_))
+        ) || record.journal_writer != Some(writer)
             || root.domain != SubmissionWriterDomainV1::Ordinary
             || root.disposal_started
             || root.disposed_count != 0
@@ -139,6 +144,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let allocation = &root.allocations[0];
         let member = root.members[0];
         if allocation.disposed
+            || self.scalar_peer_copies.get(&id).is_none_or(|peer| {
+                peer.destination.region.allocation != allocation.id
+                    || peer.destination.record != allocation.record
+            })
             || self.allocations.get(&allocation.id) != Some(&allocation.record)
             || !self
                 .backend_allocations
@@ -343,7 +352,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return absent;
             };
             if versions.submission_readers.contains_key(&id)
+                || versions.producer_readers.contains_key(&id)
                 || record.is_some_and(|record| record.journal_read.is_some())
+                || record.is_some_and(|record| record.journal_producer_read.is_some())
             {
                 return Err(ContextVersionJournalErrorV1::InvalidState);
             }
@@ -425,6 +436,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 }
             }
         }
+        for root in versions.producer_readers.values() {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                self.allocation_admission
+                    .quarantine(root.source.region.allocation);
+            })) {
+                core::mem::forget(payload);
+            }
+        }
     }
 
     pub(in crate::context) fn invoke_journal_backend_v1<T>(
@@ -453,7 +472,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         submit: impl FnOnce(&mut B) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>> {
         let prepared = self.prepare_submission_writer_v1(destinations)?;
-        let reads = self.prepare_submission_readers_v1(sources)?;
+        let producer = self.prepare_producer_read_v1(peer.as_ref())?;
+        let reads = if producer.is_some() {
+            None
+        } else {
+            self.prepare_submission_readers_v1(sources)?
+        };
         self.submissions
             .try_reserve(1)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
@@ -465,8 +489,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             self.begin_submission_writer_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)?;
         let journal_read =
             self.begin_submission_readers_v1(id, reads, SubmissionWriterDomainV1::Ordinary)?;
+        let journal_producer_read = self.begin_producer_read_v1(id, producer)?;
         let peer_transfer = peer.as_ref().map(|peer| peer.mechanism);
         let scalar_peer_copy = peer.as_ref().is_some_and(|peer| peer.scalar.is_some());
+        let directed_peer_copy = peer
+            .as_ref()
+            .and_then(|peer| peer.scalar.as_ref())
+            .is_some_and(|root| root.directed.is_some());
         if let Some(root) = peer.and_then(|peer| peer.scalar) {
             self.begin_scalar_peer_custody_v1(id, root);
         }
@@ -483,7 +512,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     SubmissionWriterOutcomeV1::Unknown
                 };
                 if self.check_scalar_peer_custody_v1(id).is_ok()
-                    && self.release_submission_readers_v1(id).is_ok()
+                    && self.release_submission_inputs_v1(id).is_ok()
                     && self.settle_submission_writer_v1(id, outcome).is_ok()
                     && self.release_scalar_peer_dependencies_v1(id).is_ok()
                 {
@@ -511,7 +540,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 status: RuntimeCompletionStatusV1::Pending,
                 journal_writer,
                 journal_read,
+                journal_producer_read,
                 scalar_peer_copy,
+                directed_peer_copy,
                 dependency_retains: 0,
             },
         );

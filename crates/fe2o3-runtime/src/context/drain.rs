@@ -46,9 +46,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.status.is_terminal() {
             return Ok(record.status);
         }
-        let result =
-            self.invoke_journal_backend_v1(|backend| backend.poll_v1(record.backend_submission));
-        self.completion_backend_result(id, result)
+        self.observe_completion_step_v1(id, |backend, id| backend.poll_v1(id))
     }
 
     pub(crate) fn async_drain_counts_v1(&self) -> RuntimeStreamObservationV1 {

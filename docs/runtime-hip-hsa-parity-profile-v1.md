@@ -668,6 +668,18 @@ proofs, Context dependency authentication and result custody, consumer-driven
 dependency progress, and native qualification remain required. No parity gate
 or performance claim is closed by these CPU tests or conditional model proofs.
 
+## Directed Context Integration
+
+The [directed Context packet](runtime-directed-context-peer-v1.md) now admits
+exact pending-producer sources through the explicit directed scalar API, retains
+their reservations, and reconciles producer results before logical consumer
+Success. It does not upgrade legacy/ordered/Worker profiles. Its
+[CPU evidence](evidence/dev-directed-context-peer-cpu-2026-09-24/README.md)
+passes 1,304 runtime tests on each GNU/musl target and 46 doctests, with twenty
+hardware-only ignores per target. Dedicated async-engine integration, native
+pending-input chains/faults/cleanup, executable refinement and matched performance
+remain required. No complete parity gate is closed by this integration.
+
 ## Required Gates
 
 ### G1: API and ownership

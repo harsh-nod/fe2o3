@@ -1,5 +1,22 @@
 # Current Runtime Swarm Work Orders
 
+Latest Context integration (2026-09-24): the
+[directed pending-input packet](evidence/dev-directed-context-peer-cpu-2026-09-24/README.md)
+adds the distinct directed scalar Context API, exact pending-writer/input
+reservations, retained native terminal facts and bounded producer-first
+reconciliation across all ordinary observation paths. Failure, quiescence and
+cancellation release consumer inputs without waiting on pending siblings;
+Unknown cannot become Success. Legacy, ordered and generated profiles remain
+separate. GNU and musl each pass 1,304 runtime tests with twenty hardware-only
+ignores; 46 doctests, formatting, strict Clippy and 3,814 unchanged inputs pass.
+Two independent source reviews find no remaining blocker. The
+[contract](runtime-directed-context-peer-v1.md) scopes one backend action per
+submission observation, not an entire stream synchronization. Next is dedicated
+async-engine registration without an implicit operation flush, then native
+pending-input chains, faults and cleanup. Executable refinement, aggregate
+memory and matched performance remain open. This does not advance the accepted
+Native R125, Admission R118B or Resources R116/V3 checkpoints or close A1/A2.
+
 Latest directed backend checkpoint (2026-09-23): the
 [directed scalar SPI packet](evidence/dev-directed-scalar-peer-cpu-2026-09-23/README.md)
 adds explicit success-gated native XGMI admission with exact device/region/stream

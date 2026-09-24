@@ -1,0 +1,18 @@
+{
+  "command": [
+    "cargo",
+    "--locked",
+    "test",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "--target",
+    "x86_64-unknown-linux-musl"
+  ],
+  "started_ns": 1790234223706418232,
+  "process_group": 3912703,
+  "group_absent": true,
+  "finished_ns": 1790234386580221776,
+  "status": 0
+}

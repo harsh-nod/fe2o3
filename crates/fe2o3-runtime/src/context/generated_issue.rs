@@ -221,6 +221,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             id,
             SubmissionRecordV1 {
                 scalar_peer_copy: false,
+                directed_peer_copy: false,
                 dependency_retains: 0,
                 backend_submission,
                 stream: hold.stream(),
@@ -229,6 +230,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 status: RuntimeCompletionStatusV1::Pending,
                 journal_writer,
                 journal_read,
+                journal_producer_read: None,
             },
         );
         assert!(self.backend_submissions.insert(backend_submission));
