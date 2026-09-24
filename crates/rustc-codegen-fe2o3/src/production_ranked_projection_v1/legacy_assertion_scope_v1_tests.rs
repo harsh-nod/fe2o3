@@ -23,7 +23,12 @@ mod legacy_scope_tests {
             roots,
         } = program;
         let mut root = roots.into_vec().into_iter().next().unwrap();
-        assert!(root.lowering.all_mandatory_reports_are_clean());
+        assert!(
+            root.verification
+                .ordinary()
+                .expect("ordinary test root")
+                .all_mandatory_reports_are_clean()
+        );
         inspect(&materialized, &mut root);
         if legacy {
             let source = assertion_ssa_functions(assertion_types(), vec![function])
@@ -37,7 +42,7 @@ mod legacy_scope_tests {
                     .semantic_sha256()
             );
             let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
-                source, root.lowering, root.ranked_ir, root.access_sources, root.executable_effect_sources,
+                source, root.verification.into_ordinary().expect("ordinary test root").0, root.ranked_ir, root.access_sources, root.executable_effect_sources,
             ).unwrap();
             ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
                 receipt,
@@ -67,8 +72,12 @@ mod legacy_scope_tests {
             (0, Some(statement), 0)
         );
         assert!(matches!(
-            root.lowering.kernel().blocks()[row.ranked_block() as usize].operations()
-                [row.ranked_operation() as usize],
+            root.verification
+                .ordinary()
+                .expect("ordinary test root")
+                .kernel()
+                .blocks()[row.ranked_block() as usize]
+                .operations()[row.ranked_operation() as usize],
             ProductionRankedOperationV1::Access {
                 kind: AccessKindAttr::Write,
                 ..
@@ -147,7 +156,11 @@ mod legacy_scope_tests {
                 legacy,
                 |materialized, root| {
                     assert_private_write_row_v1(materialized, root, 1);
-                    let kernel = root.lowering.kernel();
+                    let kernel = root
+                        .verification
+                        .ordinary()
+                        .expect("ordinary test root")
+                        .kernel();
                     let mut changed = 0;
                     let blocks = kernel
                         .blocks()
@@ -183,12 +196,18 @@ mod legacy_scope_tests {
                     .unwrap();
                     root.ranked_ir =
                         format_ranked_cfg(changed.function_name(), changed.blocks()).unwrap();
-                    root.lowering = fe2o3_pliron::compile_ranked_kernel_for_lowering_v1(
-                        ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, changed).unwrap(),
-                        ProductionSessionLimitsV1::default(),
-                    )
-                    .unwrap();
-                    assert!(root.lowering.all_mandatory_reports_are_clean());
+                    *ordinary_test_lowering_mut(root) =
+                        fe2o3_pliron::compile_ranked_kernel_for_lowering_v1(
+                            ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, changed).unwrap(),
+                            ProductionSessionLimitsV1::default(),
+                        )
+                        .unwrap();
+                    assert!(
+                        root.verification
+                            .ordinary()
+                            .expect("ordinary test root")
+                            .all_mandatory_reports_are_clean()
+                    );
                 },
             );
             assert!(
@@ -666,7 +685,12 @@ mod legacy_scope_tests {
             roots,
         } = program;
         let root = roots.into_vec().into_iter().next().unwrap();
-        assert!(root.lowering.all_mandatory_reports_are_clean());
+        assert!(
+            root.verification
+                .ordinary()
+                .expect("ordinary test root")
+                .all_mandatory_reports_are_clean()
+        );
         // This source/ranked receipt is the existing checked-attachment input,
         // not a fabricated functional-verification or publication receipt.
         let receipt = materialized_ranked_fixture_receipt_v1(materialized, root);
@@ -733,7 +757,7 @@ mod legacy_scope_tests {
                         .semantic_sha256(),
                 );
                 let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
-                    source, root.lowering, root.ranked_ir, root.access_sources,
+                    source, root.verification.into_ordinary().expect("ordinary test root").0, root.ranked_ir, root.access_sources,
                     root.executable_effect_sources,
                 )
                 .unwrap();
@@ -1148,7 +1172,12 @@ mod legacy_scope_tests {
             roots,
         } = program;
         let mut root = roots.into_vec().into_iter().next().unwrap();
-        assert!(root.lowering.all_mandatory_reports_are_clean());
+        assert!(
+            root.verification
+                .ordinary()
+                .expect("ordinary test root")
+                .all_mandatory_reports_are_clean()
+        );
         assert_eq!(root.access_sources.len(), expected.len());
         let mut views = Vec::new();
         for (ordinal, (row, expected_kind)) in root.access_sources.iter().zip(&expected).enumerate()
@@ -1161,9 +1190,13 @@ mod legacy_scope_tests {
                 ),
                 (1, Some(u32::from(alias)), ordinal as u32)
             );
-            let ProductionRankedOperationV1::Access { kind, view, .. } =
-                &root.lowering.kernel().blocks()[row.ranked_block() as usize].operations()
-                    [row.ranked_operation() as usize]
+            let ProductionRankedOperationV1::Access { kind, view, .. } = &root
+                .verification
+                .ordinary()
+                .expect("ordinary test root")
+                .kernel()
+                .blocks()[row.ranked_block() as usize]
+                .operations()[row.ranked_operation() as usize]
             else {
                 panic!("ordinary source effect row");
             };
@@ -1174,7 +1207,9 @@ mod legacy_scope_tests {
             let origins = views
                 .iter()
                 .map(|view| {
-                    root.lowering
+                    root.verification
+                        .ordinary()
+                        .expect("ordinary test root")
                         .kernel()
                         .blocks()
                         .iter()
@@ -1220,7 +1255,7 @@ mod legacy_scope_tests {
                     .semantic_sha256()
             );
             let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
-                source, root.lowering, root.ranked_ir, root.access_sources, root.executable_effect_sources,
+                source, root.verification.into_ordinary().expect("ordinary test root").0, root.ranked_ir, root.access_sources, root.executable_effect_sources,
             ).unwrap();
             ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
                 receipt,
@@ -1841,12 +1876,22 @@ mod legacy_scope_tests {
             roots,
         } = program;
         let root = roots.into_vec().into_iter().next().unwrap();
-        assert!(root.lowering.all_mandatory_reports_are_clean());
+        assert!(
+            root.verification
+                .ordinary()
+                .expect("ordinary test root")
+                .all_mandatory_reports_are_clean()
+        );
         let rows = root
             .access_sources
             .iter()
             .map(|row| {
-                let kind = match root.lowering.kernel().blocks()[row.ranked_block() as usize]
+                let kind = match root
+                    .verification
+                    .ordinary()
+                    .expect("ordinary test root")
+                    .kernel()
+                    .blocks()[row.ranked_block() as usize]
                     .operations()[row.ranked_operation() as usize]
                 {
                     ProductionRankedOperationV1::Access { kind, .. } => kind,
@@ -1884,7 +1929,7 @@ mod legacy_scope_tests {
                     .semantic_sha256()
             );
             let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
-                source, root.lowering, root.ranked_ir, root.access_sources, root.executable_effect_sources,
+                source, root.verification.into_ordinary().expect("ordinary test root").0, root.ranked_ir, root.access_sources, root.executable_effect_sources,
             ).unwrap();
             ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
                 receipt,

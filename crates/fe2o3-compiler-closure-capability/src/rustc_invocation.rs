@@ -7,7 +7,16 @@ use fe2o3_rustc_invocation::{
     encode_descriptor_v3,
 };
 
+use crate::native_capability::{
+    CompilerExecutionCapabilityErrorV2 as NativeError,
+    CompilerExecutionCapabilityStorageV2 as NativeStorage,
+};
 use crate::sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+};
+use std::mem::size_of;
 
 const ROLE: CapabilityRole = CapabilityRole {
     name: "rustc-invocation capability",
@@ -28,6 +37,107 @@ pub struct RustcInvocationCapabilityV1 {
 }
 
 impl RustcInvocationCapabilityV1 {
+    /// Logical input charge for the consumed descriptor; image/decoded storage
+    /// is discovered, admitted and returned as growth during native admission.
+    pub const NATIVE_FILE_STORAGE: usize = size_of::<(File, NativeStorage)>();
+    const NATIVE_IO_WORK: usize = 64 * 1024;
+    const NATIVE_FRAME: usize = 8192 + 4 * size_of::<Self>();
+
+    /// Fresh metered admission of the existing canonical V3 invocation format.
+    /// No V1 compiler-execution subject, service or policy owner is constructed.
+    /// The frozen decoder is prepaid in full before entry: bounded field scans,
+    /// UTF-8/path validation, fixed environment searches and canonical re-encodes
+    /// are linear in its input. This is logical work/storage, not allocator RSS
+    /// or a claim that the shared decoder's internal allocations are fallible.
+    pub fn from_file_native(
+        image: File,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, NativeStorage), NativeError> {
+        budget.with_prepaid_scope(
+            Self::NATIVE_FILE_STORAGE,
+            8,
+            Self::NATIVE_IO_WORK,
+            Self::NATIVE_FRAME,
+            |budget| {
+                let image = SealedCapabilityImage::from_file_bounded_native(
+                    image,
+                    ROLE,
+                    MAX_DESCRIPTOR_BYTES_V3,
+                )?;
+                let length = image.native_length();
+                Self::native_contents_scope(budget, length, true, |_: &mut Budget<'_>| {
+                    let canonical_bytes = image.read_bounded_native()?;
+                    let descriptor = decode_descriptor_v3(&canonical_bytes)
+                        .map_err(|_| NativeError::Rejected("invalid canonical V3 invocation"))?;
+                    let admitted = Self {
+                        descriptor,
+                        canonical_bytes,
+                        image,
+                    };
+                    let storage = admitted
+                        .native_retained_storage()?
+                        .checked_sub(Self::NATIVE_FILE_STORAGE)
+                        .ok_or(Resource::Accounting)?;
+                    Ok((admitted, NativeStorage(storage)))
+                })
+            },
+        )
+    }
+
+    /// Rechecks original sealed-object identity and exact canonical bytes. The
+    /// decoded descriptor is immutable, so equal bytes need no second decode.
+    pub fn revalidate_native(&self, budget: &mut Budget<'_>) -> Result<(), NativeError> {
+        budget.with_prepaid_scope(
+            self.native_retained_storage()?,
+            8,
+            Self::NATIVE_IO_WORK,
+            Self::NATIVE_FRAME,
+            |budget| {
+                Self::native_contents_scope(budget, self.canonical_bytes.len(), false, |_| {
+                    if self.image.read_bounded_native()? != self.canonical_bytes {
+                        return Err(NativeError::Rejected("retained invocation bytes changed"));
+                    }
+                    Ok(())
+                })
+            },
+        )
+    }
+
+    /// Conservative full owner charge, including canonical and decoded backing.
+    pub fn native_retained_storage(&self) -> Result<usize, NativeError> {
+        Self::native_storage_for(self.canonical_bytes.len())
+    }
+
+    fn native_storage_for(length: usize) -> Result<usize, NativeError> {
+        // Each string header consumes at least a 4-byte length in the input;
+        // environment headers consume at least 6. Includes both vector stages,
+        // immutable bytes, repeated encoder buffers and result envelopes.
+        length
+            .checked_mul(64)
+            .and_then(|n| n.checked_add(Self::NATIVE_FRAME))
+            .ok_or_else(|| Resource::Arithmetic.into())
+    }
+
+    fn native_contents_scope<T>(
+        budget: &mut Budget<'_>,
+        length: usize,
+        decode: bool,
+        operation: impl FnOnce(&mut Budget<'_>) -> Result<T, NativeError>,
+    ) -> Result<T, NativeError> {
+        if length == 0 || length > MAX_DESCRIPTOR_BYTES_V3 {
+            return Err(NativeError::Rejected(
+                "invocation length exceeds canonical V3 bound",
+            ));
+        }
+        // 4096 covers per-byte scanning/copying and the bounded V2-body/V3
+        // validator/encoder passes; fixed closure hashing is separately covered.
+        let work = length
+            .checked_mul(if decode { 4096 } else { 8 })
+            .and_then(|n| n.checked_add(Self::NATIVE_IO_WORK))
+            .ok_or(Resource::Arithmetic)?;
+        budget.with_prepaid_scope(0, 8, work, Self::native_storage_for(length)?, operation)
+    }
+
     /// Creates and seals the canonical encoding of one validated V3 invocation descriptor.
     pub fn create(descriptor: RustcInvocationDescriptorV3) -> Result<Self, String> {
         let canonical_bytes = encode_descriptor_v3(&descriptor)

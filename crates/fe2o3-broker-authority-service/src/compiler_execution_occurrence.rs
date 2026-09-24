@@ -24,6 +24,10 @@ use crate::{
 const SHA256_BYTES: usize = 32;
 const OCCURRENCE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-COMPILER-EXECUTION-OCCURRENCE/V1\0";
 
+#[path = "compiler_execution_occurrence_native.rs"]
+mod native;
+pub(crate) use native::{NativeOccurrence, NativeOccurrenceError};
+
 enum CompilerExecutionOccurrenceCustodyV1 {
     Current {
         publication: CompilerModuleHandoffCurrentnessLeaseV3,

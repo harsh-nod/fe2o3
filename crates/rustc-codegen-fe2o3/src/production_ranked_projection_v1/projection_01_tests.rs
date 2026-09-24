@@ -1,3 +1,16 @@
+    fn ordinary_test_lowering_mut(
+        root: &mut ProductionRankedRootProgramV1,
+    ) -> &mut ProductionRankedKernelLoweringInputV1 {
+        let crate::production_reference_effect_join_v2::conditional::ReferenceRootV1::Ordinary {
+            lowering,
+            ..
+        } = &mut root.verification
+        else {
+            panic!("ordinary mutation fixture unexpectedly became conditional");
+        };
+        lowering
+    }
+
     // Fixtures exercise the same source roster and executable stage as production.
     // Invalid source launches remain typed errors; a lowerer failure is a fixture
     // failure, never a fallback to the old source-only projector.
@@ -40,7 +53,7 @@
                 fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionRootV1::new(
                     root.semantic_root,
                     root.source_rank,
-                    root.lowering,
+                    root.verification.into_ordinary().expect("ordinary test root").0,
                     root.ranked_ir,
                     root.access_sources,
                     root.executable_effect_sources,
@@ -49,7 +62,6 @@
         )
         .expect("the fixture retains structurally valid source/ranked correspondence")
     }
-
 
     fn project_ranked_fixture_v1(
         semantic_ssa: ProductionSemanticSsaOwnerV1,
@@ -62,6 +74,8 @@
 
     #[path = "conditional_generated_attribution_v1_tests.rs"]
     mod conditional_generated_attribution_v1_tests;
+    #[path = "reference_continuation_v1_tests.rs"]
+    mod reference_continuation_v1_tests;
     use super::*;
     use fe2o3_mir_model::SemanticOptionProducerV1;
     use fe2o3_mir_model::semantic_mir_v1::*;

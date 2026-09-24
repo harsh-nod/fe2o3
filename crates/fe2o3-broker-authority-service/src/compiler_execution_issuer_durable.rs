@@ -23,7 +23,8 @@ use fe2o3_runtime_protocol::{
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
 };
-use rustix::fs::{FlockOperation, Mode, OFlags, flock};
+#[cfg(test)]
+use rustix::fs::Mode;
 use sha2::{Digest, Sha256};
 
 use crate::compiler_execution_journal_recovery::{JournalNames, reject_legacy_state};
@@ -807,53 +808,13 @@ impl IssuerLedgerV2 {
     }
 }
 
-struct SingletonLockV1 {
-    descriptor: OwnedFd,
-}
-
-impl Drop for SingletonLockV1 {
-    fn drop(&mut self) {
-        // Explicitly unlock the shared open-file description before close, including transient
-        // fork inheritance that has not reached close-on-exec yet.
-        let _ = flock(&self.descriptor, FlockOperation::Unlock);
-    }
-}
+type SingletonLockV1 = crate::compiler_execution_journal_recovery::SingletonLock;
 
 fn acquire_singleton_lock(
     service_root: &OwnedFd,
 ) -> Result<SingletonLockV1, ProtectedCompilerExecutionIssuerErrorV1> {
-    let lock = rustix::fs::openat(
-        service_root,
-        ".",
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::empty(),
-    )
-    .map_err(|error| {
-        ProtectedCompilerExecutionIssuerErrorV1::SingletonLock(io::Error::from(error))
-    })?;
-    let root_stat = rustix::fs::fstat(service_root).map_err(|error| {
-        ProtectedCompilerExecutionIssuerErrorV1::SingletonLock(io::Error::from(error))
-    })?;
-    let lock_stat = rustix::fs::fstat(&lock).map_err(|error| {
-        ProtectedCompilerExecutionIssuerErrorV1::SingletonLock(io::Error::from(error))
-    })?;
-    if (root_stat.st_dev, root_stat.st_ino) != (lock_stat.st_dev, lock_stat.st_ino) {
-        return Err(ProtectedCompilerExecutionIssuerErrorV1::SingletonLock(
-            io::Error::other("issuer lock descriptor does not name the retained service root"),
-        ));
-    }
-    let descriptor_flags = rustix::io::fcntl_getfd(&lock).map_err(|error| {
-        ProtectedCompilerExecutionIssuerErrorV1::SingletonLock(io::Error::from(error))
-    })?;
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        return Err(ProtectedCompilerExecutionIssuerErrorV1::SingletonLock(
-            io::Error::other("issuer lock descriptor lacks FD_CLOEXEC"),
-        ));
-    }
-    flock(&lock, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
-        ProtectedCompilerExecutionIssuerErrorV1::SingletonLock(io::Error::from(error))
-    })?;
-    Ok(SingletonLockV1 { descriptor: lock })
+    SingletonLockV1::acquire(service_root)
+        .map_err(ProtectedCompilerExecutionIssuerErrorV1::SingletonLock)
 }
 
 /// Move-only challenge released only after its complete prepared record is durable.
@@ -2963,7 +2924,7 @@ mod tests {
         let fixture = Fixture::new();
         let first =
             IssuerLedgerV2::recover(fixture.root(), &fixture.policy, &fixture.signing_key).unwrap();
-        let inherited = rustix::io::dup(&first._singleton_lock.descriptor).unwrap();
+        let inherited = rustix::io::dup(first._singleton_lock.descriptor()).unwrap();
         drop(first);
 
         let second =

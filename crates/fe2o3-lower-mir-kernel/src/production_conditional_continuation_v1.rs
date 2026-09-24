@@ -16,6 +16,28 @@ pub struct ProductionConditionalRootInputV1 {
     pub reference_subjects: fe2o3_pliron::ProductionConditionalReferenceSubjectsV1,
 }
 
+impl ProductionConditionalRootInputV1 {
+    /// Exact retained arena and source-buffer capacity charge. This excludes
+    /// the source owner, derived conditional facts, runtime and proof receipts.
+    pub fn retained_storage_v1(
+        &self,
+    ) -> Result<usize, fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1> {
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        self.access_sources
+            .capacity()
+            .checked_mul(std::mem::size_of::<ProductionRankedAccessSourceV1>())
+            .and_then(|bytes| {
+                self.executable_effect_sources
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<ProductionRankedExecutableEffectSourceV1>())
+                    .and_then(|effects| bytes.checked_add(effects))
+            })
+            .and_then(|bytes| bytes.checked_add(self.ranked_ir.capacity()))
+            .and_then(|bytes| bytes.checked_add(self.pending.retained_analysis_storage_v1()))
+            .ok_or(Resource::Arithmetic)
+    }
+}
+
 /// Exact argument correspondence for premise and reference/descriptor consumers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionConditionalSourceArgumentV1 {
@@ -105,6 +127,73 @@ enum ConditionalContinuationGraphV1<'source> {
     Staged(fe2o3_pliron::ProductionConditionalAggregateStateV1<'source>),
 }
 
+// Both entry points lend the same account; this adapter cannot recreate its
+// work history, alter its identity, or convert a borrowed budget to an owner.
+trait ConditionalOriginalLedgerV1 {
+    fn storage(&self) -> usize;
+    fn visit_budget(&mut self, visit: &mut dyn FnMut(&mut ArgumentBudgetV1<'_>));
+}
+
+impl ConditionalOriginalLedgerV1
+    for fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1
+{
+    fn storage(&self) -> usize {
+        self.storage()
+    }
+    fn visit_budget(&mut self, visit: &mut dyn FnMut(&mut ArgumentBudgetV1<'_>)) {
+        self.with_budget(visit);
+    }
+}
+
+impl ConditionalOriginalLedgerV1 for ArgumentBudgetV1<'_> {
+    fn storage(&self) -> usize {
+        self.storage()
+    }
+    fn visit_budget(&mut self, visit: &mut dyn FnMut(&mut ArgumentBudgetV1<'_>)) {
+        visit(self);
+    }
+}
+
+impl dyn ConditionalOriginalLedgerV1 + '_ {
+    fn with_budget<R>(&mut self, consume: impl FnOnce(&mut ArgumentBudgetV1<'_>) -> R) -> R {
+        let mut consume = Some(consume);
+        let mut result = None;
+        self.visit_budget(&mut |budget| {
+            result = Some(consume.take().expect("one original account visit")(budget));
+        });
+        result.expect("original account was visited")
+    }
+}
+
+fn with_conditional_original_budget_v1<R>(
+    ledger: &mut dyn ConditionalOriginalLedgerV1,
+    account: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    protected: usize,
+    poisoned: &mut bool,
+    consume: impl FnOnce(
+        &mut ArgumentBudgetV1<'_>,
+    ) -> Result<R, ProductionConditionalContinuationErrorV1>,
+) -> Result<R, ProductionConditionalContinuationErrorV1> {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    ledger.with_budget(|budget| {
+        if *poisoned || budget.work_ledger_identity_v1() != account || budget.storage() < protected
+        {
+            *poisoned = true;
+            return Err(Resource::Accounting.into());
+        }
+        let floor = budget.storage();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(budget)));
+        if budget.work_ledger_identity_v1() != account || budget.storage() < floor {
+            *poisoned = true;
+        }
+        match result {
+            Ok(_) if *poisoned => Err(Resource::Accounting.into()),
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
+}
+
 /// A consuming root continuation borrowing the original canonical owner and
 /// account. There is no graph mutation, ordinary clean conversion or launch API.
 pub struct ProductionConditionalFinalRootV1<'source, 'ledger> {
@@ -116,8 +205,11 @@ pub struct ProductionConditionalFinalRootV1<'source, 'ledger> {
     access_sources: Vec<ProductionRankedAccessSourceV1>,
     executable_effect_sources: Vec<ProductionRankedExecutableEffectSourceV1>,
     ranked_ir: String,
-    ledger: &'ledger mut fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1,
+    ledger: &'ledger mut dyn ConditionalOriginalLedgerV1,
     reserved: usize,
+    account: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    floor: usize,
+    poisoned: bool,
 }
 
 /// A staged conditional graph retaining the original source and resource account.
@@ -167,10 +259,22 @@ pub fn continue_conditional_root_v1<'source, 'ledger>(
     ProductionConditionalFinalRootV1<'source, 'ledger>,
     ProductionConditionalContinuationErrorV1,
 > {
+    continue_conditional_root_with_ledger_v1(source, input, ledger)
+}
+
+fn continue_conditional_root_with_ledger_v1<'source, 'ledger>(
+    source: &'source ProductionPreRankedKirOwnerV1,
+    input: ProductionConditionalRootInputV1,
+    ledger: &'ledger mut dyn ConditionalOriginalLedgerV1,
+) -> Result<
+    ProductionConditionalFinalRootV1<'source, 'ledger>,
+    ProductionConditionalContinuationErrorV1,
+> {
     use ProductionConditionalContinuationErrorV1 as E;
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceErrorV1 as Resource, ConditionalTotalViewAnalysisV1,
     };
+    let input_storage = input.retained_storage_v1()?;
     let ProductionConditionalRootInputV1 {
         pending,
         semantic_root,
@@ -181,27 +285,15 @@ pub fn continue_conditional_root_v1<'source, 'ledger>(
         reference_subjects,
     } = input;
     let floor = ledger.storage();
+    let account = ledger.with_budget(|budget| budget.work_ledger_identity_v1());
     let result = ledger.with_budget(|budget| {
         budget.charge_work(8)?;
         if budget.storage() < source.retained_analysis_storage_v1() {
             return Err(Resource::Accounting.into());
         }
-        let input_storage = access_sources
-            .capacity()
-            .checked_mul(std::mem::size_of::<ProductionRankedAccessSourceV1>())
-            .and_then(|bytes| {
-                executable_effect_sources
-                    .capacity()
-                    .checked_mul(std::mem::size_of::<ProductionRankedExecutableEffectSourceV1>())
-                    .and_then(|effects| bytes.checked_add(effects))
-            })
-            .and_then(|bytes| bytes.checked_add(ranked_ir.capacity()))
-            .ok_or(Resource::Arithmetic)?;
         budget.reserve_storage(
-            pending
-                .retained_analysis_storage_v1()
+            input_storage
                 .checked_add(std::mem::size_of::<ProductionConditionalFinalRootV1<'_, '_>>())
-                .and_then(|bytes| bytes.checked_add(input_storage))
                 .ok_or(Resource::Arithmetic)?,
         )?;
         let candidate = crate::NativeRankedSourceCandidateV1::from_untrusted_parts(
@@ -378,6 +470,9 @@ pub fn continue_conditional_root_v1<'source, 'ledger>(
                 ranked_ir,
                 ledger,
                 reserved,
+                account,
+                floor,
+                poisoned: false,
             })
         }
         Err(error) => {
@@ -385,6 +480,9 @@ pub fn continue_conditional_root_v1<'source, 'ledger>(
             drop(executable_effect_sources);
             drop(ranked_ir);
             ledger.with_budget(|budget| {
+                if budget.work_ledger_identity_v1() != account {
+                    return Err(Resource::Accounting);
+                }
                 budget.release_storage(
                     budget
                         .storage()
@@ -418,6 +516,32 @@ fn conditional_continuation_vec_v1<T>(
 }
 
 impl<'source, 'ledger> ProductionConditionalFinalRootV1<'source, 'ledger> {
+    fn protected_storage_v1(
+        &self,
+    ) -> Result<usize, fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1> {
+        self.floor
+            .checked_add(self.reserved)
+            .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)
+    }
+
+    fn transfer_input_storage_v1(
+        &mut self,
+        retained: usize,
+    ) -> Result<(), fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1> {
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        let reserved = self
+            .reserved
+            .checked_sub(retained)
+            .ok_or(Resource::Accounting)?;
+        let floor = self
+            .floor
+            .checked_add(retained)
+            .ok_or(Resource::Arithmetic)?;
+        self.reserved = reserved;
+        self.floor = floor;
+        Ok(())
+    }
+
     /// Consumes the checked root and binds its conditional aggregate identity.
     #[allow(clippy::result_large_err)]
     pub fn into_aggregate_stage_v1(
@@ -432,10 +556,18 @@ impl<'source, 'ledger> ProductionConditionalFinalRootV1<'source, 'ledger> {
             ));
         };
         let before = self.ledger.storage();
-        let state = self
-            .ledger
-            .with_budget(|budget| graph.into_aggregate_state_v1(budget))
-            .map_err(conditional_aggregate_error_v1);
+        let protected = self.protected_storage_v1()?;
+        let state = with_conditional_original_budget_v1(
+            self.ledger,
+            self.account,
+            protected,
+            &mut self.poisoned,
+            |budget| {
+                graph
+                    .into_aggregate_state_v1(budget)
+                    .map_err(conditional_aggregate_error_v1)
+            },
+        );
         let added = self
             .ledger
             .storage()
@@ -462,50 +594,101 @@ impl ProductionConditionalAggregateStageV1<'_, '_> {
         ) -> R,
     ) -> Result<R, ProductionConditionalContinuationErrorV1> {
         let root = &mut self.root;
+        let protected = root.protected_storage_v1()?;
         let Some(ConditionalContinuationGraphV1::Staged(state)) = &root.graph else {
             return Err(ProductionConditionalContinuationErrorV1::Subject(
                 "aggregate stage order",
             ));
         };
-        root.ledger.with_budget(|budget| {
-            let pending = state.pending_analysis();
-            let candidate = crate::NativeRankedSourceCandidateV1::from_untrusted_parts(
-                root.semantic_root,
-                root.launch_rank,
-                pending.kernel().map_err(|_| {
-                    ProductionConditionalContinuationErrorV1::Subject("pending graph")
-                })?,
-                &root.access_sources,
-                &root.executable_effect_sources,
-                &root.ranked_ir,
-            );
-            let translation = root
-                .source
-                .check_conditional_source_translation_v1(pending, candidate, budget)
-                .map_err(ProductionConditionalContinuationErrorV1::Source)?;
-            let account = budget.work_ledger_identity_v1();
-            let floor = budget.storage();
-            let result = state
-                .with_input_v1(budget, |pliron, budget| {
-                    consume(
-                        &ProductionSourceBoundConditionalAggregateRequestV1 {
-                            translation: &translation,
-                            pliron,
-                            arguments: &root.arguments,
-                        },
-                        budget,
-                    )
-                })
-                .map_err(conditional_aggregate_error_v1);
-            if budget.work_ledger_identity_v1() != account || budget.storage() < floor {
-                return Err(
-                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting
-                        .into(),
+        with_conditional_original_budget_v1(
+            root.ledger,
+            root.account,
+            protected,
+            &mut root.poisoned,
+            |budget| {
+                let pending = state.pending_analysis();
+                let candidate = crate::NativeRankedSourceCandidateV1::from_untrusted_parts(
+                    root.semantic_root,
+                    root.launch_rank,
+                    pending.kernel().map_err(|_| {
+                        ProductionConditionalContinuationErrorV1::Subject("pending graph")
+                    })?,
+                    &root.access_sources,
+                    &root.executable_effect_sources,
+                    &root.ranked_ir,
                 );
-            }
-            result
-        })
+                let translation = root
+                    .source
+                    .check_conditional_source_translation_v1(pending, candidate, budget)
+                    .map_err(ProductionConditionalContinuationErrorV1::Source)?;
+                state
+                    .with_input_v1(budget, |pliron, budget| {
+                        consume(
+                            &ProductionSourceBoundConditionalAggregateRequestV1 {
+                                translation: &translation,
+                                pliron,
+                                arguments: &root.arguments,
+                            },
+                            budget,
+                        )
+                    })
+                    .map_err(conditional_aggregate_error_v1)
+            },
+        )
     }
+}
+
+/// Consumes the existing pending arena using a borrowed view of the original
+/// account, replays source and final-graph checks, and lends the staged request.
+///
+/// The returned input is still pending, not clean or authenticated lowering.
+/// Its arena and moved source-buffer reservations remain charged on `budget`;
+/// only derived conditional facts are released. The caller must retain those
+/// reservations for the returned input's lifetime within its accounting phase.
+/// Callback-owned reservations are not released here. Failed work is retained.
+#[allow(clippy::result_large_err)]
+pub fn with_conditional_root_request_v1<R>(
+    source: &ProductionPreRankedKirOwnerV1,
+    input: ProductionConditionalRootInputV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+    consume: impl for<'a> FnOnce(
+        &ProductionSourceBoundConditionalAggregateRequestV1<'a>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> R,
+) -> Result<(R, ProductionConditionalRootInputV1), ProductionConditionalContinuationErrorV1> {
+    use ProductionConditionalContinuationErrorV1 as E;
+    let reference_subjects = input.reference_subjects;
+    let mut stage = continue_conditional_root_with_ledger_v1(source, input, budget)?
+        .into_aggregate_stage_v1()?;
+    let result = stage.with_request_v1(consume)?;
+    let root = &mut stage.root;
+    let Some(ConditionalContinuationGraphV1::Staged(graph)) = root.graph.take() else {
+        return Err(E::Subject("conditional arena return stage order"));
+    };
+    let protected = root.protected_storage_v1()?;
+    let pending = with_conditional_original_budget_v1(
+        root.ledger,
+        root.account,
+        protected,
+        &mut root.poisoned,
+        |budget| {
+            graph
+                .into_pending_analysis_v1(budget)
+                .map_err(conditional_aggregate_error_v1)
+        },
+    )?;
+    let input = ProductionConditionalRootInputV1 {
+        pending,
+        semantic_root: root.semantic_root,
+        launch_rank: root.launch_rank,
+        access_sources: std::mem::take(&mut root.access_sources),
+        executable_effect_sources: std::mem::take(&mut root.executable_effect_sources),
+        ranked_ir: std::mem::take(&mut root.ranked_ir),
+        reference_subjects,
+    };
+    root.transfer_input_storage_v1(input.retained_storage_v1()?)?;
+    drop(stage);
+    Ok((result, input))
 }
 
 impl Drop for ProductionConditionalFinalRootV1<'_, '_> {
@@ -515,9 +698,16 @@ impl Drop for ProductionConditionalFinalRootV1<'_, '_> {
         drop(std::mem::take(&mut self.access_sources));
         drop(std::mem::take(&mut self.executable_effect_sources));
         drop(std::mem::take(&mut self.ranked_ir));
+        // Never debit a substituted account or a damaged enclosing floor.
         // Reservations owned by a consumer callback are not part of `reserved`.
-        let _ = self
-            .ledger
-            .with_budget(|budget| budget.release_storage(self.reserved));
+        let protected = self.protected_storage_v1();
+        self.ledger.with_budget(|budget| {
+            if !self.poisoned
+                && budget.work_ledger_identity_v1() == self.account
+                && protected.is_ok_and(|floor| budget.storage() >= floor)
+            {
+                let _ = budget.release_storage(self.reserved);
+            }
+        });
     }
 }

@@ -677,6 +677,27 @@ fn emit_ranked_value_v1(
 }
 
 impl ProductionConditionalAggregateStateV1<'_> {
+    /// Rechecks epoch and statement identity, discards conditional derived facts,
+    /// and returns the original pending arena. No clean evidence or proof is
+    /// transferred; callers must preserve the arena's existing reservation.
+    #[allow(clippy::result_large_err)]
+    pub fn into_pending_analysis_v1(
+        self,
+        budget: &mut Budget<'_>,
+    ) -> Result<ProductionConditionalRankedAnalysisV1, ProductionConditionalAggregateErrorV1> {
+        self.with_input_v1(budget, |_, _| ())?;
+        let ProductionConditionalFinalGraphV1 {
+            canonical,
+            output,
+            reads,
+            premises,
+            pipeline,
+            ..
+        } = self.graph;
+        drop((canonical, output, reads, premises));
+        Ok(pipeline.into_pending_analysis_v1())
+    }
+
     pub fn pending_analysis(&self) -> &ProductionConditionalRankedAnalysisV1 {
         self.graph.pending_analysis()
     }

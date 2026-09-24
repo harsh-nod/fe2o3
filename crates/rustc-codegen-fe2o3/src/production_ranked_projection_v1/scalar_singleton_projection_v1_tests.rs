@@ -148,7 +148,9 @@ fn scalar_private_singleton_real_projector_preserves_one_and_two_root_effects() 
             for root in &program.roots {
                 let mut views = std::collections::BTreeSet::new();
                 for operation in root
-                    .lowering
+                    .verification
+                    .ordinary()
+                    .expect("ordinary test root")
                     .kernel()
                     .blocks()
                     .iter()
@@ -174,7 +176,15 @@ fn scalar_private_singleton_real_projector_preserves_one_and_two_root_effects() 
                 assert_eq!(views.len(), 2);
                 let mut private_reads = 0;
                 let mut private_writes = 0;
-                for (block, recipe) in root.lowering.kernel().blocks().iter().enumerate() {
+                for (block, recipe) in root
+                    .verification
+                    .ordinary()
+                    .expect("ordinary test root")
+                    .kernel()
+                    .blocks()
+                    .iter()
+                    .enumerate()
+                {
                     for (operation, item) in recipe.operations().iter().enumerate() {
                         if let ProductionRankedOperationV1::Access {
                             kind,

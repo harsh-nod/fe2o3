@@ -217,7 +217,7 @@ fn source_launch_materialized_two_roots_reject_reordering_and_duplicate_labels()
             (0, Some(1), 0)
         );
         assert!(matches!(
-            &root.lowering.kernel().blocks()[row.ranked_block() as usize].operations()
+            &root.verification.ordinary().expect("ordinary test root").kernel().blocks()[row.ranked_block() as usize].operations()
                 [row.ranked_operation() as usize],
             ProductionRankedOperationV1::Access {
                 kind: AccessKindAttr::Write,
@@ -353,7 +353,9 @@ fn source_launch_production_row_guard_rejects_substituted_grid_identity_and_root
     assert_eq!(exact.kernel_binding, bytes(247));
     assert_eq!(exact.source_rank, 1);
     let layouts = exact
-        .lowering
+        .verification
+        .ordinary()
+        .expect("ordinary test root")
         .kernel()
         .blocks()
         .iter()
@@ -466,7 +468,9 @@ fn source_launch_production_accepts_empty_roots_and_rejects_later_geometry() {
         assert!(root.access_sources.is_empty());
         assert!(root.executable_effect_sources.is_empty());
         let operations = root
-            .lowering
+            .verification
+            .ordinary()
+            .expect("ordinary test root")
             .kernel()
             .blocks()
             .iter()

@@ -15,7 +15,10 @@ fn unit_local_backend_stage_candidates_v1(
             fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionRootV1::new(
                 root.semantic_root,
                 root.source_rank,
-                root.lowering,
+                root.verification
+                    .into_ordinary()
+                    .expect("ordinary test root")
+                    .0,
                 root.ranked_ir,
                 root.access_sources,
                 root.executable_effect_sources,

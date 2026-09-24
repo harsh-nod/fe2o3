@@ -24,6 +24,49 @@ impl From<ImageError> for Error {
 }
 
 impl SealedCapabilityImage {
+    /// Admission for the bounded V3 invocation role. The caller meters metadata
+    /// before entry and prepays the admitted length before requesting any bytes.
+    pub(crate) fn from_file_bounded_native(
+        image: File,
+        role: CapabilityRole,
+        maximum: usize,
+    ) -> Result<Self> {
+        let length_rule = ImageLength::Bounded { max: maximum };
+        let (metadata, length) = validate_file_checked(&image, length_rule)?;
+        Ok(Self {
+            image,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            length,
+            length_rule,
+            role,
+        })
+    }
+
+    pub(crate) const fn native_length(&self) -> usize {
+        self.length
+    }
+
+    /// One positional read; the immutable length and original object are checked
+    /// both before and after. Short reads and interruptions are terminal failures.
+    pub(crate) fn read_bounded_native(&self) -> Result<Vec<u8>> {
+        self.revalidate_fixed()?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(self.length).map_err(|_| {
+            Error::Resource(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Allocation,
+            )
+        })?;
+        bytes.resize(self.length, 0);
+        let read = rustix::io::pread(&self.image, bytes.as_mut_slice(), 0)
+            .map_err(|e| Error::io("read bounded sealed invocation", e))?;
+        if read != self.length {
+            return Err(Error::Rejected("short sealed invocation read"));
+        }
+        self.revalidate_fixed()?;
+        Ok(bytes)
+    }
+
     pub(crate) fn create_fixed<const N: usize>(
         bytes: &[u8; N],
         role: CapabilityRole,

@@ -894,6 +894,8 @@ fn legacy_none_route_keeps_exact_ranked_bytes_work_and_source_report() {
     let start = budget.work();
     let explicit_none =
         project_ranked_roots_with_progress_v1(&source, &roots, &references, &mut budget, None)
+            .unwrap()
+            .finish(&source, &mut budget)
             .unwrap();
     assert_eq!(budget.work() - start, old_work);
     assert_eq!(budget.storage(), floor);

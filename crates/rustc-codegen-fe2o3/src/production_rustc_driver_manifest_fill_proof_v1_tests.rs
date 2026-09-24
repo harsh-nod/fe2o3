@@ -365,6 +365,7 @@ struct SourceOutcomeV1 {
     observed: proof::Observation,
     diagnostic: String,
     conditional: Option<conditional::Observation>,
+    conditional_formula: Option<serde_json::Value>,
 }
 
 impl Callbacks for CallbacksV1 {
@@ -408,29 +409,57 @@ impl Callbacks for CallbacksV1 {
                     observed,
                     diagnostic: conditional::STOP.into(),
                     conditional: Some(pending),
+                    conditional_formula: None,
                 })
             } else {
                 let (result, observed) =
                     proof::observe(None, || transaction.verify_general_kernel_checks());
                 use crate::production_pipeline::ProductionPipelineError as Pipeline;
                 use crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1 as Projection;
+                use crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1 as Verification;
                 use crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2 as Join;
+                let mut conditional_formula = None;
                 let diagnostic = match (self.case, result) {
-                    (
-                        Case::Original,
-                        Err(Pipeline::RankedProjection(Projection::ReferenceEffectJoin(
-                            Join::Compile(error),
-                        ))),
-                    ) => {
-                        let diagnostic = error.to_string();
-                        if !diagnostic.contains("FE2O3-OWN-002")
-                            || !diagnostic.contains("launch dimension 0 is dynamic")
-                        {
-                            return Err(format!(
-                                "wrong post-proof admission boundary: {diagnostic}"
-                            ));
+                    (Case::Original, Ok(ranked)) => {
+                        assert!(!ranked.all_kernel_checks_are_clean());
+                        assert!(!ranked.grants_artifact_or_launch_authority());
+                        let [root] = ranked.ranked_roots() else {
+                            return Err("exactly one consuming source root required".into());
+                        };
+                        let report = root
+                            .conditional_formula_report_v1()
+                            .ok_or("source root did not consume a conditional formula execution")?;
+                        for identity in [
+                            report.statement_identity(),
+                            report.generated_source_identity(),
+                            report.execution_identity(),
+                            report.receipt_identity(),
+                        ] {
+                            assert_ne!(identity.as_bytes(), &[0; 32]);
                         }
-                        diagnostic
+                        // The receipt is callback-scoped. Only an inert report
+                        // escapes; its presence cannot satisfy the finalizer.
+                        conditional_formula = Some(serde_json::json!({
+                            "statement": report.statement_identity().as_bytes(),
+                            "generated_source": report.generated_source_identity().as_bytes(),
+                            "execution": report.execution_identity().as_bytes(),
+                            "receipt": report.receipt_identity().as_bytes(),
+                            "proof_retained_after_callback": false,
+                        }));
+                        match dispatch::Stage::lower(ranked) {
+                            Err(Pipeline::RankedVerification(
+                                error @ Verification::ConditionalFinalizerRequired { .. },
+                            )) => {
+                                assert!(error.to_string().contains("FE2O3-COND-FINALIZER-001"));
+                                error.to_string()
+                            }
+                            result => {
+                                return Err(format!(
+                                    "wrong conditional finalizer boundary: {:?}",
+                                    result.err()
+                                ));
+                            }
+                        }
                     }
                     (
                         Case::WrongStore,
@@ -455,6 +484,7 @@ impl Callbacks for CallbacksV1 {
                     observed,
                     diagnostic,
                     conditional: None,
+                    conditional_formula,
                 })
             }
         })());
@@ -538,6 +568,7 @@ fn actual_manifest_fill_signed_effect_child() {
         "schema": "fe2o3-test-manifest-fill-proof-v1", "case": case,
         "invocation": actual, "observed": outcome.observed,
         "diagnostic": outcome.diagnostic, "conditional": outcome.conditional,
+        "conditional_formula": outcome.conditional_formula,
         "actual_rustc_callback": true, "source_admission_complete": false,
         "default_manifest_selection": false, "qualification_credit": false,
         "grants_artifact_or_launch_authority": false, "hardware_observed": false,
@@ -599,6 +630,21 @@ fn actual_manifest_fill_protected_effect_and_mutation() {
         assert_eq!(report["source_admission_complete"], false);
         assert_eq!(report["default_manifest_selection"], false);
         assert_eq!(report["qualification_credit"], false);
+        if case == Case::Original {
+            assert!(report["conditional_formula"].is_object());
+            assert_eq!(
+                report["conditional_formula"]["proof_retained_after_callback"],
+                false
+            );
+            assert!(
+                report["diagnostic"]
+                    .as_str()
+                    .unwrap()
+                    .contains("FE2O3-COND-FINALIZER-001")
+            );
+        } else {
+            assert!(report["conditional_formula"].is_null());
+        }
         reports.push(report);
     }
     for field in ["kernel_mir", "normalized_obligation"] {

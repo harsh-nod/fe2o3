@@ -70,7 +70,7 @@ fn private_array_copy_read_attaches_and_resets_each_statement_ordinal() {
                         AccessKindAttr::Read
                     };
                     assert!(
-                        matches!(root.lowering.kernel().blocks()[row.ranked_block() as usize]
+                        matches!(root.verification.ordinary().expect("ordinary test root").kernel().blocks()[row.ranked_block() as usize]
                         .operations()[row.ranked_operation() as usize],
                         ProductionRankedOperationV1::Access { kind, .. } if kind == expected)
                     );
@@ -237,7 +237,11 @@ fn private_array_read_missing_row_and_wrong_ranked_index_fail_final_relation() {
                             root.access_sources.pop();
                             return;
                         }
-                        let kernel = root.lowering.kernel();
+                        let kernel = root
+                            .verification
+                            .ordinary()
+                            .expect("ordinary test root")
+                            .kernel();
                         let ProductionRankedOperationV1::Access {
                             indices,
                             kind: AccessKindAttr::Read,
@@ -284,12 +288,19 @@ fn private_array_read_missing_row_and_wrong_ranked_index_fail_final_relation() {
                         .unwrap();
                         root.ranked_ir =
                             format_ranked_cfg(changed.function_name(), changed.blocks()).unwrap();
-                        root.lowering = fe2o3_pliron::compile_ranked_kernel_for_lowering_v1(
-                            ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, changed).unwrap(),
-                            ProductionSessionLimitsV1::default(),
-                        )
-                        .unwrap();
-                        assert!(root.lowering.all_mandatory_reports_are_clean());
+                        *ordinary_test_lowering_mut(root) =
+                            fe2o3_pliron::compile_ranked_kernel_for_lowering_v1(
+                                ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, changed)
+                                    .unwrap(),
+                                ProductionSessionLimitsV1::default(),
+                            )
+                            .unwrap();
+                        assert!(
+                            root.verification
+                                .ordinary()
+                                .expect("ordinary test root")
+                                .all_mandatory_reports_are_clean()
+                        );
                     },
                 );
                 if missing {
@@ -366,7 +377,11 @@ fn private_array_read_checks_caller_budget_and_rejects_duplicate_occurrences() {
                 let result = production_access_sources(
                     semantic.types(),
                     &semantic.functions()[0],
-                    root.lowering.kernel().blocks(),
+                    root.verification
+                        .ordinary()
+                        .expect("ordinary test root")
+                        .kernel()
+                        .blocks(),
                     &[source],
                     &mut session.for_source_with_query_budget_v1(&mut budget, ROOT, ROOT),
                 );
@@ -395,7 +410,11 @@ fn private_array_read_checks_caller_budget_and_rejects_duplicate_occurrences() {
             let result = production_access_sources(
                 semantic.types(),
                 &semantic.functions()[0],
-                root.lowering.kernel().blocks(),
+                root.verification
+                    .ordinary()
+                    .expect("ordinary test root")
+                    .kernel()
+                    .blocks(),
                 &[source, source],
                 &mut session.for_source(ROOT, ROOT),
             );

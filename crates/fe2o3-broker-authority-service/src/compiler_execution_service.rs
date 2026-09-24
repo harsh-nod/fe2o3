@@ -408,9 +408,19 @@ fn receive_packet(
     client_pidfd: BorrowedFd<'_>,
     deadline: Instant,
 ) -> Result<ReceivedPacketV1, CompilerExecutionServiceErrorV1> {
-    let mut bytes = [0_u8; MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1];
+    receive_packet_metered(peer, client_pidfd, deadline, &mut || Ok(()))
+}
+
+pub(crate) fn receive_packet_metered<const N: usize, E: From<CompilerExecutionServiceErrorV1>>(
+    peer: BorrowedFd<'_>,
+    client_pidfd: BorrowedFd<'_>,
+    deadline: Instant,
+    before_io: &mut impl FnMut() -> Result<(), E>,
+) -> Result<ReceivedPacket<N>, E> {
+    let mut bytes = [0_u8; N];
     loop {
-        wait_for_peer(peer, client_pidfd, libc::POLLIN, deadline)?;
+        wait_for_peer_metered(peer, client_pidfd, libc::POLLIN, deadline, before_io)?;
+        before_io()?;
         let mut vector = libc::iovec {
             iov_base: bytes.as_mut_ptr().cast(),
             iov_len: bytes.len(),
@@ -439,33 +449,34 @@ fn receive_packet(
             ) {
                 continue;
             }
-            return Err(CompilerExecutionServiceErrorV1::Receive(error));
+            return Err(CompilerExecutionServiceErrorV1::Receive(error).into());
         }
         if header.msg_flags & libc::MSG_CTRUNC != 0 {
-            return Err(CompilerExecutionServiceErrorV1::AncillaryData);
+            return Err(CompilerExecutionServiceErrorV1::AncillaryData.into());
         }
         if header.msg_flags & libc::MSG_TRUNC != 0 {
-            return Err(CompilerExecutionServiceErrorV1::PacketTruncated);
+            return Err(CompilerExecutionServiceErrorV1::PacketTruncated.into());
         }
         let received = usize::try_from(received)
             .map_err(|_| CompilerExecutionServiceErrorV1::PacketTruncated)?;
         if received == 0 {
-            return Err(CompilerExecutionServiceErrorV1::PeerClosed);
+            return Err(CompilerExecutionServiceErrorV1::PeerClosed.into());
         }
-        return Ok(ReceivedPacketV1 {
+        return Ok(ReceivedPacket {
             bytes,
             len: received,
         });
     }
 }
 
-struct ReceivedPacketV1 {
-    bytes: [u8; MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1],
+type ReceivedPacketV1 = ReceivedPacket<MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1>;
+pub(crate) struct ReceivedPacket<const N: usize> {
+    bytes: [u8; N],
     len: usize,
 }
 
-impl ReceivedPacketV1 {
-    fn as_slice(&self) -> &[u8] {
+impl<const N: usize> ReceivedPacket<N> {
+    pub(crate) fn as_slice(&self) -> &[u8] {
         &self.bytes[..self.len]
     }
 }
@@ -476,8 +487,19 @@ fn send_packet(
     bytes: &[u8],
     deadline: Instant,
 ) -> Result<(), CompilerExecutionServiceErrorV1> {
+    send_packet_metered(peer, client_pidfd, bytes, deadline, &mut || Ok(()))
+}
+
+pub(crate) fn send_packet_metered<E: From<CompilerExecutionServiceErrorV1>>(
+    peer: BorrowedFd<'_>,
+    client_pidfd: BorrowedFd<'_>,
+    bytes: &[u8],
+    deadline: Instant,
+    before_io: &mut impl FnMut() -> Result<(), E>,
+) -> Result<(), E> {
     loop {
-        wait_for_peer(peer, client_pidfd, libc::POLLOUT, deadline)?;
+        wait_for_peer_metered(peer, client_pidfd, libc::POLLOUT, deadline, before_io)?;
+        before_io()?;
         // SAFETY: `bytes` is readable for `bytes.len()` bytes and `peer` remains borrowed for the
         // duration of the call.
         let sent = unsafe {
@@ -496,25 +518,27 @@ fn send_packet(
             ) {
                 continue;
             }
-            return Err(CompilerExecutionServiceErrorV1::Send(error));
+            return Err(CompilerExecutionServiceErrorV1::Send(error).into());
         }
         if usize::try_from(sent).ok() != Some(bytes.len()) {
-            return Err(CompilerExecutionServiceErrorV1::PartialSend);
+            return Err(CompilerExecutionServiceErrorV1::PartialSend.into());
         }
         return Ok(());
     }
 }
 
-fn wait_for_peer(
+fn wait_for_peer_metered<E: From<CompilerExecutionServiceErrorV1>>(
     peer: BorrowedFd<'_>,
     client_pidfd: BorrowedFd<'_>,
     wanted: i16,
     deadline: Instant,
-) -> Result<(), CompilerExecutionServiceErrorV1> {
+    before_io: &mut impl FnMut() -> Result<(), E>,
+) -> Result<(), E> {
     loop {
+        before_io()?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(CompilerExecutionServiceErrorV1::Timeout);
+            return Err(CompilerExecutionServiceErrorV1::Timeout.into());
         }
         let mut descriptors = [
             libc::pollfd {
@@ -541,25 +565,25 @@ fn wait_for_peer(
             if error.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            return Err(CompilerExecutionServiceErrorV1::Poll(error));
+            return Err(CompilerExecutionServiceErrorV1::Poll(error).into());
         }
         if result == 0 || deadline.saturating_duration_since(Instant::now()).is_zero() {
-            return Err(CompilerExecutionServiceErrorV1::Timeout);
+            return Err(CompilerExecutionServiceErrorV1::Timeout.into());
         }
         if descriptors[0].revents & libc::POLLNVAL != 0 {
-            return Err(CompilerExecutionServiceErrorV1::InvalidClientPidfd);
+            return Err(CompilerExecutionServiceErrorV1::InvalidClientPidfd.into());
         }
         if descriptors[0].revents != 0 {
-            return Err(CompilerExecutionServiceErrorV1::ClientExited);
+            return Err(CompilerExecutionServiceErrorV1::ClientExited.into());
         }
         if descriptors[1].revents & libc::POLLNVAL != 0 {
-            return Err(CompilerExecutionServiceErrorV1::InvalidPeer);
+            return Err(CompilerExecutionServiceErrorV1::InvalidPeer.into());
         }
         if descriptors[1].revents & libc::POLLERR != 0 {
-            return Err(CompilerExecutionServiceErrorV1::PeerFailed);
+            return Err(CompilerExecutionServiceErrorV1::PeerFailed.into());
         }
         if descriptors[1].revents & libc::POLLHUP != 0 {
-            return Err(CompilerExecutionServiceErrorV1::PeerClosed);
+            return Err(CompilerExecutionServiceErrorV1::PeerClosed.into());
         }
         if descriptors[1].revents & wanted != 0 {
             return Ok(());

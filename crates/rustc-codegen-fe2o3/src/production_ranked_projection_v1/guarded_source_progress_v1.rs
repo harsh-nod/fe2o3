@@ -363,7 +363,7 @@ impl GuardedRankedSourceV1 {
                     .map_err(resource)?;
                 let slot = budget as *mut _ as usize;
                 let ledger = budget.work_ledger_identity_v1();
-                let roots = {
+                let (roots, root_storage) = {
                     let source =
                         RankedProjectionSourceV1::from_materialized_checked(capture.original())?;
                     let mut progress = GuardedSourceProgressV1 {
@@ -375,7 +375,7 @@ impl GuardedRankedSourceV1 {
                         ledger,
                         floor: budget.storage(),
                     };
-                    let roots = project_ranked_roots_with_progress_v1(
+                    let projected = project_ranked_roots_with_progress_v1(
                         &source,
                         inputs,
                         references,
@@ -383,7 +383,13 @@ impl GuardedRankedSourceV1 {
                         Some(&mut progress),
                     )?;
                     progress.finish(budget)?;
-                    roots
+                    let floor = budget.storage();
+                    let roots = projected.finish(&source, budget)?;
+                    let retained = budget
+                        .storage()
+                        .checked_sub(floor)
+                        .ok_or_else(|| resource(Resource::Accounting))?;
+                    (roots, retained)
                 };
                 drop(guards);
                 budget.release_storage(guard_storage).map_err(resource)?;
@@ -391,6 +397,7 @@ impl GuardedRankedSourceV1 {
                     .checked_add(delta)
                     .and_then(|n| n.checked_add(report_storage))
                     .and_then(|n| n.checked_add(site_storage))
+                    .and_then(|n| n.checked_add(root_storage))
                     .ok_or_else(|| resource(Resource::Arithmetic))?;
                 Ok((
                     Self {

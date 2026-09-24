@@ -1,3 +1,5 @@
+include!("production_conditional_continuation_accounting_v1_tests.rs");
+
 fn conditional_wrapper_pending(
     source: &ProductionPreRankedKirOwnerV1,
 ) -> fe2o3_pliron::ProductionConditionalRankedAnalysisV1 {
@@ -264,5 +266,100 @@ fn consuming_continuation_adopts_spare_input_capacity_before_source_replay() {
         ));
         assert_eq!(ledger.storage(), floor);
         assert_eq!(ledger.work(), 8);
+    }
+}
+
+#[test]
+fn borrowed_continuation_replays_source_on_the_original_account() {
+    let source = materialize(Fixture::default());
+    let selected = source
+        .semantic_ssa()
+        .source_semantic()
+        .select_kernel_body_for_root_v1(SemanticFunctionIdV1::from_index(0))
+        .unwrap();
+    let floor = source.retained_analysis_storage_v1() + FLOOR;
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
+    budget.reserve_storage(floor).unwrap();
+    budget.charge_work(7).unwrap();
+    let account = budget.work_ledger_identity_v1();
+    for (root, wrong_body) in [(selected.body(), true), (selected.root(), false)] {
+        let error = with_conditional_root_request_v1(
+            &source,
+            continuation_input(&source, root.index()),
+            &mut budget,
+            |_, _| panic!("a source mismatch or missing output cannot expose proof subjects"),
+        )
+        .err()
+        .expect("unsupported source must remain closed");
+        if wrong_body {
+            assert!(matches!(
+                error,
+                ProductionConditionalContinuationErrorV1::Source(
+                    ProductionConditionalSourceTranslationErrorV1::SourceAssociation
+                )
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                ProductionConditionalContinuationErrorV1::Subject(
+                    "unsupported canonical conditional output"
+                )
+            ));
+        }
+        assert!(budget.work_ledger_identity_v1() == account);
+        assert_eq!(budget.storage(), floor);
+    }
+    drop(budget);
+    assert!(work.work() > 7);
+}
+
+#[test]
+fn borrowed_continuation_cannot_restart_exhausted_work_or_skip_input_capacity() {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    let source = materialize(Fixture::default());
+    let floor = source.retained_analysis_storage_v1() + FLOOR;
+    for denial in 0..5 {
+        let mut input = continuation_input(&source, 0);
+        let old_allowance = input.pending.retained_analysis_storage_v1()
+            + std::mem::size_of::<ProductionConditionalFinalRootV1<'_, '_>>();
+        match denial {
+            2 => input.access_sources.reserve_exact(64),
+            3 => input.executable_effect_sources.reserve_exact(64),
+            4 => input.ranked_ir.reserve_exact(4096),
+            _ => (),
+        }
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(if denial == 0 { 7 } else { WORK });
+        let storage = if denial == 0 {
+            STORAGE
+        } else if denial == 1 {
+            floor
+        } else {
+            floor + old_allowance
+        };
+        let mut budget = AssertOriginBudgetV1::new(&mut work, storage);
+        budget.reserve_storage(floor).unwrap();
+        budget.charge_work(7).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        let error = with_conditional_root_request_v1(&source, input, &mut budget, |_, _| {
+            panic!("exhausted inherited account cannot expose a request")
+        })
+        .err()
+        .expect("the original account must deny continuation");
+        if denial == 0 {
+            assert!(matches!(
+                error,
+                ProductionConditionalContinuationErrorV1::Resource(Resource::Work(_))
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                ProductionConditionalContinuationErrorV1::Resource(Resource::Storage(_))
+            ));
+        }
+        assert!(budget.work_ledger_identity_v1() == account);
+        assert_eq!(budget.storage(), floor);
+        drop(budget);
+        assert_eq!(work.work(), if denial == 0 { 7 } else { 15 });
     }
 }

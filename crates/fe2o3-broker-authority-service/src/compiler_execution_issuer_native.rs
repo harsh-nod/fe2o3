@@ -1,4 +1,4 @@
-//! Native issuer custody admission. Durable activation is deliberately absent.
+//! Native issuer custody admission and its bounded first-sequence consumer.
 use super::{
     CurrentStaticIssuerMeasurementsV1 as Measurements, FileSnapshotV1 as Snapshot,
     IssuerAdmissionErrorKindV1 as Kind, ProtectedIssuerProcessV1 as Process,
@@ -28,6 +28,10 @@ use fe2o3_runtime_protocol::{
 use sha2::{Digest, Sha256};
 use std::{fmt, fs::File, marker::PhantomData, mem::size_of};
 
+#[path = "compiler_execution_issuer_native_service.rs"]
+mod service;
+pub use service::NativeIssuerServiceError as ProtectedCompilerExecutionIssuerServiceErrorV2;
+
 const ENTRY_WORK: usize = 8;
 // Fixed comparisons, process-security queries, opens/fstats/flags, and closes.
 // Each image pass and nested native owner separately prepays its own operation.
@@ -56,11 +60,13 @@ use ProtectedCompilerExecutionIssuerStorageV2 as Storage;
 /// Admission checks a caller-pinned policy, not its provisioning provenance.
 /// The anchor is retained transport custody only: no exchange has authenticated
 /// an observation under the policy's anchor key. The next production boundary
-/// must consume this owner into a native durable state machine, authenticate
-/// exact occurrence/currentness, verify the separately pinned anchor response,
-/// and durably commit before signing or publishing readiness. None of those
-/// transitions, signing/key access, descriptor extraction, or V1 conversions
-/// are exposed by this stage. The V1 serving entrypoint is unchanged.
+/// must verify the separately pinned anchor response and join the native Worker
+/// journal before publication or readiness. `serve_native_preparation` consumes
+/// this owner into singleton recovery and durable Prepare/Issue exchanges for
+/// an independently observed, still-current first-sequence occurrence. It refuses
+/// Worker publication/currentness and does not publish readiness. Raw signing,
+/// descriptor extraction and V1 conversions remain unavailable. The V1 serving
+/// entrypoint is unchanged.
 ///
 /// Keep input reservations live and use the original cumulative budget for all
 /// calls. This owner borrows the work meter's lifetime and rejects a different

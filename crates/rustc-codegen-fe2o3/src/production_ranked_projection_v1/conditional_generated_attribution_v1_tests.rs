@@ -25,11 +25,17 @@ fn source255_genuine_generated_only_memory_passes_shared_attribution() {
         let root = roots.into_vec().into_iter().next().unwrap();
         assert!(root.access_sources.is_empty());
         assert!(!root.executable_effect_sources.is_empty());
-        assert!(root.executable_effect_sources.iter().any(|source| matches!(
-            root.lowering.kernel().blocks()[source.ranked_block() as usize].operations()
-                [source.ranked_operation() as usize],
-            ProductionRankedOperationV1::AllocationEffect { .. }
-        )));
+        assert!(root.executable_effect_sources.iter().any(|source| {
+            matches!(
+                root.verification
+                    .ordinary()
+                    .expect("ordinary test root")
+                    .kernel()
+                    .blocks()[source.ranked_block() as usize]
+                    .operations()[source.ranked_operation() as usize],
+                ProductionRankedOperationV1::AllocationEffect { .. }
+            )
+        }));
         let receipt = materialized_ranked_fixture_receipt_v1(materialized, root);
         let _owner = ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt)
             .expect(
@@ -53,8 +59,12 @@ fn source255_generated_overlap_candidate_is_rejected_as_unused_ordinary_attribut
             .iter()
             .find(|source| {
                 matches!(
-                    root.lowering.kernel().blocks()[source.ranked_block() as usize].operations()
-                        [source.ranked_operation() as usize],
+                    root.verification
+                        .ordinary()
+                        .expect("ordinary test root")
+                        .kernel()
+                        .blocks()[source.ranked_block() as usize]
+                        .operations()[source.ranked_operation() as usize],
                     ProductionRankedOperationV1::AllocationEffect { .. }
                 )
             })

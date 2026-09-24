@@ -30,7 +30,7 @@ mod native;
 mod native_checks;
 pub use native::{
     ProtectedCompilerExecutionIssuerAdmissionErrorV2, ProtectedCompilerExecutionIssuerAdmissionV2,
-    ProtectedCompilerExecutionIssuerStorageV2,
+    ProtectedCompilerExecutionIssuerServiceErrorV2, ProtectedCompilerExecutionIssuerStorageV2,
 };
 use native_checks::IssuerInspectionError;
 

@@ -76,7 +76,11 @@ fn private_array_binary_read_binds_operand_role_not_access_ordinal() {
                             (0, Some(3), 0)
                         );
                         assert!(matches!(
-                            root.lowering.kernel().blocks()[row.ranked_block() as usize]
+                            root.verification
+                                .ordinary()
+                                .expect("ordinary test root")
+                                .kernel()
+                                .blocks()[row.ranked_block() as usize]
                                 .operations()[row.ranked_operation() as usize],
                             ProductionRankedOperationV1::Access {
                                 kind: AccessKindAttr::Read,
