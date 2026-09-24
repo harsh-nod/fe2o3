@@ -1,0 +1,24 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/verify.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790275664195650647,
+  "group_absent": true,
+  "pid": 2198946,
+  "started_ns": 1790275658100314051,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "2e6e52568c3a01fa1a72ca1ccf705d5a8f5b5821f12f872b5d05a7ad2702dfdd",
+  "timeout_seconds": 300
+}

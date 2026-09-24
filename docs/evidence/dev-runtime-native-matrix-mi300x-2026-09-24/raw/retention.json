@@ -1,0 +1,32 @@
+{
+  "absent": true,
+  "allocated_bytes": 627740672,
+  "excluded": [
+    "build/source",
+    "build/target"
+  ],
+  "finished_ns": 1790275535503246868,
+  "replay": {
+    "cpu_hardware_ignores": 20,
+    "cpu_tests": 1365,
+    "endpoint_observations": 66,
+    "formal_refinement": false,
+    "harness_passes": 24,
+    "local_build_commands": 11,
+    "local_campaign_commands": 16,
+    "local_prelaunch_commands": 1,
+    "native_commands": 22,
+    "original_matrix_accepted": false,
+    "performance_acceptance": false,
+    "record_replay": "pass",
+    "refused_observations": 1,
+    "remote_commands": 92,
+    "separate_suffix_accepted": true,
+    "strict_admitted": 65,
+    "whole_elf_retained": true
+  },
+  "retained_files": 556,
+  "retained_sha256": "a829b6ff18874de4e66bc7d65af95454eaa866bb0f3a1508aaa4665d0beb40fa",
+  "source": "/home/harsh/.codex-tmp/fe2o3-runtime-native-20260924-6Bl3TK87",
+  "started_ns": 1790275519327284855
+}

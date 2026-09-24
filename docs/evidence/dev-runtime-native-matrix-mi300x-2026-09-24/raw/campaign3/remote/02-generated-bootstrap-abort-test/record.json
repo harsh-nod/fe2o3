@@ -1,0 +1,58 @@
+{
+  "name": "02-generated-bootstrap-abort-test",
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=5s",
+    "180s",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--fsize=16777216:16777216",
+    "--",
+    "/usr/bin/numactl",
+    "--physcpubind=0-47",
+    "--membind=0",
+    "/home/harsh/fe2o3-runtime-native-20260924.6dcc66106b686f25/runtime-tests",
+    "--exact",
+    "kfd_backend::generated_adoption::tests::native::generated_native_bootstrap_primary_auxiliary_rebound_abort_and_shutdown",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1",
+    "--color=never"
+  ],
+  "cwd": "/home/harsh/fe2o3-runtime-native-20260924.6dcc66106b686f25",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0",
+    "FE2O3_TEST_NATIVE_UNIQUE_ID": "0xab83d2ffef0d3cdf",
+    "TMPDIR": "/home/harsh/fe2o3-runtime-native-20260924.6dcc66106b686f25/tmp",
+    "FE2O3_TEST_NATIVE_ISOLATED": "1"
+  },
+  "started": {
+    "realtime_ns": 1790274891855849399,
+    "monotonic_ns": 7773789277521250
+  },
+  "spawned": {
+    "realtime_ns": 1790274891863617636,
+    "monotonic_ns": 7773789285289438
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 3173521,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1790274895837672221,
+    "monotonic_ns": 7773793259345425
+  },
+  "outer_bound_seconds": 200,
+  "finished": {
+    "realtime_ns": 1790274895837735635,
+    "monotonic_ns": 7773793259407357
+  },
+  "stdout_sha256": "d2e068ea5c6f19982922307243307f942c913063257f03278e689c6b87418153",
+  "stderr_sha256": "93cddc2f5f4dc356a079a9a49d9f14e509cde15e7f28b915426c0d2d004f7c31"
+}

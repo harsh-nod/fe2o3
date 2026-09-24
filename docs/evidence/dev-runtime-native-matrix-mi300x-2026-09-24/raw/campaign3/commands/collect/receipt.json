@@ -1,0 +1,37 @@
+{
+  "command": [
+    "scp",
+    "-q",
+    "-r",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "--",
+    "mi300x:/home/harsh/fe2o3-runtime-native-20260924.6dcc66106b686f25/results",
+    "/home/harsh/.codex-tmp/fe2o3-runtime-native-20260924-6Bl3TK87/campaign3/remote"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790275315373160252,
+  "group_absent": true,
+  "pid": 2139113,
+  "started_ns": 1790275304651928178,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 180
+}

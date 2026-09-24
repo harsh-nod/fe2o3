@@ -1,0 +1,6 @@
+
+running 1 test
+test kfd_backend::generated_adoption::tests::native::generated_native_bootstrap_full_roster_readback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 5.17s
+

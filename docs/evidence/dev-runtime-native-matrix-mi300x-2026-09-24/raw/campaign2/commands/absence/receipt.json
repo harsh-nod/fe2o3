@@ -1,0 +1,35 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I -B - absence '{\"binding_sha256\":\"1a1cb17890192323d9502ff3890088027a6866b3eb1960f56952ae016fe0cc1c\",\"commit\":\"3540325123fa30b5208d57ba950922a707eb07b8\",\"path\":\"/home/harsh/fe2o3-runtime-native-20260924.146edeb16d424b4e\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790274725063117187,
+  "group_absent": true,
+  "pid": 2046780,
+  "started_ns": 1790274724271892471,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": "b9c71b10a04d6a29a7a575898716271971c42d3d509536ceb63f075593278700",
+  "stdout_sha256": "d19392574e21a085c37ad25485dad992302f18a7c3be2f39d8be5873ad24e074",
+  "timeout_seconds": 120
+}

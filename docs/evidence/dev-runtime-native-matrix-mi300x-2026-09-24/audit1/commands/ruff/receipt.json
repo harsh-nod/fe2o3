@@ -1,0 +1,34 @@
+{
+  "command": [
+    "/home/harsh/.local/bin/ruff",
+    "check",
+    "--isolated",
+    "--select",
+    "F",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/prepare.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/protocol.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/native.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/campaign.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/test_protocol.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/collect.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/verify.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/test_verify.py",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-runtime-native-matrix-mi300x-2026-09-24/audit.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790275683047320488,
+  "group_absent": true,
+  "pid": 2203537,
+  "started_ns": 1790275682914382179,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+  "timeout_seconds": 120
+}

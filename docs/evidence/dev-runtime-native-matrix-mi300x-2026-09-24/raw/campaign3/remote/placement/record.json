@@ -1,0 +1,44 @@
+{
+  "name": "placement",
+  "command": [
+    "/usr/bin/numactl",
+    "--physcpubind=0-47",
+    "--membind=0",
+    "/usr/bin/numactl",
+    "--show"
+  ],
+  "cwd": "/home/harsh/fe2o3-runtime-native-20260924.6dcc66106b686f25",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0",
+    "FE2O3_TEST_NATIVE_UNIQUE_ID": "0xab83d2ffef0d3cdf",
+    "TMPDIR": "/home/harsh/fe2o3-runtime-native-20260924.6dcc66106b686f25/tmp"
+  },
+  "started": {
+    "realtime_ns": 1790274861835318436,
+    "monotonic_ns": 7773759256990037
+  },
+  "spawned": {
+    "realtime_ns": 1790274861838142289,
+    "monotonic_ns": 7773759259813820
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 3171408,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1790274861841349555,
+    "monotonic_ns": 7773759263021056
+  },
+  "outer_bound_seconds": 30,
+  "finished": {
+    "realtime_ns": 1790274861841363686,
+    "monotonic_ns": 7773759263035147
+  },
+  "stdout_sha256": "756e97e3a5306549aba9cb56d603af82dc305a7042b1e128365dfa6ad6d4d69e",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

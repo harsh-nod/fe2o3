@@ -1,0 +1,8 @@
+{
+  "PROTOCOL.md": "54cb730c1031789477da6aabf51ab5457e7e4cbf7a81550f0779c1c69ed444cd",
+  "campaign.py": "82a5e011e4361db15b81871067e9d83568e2294d1d165373e7f06d1f1018208d",
+  "native.py": "bde93130a25d89b18aecca185975572efc88b3452bdbaa42edeef1a427449006",
+  "prepare.py": "8a112f3680d3a3266f6d57182944e55ffe976ed5f87b39c50bb7280fa88a70dd",
+  "protocol.py": "abea7f92b082c3798e05d67db71955eaf6cfccceeeb0dce7f9bb67a261ccd25b",
+  "test_protocol.py": "6162b30da5be964825ec32ff0e5d1c13a9de1e48f501ed518d4d74a0cda90ca7"
+}

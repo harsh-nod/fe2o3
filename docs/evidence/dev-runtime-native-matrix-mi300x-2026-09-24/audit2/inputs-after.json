@@ -1,0 +1,14 @@
+{
+  "PROTOCOL.md": "2b11a5035eaa45c2cbbde60cba6da4fa8a95db798e9cdf0f9416a2add76ac76f",
+  "README.md": "0f339715d4d327b29e134ab85e18253f2a7e4cc2123edd991d7a26375cce1681",
+  "artifacts.json": "ebb836baa331bc3b78e2dd353a1c99017fbfc80d7a49f27903edb6242db7faad",
+  "audit.py": "827684166ed7efea9fff268d1b29b18f620bdc4a7dafbe5d7d17fffe849bff43",
+  "campaign.py": "a559998e4dada03940257c86d8a4f843ca478df4481e458bd4faae75177b8de0",
+  "collect.py": "fa924337d6d034df046e3f29114ee551bc67238828576c7a01ccb3b3cee1dc19",
+  "native.py": "64b069cdca99e05bdee39c5283314f853702a3939561ed01acda8efd93b94407",
+  "prepare.py": "8a112f3680d3a3266f6d57182944e55ffe976ed5f87b39c50bb7280fa88a70dd",
+  "protocol.py": "abea7f92b082c3798e05d67db71955eaf6cfccceeeb0dce7f9bb67a261ccd25b",
+  "test_protocol.py": "ba1e18ee9adb5c92fadba620435221adc088b69412af2bda062c89560c1c676f",
+  "test_verify.py": "f656ebfe6cc8bea7674a156b9c8c5ff7dbe86af956bf5c10fb3a5239ab67977d",
+  "verify.py": "d7cd7cb2a7ebc44cbd2b6e94a45db4efe74fca81d78476726be7b8b5e3847b79"
+}

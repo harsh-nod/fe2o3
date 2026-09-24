@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+  File "/home/harsh/fe2o3-runtime-native-20260924.146edeb16d424b4e/native.py", line 235, in <module>
+    main()
+  File "/home/harsh/fe2o3-runtime-native-20260924.146edeb16d424b4e/native.py", line 231, in main
+    p.need(not failures and len(cases) == 22, "native matrix did not qualify: " + repr(failures))
+  File "/home/harsh/fe2o3-runtime-native-20260924.146edeb16d424b4e/protocol.py", line 46, in need
+    raise ValueError(message)
+ValueError: native matrix did not qualify: ['ValueError(\'case rejected; no subsequent case: {\\\'case\\\': \\\'primary-panic\\\', \\\'ordinal\\\': 6, \\\'failures\\\': ["immediate: ValueError(\\\'successful strict observer command\\\')"], \\\'transcript\\\': {\\\'case\\\': \\\'primary-panic\\\', \\\'harness_passes\\\': 2, \\\'marker_count\\\': 1}, \\\'post_observations\\\': {\\\'immediate\\\': \\\'refused\\\', \\\'delayed\\\': \\\'strict_pass\\\'}}\')']

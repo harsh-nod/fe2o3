@@ -1,0 +1,235 @@
+{
+  "commit": "3540325123fa30b5208d57ba950922a707eb07b8",
+  "cases": [
+    {
+      "case": "generated-cold-abort",
+      "ordinal": 1,
+      "failures": [],
+      "transcript": {
+        "case": "generated-cold-abort",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "generated-bootstrap-abort",
+      "ordinal": 2,
+      "failures": [],
+      "transcript": {
+        "case": "generated-bootstrap-abort",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "generated-cold-issue",
+      "ordinal": 3,
+      "failures": [],
+      "transcript": {
+        "case": "generated-cold-issue",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "generated-bootstrap-issue",
+      "ordinal": 4,
+      "failures": [],
+      "transcript": {
+        "case": "generated-bootstrap-issue",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "generated-cold-roster",
+      "ordinal": 5,
+      "failures": [],
+      "transcript": {
+        "case": "generated-cold-roster",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "generated-bootstrap-roster",
+      "ordinal": 6,
+      "failures": [],
+      "transcript": {
+        "case": "generated-bootstrap-roster",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "typed",
+      "ordinal": 7,
+      "failures": [],
+      "transcript": {
+        "case": "typed",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "pending-primary",
+      "ordinal": 8,
+      "failures": [],
+      "transcript": {
+        "case": "pending-primary",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "pending-both",
+      "ordinal": 9,
+      "failures": [],
+      "transcript": {
+        "case": "pending-both",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "auxiliary-retry",
+      "ordinal": 10,
+      "failures": [],
+      "transcript": {
+        "case": "auxiliary-retry",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "cold-device",
+      "ordinal": 11,
+      "failures": [],
+      "transcript": {
+        "case": "cold-device",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "cold-host",
+      "ordinal": 12,
+      "failures": [],
+      "transcript": {
+        "case": "cold-host",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "allocation-release",
+      "ordinal": 13,
+      "failures": [],
+      "transcript": {
+        "case": "allocation-release",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "device-promotion",
+      "ordinal": 14,
+      "failures": [],
+      "transcript": {
+        "case": "device-promotion",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "zero-cache",
+      "ordinal": 15,
+      "failures": [],
+      "transcript": {
+        "case": "zero-cache",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "copy-256mib",
+      "ordinal": 16,
+      "failures": [],
+      "transcript": {
+        "case": "copy-256mib",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    }
+  ],
+  "failures": [],
+  "spawn_failures": [],
+  "complete_matrix": true,
+  "exclusive_reservation": false,
+  "performance_acceptance": false,
+  "formal_refinement": false
+}

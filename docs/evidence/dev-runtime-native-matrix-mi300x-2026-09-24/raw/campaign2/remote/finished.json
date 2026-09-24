@@ -1,0 +1,99 @@
+{
+  "commit": "3540325123fa30b5208d57ba950922a707eb07b8",
+  "cases": [
+    {
+      "case": "two-stream",
+      "ordinal": 1,
+      "failures": [],
+      "transcript": {
+        "case": "two-stream",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "prefix-0",
+      "ordinal": 2,
+      "failures": [],
+      "transcript": {
+        "case": "prefix-0",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "prefix-1",
+      "ordinal": 3,
+      "failures": [],
+      "transcript": {
+        "case": "prefix-1",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "prefix-2",
+      "ordinal": 4,
+      "failures": [],
+      "transcript": {
+        "case": "prefix-2",
+        "harness_passes": 1,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "primary-error",
+      "ordinal": 5,
+      "failures": [],
+      "transcript": {
+        "case": "primary-error",
+        "harness_passes": 2,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    },
+    {
+      "case": "primary-panic",
+      "ordinal": 6,
+      "failures": [
+        "immediate: ValueError('successful strict observer command')"
+      ],
+      "transcript": {
+        "case": "primary-panic",
+        "harness_passes": 2,
+        "marker_count": 1
+      },
+      "post_observations": {
+        "immediate": "refused",
+        "delayed": "strict_pass"
+      }
+    }
+  ],
+  "failures": [
+    "ValueError('case rejected; no subsequent case: {\\'case\\': \\'primary-panic\\', \\'ordinal\\': 6, \\'failures\\': [\"immediate: ValueError(\\'successful strict observer command\\')\"], \\'transcript\\': {\\'case\\': \\'primary-panic\\', \\'harness_passes\\': 2, \\'marker_count\\': 1}, \\'post_observations\\': {\\'immediate\\': \\'refused\\', \\'delayed\\': \\'strict_pass\\'}}')"
+  ],
+  "spawn_failures": [],
+  "complete_matrix": false,
+  "exclusive_reservation": false,
+  "performance_acceptance": false,
+  "formal_refinement": false
+}

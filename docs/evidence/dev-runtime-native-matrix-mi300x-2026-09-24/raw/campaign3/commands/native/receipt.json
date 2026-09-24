@@ -1,0 +1,35 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/timeout --signal=TERM --kill-after=15s 12000s /usr/bin/python3 -I -B -c 'import hashlib, json, sys\nfrom pathlib import Path\nmarker = json.loads(sys.argv[1])\nroot = Path(marker[\"path\"])\ndef raw(name):\n    path = root / name\n    if path.is_symlink() or not path.is_file():\n        raise RuntimeError(\"ordinary bootstrap input\")\n    return path.read_bytes()\nbinding_bytes = raw(\"binding.json\")\nif hashlib.sha256(binding_bytes).hexdigest() != marker[\"binding_sha256\"]:\n    raise RuntimeError(\"bootstrap binding\")\nbinding = json.loads(binding_bytes)\nnative_bytes = raw(\"native.py\")\nif hashlib.sha256(native_bytes).hexdigest() != binding[\"payload\"][\"native.py\"]:\n    raise RuntimeError(\"bootstrap native identity\")\nsys.argv = [str(root / \"native.py\"), \"run\", sys.argv[1]]\nexec(compile(native_bytes, sys.argv[0], \"exec\"), {\"__name__\": \"__main__\", \"__file__\": sys.argv[0]})\n' '{\"binding_sha256\":\"a05d1dc58ced90321b41e3366a5c6963b982128a0358011bda72fe0f1b335d9f\",\"commit\":\"3540325123fa30b5208d57ba950922a707eb07b8\",\"path\":\"/home/harsh/fe2o3-runtime-native-20260924.6dcc66106b686f25\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790275303920196556,
+  "group_absent": true,
+  "pid": 2067881,
+  "started_ns": 1790274860994064287,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 12120
+}

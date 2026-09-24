@@ -1,0 +1,20 @@
+{
+  "pid": 3134084,
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/fe2o3-runtime-native-20260924.146edeb16d424b4e/observer.py",
+    "--gpu-index",
+    "1",
+    "--pci-bdf",
+    "0000:26:00.0",
+    "--unique-id",
+    "0xab83d2ffef0d3cdf"
+  ],
+  "started": {
+    "realtime_ns": 1790274557657064287,
+    "monotonic_ns": 7773455078736058
+  },
+  "purpose": "record group before unblocking managed signals"
+}

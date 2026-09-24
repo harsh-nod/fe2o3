@@ -1,0 +1,13 @@
+
+running 1 test
+test kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_error_retains_installed_root ... 
+running 1 test
+test kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_error_retains_installed_root ... native_runtime_primary_release_envelope=error retained_original_root=true terminal=true destroyed_observation=false retry_entered=false disposition=process_exit
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 1.70s
+
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 1.71s
+

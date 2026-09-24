@@ -1,0 +1,21 @@
+{
+  "pid": 3171397,
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/fe2o3-runtime-native-20260924.6dcc66106b686f25/topology.py",
+    "topology",
+    "--gpu-index",
+    "1",
+    "--pci-bdf",
+    "0000:26:00.0",
+    "--unique-id",
+    "0xab83d2ffef0d3cdf"
+  ],
+  "started": {
+    "realtime_ns": 1790274861770436507,
+    "monotonic_ns": 7773759192108509
+  },
+  "purpose": "record group before unblocking managed signals"
+}

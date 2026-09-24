@@ -1,0 +1,31 @@
+{
+  "command": [
+    "/usr/bin/git",
+    "--no-replace-objects",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.untrackedCache=false",
+    "show",
+    "3540325123fa30b5208d57ba950922a707eb07b8:docs/evidence/dev-topology-link-directory-cpu-2026-09-24/raw/cpu2/inputs-before.json"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790273752000207511,
+  "group_absent": true,
+  "pid": 1872097,
+  "started_ns": 1790273751980943184,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "c1ea75c7e038a0ba120b199b8705673b8e4381155371f3cb80a7ea953f82f49e",
+  "timeout_seconds": 30
+}

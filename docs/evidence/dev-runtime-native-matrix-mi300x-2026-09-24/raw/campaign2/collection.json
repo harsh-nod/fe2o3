@@ -1,0 +1,9 @@
+{
+  "collected": true,
+  "exclusive_reservation": false,
+  "failures": [
+    "RuntimeError('native failed')"
+  ],
+  "owned_cleanup": true,
+  "performance_acceptance": false
+}

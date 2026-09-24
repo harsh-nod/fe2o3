@@ -1,0 +1,15 @@
+{
+  "pid": 3171408,
+  "command": [
+    "/usr/bin/numactl",
+    "--physcpubind=0-47",
+    "--membind=0",
+    "/usr/bin/numactl",
+    "--show"
+  ],
+  "started": {
+    "realtime_ns": 1790274861837977662,
+    "monotonic_ns": 7773759259649484
+  },
+  "purpose": "record group before unblocking managed signals"
+}

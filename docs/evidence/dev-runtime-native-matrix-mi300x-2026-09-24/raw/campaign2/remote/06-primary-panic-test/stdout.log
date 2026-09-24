@@ -1,0 +1,13 @@
+
+running 1 test
+test kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_panic_retains_installed_root_and_payload ... 
+running 1 test
+test kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_panic_retains_installed_root_and_payload ... native_runtime_primary_release_envelope=panic retained_original_root=true terminal=true destroyed_observation=false retry_entered=false original_payload=true disposition=process_exit
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 1.69s
+
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 1.71s
+

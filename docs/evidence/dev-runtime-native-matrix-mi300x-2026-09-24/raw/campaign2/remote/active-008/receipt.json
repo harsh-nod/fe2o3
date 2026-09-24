@@ -1,0 +1,28 @@
+{
+  "pid": 3136652,
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=5s",
+    "180s",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--fsize=16777216:16777216",
+    "--",
+    "/usr/bin/numactl",
+    "--physcpubind=0-47",
+    "--membind=0",
+    "/home/harsh/fe2o3-runtime-native-20260924.146edeb16d424b4e/runtime-tests",
+    "--exact",
+    "kfd_backend::retained_release_tests::native_runtime_auxiliary_budget_failure_retains_initialized_prefix",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1",
+    "--color=never"
+  ],
+  "started": {
+    "realtime_ns": 1790274587975953889,
+    "monotonic_ns": 7773485397625751
+  },
+  "purpose": "record group before unblocking managed signals"
+}

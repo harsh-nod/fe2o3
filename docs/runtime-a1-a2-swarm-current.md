@@ -1,5 +1,23 @@
 # Current Runtime Swarm Work Orders
 
+Latest native runtime qualification (2026-09-24): the
+[current-source matrix](evidence/dev-runtime-native-matrix-mi300x-2026-09-24/README.md)
+passes all 22 test commands across two campaigns from signed `354032512`.
+The original strict campaign remains rejected: after six passing commands,
+the primary-panic immediate endpoint records 1% GPU busy. Its delayed pass
+does not override that refusal. The separate sixteen-case suffix passes all
+48 endpoint observations. Combined evidence retains 24 harness frames,
+65 admitted endpoints and one refusal across 92 remote commands, with the
+same cold-built musl ELF and signed source. All 1,365 CPU tests pass; all twenty
+hardware-only test names are exercised through the 22 native variants.
+Byte-exact collection, exact-owned remote removal, independent absence and
+offline replay pass. Local collection retains all attempts, source archive and
+ELF before removing 627,740,672 bytes of owned scratch. This does not qualify
+protected Worker execution, physical overlap, native faults, aggregate memory,
+production refinement or performance. A1/A2 and the broader accepted checkpoints
+remain unchanged. Next is producer-aware typed-launch integration with exact
+pending-input leases, followed by its independent native/proof qualification.
+
 Latest topology CPU qualification (2026-09-24): the
 [link-directory packet](evidence/dev-topology-link-directory-cpu-2026-09-24/README.md)
 removes one duplicate directory check per I/O/P2P link without caching topology

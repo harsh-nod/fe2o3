@@ -1,0 +1,20 @@
+test_all_22_transcripts (__main__.ProtocolTests.test_all_22_transcripts) ... ok
+test_build_artifact_rejects_multiple_and_foreign_paths (__main__.ProtocolTests.test_build_artifact_rejects_multiple_and_foreign_paths) ... ok
+test_captured_loader_rejects_wrong_digest (__main__.ProtocolTests.test_captured_loader_rejects_wrong_digest) ... ok
+test_cold_promotion_accounts_cannot_be_spliced_or_corrupted (__main__.ProtocolTests.test_cold_promotion_accounts_cannot_be_spliced_or_corrupted) ... ok
+test_endpoint_policy_and_fixed_windows (__main__.ProtocolTests.test_endpoint_policy_and_fixed_windows) ... ok
+test_exact_roster_and_case_environments (__main__.ProtocolTests.test_exact_roster_and_case_environments) ... ok
+test_failed_case_attempts_both_postflights_and_stops (__main__.ProtocolTests.test_failed_case_attempts_both_postflights_and_stops) ... ok
+test_helper_pins_match_current_source (__main__.ProtocolTests.test_helper_pins_match_current_source) ... ok
+test_historical_output_as_parser_calibration_only (__main__.ProtocolTests.test_historical_output_as_parser_calibration_only) ... ok
+test_profiler_rejects_boolean_and_wrong_readback (__main__.ProtocolTests.test_profiler_rejects_boolean_and_wrong_readback) ... ok
+test_recorded_spawn_does_not_overwrite_live_custody (__main__.ProtocolTests.test_recorded_spawn_does_not_overwrite_live_custody) ... ok
+test_recorded_spawn_persistence_failure_keeps_custody_and_t0 (__main__.ProtocolTests.test_recorded_spawn_persistence_failure_keeps_custody_and_t0) ... ok
+test_spawn_and_cleanup_failure_preserves_handle (__main__.ProtocolTests.test_spawn_and_cleanup_failure_preserves_handle) ... ok
+test_transcript_mutations (__main__.ProtocolTests.test_transcript_mutations) ... ok
+test_unrecorded_prelaunch_spawn_never_starts_test (__main__.ProtocolTests.test_unrecorded_prelaunch_spawn_never_starts_test) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.131s
+
+OK
