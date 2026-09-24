@@ -267,6 +267,7 @@ struct AssertOriginEmissionV1<'a, 'work> {
     records: Vec<PendingAssertOriginV1>,
     arguments: Vec<ValueId>,
     scalar_capture: Option<scalar_ssa_emission_v1::Recorder>,
+    tiled_capture: Option<tiled_region_v1::Capture>,
 }
 impl<'a, 'work> AssertOriginEmissionV1<'a, 'work> {
     fn new(budget: &'a mut AssertOriginBudgetV1<'work>) -> Self {
@@ -275,6 +276,7 @@ impl<'a, 'work> AssertOriginEmissionV1<'a, 'work> {
             records: Vec::new(),
             arguments: Vec::new(),
             scalar_capture: None,
+            tiled_capture: None,
         }
     }
 

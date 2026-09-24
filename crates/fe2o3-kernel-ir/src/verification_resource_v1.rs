@@ -423,6 +423,12 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
         self.work.work()
     }
 
+    /// First rejected cumulative work on this exact borrowed ledger.
+    /// This is observational only and never clears or refunds the failure.
+    pub const fn failed_work(&self) -> Option<usize> {
+        self.work.failed_work()
+    }
+
     /// Returns accepted live verifier-local storage.
     pub const fn storage(&self) -> usize {
         self.storage.state().storage

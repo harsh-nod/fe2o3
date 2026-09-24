@@ -1,5 +1,41 @@
 # Assembly authoring implementation status
 
+## BF16 source inspection through normal compiler continuation — 2026-09-24
+
+The separate genuine two-session ladder now carries the original inspected
+BF16 compilation through ranked, formal and target checks into ordinary LLVM
+and the existing inert V2 worker handoff. Wrong launch still refuses before
+inspection. Four observation controls passed; runtime bounds/alias requirements
+remain retained, and the handoff grants no production publication or launch
+authority. See the [qualification record](source-transport-tiled-debugger-qualification-20260924.md#same-owner-bf16-normal-continuation).
+
+This does not yet establish numerical simulation, edited-tile promotion,
+machine equivalence or GPU execution. Broad accepted exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Source-role transport and disabled debugger packages — 2026-09-24
+
+The [new qualification record](source-transport-tiled-debugger-qualification-20260924.md)
+records 26 fresh frontend children and six O0/O3 typed machine DATA observations.
+The rebuilt fourteen-case legacy matrix also passed with byte-identical HSACOs,
+using its explicitly retained historical source/artifacts. Full O0 caller ABI,
+address/predicate correctness, functional equivalence and GPU behavior remain
+separate obligations.
+
+The standalone Rust controller and separate GPL debugger adapter sources are
+now packaged with read-only source verifiers. Their CPU/static gates passed;
+the published controller profile is None and the GPL activation gate is false.
+Neither package has launched a target or captured physical registers/memory.
+
+The experimental tiled BF16 inspection now passes its genuine four-session
+core ladder, with 62 lowerer and 18 frontend controls. The separate shape
+ladder still refuses a source-spelled alias that optimization did not retain;
+At that checkpoint normal continuation, numerical simulation and edited-tile
+promotion remained open; the separate normal continuation is recorded above.
+The latest merged regression passed 5,810 test executions plus inventory/build
+checks on its recorded snapshot, including the final unused-result correction.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Fresh promoted-source normal and native continuation — 2026-09-24
 
 The [fresh promoted-source qualification](ordered-composition-promoted-qualification-20260924.md)

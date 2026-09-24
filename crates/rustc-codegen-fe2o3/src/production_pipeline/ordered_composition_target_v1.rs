@@ -24,6 +24,19 @@ impl<'tcx> AuthenticatedOrderedCompositionTargetModuleV1<'tcx> {
     pub(crate) const fn target_name(&self) -> &'static str {
         "gfx942:xnack-"
     }
+    /// Test-only inspection over the actual retained owner and its original ledger.
+    #[cfg(test)]
+    pub(crate) fn observe_transport_with_budget<T>(
+        &mut self,
+        observe: impl FnOnce(
+            &Checked,
+            &str,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> T,
+    ) -> T {
+        self.ledger
+            .with_budget(|budget| observe(&self.checked, self.emission.llvm_ir(), budget))
+    }
     pub(crate) fn into_parts(
         self,
     ) -> (

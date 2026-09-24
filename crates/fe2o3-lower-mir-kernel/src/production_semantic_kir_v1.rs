@@ -138,6 +138,12 @@ include!("production_assert_origins_v1.rs");
 mod origin_worklist_v1;
 #[path = "production_scalar_ssa_emission_v1.rs"]
 mod scalar_ssa_emission_v1;
+#[path = "production_tiled_region_v1.rs"]
+mod tiled_region_v1;
+pub use tiled_region_v1::{
+    ProductionBf16MfmaEmissionViewV1, ProductionBf16MfmaResultUseV1, ProductionBf16MfmaRoleV1,
+    ProductionTiledRegionInspectionErrorV1, materialize_with_bf16_mfma_inspection_v1,
+};
 #[path = "production_scoped_slot_relocation_v29.rs"]
 mod scoped_slot_relocation_v29;
 #[path = "production_scoped_slot_uses_v29.rs"]
@@ -11006,17 +11012,36 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
         .transpose()?;
     let emitted_operations = lowering.emitted_operations;
     let next_value = lowering.next_value;
-    if let Some(origins) = assert_origins
-        && let Some(capture) = origins.scalar_capture.as_mut()
-    {
-        capture
-            .record_function(plan, &lowering, &target_blocks, origins.budget)
-            .map_err(|error| match error {
-                scalar_ssa_emission_v1::ProductionScalarSsaEmissionErrorV1::Resource(error) => {
-                    ProductionSemanticKirErrorV1::from(error)
-                }
-                _ => ProductionSemanticKirErrorV1::CorrespondenceMismatch,
-            })?;
+    if let Some(origins) = assert_origins {
+        if let Some(capture) = origins.scalar_capture.as_mut() {
+            capture
+                .record_function(plan, &lowering, &target_blocks, origins.budget)
+                .map_err(|error| match error {
+                    scalar_ssa_emission_v1::ProductionScalarSsaEmissionErrorV1::Resource(error) => {
+                        ProductionSemanticKirErrorV1::from(error)
+                    }
+                    _ => ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                })?;
+        }
+        if let Some(capture) = origins.tiled_capture.as_mut() {
+            capture
+                .record_function(
+                    plan,
+                    &lowering,
+                    &target_blocks,
+                    &terminator_operation_spans,
+                    origins.budget,
+                )
+                .map_err(|error| match error {
+                    tiled_region_v1::ProductionTiledRegionInspectionErrorV1::Resource(error) => {
+                        ProductionSemanticKirErrorV1::from(error)
+                    }
+                    tiled_region_v1::ProductionTiledRegionInspectionErrorV1::Unavailable(
+                        detail,
+                    ) => unsupported(plan.semantic_function.index(), None, None, detail),
+                    _ => ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                })?;
+        }
     }
     #[cfg(test)]
     let execution_observation = lowering

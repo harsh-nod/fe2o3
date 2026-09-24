@@ -204,13 +204,39 @@ impl ProductionPreRankedKirOwnerV1 {
     }
 
     fn try_materialize_origins_with_scalar_capture_v1(
-        mut semantic_ssa: ProductionSemanticSsaOwnerV1,
+        semantic_ssa: ProductionSemanticSsaOwnerV1,
         source_launch: crate::ProductionSourceLaunchRosterV1,
         limits: ProductionSemanticKirLimitsV1,
         scalar_capture: Option<scalar_ssa_emission_v1::Recorder>,
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> Result<(Self, Option<scalar_ssa_emission_v1::Recorder>), ProductionPreRankedKirErrorV1>
     {
+        Self::try_materialize_origins_with_captures_v1(
+            semantic_ssa,
+            source_launch,
+            limits,
+            scalar_capture,
+            None,
+            budget,
+        )
+        .map(|(owner, scalar, _)| (owner, scalar))
+    }
+
+    fn try_materialize_origins_with_captures_v1(
+        mut semantic_ssa: ProductionSemanticSsaOwnerV1,
+        source_launch: crate::ProductionSourceLaunchRosterV1,
+        limits: ProductionSemanticKirLimitsV1,
+        scalar_capture: Option<scalar_ssa_emission_v1::Recorder>,
+        tiled_capture: Option<tiled_region_v1::Capture>,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<
+        (
+            Self,
+            Option<scalar_ssa_emission_v1::Recorder>,
+            Option<tiled_region_v1::Capture>,
+        ),
+        ProductionPreRankedKirErrorV1,
+    > {
         let launch_roots = materialization_launch_roots_v1(&semantic_ssa, &source_launch)?;
         budget.charge_work(2)?;
         let mut capture = match semantic_ssa.occurrence_storage() {
@@ -224,6 +250,7 @@ impl ProductionPreRankedKirOwnerV1 {
         };
         let mut emitted_origins = AssertOriginEmissionV1::new(budget);
         emitted_origins.scalar_capture = scalar_capture;
+        emitted_origins.tiled_capture = tiled_capture;
         let PendingHelperSourceLoweringV1 {
             module,
             correspondence,
@@ -256,6 +283,7 @@ impl ProductionPreRankedKirOwnerV1 {
             capture = HelperOccurrenceCaptureV1::Transferred(receipt);
         }
         let scalar_capture = emitted_origins.scalar_capture.take();
+        let tiled_capture = emitted_origins.tiled_capture.take();
         let assert_origins = emitted_origins.seal(&semantic_ssa, &correspondence, &executable)?;
         let subject = CanonicalCallSubjectV1 {
             semantic_ssa: &semantic_ssa,
@@ -296,6 +324,7 @@ impl ProductionPreRankedKirOwnerV1 {
                 helper_memory,
             },
             scalar_capture,
+            tiled_capture,
         ))
     }
 
@@ -456,7 +485,8 @@ impl ProductionSemanticKirOwnerV1 {
         let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
             limits.max_argument_correspondence_work,
         );
-        let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
+        let mut budget =
+            ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
         Self::try_attach_materialized_ranked_checks_with_budget_v1(receipt, &mut budget)
     }
 
@@ -490,18 +520,19 @@ impl ProductionSemanticKirOwnerV1 {
         let mut generic_checks = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
             let function_name = root.function_name().to_owned();
-            let translation_validation = validate_mir_pliron_translation_with_semantic_and_budget_v1(
-                Some(semantic),
-                executable.module(),
-                &correspondence,
-                &function_name,
-                &root.lowering,
-                &root.access_sources,
-                &root.executable_effect_sources,
-                limits.max_operations,
-                budget,
-            )
-            .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
+            let translation_validation =
+                validate_mir_pliron_translation_with_semantic_and_budget_v1(
+                    Some(semantic),
+                    executable.module(),
+                    &correspondence,
+                    &function_name,
+                    &root.lowering,
+                    &root.access_sources,
+                    &root.executable_effect_sources,
+                    limits.max_operations,
+                    budget,
+                )
+                .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
             generic_checks.push(RetainedGenericKernelChecksV1 {
                 selected_root: root.selected_root,
                 launch_rank: root.launch_rank,

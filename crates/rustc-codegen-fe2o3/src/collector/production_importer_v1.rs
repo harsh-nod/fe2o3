@@ -325,12 +325,13 @@ fn construct_production_semantic_mir_with_nominal_v35<'tcx>(
         closure,
         debug_source_capture,
         nominal,
-        OrderedSourceImportPolicyV1::Singleton,
+        SourceImportPolicyV1::Singleton,
     )?;
     match completion {
-        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1::Singleton => Ok(constructed),
-        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1::Composition(_) =>
-            Err(body_owner_table_mismatch_v1("singleton import returned composition source custody")),
+        SourceImportCompletionV1::Singleton => Ok(constructed),
+        _ => Err(body_owner_table_mismatch_v1(
+            "singleton import returned composition source custody",
+        )),
     }
 }
 
@@ -351,9 +352,54 @@ impl<'tcx> AuthenticatedOrderedCompositionMirV1<'tcx> {
 }
 
 #[derive(Clone, Copy)]
-enum OrderedSourceImportPolicyV1 {
+enum SourceImportPolicyV1 {
     Singleton,
     Composition,
+    Bf16Inspection,
+}
+// Exact private completion modes: no inferred or fallback source custody.
+enum SourceImportCompletionV1<'tcx> {
+    Singleton,
+    Composition(crate::production_ordered_composition_source_v1::AuthenticatedOrderedCompositionSourceSeedV1<'tcx>),
+    Bf16Inspection(crate::production_tiled_region_source_v1::AuthenticatedBf16MfmaSourceSeedV1<'tcx>),
+}
+pub(crate) struct AuthenticatedBf16MfmaInspectionMirV1<'tcx> {
+    constructed: ConstructedProductionSemanticMirV1,
+    source_seed: crate::production_tiled_region_source_v1::AuthenticatedBf16MfmaSourceSeedV1<'tcx>,
+}
+impl<'tcx> AuthenticatedBf16MfmaInspectionMirV1<'tcx> {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        ConstructedProductionSemanticMirV1,
+        crate::production_tiled_region_source_v1::AuthenticatedBf16MfmaSourceSeedV1<'tcx>,
+    ) {
+        (self.constructed, self.source_seed)
+    }
+}
+pub(crate) fn construct_production_semantic_mir_bf16_inspection_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+) -> Result<AuthenticatedBf16MfmaInspectionMirV1<'tcx>, ProductionSemanticImportErrorV1> {
+    let (constructed, completion) = construct_production_semantic_mir_with_policy_v1(
+        tcx,
+        closure,
+        debug_source_capture,
+        false,
+        SourceImportPolicyV1::Bf16Inspection,
+    )?;
+    match completion {
+        SourceImportCompletionV1::Bf16Inspection(source_seed) => {
+            Ok(AuthenticatedBf16MfmaInspectionMirV1 {
+                constructed,
+                source_seed,
+            })
+        }
+        _ => Err(body_owner_table_mismatch_v1(
+            "BF16 inspection import returned foreign source custody",
+        )),
+    }
 }
 
 pub(crate) fn construct_production_semantic_mir_ordered_composition_v1<'tcx>(
@@ -366,13 +412,18 @@ pub(crate) fn construct_production_semantic_mir_ordered_composition_v1<'tcx>(
         closure,
         debug_source_capture,
         false,
-        OrderedSourceImportPolicyV1::Composition,
+        SourceImportPolicyV1::Composition,
     )?;
     match completion {
-        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1::Composition(source_seed) =>
-            Ok(AuthenticatedOrderedCompositionMirV1 { constructed, source_seed }),
-        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1::Singleton =>
-            Err(body_owner_table_mismatch_v1("composition import returned singleton source custody")),
+        SourceImportCompletionV1::Composition(source_seed) => {
+            Ok(AuthenticatedOrderedCompositionMirV1 {
+                constructed,
+                source_seed,
+            })
+        }
+        _ => Err(body_owner_table_mismatch_v1(
+            "composition import returned singleton source custody",
+        )),
     }
 }
 
@@ -381,11 +432,11 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
     debug_source_capture: DebugSourceCaptureRequestV2,
     nominal: bool,
-    ordered_policy: OrderedSourceImportPolicyV1,
+    ordered_policy: SourceImportPolicyV1,
 ) -> Result<
     (
         ConstructedProductionSemanticMirV1,
-        crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1<'tcx>,
+        SourceImportCompletionV1<'tcx>,
     ),
     ProductionSemanticImportErrorV1,
 > {
@@ -497,15 +548,34 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
             ));
         }
     };
-    let (semantic_mir, context_entries, ordered_completion) = construct_complete_request_v1(
-        tcx,
-        canonical_target_layout_v1(target.rustc_layout()),
-        &mut plan,
-        semantic_types.into_records(),
-        semantic_function_abis,
-        semantic_terminal_abis,
-        ordered_policy,
-    )?;
+    let (semantic_mir, context_entries, ordered_completion, bf16_completion) =
+        construct_complete_request_v1(
+            tcx,
+            canonical_target_layout_v1(target.rustc_layout()),
+            &mut plan,
+            semantic_types.into_records(),
+            semantic_function_abis,
+            semantic_terminal_abis,
+            ordered_policy,
+        )?;
+    use crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1 as Ordered;
+    use crate::production_tiled_region_source_v1::Bf16MfmaImportCompletionV1 as Bf16;
+    let completion = match (ordered_policy, ordered_completion, bf16_completion) {
+        (SourceImportPolicyV1::Singleton, Ordered::Singleton, Bf16::Disabled) => {
+            SourceImportCompletionV1::Singleton
+        }
+        (SourceImportPolicyV1::Composition, Ordered::Composition(seed), Bf16::Disabled) => {
+            SourceImportCompletionV1::Composition(seed)
+        }
+        (SourceImportPolicyV1::Bf16Inspection, Ordered::Singleton, Bf16::Inspected(seed)) => {
+            SourceImportCompletionV1::Bf16Inspection(seed)
+        }
+        _ => {
+            return Err(body_owner_table_mismatch_v1(
+                "source import completion modes differ",
+            ));
+        }
+    };
     #[cfg(test)]
     super::semantic_import_observation_v1_tests::observe_actual(tcx, &semantic_mir);
     let (
@@ -539,7 +609,7 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
             debug_source_variables,
             debug_capture_gap,
         },
-        ordered_completion,
+        completion,
     ))
 }
 
@@ -565,12 +635,13 @@ fn construct_complete_request_v1<'tcx>(
     types: Vec<SemanticTypeDeclV1>,
     function_abis: ConstructedSemanticFunctionAbisV1,
     terminal_abis: ConstructedSemanticFunctionAbisV1,
-    ordered_policy: OrderedSourceImportPolicyV1,
+    ordered_policy: SourceImportPolicyV1,
 ) -> Result<
     (
         AdmittedInertSemanticMirV1,
         super::RetainedContextEntriesV29,
         crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1<'tcx>,
+        crate::production_tiled_region_source_v1::Bf16MfmaImportCompletionV1<'tcx>,
     ),
     ProductionSemanticImportErrorV1,
 > {
@@ -645,7 +716,7 @@ fn construct_complete_request_v1<'tcx>(
     .with_inline_sources_v30(inline_sources)
     .with_ordered_sources_v31(ordered_sources);
     match ordered_policy {
-        OrderedSourceImportPolicyV1::Singleton => {
+        SourceImportPolicyV1::Singleton | SourceImportPolicyV1::Bf16Inspection => {
             let sources = if contains_ordered_program {
                 crate::production_ordered_program_source_occurrences_v32::OrderedProgramSourceOccurrencesV32::from_plan(tcx, plan)
                     .map_err(body_owner_table_mismatch_v1)?
@@ -654,7 +725,7 @@ fn construct_complete_request_v1<'tcx>(
             };
             body_owner = body_owner.with_program_sources_v32(sources);
         }
-        OrderedSourceImportPolicyV1::Composition => {
+        SourceImportPolicyV1::Composition => {
             if !contains_ordered_program {
                 return Err(body_owner_table_mismatch_v1(
                     "ordered composition marker roster missing",
@@ -666,6 +737,11 @@ fn construct_complete_request_v1<'tcx>(
                     ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error))
                 })?;
         }
+    }
+    if matches!(ordered_policy, SourceImportPolicyV1::Bf16Inspection) {
+        body_owner
+            .prepare_bf16_inspection_source_v1(tcx, plan)
+            .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     }
     if contains_physical_entry {
         body_owner
@@ -934,13 +1010,21 @@ fn construct_complete_request_v1<'tcx>(
         }
     })
     .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    let bf16_completion = body_owner
+        .complete_bf16_inspection_source_v1(&semantic)
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     let ordered_completion = body_owner
         .complete_ordered_source_import_v1(&semantic)
         .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     let context_entries = body_owner
         .seal_context_entries(&semantic)
         .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
-    Ok((semantic, context_entries, ordered_completion))
+    Ok((
+        semantic,
+        context_entries,
+        ordered_completion,
+        bf16_completion,
+    ))
 }
 
 fn build_body_request_owner_v1<'tcx>(
