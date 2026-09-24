@@ -248,10 +248,20 @@ bytes after payload deletion. One move-only buffer retains the body, with actual
 capacity charged and all native postcommit readback work prepaid. This is inert
 transport, not protected issuance or an activated production consumer.
 
+The [native Worker adapter](../crates/fe2o3-hsaco-finalize/README.md#native-sourcef-worker-integration)
+now borrows the locked recovered token for preflight and consumes that exact
+occurrence through the existing candidate/replay engine. Its separate identity
+domains bind the whole receipt, carrier, actual F, descriptor and compiler
+closure without changing the frozen Worker V2 wire or legacy V3 identities.
+Returned inert evidence retains the consumed source/F owner and complete Worker
+transcripts. Shared Rust staging/replay is conservatively prepaid on the original
+ledger; process/LLVM accounting remains separate. Public-key fixtures and a
+synthetic Worker test this connection, not protected or GPU execution.
+
 Inventory/preflight receipts remain inert until the compiler custody boundary
-authenticates them. Protected execution policy/attestation/carriage, Cargo,
-Worker, runtime and generated-host V4 consumers are still not
-connected. The transaction adapter has no executable-artifact publication
+authenticates them. Native protected service admission, Cargo intake, finalizer
+publication/restart, runtime and generated-host consumers are still not connected
+end to end. The native Worker adapter has no executable-artifact publication
 conversion; default production remains unchanged. No tutorial kernel gains
 production or hardware coverage from this library integration alone.
 The signed ordinary-Rust producer fixture exercises base construction with an

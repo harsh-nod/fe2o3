@@ -41,9 +41,9 @@ const RESPONSE_FIELD_COUNT_V3: u16 = 9;
 const RESPONSE_FIELD_COUNT_V4: u16 = 10;
 const INPUT_OVERHEAD_BYTES: usize = 1 + 32 + 8;
 const CONTENT_IDENTITY_BYTES: usize = 32 + 8;
-const MAX_PROVIDER_IDENTITY_BYTES: usize = 128;
-const MAX_PROVIDER_FILES: usize = 16;
-const MAX_PROVIDER_BASENAME_BYTES: usize = 128;
+pub(crate) const MAX_PROVIDER_IDENTITY_BYTES: usize = 128;
+pub(crate) const MAX_PROVIDER_FILES: usize = 16;
+pub(crate) const MAX_PROVIDER_BASENAME_BYTES: usize = 128;
 const MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES: usize = checked_bound_add(
     checked_bound_add(
         MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES,

@@ -321,6 +321,58 @@ fn decode(wire: Vec<u8>, budget: &mut Budget<'_>) -> Handoff {
     Handoff::decode_owned(wire).unwrap()
 }
 
+/// Opt-in transport export for CPU structural Worker integration tests only.
+/// PUBLIC TEST signing keys and a synthetic invocation grant no protected
+/// compiler origin, production proof authority, LLVM refinement, or GPU credit.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "EXPORT: requires FE2O3_NATIVE_WORKER_FIXTURE_DIR, an existing private directory"]
+fn export_native_first_build_worker_v4_fixtures() {
+    use rustix::fs::{Mode, OFlags, open, openat};
+    use std::{fs::File, io::Write, os::unix::fs::MetadataExt, path::PathBuf};
+
+    const MAX_FIXTURE_BYTES: usize = 16 * 1024 * 1024;
+    let path = PathBuf::from(
+        std::env::var_os("FE2O3_NATIVE_WORKER_FIXTURE_DIR")
+            .expect("set FE2O3_NATIVE_WORKER_FIXTURE_DIR to a fresh caller-owned 0700 directory"),
+    );
+    assert!(path.is_absolute(), "fixture directory must be absolute");
+    let directory = File::from(
+        open(
+            &path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .expect("open existing private fixture directory without following a final symlink"),
+    );
+    let metadata = directory.metadata().unwrap();
+    assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
+    assert_eq!(metadata.mode() & 0o7777, 0o700);
+    for (unit, profile, name) in [
+        (false, Profile::Gfx942, "direct-gfx942.v4"),
+        (false, Profile::Gfx950, "direct-gfx950.v4"),
+        (true, Profile::Gfx942, "erased-gfx942.v4"),
+        (true, Profile::Gfx950, "erased-gfx950.v4"),
+    ] {
+        let wire = CapsuleFixture::new(unit, profile).wire();
+        assert!(!wire.is_empty() && wire.len() <= MAX_FIXTURE_BYTES);
+        // CREATE | EXCL is create_new: never replace an existing fixture. The
+        // retained directory descriptor also anchors every output pathname.
+        let mut file = File::from(
+            openat(
+                &directory,
+                name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .unwrap_or_else(|error| panic!("create_new {name}: {error}")),
+        );
+        file.write_all(&wire).unwrap();
+        file.sync_all().unwrap();
+    }
+    directory.sync_all().unwrap();
+}
+
 #[test]
 fn native_capsule_admission_v4_transaction_keeps_exact_owner_until_checked_consumption() {
     use fe2o3_artifact_transaction as transaction;

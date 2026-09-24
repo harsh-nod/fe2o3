@@ -202,6 +202,40 @@ or independently grant HSA load or launch authority. The scalar-GEMM descriptor
 validator is retained because Worker V3 authority consumes it; no scalar-GEMM
 worker publication route is retained.
 
+## Native source/F Worker integration
+
+`preflight_native_reproducible_first_build_worker_v1` borrows the locked
+`CompilerModuleHandoffConsumptionTokenV4<RecoveredCompilerNativeSemanticHandoffV4>`.
+It checks the complete receipt and compiler closure, revalidates currentness
+before and after staging, and prepares both request shapes before one-shot
+consumption. A receipt from another transaction is rejected even when its
+handoff bytes are identical.
+
+`execute_preflighted_native_reproducible_first_build_worker_v1` consumes that
+exact occurrence and its prepared inputs through the same measured Worker,
+frozen V2 request wire, candidate/replay engine and transcript validator used
+by V3. Native request and evidence identities have distinct domains; the legacy
+V3 preimages are unchanged. The returned inert evidence retains the complete
+consumed source/F owner, both requests and responses, and the link plan. It
+cannot be constructed from detached LLVM or an embedded V3 handoff.
+
+The caller keeps its original work/storage ledger and source reservation.
+Additional Rust staging, codec, metadata, replay and hashing work is prepaid
+with checked bounds, then returned storage is reserved while owners remain
+live. Worker process/LLVM limits are a separate existing accounting domain;
+provider/options accounting excludes arbitrary caller spare capacity and
+allocator overhead. This is neither an RSS bound nor instruction-exact
+accounting. Errors retain only a fixed-size diagnostic, not failed process-output
+buffers.
+
+CPU integration fixtures exercise direct and erased source routes on both
+target profiles with public test signing keys and a synthetic Worker. They
+test custody and structural reproducibility, not protected origin, LLVM/HSACO
+correctness or GPU execution. Native Cargo/service admission, finalizer
+publication/restart, host currentness and independent machine refinement still
+need to be connected before this adapter can participate in safe GPU launch.
+The default production producer is unchanged.
+
 ## Production semantic debug attachment
 
 The frozen Worker V3 semantic-to-LLVM association may carry a separately versioned, bounded,

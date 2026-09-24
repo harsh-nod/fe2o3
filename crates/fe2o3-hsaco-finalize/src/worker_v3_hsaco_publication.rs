@@ -1013,7 +1013,7 @@ fn validate_finalizer_replay_components<P: FinalizerProviderPayloadV1>(
         LinkInputKindClosureV1::new(&plan, plan_inputs_with_kinds(&decoded, &providers)?)?;
     let bootstrap_output = WorkerOutputConstraintsV1::new(replay.bootstrap_output_bound)?;
     let bootstrap = construct_first_build_worker_request_from_decoded(
-        &binding,
+        (&binding).into(),
         replay.worker,
         &decoded,
         providers,
@@ -1032,7 +1032,7 @@ fn validate_finalizer_replay_components<P: FinalizerProviderPayloadV1>(
     let providers = bootstrap.into_external_providers();
     let replay_output = WorkerOutputConstraintsV1::new(raw_identity.byte_len())?;
     let replay_request = construct_plan_worker_request_from_decoded(
-        &binding,
+        (&binding).into(),
         &plan,
         replay.worker,
         &decoded,

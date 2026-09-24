@@ -1,4 +1,4 @@
-//! Internal reproducible first-build engine for the production Worker V3 transaction.
+//! Shared reproducible first-build engine for the legacy and native handoff adapters.
 //!
 //! Worker requests and responses still use the frozen V2 wire codec. Those version labels describe
 //! serialized bytes only; this module exposes no V2 compilation or publication authority.
@@ -7,9 +7,10 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ContentIdentityV1, LinkInputKindClosureV1, LinkInputV1, LinkOptionV1, LinkOutputV1,
-    LinkPlanError, MultiInputLinkPlanV1, PinnedWorkerV1, ProtectedCompilerHandoffBindingV3,
-    ProvenanceNodeV1, WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputV1,
-    WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestConstructionError,
+    LinkPlanError, MultiInputLinkPlanV1, PinnedWorkerV1, ProvenanceNodeV1, WorkerExecutionError,
+    WorkerExecutionLimitsV1, WorkerInputV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    WorkerRequestConstructionError,
+    first_build_worker_binding::WorkerCompilerBinding,
     request_construction::{
         ConstructedFirstBuildWorkerRequest, DecodedCompilerModuleHandoffV2,
         construct_first_build_worker_request_from_decoded,
@@ -60,7 +61,7 @@ pub(crate) enum ReproducibleFirstBuildEngineError {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn preflight_reproducible_first_build_engine(
-    binding: &ProtectedCompilerHandoffBindingV3,
+    binding: WorkerCompilerBinding<'_>,
     decoded: DecodedCompilerModuleHandoffV2,
     worker: &PinnedWorkerV1,
     mut external_providers: Vec<WorkerInputV1>,
@@ -107,8 +108,10 @@ pub(crate) fn preflight_reproducible_first_build_engine(
     // The replay output identity is worker-produced, but its encoded shape and bounded length are
     // fixed. Validate the complete replay request with a collision-free synthetic identity now so
     // no configuration-only error remains after worker execution begins.
-    let synthetic_output =
-        synthetic_preflight_output_identity(&all_inputs, &candidate_output_bound);
+    let synthetic_output = synthetic_preflight_output_identity(
+        all_inputs.iter().map(WorkerInputV1::identity),
+        &candidate_output_bound,
+    )?;
     let synthetic_plan = derive_plan(
         decoded.target(),
         &all_inputs,
@@ -142,7 +145,7 @@ pub(crate) fn preflight_reproducible_first_build_engine(
 }
 
 pub(crate) fn execute_preflighted_reproducible_first_build_engine(
-    binding: &ProtectedCompilerHandoffBindingV3,
+    binding: WorkerCompilerBinding<'_>,
     preflight: ReproducibleFirstBuildEnginePreflight,
     worker: &PinnedWorkerV1,
     limits: WorkerExecutionLimitsV1,
@@ -248,22 +251,28 @@ fn reject_duplicate_content_identities(
 }
 
 fn synthetic_preflight_output_identity(
-    inputs: &[WorkerInputV1],
+    inputs: impl ExactSizeIterator<Item = ContentIdentityV1> + Clone,
     output: &WorkerOutputConstraintsV1,
-) -> ContentIdentityV1 {
-    let mut counter = 0_u64;
-    loop {
-        let mut hasher = Sha256::new();
-        hasher.update(b"FE2O3/FIRST-BUILD/PREFLIGHT-OUTPUT/V1\0");
-        hasher.update(counter.to_le_bytes());
-        let identity = ContentIdentityV1::from_parts(hasher.finalize().into(), output.max_bytes());
-        if inputs.iter().all(|input| input.identity() != identity) {
-            return identity;
-        }
-        counter = counter
-            .checked_add(1)
-            .expect("finite bounded input identities cannot exhaust u64 preflight probes");
+) -> Result<ContentIdentityV1, ReproducibleFirstBuildEngineError> {
+    if inputs.len() > crate::MAX_LINK_INPUTS {
+        return Err(ReproducibleFirstBuildEngineError::LinkPlan(
+            LinkPlanError::TooManyInputs,
+        ));
     }
+    let mut digest: [u8; 32] = Sha256::digest(b"FE2O3/FIRST-BUILD/PREFLIGHT-OUTPUT/V1\0").into();
+    // This discarded shape check needs a distinct placeholder, not a content
+    // hash. Encoding the counter directly makes n+1 candidates injective for
+    // n inputs; distinct hashed preimages would not establish that bound.
+    for counter in 0..=inputs.len() {
+        digest[..8].copy_from_slice(&(counter as u64).to_le_bytes());
+        let identity = ContentIdentityV1::from_parts(digest, output.max_bytes());
+        if inputs.clone().all(|input| input != identity) {
+            return Ok(identity);
+        }
+    }
+    Err(ReproducibleFirstBuildEngineError::LinkPlan(
+        LinkPlanError::OutputAliasesInput,
+    ))
 }
 
 fn derive_plan(
@@ -296,4 +305,31 @@ fn derive_plan(
         provenance,
     )
     .map_err(ReproducibleFirstBuildEngineError::LinkPlan)
+}
+
+#[cfg(test)]
+mod preflight_identity_tests {
+    use super::*;
+
+    #[test]
+    fn every_prior_candidate_can_be_occupied_without_hash_collision_assumptions() {
+        let output = WorkerOutputConstraintsV1::new(4096).unwrap();
+        let mut occupied = Vec::new();
+        for _ in 0..=crate::MAX_LINK_INPUTS {
+            let identity =
+                match synthetic_preflight_output_identity(occupied.iter().copied(), &output) {
+                    Ok(identity) => identity,
+                    Err(_) => panic!("bounded synthetic identity must exist"),
+                };
+            assert!(!occupied.contains(&identity));
+            assert_eq!(identity.byte_len(), 4096);
+            occupied.push(identity);
+        }
+        assert!(matches!(
+            synthetic_preflight_output_identity(occupied.iter().copied(), &output),
+            Err(ReproducibleFirstBuildEngineError::LinkPlan(
+                LinkPlanError::TooManyInputs
+            ))
+        ));
+    }
 }

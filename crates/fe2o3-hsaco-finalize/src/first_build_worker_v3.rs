@@ -22,6 +22,7 @@ use crate::{
     WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
     WorkerRequestConstructionError, WorkerResponseV2,
+    first_build_worker_binding::WorkerCompilerBinding,
     first_build_worker_engine::{
         ReproducibleFirstBuildEngineError, ReproducibleFirstBuildEnginePreflight,
         execute_preflighted_reproducible_first_build_engine,
@@ -32,13 +33,8 @@ use crate::{
 };
 
 const BINDING_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/PROTECTED-WORKER-COMPILER-HANDOFF-BINDING/V3\0";
-const EVIDENCE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/PROTECTED-FIRST-BUILD-WORKER-EVIDENCE/V3\0";
 const WORKER_REQUEST_MAGIC_V2: &[u8; 8] = b"F3LREQ02";
 const WORKER_REQUEST_IDENTITY_DOMAIN_V2: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
-const PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V3: &[u8] =
-    b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-FIRST-BUILD-WORKER-REQUEST/V3\0";
-const PROTECTED_PLAN_REQUEST_DOMAIN_V3: &[u8] =
-    b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-PLAN-BOUND-WORKER-REQUEST/V3\0";
 const INPUT_KIND_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-INPUT-KIND-CLOSURE/V1\0";
 const STAGED_COMPILER_FFI_ENVELOPE_DOMAIN_V1: &[u8] = b"FE2O3/STAGED-COMPILER-FFI-ENVELOPE/V1\0";
 const WORKER_REQUEST_FIELD_COUNT_V2: usize = 15;
@@ -542,7 +538,7 @@ impl ProtectedFirstBuildWorkerV3IdentityV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ValidatedProtectedFirstBuildReplayV3;
+pub(crate) struct ValidatedProtectedFirstBuildReplayV3;
 
 /// Inert evidence for one reproducible direct-LLVM worker run retaining exact V3 custody.
 ///
@@ -739,7 +735,7 @@ pub(crate) fn recover_inert_protected_first_build_worker_v3_evidence_v1(
     )
     .map_err(ProtectedFirstBuildWorkerV3Error::CompilerModuleHandoff)?;
     let validation = validate_replay_parts(
-        binding,
+        (&binding).into(),
         &worker,
         &decoded,
         &plan,
@@ -980,7 +976,7 @@ pub fn preflight_protected_reproducible_first_build_worker_v3(
     let decoded = decoded_compiler_module_handoff_v2(handoff.module_handoff().clone())
         .map_err(ProtectedFirstBuildWorkerV3Error::CompilerModuleHandoff)?;
     let engine = preflight_reproducible_first_build_engine(
-        &binding,
+        (&binding).into(),
         decoded,
         worker,
         external_providers,
@@ -1013,6 +1009,20 @@ fn enforce_protected_v3_working_set_budget(
     external_providers: &[WorkerInputV1],
     link_options: &[LinkOptionV1],
 ) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
+    enforce_worker_working_set_budget(
+        handoff.canonical_bytes().len(),
+        handoff.module_handoff(),
+        external_providers,
+        link_options,
+    )
+}
+
+pub(crate) fn enforce_worker_working_set_budget(
+    outer_handoff_bytes: usize,
+    nested: &fe2o3_compiler_ffi::CompilerModuleHandoffV2,
+    external_providers: &[WorkerInputV1],
+    link_options: &[LinkOptionV1],
+) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
     let provider_payload_bytes = checked_sum(
         external_providers.iter().map(|input| input.bytes().len()),
         "external provider payload bytes",
@@ -1023,9 +1033,8 @@ fn enforce_protected_v3_working_set_budget(
             .flat_map(|option| [option.name().len(), option.value().len()]),
         "link option text bytes",
     )?;
-    let nested = handoff.module_handoff();
     validate_working_set_dimensions(ProtectedV3WorkingSetDimensions {
-        outer_handoff_bytes: handoff.canonical_bytes().len(),
+        outer_handoff_bytes,
         compiler_module_bytes: nested.module_bytes().len(),
         provider_payload_bytes,
         provider_count: external_providers.len(),
@@ -1188,9 +1197,13 @@ pub fn execute_preflighted_protected_reproducible_first_build_worker_v3(
         return Err(preflight_mismatch("measured worker"));
     }
     let handoff = consumed.into_handoff();
-    let result =
-        execute_preflighted_reproducible_first_build_engine(&binding, engine, worker, limits)
-            .map_err(|error| map_engine_error(binding, error))?;
+    let result = execute_preflighted_reproducible_first_build_engine(
+        (&binding).into(),
+        engine,
+        worker,
+        limits,
+    )
+    .map_err(|error| map_engine_error(binding, error))?;
 
     validate_replay(binding, worker.measurement(), &result)?;
     let identity = calculate_evidence_identity(binding, worker.measurement(), limits, &result)?;
@@ -1262,7 +1275,7 @@ fn validate_replay(
     result: &crate::first_build_worker_engine::ReproducibleFirstBuildEngineResult,
 ) -> Result<ValidatedProtectedFirstBuildReplayV3, ProtectedFirstBuildWorkerV3Error> {
     validate_replay_parts(
-        binding,
+        (&binding).into(),
         worker,
         &result.decoded,
         &result.plan,
@@ -1274,8 +1287,8 @@ fn validate_replay(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_replay_parts(
-    binding: ProtectedCompilerHandoffBindingV3,
+pub(crate) fn validate_replay_parts(
+    binding: WorkerCompilerBinding<'_>,
     worker: &WorkerMeasurementV1,
     decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
     plan: &MultiInputLinkPlanV1,
@@ -1894,22 +1907,21 @@ fn decode_u64(bytes: &[u8]) -> Result<u64, ()> {
 }
 
 fn calculate_bootstrap_request_id(
-    binding: ProtectedCompilerHandoffBindingV3,
+    binding: WorkerCompilerBinding<'_>,
     worker: &WorkerMeasurementV1,
     decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
     request: &BorrowedWorkerRequestV2<'_>,
     inputs: &BorrowedRequestInputsV2,
 ) -> Result<[u8; 32], ProtectedFirstBuildWorkerV3Error> {
     let mut hasher = Sha256::new();
-    hasher.update(PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V3);
-    binding.hash_identity_preimage(&mut hasher);
+    binding.hash_first_build_request(&mut hasher);
     hash_worker_request_common(&mut hasher, worker, decoded, request, inputs)?;
     Ok(hasher.finalize().into())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn calculate_replay_request_id(
-    binding: ProtectedCompilerHandoffBindingV3,
+    binding: WorkerCompilerBinding<'_>,
     worker: &WorkerMeasurementV1,
     decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
     request: &BorrowedWorkerRequestV2<'_>,
@@ -1920,8 +1932,7 @@ fn calculate_replay_request_id(
     let input_kind_closure = calculate_input_kind_closure_identity(plan, all_inputs)?;
     let staged_envelope = calculate_staged_envelope_identity(decoded);
     let mut hasher = Sha256::new();
-    hasher.update(PROTECTED_PLAN_REQUEST_DOMAIN_V3);
-    binding.hash_identity_preimage(&mut hasher);
+    binding.hash_plan_request(&mut hasher);
     hasher.update(plan.identity().as_bytes());
     hasher.update(input_kind_closure);
     hasher.update(staged_envelope);
@@ -2166,9 +2177,32 @@ fn calculate_evidence_identity_parts(
     replay_request_bytes: &[u8],
     replay_response_bytes: &[u8],
 ) -> Result<ProtectedFirstBuildWorkerV3IdentityV1, ProtectedFirstBuildWorkerV3Error> {
+    calculate_worker_evidence_identity_parts(
+        (&binding).into(),
+        worker,
+        limits,
+        plan,
+        bootstrap_request_bytes,
+        bootstrap_response_bytes,
+        replay_request_bytes,
+        replay_response_bytes,
+    )
+    .map(ProtectedFirstBuildWorkerV3IdentityV1)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn calculate_worker_evidence_identity_parts(
+    binding: WorkerCompilerBinding<'_>,
+    worker: &WorkerMeasurementV1,
+    limits: WorkerExecutionLimitsV1,
+    plan: &MultiInputLinkPlanV1,
+    bootstrap_request_bytes: &[u8],
+    bootstrap_response_bytes: &[u8],
+    replay_request_bytes: &[u8],
+    replay_response_bytes: &[u8],
+) -> Result<[u8; 32], ProtectedFirstBuildWorkerV3Error> {
     let mut hasher = Sha256::new();
-    hasher.update(EVIDENCE_IDENTITY_DOMAIN_V3);
-    binding.hash_identity_preimage(&mut hasher);
+    binding.hash_evidence(&mut hasher);
     hash_content(&mut hasher, worker.executable());
     hash_blob(&mut hasher, worker.worker_build_identity().as_bytes());
     hash_blob(&mut hasher, worker.llvm_build_identity().as_bytes());
@@ -2181,9 +2215,7 @@ fn calculate_evidence_identity_parts(
     hash_blob(&mut hasher, bootstrap_response_bytes);
     hash_blob(&mut hasher, replay_request_bytes);
     hash_blob(&mut hasher, replay_response_bytes);
-    Ok(ProtectedFirstBuildWorkerV3IdentityV1(
-        hasher.finalize().into(),
-    ))
+    Ok(hasher.finalize().into())
 }
 
 fn hash_canonical_plan_blob(

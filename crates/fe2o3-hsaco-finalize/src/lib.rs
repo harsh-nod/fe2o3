@@ -21,7 +21,11 @@ use fe2o3_kernel_descriptor::{
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod engineering_hsaco;
+mod first_build_worker_binding;
 mod first_build_worker_engine;
+mod first_build_worker_native;
+mod first_build_worker_native_binding;
+mod first_build_worker_native_resources;
 mod first_build_worker_v3;
 mod link_plan;
 mod nominal_descriptor_finalization_v3;
@@ -85,6 +89,17 @@ pub use fe2o3_compiler_ffi::{
     MAX_COMPILER_FFI_CONTRACTS_V1, MAX_COMPILER_FFI_CRATE_LABEL_BYTES_V1,
     MAX_COMPILER_FFI_ENVELOPE_BYTES_V1, MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
     MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
+};
+pub use first_build_worker_native::{
+    InertNativeFirstBuildWorkerEvidenceV1, NativeFirstBuildWorkerErrorV1,
+    NativeFirstBuildWorkerIdentityV1, NativeFirstBuildWorkerStorageV1, NativeWorkerDiagnosticV1,
+    PreparedNativeFirstBuildWorkerV1,
+    execute_preflighted_native_reproducible_first_build_worker_v1,
+    preflight_native_reproducible_first_build_worker_v1,
+};
+pub use first_build_worker_native_binding::{
+    ProtectedCompilerNativeHandoffBindingErrorV1, ProtectedCompilerNativeHandoffBindingIdentityV1,
+    ProtectedCompilerNativeHandoffBindingV1,
 };
 pub use first_build_worker_v3::{
     InertProtectedCompilerHandoffExecutionV3, InertProtectedFirstBuildWorkerV3EvidenceV1,

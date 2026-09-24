@@ -236,6 +236,12 @@ impl<T> fmt::Debug for CompilerModuleHandoffConsumptionTokenV4<T> {
     }
 }
 impl<T> CompilerModuleHandoffConsumptionTokenV4<T> {
+    /// Exact inert receipt retained by this locked occurrence. Reading it does
+    /// not consume the token or authenticate compiler execution.
+    pub fn receipt(&self) -> CompilerModuleHandoffReceiptV4 {
+        self.binding.receipt
+    }
+
     pub const fn content(&self) -> &T {
         &self.content
     }
