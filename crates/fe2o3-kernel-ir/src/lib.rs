@@ -92,6 +92,9 @@ mod gfx942_inline_assembly_v1;
 mod gfx942_ordered_program_v1;
 mod gfx942_ordered_region_v1;
 #[cfg(test)]
+use crate as physical_entry_fixture_ir;
+#[cfg(test)]
+#[path = "../tests/fixtures/physical_entry_v20.rs"]
 mod gfx942_physical_entry_fixture_v20_tests;
 mod gfx942_physical_entry_profile_v20;
 mod gfx942_physical_entry_v20;

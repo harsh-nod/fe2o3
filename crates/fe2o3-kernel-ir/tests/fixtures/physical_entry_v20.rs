@@ -1,6 +1,6 @@
 //! Inert test-only graph construction from the literal qualified instruction list.
 //! No source authentication, numeric GPU addresses, native execution or launch authority.
-use fe2o3_kernel_ir::*;
+use super::physical_entry_fixture_ir::*;
 type Reg = Gfx942PhysicalEntryRegisterV20;
 type Opcode = Gfx942PhysicalEntryOpcodeV20;
 type Encoding = Gfx942PhysicalEntryBranchEncodingVNext;

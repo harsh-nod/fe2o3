@@ -18,6 +18,9 @@ mod gfx942_complete_body_emission_v1;
 mod gfx942_complete_body_v1;
 mod gfx942_physical_entry_emission_v20;
 #[cfg(test)]
+use fe2o3_kernel_ir as physical_entry_fixture_ir;
+#[cfg(test)]
+#[path = "../../fe2o3-kernel-ir/tests/fixtures/physical_entry_v20.rs"]
 mod gfx942_physical_entry_fixture_v20_tests;
 mod gfx950;
 mod lowering;

@@ -1,7 +1,8 @@
 //! Inert component tests; this fixture is not authenticated Rust source.
 use super::*;
+use fe2o3_kernel_ir as physical_entry_fixture_ir;
 use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, VerifiedCanonicalKernelIrModuleV20};
-#[path = "physical_entry_materialization_fixture_v20_tests.rs"]
+#[path = "../../fe2o3-kernel-ir/tests/fixtures/physical_entry_v20.rs"]
 mod fixture;
 
 fn events(module: &fe2o3_kernel_ir::Module) -> (Origin, Site, Vec<Event>) {
