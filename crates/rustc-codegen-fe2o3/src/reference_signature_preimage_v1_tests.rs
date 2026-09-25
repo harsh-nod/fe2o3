@@ -394,8 +394,9 @@ fn same_typed_arguments_keep_separate_source_ordinals_without_identity_claims() 
         ]
     );
     // Identical type rows cannot authenticate a source/effect correspondence.
-    let mut swapped = signature.clone();
-    swapped.reference_inputs.swap(0, 1);
+    let mut swapped_inputs = signature.reference_inputs().to_vec();
+    swapped_inputs.swap(0, 1);
+    let swapped = self::signature(signature.kernel_inputs().to_vec(), swapped_inputs);
     assert_eq!(swapped, signature);
 }
 

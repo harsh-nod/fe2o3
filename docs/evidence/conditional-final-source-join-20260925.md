@@ -4,7 +4,8 @@ Compiler candidate: `366f596df96cc04c358ccec4bbebeb90ff058116`.
 This extends the [conditional J integration](conditional-j-source-join-20260925.md)
 through the existing final optimized graph F. F is an IR graph, not a finalized
 HSACO. The implementation and local tests are complete for the bounded scope
-below; fresh protected execution of this candidate is still pending.
+below. The [protected-run and shared CPU replay follow-up](portable-cpu-replay-20260925.md)
+records the later failed F matrix, its transport fix, and current validation.
 `ConditionalFinalizerRequired` (`FE2O3-COND-FINALIZER-001`) remains mandatory.
 There is no new native output, publication, safe-launch or tutorial-kernel credit.
 
@@ -101,8 +102,9 @@ Four genuine-source parent/child tests remain ignored. In particular, the
 The prepared F harness reuses authenticated captured source/environment/argv,
 the existing bounded launcher and source/tool/output audits. Its main matrix is
 gfx942/gfx950 times F/fixed6/work/storage. A separate parent covers late agreement
-and replay refusals. Neither matrix has run under the protected runtime for this
-candidate; the late cases have no execution credit from this update.
+and replay refusals. At this initial publication neither matrix had run under the
+protected runtime. The follow-up above records the first main-matrix attempt;
+the late cases still have no protected execution credit.
 
 The hash-pinned r11 runner's 114 offline tests pass, including an independent
 primary rerun. Runner SHA256 is
@@ -110,7 +112,7 @@ primary rerun. Runner SHA256 is
 test SHA256 is
 `b3e021cb9c7f819894410b7241798dfa53bc09c2cfaedb1e5b50e3805f6f2dfb`.
 These exercise inert fixtures and mocked orchestration, not protected proofs.
-No remote job or scratch scope was created for this candidate's validation.
+No remote job or scratch scope was created at that initial validation checkpoint.
 
 Next are fresh protected source-to-F execution, consuming conditional native
 handoff and independent CPU/source reconstruction, actual-F conditional formal

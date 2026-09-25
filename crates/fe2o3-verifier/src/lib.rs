@@ -36,6 +36,7 @@ mod monomorphization_dead_binding;
 mod multi_kernel_proof;
 mod persistent_freshness;
 mod plan;
+pub mod portable_reference_v1;
 mod production_kir_to_llvm_replay_v1;
 mod proof_capsule;
 mod result;

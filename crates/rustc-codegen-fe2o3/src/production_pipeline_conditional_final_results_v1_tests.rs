@@ -71,6 +71,25 @@ fn matrix(suite: &str) -> Matrix {
 }
 
 #[test]
+fn final_child_protocol_distinguishes_cpu_labels_from_full_target_ids() {
+    for profile in [super::Profile::Gfx942, super::Profile::Gfx950] {
+        for mode in MAIN_MODES.into_iter().chain(LATE_MODES) {
+            let good = child(profile.cpu(), mode);
+            good.check(profile.cpu(), mode).unwrap();
+            assert_eq!(
+                decode_child(&serde_json::to_vec(&good).unwrap()).unwrap(),
+                good
+            );
+            assert_ne!(profile.cpu(), profile.device_target());
+            let full_id = child(profile.device_target(), mode);
+            assert!(full_id.check(profile.device_target(), mode).is_err());
+            assert!(decode_child(&serde_json::to_vec(&full_id).unwrap()).is_err());
+            assert!(good.check(profile.device_target(), mode).is_err());
+        }
+    }
+}
+
+#[test]
 fn final_results_require_complete_ordered_main_and_late_rosters() {
     for suite in ["main", "late"] {
         let good = matrix(suite);
