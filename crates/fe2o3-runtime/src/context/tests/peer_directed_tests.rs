@@ -1,6 +1,8 @@
 use super::*;
 use std::sync::{Arc, Mutex};
 
+mod reconciliation_tests;
+
 type Context = RuntimeContextV1<MockBackend>;
 type Submission = RuntimeSubmissionV1<RuntimeDirectedScalarPeerCopyV1>;
 
