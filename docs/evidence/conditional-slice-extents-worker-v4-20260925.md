@@ -94,3 +94,23 @@ archive before qualification. Its preserved evidence archive SHA256 is
 The agent's private remote scratch was removed after archive verification.
 
 No new protected-runtime or hardware validation is claimed by this checkpoint.
+
+## Main Integration
+
+Both remotes advanced to `13e424bdef9f0cb9d0a073c86d8bebc8f190741a` during testing.
+Their row-kernel work and fixture-lock updates were preserved by a conflict-free
+merge, `97d05e819331a6b39b3878edd766572e1b38fb18`. On that combined tree, the same
+guard retained a stable 8,156-file inventory:
+`82ae93c1ad2763ed7c6db996409fbec2377e5c69449a3d816af98a4f879a3010`.
+
+| Guard | Result | Log SHA256 |
+| --- | --- | --- |
+| `conditional-slice-extent-merged-projection-r1` | All 520 projection tests passed again | `20889db81bd762704362befbaa7f439ba026ce4ed206566e6daafc63cd15bbb9` |
+| `conditional-slice-extent-merged-production-r1` | Normal backend library check passed | `a770f0c8d69294d87706d73c4da28cb48c641e11ca480238ed82e24da52bdad4` |
+| `conditional-worker-v4-merged-targets-r1` | Finalizer all-targets check passed | `3e8dc183d5a0994af9e0911f95e35764b79645b546800f56be2975c6e662d1f6` |
+
+These repeated tests do not increase the distinct-test total above. Formatting,
+workspace dependency policy, source hygiene and commit sign-offs also passed.
+The actual-source integration and hardware matrix were not rerun after the merge;
+the source-coverage failure remains open. Only this documentation addition followed
+the combined-tree guards.
