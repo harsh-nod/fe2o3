@@ -55,6 +55,10 @@ const SCRATCH: usize = 4 * size_of::<Facts<'static>>() + size_of::<Error>() + 10
 mod tail;
 pub use tail::ProductionConditionalCheckedTailErrorV1;
 
+#[path = "production_conditional_checked_final_v1.rs"]
+mod final_output;
+pub use final_output::ProductionConditionalCheckedFinalErrorV1;
+
 impl ProductionSourceBoundConditionalAggregateRequestV1<'_> {
     /// Checks the actual sealed B/C/S/O/I against this live source request.
     /// The coordinate receipt must borrow this exact N. The backend separately

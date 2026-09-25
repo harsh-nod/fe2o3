@@ -222,7 +222,7 @@ fn coverage(
     Ok(())
 }
 
-fn site(coordinate: Bridge) -> Result<Site> {
+pub(super) fn site(coordinate: Bridge) -> Result<Site> {
     let Bridge::Operation {
         function,
         block,

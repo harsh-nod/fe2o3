@@ -8617,7 +8617,8 @@ include!("production_conditional_continuation_v1.rs");
 #[path = "production_conditional_checked_output_v1.rs"]
 mod conditional_checked_output_v1;
 pub use conditional_checked_output_v1::{
-    ProductionConditionalCheckedOutputErrorV1, ProductionConditionalCheckedTailErrorV1,
+    ProductionConditionalCheckedFinalErrorV1, ProductionConditionalCheckedOutputErrorV1,
+    ProductionConditionalCheckedTailErrorV1,
 };
 #[path = "production_conditional_ranked_output_v1.rs"]
 mod production_conditional_ranked_output_v1;
