@@ -71,6 +71,17 @@ agreement and missing storage admission; simply weakening those predicates
 would not otherwise guarantee a failing proof. Frontend errors, timeouts and
 solver exhaustion are not accepted as logical negatives.
 
+The atomic-event mutation removes only the event append in the shared
+`lifecycle_reader_append_event_v1` constructor, retaining both state snapshots.
+Its exact event-sequence and trace-invariant contracts remain unchanged, and
+mixed acquisition consumes this same helper. The earlier mutation bypassed the
+whole mixed witness append: its signed campaign reported both a postcondition
+failure and resource exhaustion, and was rejected. The helper-local development
+case reports only logical postcondition failures at the original limits. Checker
+calibration also rejects combined logical-failure/resource-exhaustion reports.
+This control correction changes no proved source, contract or expected count;
+a fresh signed campaign is still required.
+
 The checker calibration has eight CPU-only groups. Its optional `--campaign`
 mode adds relocated read-only replay and four rehashed-receipt corruptions;
 those two groups require an already complete campaign and never launch Verus.

@@ -202,9 +202,10 @@ def mutations(candidate, old):
          'production', 'lifecycle_mutation_correspondence_v1'),
         ('producer-original', BRIDGE, ' && producer_output_view(producer_original) == po', '',
          'production', 'lifecycle_mutation_correspondence_v1'),
-        ('missing-atomic-event', WITNESS,
-         'next = lifecycle_reader_append_event_v1(trace, before, *actual, model_before, *model, event);',
-         'next = trace;', 'production', 'lifecycle_mixed_record_v1'),
+        ('missing-atomic-event', READER,
+         'actual: trace.actual.push(after), model: trace.model.push(model_after), events: trace.events.push(event)',
+         'actual: trace.actual.push(after), model: trace.model.push(model_after), events: trace.events',
+         'production', 'lifecycle_reader_append_event_v1'),
     ]
     for _, path, before, after, _, _ in rows:
         old.once(candidate[path].decode(), before, after)

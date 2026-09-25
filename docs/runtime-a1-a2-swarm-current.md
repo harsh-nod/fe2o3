@@ -49,6 +49,14 @@ not establish a production runtime defect or advance A1/A2. The next step is a
 bounded, discriminating atomic-event mutation before a fresh full campaign,
 without raising solver limits or weakening the rejection policy.
 
+The atomic-event control is now retargeted to the existing shared append helper,
+omitting only the event while preserving both state snapshots. Its development
+run reports clean logical postcondition failures, accepted by the unchanged
+negative classifier; all eight checker groups pass, including a new combined
+logical/resource diagnostic rejection. Independent review finds no change to
+proved sources, contracts, limits or the expected 1,271-obligation count. This is
+a control correction, not qualification: a fresh signed-source campaign is next.
+
 Latest mixed-input correspondence (2026-09-24): the
 [independent proof packet](evidence/dev-mixed-acquisition-proof-2026-09-24/README.md)
 passes all fifteen signed-source campaign stages. Both whole-root positives

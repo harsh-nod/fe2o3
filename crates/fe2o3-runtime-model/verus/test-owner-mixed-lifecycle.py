@@ -74,6 +74,18 @@ class Calibration(unittest.TestCase):
         rows = CHECK.mutations(self.candidate, self.old)
         self.assertEqual([r[0] for r in rows], ['stable-history', 'producer-history', 'result-answer',
             'stable-answer', 'producer-answer', 'mixed-domain', 'stable-original', 'producer-original', 'missing-atomic-event'])
+        atomic = rows[-1]
+        self.assertEqual(atomic, ('missing-atomic-event', CHECK.READER,
+            'actual: trace.actual.push(after), model: trace.model.push(model_after), events: trace.events.push(event)',
+            'actual: trace.actual.push(after), model: trace.model.push(model_after), events: trace.events',
+            'production', 'lifecycle_reader_append_event_v1'))
+        original = self.candidate[CHECK.READER].decode()
+        mutated = self.old.once(original, atomic[2], atomic[3])
+        prefix, suffix = original.split(atomic[2])
+        self.assertEqual(mutated, prefix + atomic[3] + suffix)
+        self.assertIn('next.events == trace.events.push(event), next.origin == trace.origin,', prefix)
+        self.assertIn('next = lifecycle_reader_append_event_v1(trace, before, *actual, model_before, *model, event);',
+                      self.candidate[CHECK.WITNESS].decode())
         for row in rows:
             original = self.candidate[row[1]].decode()
             self.assertNotEqual(self.old.once(original, row[2], row[3]), original)
@@ -100,6 +112,16 @@ class Calibration(unittest.TestCase):
                         'solver failed', 'aborting due to 1 previous error'):
             with self.assertRaises(ValueError):
                 self.negative(message=message)
+        with self.assertRaises(ValueError):
+            self.lifecycle.check_negative(self.deps['scalar'], 'mixed-logical-and-resource-failure', 1, {
+                'result': {'encountered-error': True, 'encountered-vir-error': False,
+                           'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False},
+                'diagnostics': [
+                    {'level': 'error', 'message': 'postcondition not satisfied'},
+                    {'level': 'error', 'message': 'function body check: Resource limit (rlimit) exceeded'},
+                    {'level': 'error', 'message': 'aborting due to 2 previous errors'},
+                ],
+            })
 
     def test_report_schema(self):
         valid = {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0,
