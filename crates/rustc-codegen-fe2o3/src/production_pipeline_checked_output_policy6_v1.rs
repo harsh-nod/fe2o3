@@ -12,6 +12,9 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1 as Admitted;
 
+#[path = "production_pipeline_conditional_prefix_v1.rs"]
+pub(super) mod conditional_prefix_v1;
+
 #[derive(Debug)]
 pub(crate) enum CheckedOutputPolicy6StageErrorV1 {
     Resource(Resource),
@@ -216,6 +219,15 @@ pub(super) struct AdmittedPolicy6StageV1 {
     pub(super) bindings: AuthenticatedProductionBindings,
 }
 
+/// The single consuming Direct preparation, before any source replay or
+/// ordinary receipt admission. The conditional F entry retains these owners.
+struct DirectPolicy6PreparationV1 {
+    ranked: crate::production_ranked_projection_v1::ProductionRankedSemanticProgramV1,
+    bindings: AuthenticatedProductionBindings,
+    bound: Owner,
+    checked: fe2o3_kernel_opt::CheckedCanonicalKernelIrOwnerPolicy6V1,
+}
+
 impl RankedVerifiedProductionCompilation {
     /// Not selected by the legacy default until corpus admission and the native
     /// protected-lineage contract are complete. No caller policy parameter.
@@ -254,10 +266,10 @@ impl RankedVerifiedProductionCompilation {
         })
     }
 
-    pub(super) fn prepare_admitted_policy6_v1(
+    fn prepare_direct_policy6_v1(
         self,
         budget: &mut Budget<'_>,
-    ) -> Result<AdmittedPolicy6StageV1, ProductionPipelineError> {
+    ) -> Result<DirectPolicy6PreparationV1, ProductionPipelineError> {
         let Self { ranked, bindings } = self;
         let profile = bindings.rustc_target.profile();
         let retained = ranked
@@ -312,6 +324,24 @@ impl RankedVerifiedProductionCompilation {
             .map_err(resource)?;
         #[cfg(test)]
         phase.complete();
+        Ok(DirectPolicy6PreparationV1 {
+            ranked,
+            bindings,
+            bound,
+            checked,
+        })
+    }
+
+    pub(super) fn prepare_admitted_policy6_v1(
+        self,
+        budget: &mut Budget<'_>,
+    ) -> Result<AdmittedPolicy6StageV1, ProductionPipelineError> {
+        let DirectPolicy6PreparationV1 {
+            ranked,
+            bindings,
+            bound,
+            checked,
+        } = self.prepare_direct_policy6_v1(budget)?;
         #[cfg(test)]
         let phase = timing::begin(timing::Route::Direct, timing::Phase::RankedSourceReplay);
         // Conditional source/proof/contract replay consumes the original owned

@@ -384,6 +384,13 @@ impl RankedVerifiedProductionCompilation {
     )> {
         let floor = budget.storage();
         scoped(floor, budget, move |budget| {
+            if self.ranked.has_conditional_roots_v1()
+                && self.ranked.materialized().helper_source_policy_v1()
+                    == fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::RawEmpty
+            {
+                let prefix = self.prepare_conditional_prefix_for_f_v1(budget)?;
+                return Err(prefix.into_finalizer_error_v1(budget));
+            }
             let (prefix, ranked_verification, bindings) = self.prepare_native_prefix_v1(budget)?;
             let (native, receipt) = prepare(
                 prefix,
