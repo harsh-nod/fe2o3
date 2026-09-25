@@ -62,6 +62,21 @@ now passes. The source-only fixture also passes for ordinary and looped input
 before target binding. These results are local compiler tests, not GPU runs.
 Existing unrelated warnings remain.
 
+## Main Integration
+
+Both main branches advanced during validation to independent partial-move
+discriminant fix `09b54c16636ee0e8eab9dbe71c491a936931e144`. Initial pushes
+were rejected, not forced. The incoming change was preserved in conflict-free
+merge `b706f58ead0c534ea35814b5992dd002fdd836ae`.
+
+Guard `induction-entry-merged-regressions-r1` rebuilt that merged tree and ran
+the union of both test selections above: **84 passed, zero failed, three
+ignored**. Its unchanged 8,182-file source inventory SHA256 is
+`6ad3fa3f0483ba9164998d7da9fb1415de991e4d34eeea403dd3894c1168f1bd`;
+log SHA256 is `e24ee2fa06d66f5cf76e810d9f6d90de0d304f35b392176488f61d2b4c1069ea`.
+This section was added afterward. The separate normal-library check in the
+earlier table remains evidence for pre-merge candidate `3ab46198d`.
+
 ## Incomplete Validation
 
 The earlier broad 98-test final-entry run on `534d1d7f` was intentionally stopped
