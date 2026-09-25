@@ -41,12 +41,18 @@ cover 75 result/argument/failure combinations and four unwind positions with
 the same macro and real runtime identity/status/outcome types. The whole GNU
 runtime suite passes 1,406 tests, retaining 22 hardware-only ignores.
 
-The source-bound campaign is pending. Its checker authenticates 23 inputs,
+The [source-bound campaign](evidence/dev-completion-settlement-control-2026-09-25/README.md)
+passes all 27 stages, including both eight-obligation positive brackets and all
+22 logical negatives. Original and relocated replay pass. GNU/musl each pass
+1,406 runtime tests with 22 hardware-only ignores; 46 doctests, strict Clippy
+and formatting pass. All 113 scratch files are retained before exact-owned
+cleanup and independent absence. Its checker authenticates 23 inputs,
 requires an exact Context delta against signed `decfecb13`, pins both the shared
 body and proof root, and authenticates the inherited tool-closure script and
 manifest before use. It requires whole-root positive brackets, 22 compile-clean
 logical mutations, checker calibration and both 190-file tool-closure checks.
-Each process has a fixed 120-second bound with inherited owned-group cleanup;
+Each solver has a fixed 120-second bound plus bounded cleanup grace: the outer
+recorder permits 130 seconds and receipts permit 135 seconds including cleanup.
 frontend failures, timeouts and resource exhaustion cannot qualify negatives.
 Source staging preserves the real relative include and checks bytes around
 every solver invocation. Four CPU-only checker groups pass.

@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/test-completion-settlement-control.py"
+  ],
+  "started_ns": 1790351551989646042,
+  "process_group": 2991244,
+  "group_absent": true,
+  "finished_ns": 1790351552325667731,
+  "status": 0
+}

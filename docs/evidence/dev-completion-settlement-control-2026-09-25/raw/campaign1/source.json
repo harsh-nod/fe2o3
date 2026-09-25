@@ -1,0 +1,31 @@
+{
+  "commit": "0885dd132c8472137e8c0a73c47ddfe46321136a",
+  "inputs": {
+    "crates/fe2o3-runtime/src/context/completion_settlement_body.rs": "c301af065bd86332164721cd7a43ee7c480e14e9aaaa275f8e295dcdff7f5277",
+    "crates/fe2o3-runtime/src/context.rs": "281430af42a0a5f44c602bdd8174d58d62d07a15b7deb395979bfad9c26c47c5",
+    "crates/fe2o3-runtime-model/verus/check-completion-settlement-control.py": "0f7f2565d9e5c1461f67719ea9a82302a56ad6b872c44bc9b2edd1e6cfd50eb9",
+    "crates/fe2o3-runtime-model/verus/check-journal-issuance.py": "36d5e0641300bf2568884ec4c440c668477a4b24a07ee95273a91eab34659480",
+    "crates/fe2o3-runtime-model/verus/check-mixed-acquire.py": "6ab16853e5f3fa9630ab740b797750ee36c52bff7d93231b69b0d84ba786073f",
+    "crates/fe2o3-runtime-model/verus/check-owner-constructor.py": "c97879b598f65b9075675d8d22525b3aeb948605d27e648e10a233841c6ad99c",
+    "crates/fe2o3-runtime-model/verus/check-owner-disposal.py": "aea7140f1c536184b9fe61186d0256eb6038189de787cdfd124fcb5c96e0050c",
+    "crates/fe2o3-runtime-model/verus/check-owner-enrollment.py": "a2207602e1ca7940440d2dccd305663f0a0954c5549c6b50487519a8a581ec00",
+    "crates/fe2o3-runtime-model/verus/check-owner-inspection.py": "ceaa3d04cbc5376982c150e53620c3dfbb1b41f80ae7d23c6c8740f74bb9ca0c",
+    "crates/fe2o3-runtime-model/verus/check-owner-lifecycle.py": "7e442ed7c87078f947e550fe17f7387a90dd6ace6557bb5b64241de88bc59ea6",
+    "crates/fe2o3-runtime-model/verus/check-owner-mixed-lifecycle.py": "ec0fb0c1ad835683321d8aad84dda11ad919c88c9542ff9db1ede84584531e59",
+    "crates/fe2o3-runtime-model/verus/check-owner-retirement.py": "59cd68815d8e633b21c21045957e1862f23e71e081beb2b5ba1c552035091f84",
+    "crates/fe2o3-runtime-model/verus/check-owner-scalar-enrollment.py": "3a182afac2d30a7c2417ba0a980581bc9faf0d0837c225552379ae152306e959",
+    "crates/fe2o3-runtime-model/verus/check-owner-settlement-historical.py": "97a4049377aa94e3ebebf63f4b10ac89d5edfaaf8c23cdc26843c9035e7bb9d3",
+    "crates/fe2o3-runtime-model/verus/check-owner-settlement.py": "25daee4c258828db09d683c8ab9e39d26c2d5c91babfb73c0240e713a3d6c7b3",
+    "crates/fe2o3-runtime-model/verus/check-owner-unknown.py": "6960312d5625f433e420739d4276a395c16ee57ca3fa9c727fa4c829e58ef60d",
+    "crates/fe2o3-runtime-model/verus/check-owner-writer.py": "5993861ef8bc2a7ae8ede74d9d03e7697a1e411237ea148d34a60568c6270e3f",
+    "crates/fe2o3-runtime-model/verus/context_completion_settlement_control_v1.rs": "3088ae2257b092df9afb1233ec906ee61e570573714c169f8a0b73c7e7a600a3",
+    "crates/fe2o3-runtime-model/verus/pins/VERUS_CLOSURE_MANIFEST": "f06883e4ce463bcb9a3c8f911064ac85054c7822dc331db1a79f75f9e8878b01",
+    "crates/fe2o3-runtime-model/verus/test-completion-settlement-control.py": "d2d99b62b0fd1eb892c6da6faf22829ad7c659f43660202d2bad41bf1c76b14d",
+    "docs/evidence/dev-producer-stable-2026-09-22/check.py": "983524d61d773bfdc5bfacc77a8c41b9b084f8c1f70b433b35ea65e22180149a",
+    "examples/row_softmax_v1/verify-verus-closure.sh": "c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c",
+    "examples/wave64_collectives_v1/check-proof-source.py": "a3071ad8f0025a59d0c70dcf2427c1eb43b0c02fe484474a84d0377d99ccb887"
+  },
+  "recorded_repo": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "recorded_output": "/home/harsh/.codex-tmp/fe2o3-completion-control-20260925-MZxYtw3L/campaign1",
+  "recorded_verus": "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux/verus"
+}
