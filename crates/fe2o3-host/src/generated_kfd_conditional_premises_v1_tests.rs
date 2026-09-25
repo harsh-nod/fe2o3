@@ -258,7 +258,7 @@ mod conditional_premises_tests {
             descriptor_symbol: "conditional.kd",
             source_evidence: evidence,
             executable_ir_evidence: evidence,
-            capabilities: &[],
+            capabilities: &[CapabilityV1::AmdWave],
             abi_layout: KernelAbiLayoutV1::new(40, 296, 8).unwrap(),
             launch: &launch,
             arguments: &fields,
@@ -483,7 +483,7 @@ mod conditional_premises_tests {
                     let (packed, retained) =
                         binding.pack_with_conditional_plan_v1(&plan, budget)?;
                     budget.reserve_storage(retained)?;
-                    packed.bind_conditional_premises_v1(&table, geometry(), budget)?;
+                    drop(packed.bind_conditional_premises_v1(&table, geometry(), budget)?);
                     Ok(())
                 });
             assert!(result.is_err());

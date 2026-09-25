@@ -71,6 +71,33 @@ against the observed source fields and signed receipt, but was **not run** here.
 The generic storage tests use arbitrary bytes only to test ownership/accounting;
 they do not fabricate a successful source-bound proof.
 
+### Final integrated revision
+
+All five final guards passed on the same 8,136-file source inventory:
+`6dcb9f38eea056a0188debe29e1a1ce6ca396d8eb24485f40ff2111bbdb6cf9d`.
+Source and tool hashes were stable in every run.
+
+| Guard | Result | Log SHA256 |
+| --- | --- | --- |
+| `conditional-production-check-r1` | Normal backend `cargo check --lib`, no test-only features | `87369fffb150f662a4a97d06b55f689674415b2aaad48918f645607d9c1be042` |
+| `conditional-contract-integrated-r2` | 127 passed, 13 ignored | `76a6cafde6f4c2af9d131209d30374cff8109969a41b13cf5a7b7276a1c40a1c` |
+| `conditional-host-runtime-r3` | Host 80, KFD 16, runtime 28 passed | `13f49574f3237bb1a4b3ee07370e568fe72ef7d4d4ac004783ac59f2dc82f3ce` |
+| `conditional-runtime-api-r2` | 32 compile-fail doctests passed | `2c04877b2a660e54e7eb7464fb363e6e7754e669435ef88d3b5bb1c2012d855b` |
+| `conditional-runtime-targets-r2` | Host/runtime/KFD `cargo check --all-targets` | `3c7fb42c96119b4e13af82544b3cc49b7b6e9bbb169635ccb107d465a7b2c083` |
+
+These are 251 distinct selected unit tests and 32 API tests, not a whole-workspace
+test run. The 13 ignored cases include protected actual-source and target
+qualification tests; they do not count as passes. Builds still report unused-code
+warnings, including the not-yet-authorized host helper path.
+
+The first host run exposed nine fixture setup failures: its exact Wave64
+requirement omitted `CapabilityV1::AmdWave`. The fixture now declares the
+capability, matching existing nominal fixtures; no production validator was
+weakened. The repeated host run also includes explicit disposal of a move-only
+test result. Encoder/owner review found no concrete defect. Formatting, source
+hygiene, dependency-layer and sign-off checks passed. Only this validation page
+was updated after the final guards.
+
 ## Remaining acceptance
 
 - Run the exact integrated source through the protected actual-source proof test.
