@@ -571,14 +571,26 @@ pub fn encode_device_descriptor_table_v3<E>(
     }
     // Every emitted byte and every visited bounded row is included before mutation.
     pay(charge, n * 2 + 1)?;
+    write_nominal_prefix(input, output, DEVICE_DESCRIPTOR_VERSION_V3, n, &target);
+    Ok(())
+}
+
+/// Shared nonfallible writer, reached only after complete version preflight.
+pub(crate) fn write_nominal_prefix(
+    input: &DeviceDescriptorTableInputV3<'_>,
+    output: &mut [u8],
+    version: u16,
+    total_len: usize,
+    target: &crate::wire_v3::TargetText,
+) {
     let mut writer = Output {
         bytes: output,
         position: 0,
     };
     writer.bytes(&DEVICE_DESCRIPTOR_MAGIC);
-    writer.u16(DEVICE_DESCRIPTOR_VERSION_V3);
+    writer.u16(version);
     writer.u16(0);
-    writer.u32(n as u32);
+    writer.u32(total_len as u32);
     writer.bytes(input.canonical_code_object_digest.as_bytes());
     writer.bytes(&[
         crate::encode::code_object_version_tag(input.code_object_version),
@@ -611,23 +623,31 @@ pub fn encode_device_descriptor_table_v3<E>(
     for req in input.requirements {
         writer.bytes(&crate::wire_v2::requirement_bytes(*req));
     }
-    Ok(())
 }
 
-struct Output<'a> {
-    bytes: &'a mut [u8],
-    position: usize,
+pub(crate) struct Output<'a> {
+    pub(crate) bytes: &'a mut [u8],
+    pub(crate) position: usize,
 }
 impl Output<'_> {
-    fn bytes(&mut self, bytes: &[u8]) {
+    pub(crate) fn for_slice(bytes: &mut [u8]) -> Output<'_> {
+        Output { bytes, position: 0 }
+    }
+    pub(crate) fn u8(&mut self, n: u8) {
+        self.bytes(&[n]);
+    }
+    pub(crate) fn u64(&mut self, n: u64) {
+        self.bytes(&n.to_le_bytes());
+    }
+    pub(crate) fn bytes(&mut self, bytes: &[u8]) {
         let end = self.position + bytes.len();
         self.bytes[self.position..end].copy_from_slice(bytes);
         self.position = end;
     }
-    fn u16(&mut self, n: u16) {
+    pub(crate) fn u16(&mut self, n: u16) {
         self.bytes(&n.to_le_bytes());
     }
-    fn u32(&mut self, n: u32) {
+    pub(crate) fn u32(&mut self, n: u32) {
         self.bytes(&n.to_le_bytes());
     }
     fn text(&mut self, s: &str) {

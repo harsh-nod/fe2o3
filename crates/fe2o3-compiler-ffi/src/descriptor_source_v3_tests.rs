@@ -1,5 +1,6 @@
 use super::*;
 use fe2o3_kernel_descriptor::*;
+use sha2::Digest;
 
 const TARGETS: [&str; 2] = ["gfx942:xnack-", "gfx950:xnack-"];
 const MIXED: [SourceTypeDescriptorV3; 4] = [

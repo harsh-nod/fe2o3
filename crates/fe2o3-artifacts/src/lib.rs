@@ -6,6 +6,7 @@ mod binding;
 mod bundle;
 mod bundle_decode;
 mod bundle_encode;
+mod conditional_invocation_v1;
 mod container;
 mod container_decode;
 mod container_encode;
@@ -46,6 +47,7 @@ pub use bundle::{
 };
 pub use bundle_decode::BundleDecodeError;
 pub use bundle_encode::{BUNDLE_INDEX_MAGIC, BUNDLE_INDEX_VERSION, MAX_BUNDLE_INDEX_BYTES};
+pub use conditional_invocation_v1::*;
 pub use container::{
     ArtifactContainerV1, CodeObjectPayload, ContainerValidationError, MAX_CODE_OBJECT_BYTES,
     MAX_EMBEDDED_PAYLOAD_BYTES,

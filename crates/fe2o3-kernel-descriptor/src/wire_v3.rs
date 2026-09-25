@@ -9,86 +9,8 @@ use std::fmt::{self, Write};
 
 type ResultV3<T, E> = Result<T, DescriptorWireErrorV3<E>>;
 
-struct Reader<'a> {
-    bytes: &'a [u8],
-    position: usize,
-}
-impl<'a> Reader<'a> {
-    fn at(bytes: &'a [u8], position: usize) -> Self {
-        Self { bytes, position }
-    }
-    fn take<E>(
-        &mut self,
-        n: usize,
-        c: &mut impl FnMut(usize) -> Result<(), E>,
-    ) -> ResultV3<&'a [u8], E> {
-        pay(c, 3 * n + 1)?;
-        let end = self.position.checked_add(n).ok_or(DecodeError::Truncated)?;
-        let value = self
-            .bytes
-            .get(self.position..end)
-            .ok_or(DecodeError::Truncated)?;
-        self.position = end;
-        Ok(value)
-    }
-    fn fixed<const N: usize, E>(
-        &mut self,
-        c: &mut impl FnMut(usize) -> Result<(), E>,
-    ) -> ResultV3<[u8; N], E> {
-        Ok(self
-            .take(N, c)?
-            .try_into()
-            .map_err(|_| DecodeError::Truncated)?)
-    }
-    fn u8<E>(&mut self, c: &mut impl FnMut(usize) -> Result<(), E>) -> ResultV3<u8, E> {
-        Ok(self.fixed::<1, E>(c)?[0])
-    }
-    fn u16<E>(&mut self, c: &mut impl FnMut(usize) -> Result<(), E>) -> ResultV3<u16, E> {
-        Ok(u16::from_le_bytes(self.fixed(c)?))
-    }
-    fn u32<E>(&mut self, c: &mut impl FnMut(usize) -> Result<(), E>) -> ResultV3<u32, E> {
-        Ok(u32::from_le_bytes(self.fixed(c)?))
-    }
-    fn zero<E>(
-        &mut self,
-        field: &'static str,
-        c: &mut impl FnMut(usize) -> Result<(), E>,
-    ) -> ResultV3<(), E> {
-        if self.u16(c)? != 0 {
-            return Err(DecodeError::NonzeroReserved { field }.into());
-        }
-        Ok(())
-    }
-    fn count<E>(
-        &mut self,
-        field: &'static str,
-        max: usize,
-        c: &mut impl FnMut(usize) -> Result<(), E>,
-    ) -> ResultV3<usize, E> {
-        let n = usize::from(self.u16(c)?);
-        count(n, field, max)?;
-        Ok(n)
-    }
-    fn text<E>(
-        &mut self,
-        field: &'static str,
-        name: bool,
-        c: &mut impl FnMut(usize) -> Result<(), E>,
-    ) -> ResultV3<&'a str, E> {
-        let n = self.count(field, if name { MAX_NAME_BYTES } else { MAX_TEXT_BYTES }, c)?;
-        let bytes = self.take(n, c)?;
-        pay(c, n + 1)?;
-        let text = std::str::from_utf8(bytes).map_err(|_| DecodeError::InvalidText { field })?;
-        if name {
-            model::validate_name(text, field)?;
-        } else {
-            model::validate_text(text, field)?;
-        }
-        Ok(text)
-    }
-}
-
-fn count<E>(n: usize, field: &'static str, max: usize) -> ResultV3<(), E> {
+use crate::wire_common::Reader;
+pub(crate) fn count<E>(n: usize, field: &'static str, max: usize) -> ResultV3<(), E> {
     if n > max {
         return Err(DecodeError::CountOutOfRange {
             field,
@@ -812,6 +734,20 @@ pub fn decode_device_descriptor_table_v3<'a, E>(
     bytes: &'a [u8],
     c: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> ResultV3<DeviceDescriptorTableV3<'a>, E> {
+    let (view, end) = decode_nominal_prefix(bytes, DEVICE_DESCRIPTOR_VERSION_V3, c)?;
+    if end != bytes.len() {
+        return Err(DecodeError::TrailingBytes.into());
+    }
+    Ok(view)
+}
+
+/// Private common row decoder. V4 must validate its mandatory trailer before
+/// returning a distinct public view; this never exposes V4 through V3 decode.
+pub(crate) fn decode_nominal_prefix<'a, E>(
+    bytes: &'a [u8],
+    expected_version: u16,
+    c: &mut impl FnMut(usize) -> Result<(), E>,
+) -> ResultV3<(DeviceDescriptorTableV3<'a>, usize), E> {
     pay(c, 1)?;
     if bytes.len() > MAX_DESCRIPTOR_TABLE_BYTES {
         return Err(DecodeError::TooLarge {
@@ -824,7 +760,7 @@ pub fn decode_device_descriptor_table_v3<'a, E>(
         return Err(DecodeError::InvalidMagic.into());
     }
     let version = r.u16(c)?;
-    if version != DEVICE_DESCRIPTOR_VERSION_V3 {
+    if version != expected_version {
         return Err(DecodeError::UnknownVersion(version).into());
     }
     let flags = r.u16(c)?;
@@ -901,11 +837,12 @@ pub fn decode_device_descriptor_table_v3<'a, E>(
     }
     v.requirements_start = r.position;
     r.take(requirements * 48, c)?;
-    if r.position != bytes.len() {
+    // Preserve V3's original rejection order and charging before view replay.
+    if expected_version == DEVICE_DESCRIPTOR_VERSION_V3 && r.position != bytes.len() {
         return Err(DecodeError::TrailingBytes.into());
     }
     validate_view(&v, c)?;
-    Ok(v)
+    Ok((v, r.position))
 }
 
 // These are explicit simultaneous typed extents, not an allocator/RSS promise.

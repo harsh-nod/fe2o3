@@ -107,6 +107,16 @@ impl ProductionRankedSemanticProgramV1 {
     pub(crate) fn replay_conditional_roots_v1(
         mut self,
         references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+        mut consume: impl FnMut(
+            u32,
+            &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+            &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+            &fe2o3_verifier::ProductionConditionalFormulaExecutionV1,
+            &mut Budget<'_>,
+        ) -> Result<
+            (),
+            crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2,
+        >,
     ) -> Result<Self, Error> {
         let roots = std::mem::take(&mut self.roots);
         let source = &self.materialized;
@@ -151,6 +161,7 @@ impl ProductionRankedSemanticProgramV1 {
                 return Err(Error::ConditionalResource(Resource::Accounting));
             }
             for mut root in roots.into_vec() {
+                let semantic_root = root.semantic_root.index();
                 root.verification = match root.verification {
                     ReferenceRootV1::Conditional(conditional) => {
                         first.get_or_insert(root.semantic_root.index());
@@ -178,7 +189,14 @@ impl ProductionRankedSemanticProgramV1 {
                             .ok_or(Error::RosterMetadata("missing conditional CPU binding"))?;
                         ReferenceRootV1::Conditional(
                             conditional
-                                .replay_for_target_v1(source, reference, budget)
+                                .replay_for_target_v1(
+                                    source,
+                                    reference,
+                                    budget,
+                                    |request, execution, budget| {
+                                        consume(semantic_root, source, request, execution, budget)
+                                    },
+                                )
                                 .map_err(Error::ConditionalReplay)?,
                         )
                     }

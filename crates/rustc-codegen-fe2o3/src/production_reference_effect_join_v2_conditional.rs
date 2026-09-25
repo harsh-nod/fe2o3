@@ -112,6 +112,11 @@ impl ConditionalReferenceRootV1 {
         source: &ProductionPreRankedKirOwnerV1,
         reference: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1,
         budget: &mut Budget<'_>,
+        consume: impl FnOnce(
+            &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+            &fe2o3_verifier::ProductionConditionalFormulaExecutionV1,
+            &mut Budget<'_>,
+        ) -> Result<(), Error>,
     ) -> Result<Self, Error> {
         let Self {
             input,
@@ -135,9 +140,10 @@ impl ConditionalReferenceRootV1 {
                     reference,
                     root,
                     budget,
-                    |_execution, _budget| {
+                    |execution, budget| {
                         #[cfg(test)]
-                        observation::replay_callback(root, request, _execution, _budget);
+                        observation::replay_callback(root, request, execution, budget);
+                        consume(request, execution, budget)
                     },
                 )
             },
@@ -156,7 +162,9 @@ impl ConditionalReferenceRootV1 {
                     return Err(failure(Resource::Accounting));
                 }
                 budget.release_storage(transferred).map_err(failure)?;
-                result?;
+                // The consumer result is nested inside CPU/formula replay.
+                // Both errors follow all verifier/lower/account postchecks.
+                result??;
                 #[cfg(test)]
                 observation::replay_accepted(root, &proof, budget);
                 Ok(Self {

@@ -2,6 +2,7 @@
 //! These tests are unvalidated until run on the integrated conditional pipeline.
 use super::*;
 use crate::production_pipeline::ProductionPipelineError as Pipeline;
+use crate::production_pipeline::conditional_generated_fields_v1::observation as generated;
 use crate::production_ranked_projection_v1::{
     ProductionRankedProjectionErrorV1 as Projection,
     ProductionRankedVerificationErrorV1 as Verification,
@@ -201,9 +202,158 @@ fn fresh_proof(observation: &proof::Observation, expected: usize) {
     }
 }
 
+// These are passive assertions about the actual callback, not a descriptor,
+// receipt importer, source correspondence checker, or finalizer.
+fn check_generated_fields(
+    observed: &generated::Observation,
+    retained: &retention::Observation,
+    expected_root: u32,
+    expected_kernel_binding: [u8; 32],
+    output_allocation_origin: u64,
+) {
+    generated::check(observed);
+    let [
+        generated::Event::ProjectionCallback(fields),
+        generated::Event::ReplayCompleted,
+    ] = observed.events.as_slice()
+    else {
+        panic!("one Vecadd projection followed by completed retained replay required");
+    };
+    let [
+        retention::Event::Retained { root, receipt, .. },
+        retention::Event::PhaseRetained(initial),
+        retention::Event::ReplayCallback {
+            root: callback_root,
+            receipt: callback_receipt,
+            work: callback_work,
+            storage: callback_storage,
+            ..
+        },
+        retention::Event::ReplayAccepted {
+            root: accepted_root,
+            receipt: accepted_receipt,
+            work: accepted_work,
+            ..
+        },
+        retention::Event::PhaseFinished { after, .. },
+        retention::Event::PhaseDropped { .. },
+    ] = retained.events.as_slice()
+    else {
+        panic!("generated fields require the actual retained-proof event sequence");
+    };
+    assert_eq!(fields.root, expected_root);
+    assert_eq!(fields.kernel_binding, expected_kernel_binding);
+    for (root, receipt) in [
+        (root, receipt),
+        (callback_root, callback_receipt),
+        (accepted_root, accepted_receipt),
+    ] {
+        assert_eq!(fields.root, *root);
+        assert_eq!(fields.statement, receipt.statement);
+        assert_eq!(fields.receipt, receipt.receipt);
+    }
+    assert!(initial.work < *callback_work && *callback_work < fields.work);
+    assert!(fields.work <= *accepted_work && *accepted_work <= after.work);
+    assert!(fields.storage >= *callback_storage && fields.storage <= after.peak_storage);
+
+    // The shared body has two &[f32] inputs and one DisjointSlice<f32> output.
+    // Check each logical field, not six physical pointer/length components.
+    assert_eq!(fields.arguments.len(), 3);
+    for (source, adjusted, local, field, offset, output) in [
+        (0, 0, 1, 0, 0, false),
+        (1, 1, 2, 1, 16, false),
+        (2, 2, 3, 2, 32, true),
+    ] {
+        let matches: Vec<_> = fields
+            .arguments
+            .iter()
+            .filter(|argument| argument.source_argument == source)
+            .collect();
+        let [argument] = matches.as_slice() else {
+            panic!("exactly one generated field for Vecadd source argument {source}");
+        };
+        assert_eq!(argument.adjusted_argument, adjusted);
+        assert_eq!(argument.semantic_local, local);
+        assert_eq!(argument.generated_field, field);
+        assert_eq!(argument.generated_offset, offset);
+        assert_eq!(argument.output, output);
+        for identity in [
+            argument.source_type_identity,
+            argument.device_layout_identity,
+            argument.generated_semantic_type_identity,
+        ] {
+            assert_ne!(identity, [0; 32]);
+        }
+    }
+    // Canonical parameters/SSA values are a unique table, not inferred source,
+    // adjusted, generated-field, or read-occurrence ordinals.
+    for (index, argument) in fields.arguments.iter().enumerate() {
+        for other in &fields.arguments[..index] {
+            assert_ne!(argument.canonical_parameter, other.canonical_parameter);
+            assert_ne!(argument.canonical_value, other.canonical_value);
+        }
+    }
+    let output = &fields.arguments[usize::from(fields.output_argument)];
+    assert_eq!(output.source_argument, 2);
+    assert_eq!(
+        u64::from(output.source_argument) + 1,
+        output_allocation_origin
+    );
+
+    // Preserve the actual a[i], b[i] order and multiplicity. The a[i], a[i]
+    // mutation remains AMBIGUOUS_LOAD; it is not a new accepted source case.
+    let [read_a, read_b] = fields.reads.as_slice() else {
+        panic!("the unchanged Vecadd body has exactly two input read occurrences");
+    };
+    assert_eq!([read_a.source_argument, read_b.source_argument], [0, 1]);
+    assert_ne!(read_a.argument, read_b.argument);
+    let a = &fields.arguments[usize::from(read_a.argument)];
+    let b = &fields.arguments[usize::from(read_b.argument)];
+    assert_eq!(a.semantic_type, b.semantic_type);
+    assert_ne!(a.semantic_type, output.semantic_type);
+    assert_eq!(
+        a.generated_semantic_type_identity,
+        b.generated_semantic_type_identity
+    );
+    assert_ne!(
+        a.generated_semantic_type_identity,
+        output.generated_semantic_type_identity
+    );
+    assert_eq!(a.source_type_identity, b.source_type_identity);
+    assert_eq!(a.device_layout_identity, b.device_layout_identity);
+    for (index, argument) in fields.arguments.iter().enumerate() {
+        assert_eq!(
+            fields
+                .reads
+                .iter()
+                .filter(|read| usize::from(read.argument) == index)
+                .count(),
+            if argument.output { 0 } else { 1 },
+        );
+    }
+    assert_ne!(
+        (read_a.canonical_block, read_a.canonical_operation),
+        (read_b.canonical_block, read_b.canonical_operation),
+    );
+    assert_ne!(
+        (read_a.ranked_block, read_a.ranked_operation),
+        (read_b.ranked_block, read_b.ranked_operation),
+    );
+    // This location comes from canonical_output_store_location_v1(), not from
+    // the ranked write. Do not assume canonical and ranked operation numbering.
+    let store = (
+        fields.canonical_store_block,
+        fields.canonical_store_operation,
+    );
+    for read in &fields.reads {
+        assert_ne!(store, (read.canonical_block, read.canonical_operation));
+    }
+}
+
 impl Callbacks for VecaddCallbacks {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.calls += 1;
+        let mut generated_fields = None;
         let (result, retention) = retention::observe(|| {
             let transaction = transaction_in_active_session_v1(
                 tcx,
@@ -300,6 +450,12 @@ impl Callbacks for VecaddCallbacks {
                             let [root] = ranked.ranked_roots() else {
                                 return Err("one Vecadd root required".into());
                             };
+                            let expected_root = root.semantic_root().index();
+                            let expected_kernel_binding = *root.kernel_binding();
+                            let [write] = root.observed_reference_writes() else {
+                                return Err("one actual Vecadd output write required".into());
+                            };
+                            let output_allocation_origin = write.allocation_origin;
                             let formula = root.conditional_formula_report_v1().ok_or(
                                 "Vecadd did not consume an actual conditional formula execution",
                             )?;
@@ -317,9 +473,11 @@ impl Callbacks for VecaddCallbacks {
                                 "execution": identities[2].as_bytes(), "receipt": identities[3].as_bytes(),
                                 "proof_retained_after_callback": false,
                             });
+                            let (result, observation) =
+                                generated::observe(|| dispatch::Stage::lower(ranked));
                             let Err(Pipeline::RankedVerification(
                                 error @ Verification::ConditionalFinalizerRequired { .. },
-                            )) = dispatch::Stage::lower(ranked)
+                            )) = result
                             else {
                                 return Err(
                                     "Vecadd requires the exact conditional finalizer refusal"
@@ -327,6 +485,12 @@ impl Callbacks for VecaddCallbacks {
                                 );
                             };
                             assert!(error.to_string().contains("FE2O3-COND-FINALIZER-001"));
+                            generated_fields = Some((
+                                observation,
+                                expected_root,
+                                expected_kernel_binding,
+                                output_allocation_origin,
+                            ));
                             serde_json::json!({"boundary": error.to_string(), "conditional_formula": report})
                         }
                         (
@@ -377,9 +541,17 @@ impl Callbacks for VecaddCallbacks {
         self.result = Some(result.map(|mut report| {
             if self.case == Case::Annotated && self.stage == Stage::Consuming {
                 retention::check(&retention, &report.detail["conditional_formula"]);
+                let (fields, root, kernel_binding, output_origin) =
+                    generated_fields.expect("actual target replay must observe generated fields");
+                check_generated_fields(&fields, &retention, root, kernel_binding, output_origin);
+                report.detail["generated_field_events"] = serde_json::to_value(fields).unwrap();
                 report.detail["conditional_formula"]["proof_retained_after_callback"] = true.into();
                 report.detail["retained_proof_events"] = serde_json::to_value(retention).unwrap();
             } else {
+                assert!(
+                    generated_fields.is_none(),
+                    "unexpected generated-field replay"
+                );
                 assert!(
                     retention.events.is_empty(),
                     "unexpected retained proof phase"

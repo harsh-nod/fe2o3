@@ -140,7 +140,7 @@ fn text(value: &str, budget: &mut Budget<'_>) -> R<Text> {
     Text::new(string).map_err(E::Validation)
 }
 
-fn records(
+pub(super) fn records(
     kind: DescriptorArgumentKindV1,
     budget: &mut Budget<'_>,
 ) -> R<(SourceTypeRecordV3, DeviceLayoutRecordV1)> {

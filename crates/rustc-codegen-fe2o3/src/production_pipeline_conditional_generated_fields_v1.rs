@@ -1,0 +1,70 @@
+//! Generated-field projection borrows the existing compilation's retained roots.
+//! No reconstructed root slice or source digest can construct this scope.
+use super::AuthenticatedProductionBindings;
+use crate::compiler_descriptor::{
+    TypedDescriptorRootV1, conditional_generated_fields_v1::with_generated_fields_v1,
+};
+use crate::production_ranked_projection_v1::{
+    ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1,
+};
+use crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2;
+use fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1;
+
+#[cfg(test)]
+pub(crate) use crate::compiler_descriptor::conditional_generated_fields_v1::observation;
+
+/// Borrowed custody from an existing compilation stage, not an admission token.
+/// Only the retained replay below constructs it. No work identity is retained.
+pub(crate) struct ConditionalGeneratedFieldOwnerV1<'a> {
+    source: &'a ProductionPreRankedKirOwnerV1,
+    roots: &'a [TypedDescriptorRootV1],
+}
+
+impl ConditionalGeneratedFieldOwnerV1<'_> {
+    pub(crate) fn source(&self) -> &ProductionPreRankedKirOwnerV1 {
+        self.source
+    }
+    pub(crate) fn roots(&self) -> &[TypedDescriptorRootV1] {
+        self.roots
+    }
+}
+
+/// The caller destructures the existing ranked stage, retaining `bindings`
+/// while moving `ranked` through its ONE original replay. Its callback lends
+/// the actual materialized owner alongside the source-bound request and the
+/// reimported signed execution. No shared borrow of the consumed stage remains.
+pub(super) fn replay_conditional_roots_v1(
+    ranked: ProductionRankedSemanticProgramV1,
+    bindings: &AuthenticatedProductionBindings,
+) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1> {
+    let ranked = ranked.replay_conditional_roots_v1(
+        &bindings.reference_effect_bindings,
+        |root, source, request, execution, budget| {
+            with_generated_fields_v1(
+                &ConditionalGeneratedFieldOwnerV1 {
+                    source,
+                    roots: &bindings.typed_descriptor_roots,
+                },
+                request,
+                budget,
+                |fields, budget| {
+                    fields.require_replayed_root_v1(root, budget)?;
+                    #[cfg(test)]
+                    observation::projection_callback(&fields, execution, budget);
+                    // Inspection only. This callback neither serializes a
+                    // contract nor converts the conditional receipt to V5.
+                    let _ = execution;
+                    Ok(())
+                },
+            )
+            .map_err(|error| {
+                ProductionReferenceEffectJoinErrorV2::ProofExecution(error.to_string())
+            })
+        },
+    )?;
+    // This is later than descriptor, verifier, lower and original-phase
+    // postchecks. Test observations do not alter the retained owning program.
+    #[cfg(test)]
+    observation::replay_completed();
+    Ok(ranked)
+}

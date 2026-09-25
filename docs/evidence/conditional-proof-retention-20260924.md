@@ -104,7 +104,8 @@ early-refusal test observes real account cleanup, but not independent source/roo
 destructor liveness; the drop-order fix also relies on Rust's lexical drop order.
 
 The [prepared Vecadd exporter](prepared-conditional-vecadd-20260925.md) is now
-integrated as test infrastructure. The generated-field descriptor bridge and
+integrated as test infrastructure. The [generated-field check and inert V4
+transport](conditional-generated-fields-20260925.md) are also integrated;
 host-premise patches remain separate, unintegrated work. Protected source replay must first
 demonstrate retention and consumption in the real transaction. Conditional target
 admission, applicable machine/numerical refinement, native issuance and generated

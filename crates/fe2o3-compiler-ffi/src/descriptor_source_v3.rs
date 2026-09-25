@@ -3,7 +3,7 @@ use fe2o3_kernel_descriptor::{
     DESCRIPTOR_READER_SCRATCH_STORAGE_V3, DESCRIPTOR_TABLE_VIEW_STORAGE_V3, DescriptorWireErrorV3,
     DeviceDescriptorTableV3, decode_device_descriptor_table_v3,
 };
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::{error::Error, fmt, mem::size_of};
 
 /// Distinct ELF section for nominal V3 descriptors; V1 is not reinterpreted.
@@ -195,23 +195,20 @@ fn validate<E>(
     {
         let _table = decode_zero(bytes, charge)?;
     }
-    let byte_len =
-        u64::try_from(bytes.len()).map_err(|_| CompilerDescriptorSourceErrorV3::Arithmetic)?;
-    let work = COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V3
-        .len()
-        .checked_add(8)
-        .and_then(|n| n.checked_add(bytes.len()))
-        .and_then(|n| n.checked_add(128))
-        .ok_or(CompilerDescriptorSourceErrorV3::Arithmetic)?;
-    charge(work).map_err(CompilerDescriptorSourceErrorV3::Work)?;
-    let mut hash = Sha256::new();
-    hash.update(COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V3);
-    hash.update(byte_len.to_le_bytes());
-    hash.update(bytes);
-    Ok(CompilerDescriptorSourceIdentityV3 {
-        sha256: hash.finalize().into(),
-        byte_len,
-    })
+    let (sha256, byte_len) = crate::descriptor_source_common::identity(
+        COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V3,
+        bytes,
+        charge,
+    )
+    .map_err(|e| match e {
+        crate::descriptor_source_common::HashError::Arithmetic => {
+            CompilerDescriptorSourceErrorV3::Arithmetic
+        }
+        crate::descriptor_source_common::HashError::Work(e) => {
+            CompilerDescriptorSourceErrorV3::Work(e)
+        }
+    })?;
+    Ok(CompilerDescriptorSourceIdentityV3 { sha256, byte_len })
 }
 
 impl CompilerDescriptorSourceV3 {

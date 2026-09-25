@@ -36,6 +36,8 @@ pub(crate) mod checked_output_policy8_v1;
 #[cfg(test)]
 #[path = "production_pipeline_checked_output_progress_v1_tests.rs"]
 pub(crate) mod checked_output_progress_v1;
+#[path = "production_pipeline_conditional_generated_fields_v1.rs"]
+pub(crate) mod conditional_generated_fields_v1;
 #[path = "production_pipeline_erased_checked_output_policy4_v1.rs"]
 pub(crate) mod erased_checked_output_policy4_v1;
 #[path = "production_pipeline_erased_checked_output_policy5_v1.rs"]
@@ -3918,8 +3920,7 @@ impl RankedVerifiedProductionCompilation {
     fn replay_conditional_for_target_v1(self) -> Result<Self, ProductionPipelineError> {
         let Self { ranked, bindings } = self;
         let ranked = if ranked.has_conditional_roots_v1() {
-            ranked
-                .replay_conditional_roots_v1(&bindings.reference_effect_bindings)
+            conditional_generated_fields_v1::replay_conditional_roots_v1(ranked, &bindings)
                 .map_err(ProductionPipelineError::RankedVerification)?
         } else {
             ranked
