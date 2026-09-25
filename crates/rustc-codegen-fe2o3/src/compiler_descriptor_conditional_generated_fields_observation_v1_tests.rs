@@ -23,6 +23,14 @@ pub(crate) fn check(observed: &Observation) {
             assert!(read_matches(projection, read));
         }
         for argument in &projection.arguments {
+            let mut matches = projection
+                .body_arguments
+                .iter()
+                .filter(|body| body.source_argument == argument.source_argument);
+            let body = matches.next().expect("source-body argument role");
+            assert!(matches.next().is_none(), "unique source-body argument role");
+            assert_eq!(argument.semantic_local, body.semantic_local);
+            assert_eq!(argument.semantic_type, body.semantic_type);
             assert!(
                 argument.output
                     || projection
@@ -54,7 +62,7 @@ fn argument(canonical: u32, source: u32, output: bool) -> Argument {
         canonical_value: canonical + 10,
         source_argument: source,
         adjusted_argument: source,
-        semantic_local: source + 1,
+        semantic_local: [7, 3, 9][source as usize],
         semantic_type: if output { 9 } else { 8 },
         generated_field: source as u16,
         output,
@@ -71,7 +79,7 @@ fn read(argument: u16, canonical: u32, source: u32, op: u32) -> Read {
         canonical_parameter: canonical,
         source_argument: source,
         adjusted_argument: source,
-        semantic_local: source + 1,
+        semantic_local: [7, 3, 9][source as usize],
         semantic_type: 8,
         canonical_block: 1,
         canonical_operation: op as usize,
@@ -86,6 +94,23 @@ fn projection() -> Projection {
         root: 2,
         body: 3,
         kernel_binding: [4; 32],
+        body_arguments: vec![
+            BodyArgument {
+                source_argument: 1,
+                semantic_local: 3,
+                semantic_type: 8,
+            },
+            BodyArgument {
+                source_argument: 0,
+                semantic_local: 7,
+                semantic_type: 9,
+            },
+            BodyArgument {
+                source_argument: 2,
+                semantic_local: 9,
+                semantic_type: 8,
+            },
+        ],
         arguments: vec![
             argument(2, 1, false),
             argument(5, 2, false),
@@ -118,6 +143,13 @@ fn observer_preserves_distinct_ordinals_and_repeated_read_order() {
             .map(|a| a.generated_field)
             .collect::<Vec<_>>(),
         [1, 2, 0]
+    );
+    assert_eq!(
+        p.arguments
+            .iter()
+            .map(|a| a.semantic_local)
+            .collect::<Vec<_>>(),
+        [3, 9, 7]
     );
     assert_eq!(
         p.reads.iter().map(|r| r.argument).collect::<Vec<_>>(),
@@ -166,6 +198,52 @@ fn observed_read_index_and_every_source_coordinate_must_agree() {
         );
     }
     assert!(read_matches(&p, &original));
+}
+
+#[test]
+fn coherent_argument_and_read_substitutions_must_match_source_body() {
+    for case in 0..3 {
+        let mut p = projection();
+        match case {
+            0 => {
+                let local = p.arguments[0].semantic_local;
+                p.arguments[0].semantic_local = p.arguments[1].semantic_local;
+                p.arguments[1].semantic_local = local;
+            }
+            1 => p.arguments[0].semantic_local += 100,
+            2 => p.arguments[0].semantic_type += 100,
+            _ => unreachable!(),
+        }
+        for read in &mut p.reads {
+            let argument = &p.arguments[usize::from(read.argument)];
+            read.semantic_local = argument.semantic_local;
+            read.semantic_type = argument.semantic_type;
+        }
+        assert!(p.reads.iter().all(|read| read_matches(&p, read)));
+        let observed = Observation {
+            events: vec![Event::ProjectionCallback(p), Event::ReplayCompleted],
+        };
+        assert!(
+            std::panic::catch_unwind(|| check(&observed)).is_err(),
+            "coherent source-body substitution {case}"
+        );
+    }
+}
+
+#[test]
+fn source_body_argument_roles_must_exist_and_be_unique() {
+    for duplicate in [false, true] {
+        let mut p = projection();
+        if duplicate {
+            p.body_arguments.push(p.body_arguments[0].clone());
+        } else {
+            p.body_arguments.remove(0);
+        }
+        let observed = Observation {
+            events: vec![Event::ProjectionCallback(p), Event::ReplayCompleted],
+        };
+        assert!(std::panic::catch_unwind(|| check(&observed)).is_err());
+    }
 }
 
 #[test]

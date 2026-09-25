@@ -303,11 +303,14 @@ fn check_generated_fields(
 
     // The shared body has two &[f32] inputs and one DisjointSlice<f32> output.
     // Check each logical field, not six physical pointer/length components.
+    // generated::check joins local/type IDs to independent source-body roles;
+    // semantic locals are identity-sorted, not source-argument ordinals.
+    assert_eq!(fields.body_arguments.len(), 3);
     assert_eq!(fields.arguments.len(), 3);
-    for (source, adjusted, local, field, offset, output) in [
-        (0, 0, 1, 0, 0, false),
-        (1, 1, 2, 1, 16, false),
-        (2, 2, 3, 2, 32, true),
+    for (source, adjusted, field, offset, output) in [
+        (0, 0, 0, 0, false),
+        (1, 1, 1, 16, false),
+        (2, 2, 2, 32, true),
     ] {
         let matches: Vec<_> = fields
             .arguments
@@ -318,7 +321,6 @@ fn check_generated_fields(
             panic!("exactly one generated field for Vecadd source argument {source}");
         };
         assert_eq!(argument.adjusted_argument, adjusted);
-        assert_eq!(argument.semantic_local, local);
         assert_eq!(argument.generated_field, field);
         assert_eq!(argument.generated_offset, offset);
         assert_eq!(argument.output, output);

@@ -1,6 +1,7 @@
 //! Passive, test-only copies from the actual descriptor/proof replay callback.
 //! Observed rows and receipt digests are inert; completion is not finalization.
 use super::*;
+use fe2o3_mir_model::semantic_mir_v1::SemanticLocalRoleV1;
 use fe2o3_verifier::ProductionConditionalFormulaExecutionV1 as Execution;
 use serde::Serialize;
 use std::cell::RefCell;
@@ -36,11 +37,20 @@ pub(crate) struct Read {
     pub(crate) ranked_operation: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct BodyArgument {
+    pub(crate) source_argument: u32,
+    pub(crate) semantic_local: u32,
+    pub(crate) semantic_type: u32,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct Projection {
     pub(crate) root: u32,
     pub(crate) body: u32,
     pub(crate) kernel_binding: [u8; 32],
+    /// Independent source-body roles, not copied from generated-field rows.
+    pub(crate) body_arguments: Vec<BodyArgument>,
     pub(crate) arguments: Vec<Argument>,
     pub(crate) output_argument: u16,
     pub(crate) reads: Vec<Read>,
@@ -111,6 +121,29 @@ pub(crate) fn projection_callback(
         assert!(fields.arguments().len() <= MAX_CONDITIONAL_ARGUMENTS_V1);
         assert!(input.reads().len() <= MAX_CONDITIONAL_READS_V1);
         assert_eq!(fields.read_arguments().len(), input.reads().len());
+        let semantic = fields.request().source().semantic_ssa().source_semantic();
+        assert_eq!(
+            semantic
+                .select_kernel_body_for_root_v1(fields.semantic_root())
+                .unwrap()
+                .body(),
+            fields.semantic_body()
+        );
+        let body_arguments = semantic.functions()[fields.semantic_body().index() as usize]
+            .locals()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, local)| {
+                let SemanticLocalRoleV1::Argument(source_argument) = local.role() else {
+                    return None;
+                };
+                Some(BodyArgument {
+                    source_argument,
+                    semantic_local: u32::try_from(index).unwrap(),
+                    semantic_type: local.ty().index(),
+                })
+            })
+            .collect();
         let arguments = fields
             .arguments()
             .iter()
@@ -159,6 +192,7 @@ pub(crate) fn projection_callback(
             root: fields.semantic_root().index(),
             body: fields.semantic_body().index(),
             kernel_binding: fields.typed_root().kernel_binding_bytes(),
+            body_arguments,
             arguments,
             output_argument: fields.output_argument(),
             reads,
