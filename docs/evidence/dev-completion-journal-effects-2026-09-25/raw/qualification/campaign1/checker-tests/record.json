@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/test-completion-journal-effects.py"
+  ],
+  "started_ns": 1790355952285066415,
+  "process_group": 3764728,
+  "group_absent": true,
+  "finished_ns": 1790355986028757053,
+  "status": 0
+}

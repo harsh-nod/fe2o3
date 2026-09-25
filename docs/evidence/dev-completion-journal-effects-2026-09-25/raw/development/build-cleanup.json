@@ -1,0 +1,17 @@
+{
+  "path": "/dev/shm/fe2o3-completion-effects-20260925-R3jDyi6A",
+  "allocated_bytes_before_removal": 1908985856,
+  "owner_uid": 1000,
+  "device": 63,
+  "type": "directory",
+  "initial_force_removal": "tool refused before execution",
+  "removal_command": [
+    "rm",
+    "-r",
+    "--",
+    "/dev/shm/fe2o3-completion-effects-20260925-R3jDyi6A"
+  ],
+  "removal_exit": 0,
+  "independent_absence_exit": 0,
+  "scope": "task-owned CPU build cache only; not a global process census"
+}

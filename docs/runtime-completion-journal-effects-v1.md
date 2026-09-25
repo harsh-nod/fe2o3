@@ -1,7 +1,9 @@
 # Completion Journal Effects
 
-Status: development implementation, not an accepted qualification campaign or
-Context executable refinement. A1/A2 and HIP/HSA parity remain open.
+Status: qualified shared control/journal-effect composition from signed
+`957c5ce64`, not Context executable refinement. The
+[38-stage packet](evidence/dev-completion-journal-effects-2026-09-25/README.md)
+passes; A1/A2 and HIP/HSA parity remain open.
 
 ## Production Boundary
 
@@ -52,11 +54,11 @@ There are no dependency/publication success stubs and no claim about a final
 Context return, callbacks, map/root removal, retained backing, unwinding,
 physical GPU completion or eventual progress.
 
-## Qualification Still Required
+## Qualification Boundary
 
 The historical completion-control packet authenticates its original source;
 it does not qualify the nested-prefix delta. Its textual adjacent-call mutation
-must not be silently dropped or repinned. A successor campaign must cover both
+must not be silently dropped or repinned. The successor campaign covers both
 macro scopes, the independent effect oracle, optional branches, each failure
 prefix and outcome substitution, with positive brackets and retained replay.
 
@@ -65,7 +67,7 @@ from that authenticated campaign. Global proof registration, Context map and
 quarantine correspondence, producer-first reconciliation, protected generated
 execution, native/resource qualification and matched performance remain open.
 
-## Successor Campaign Design
+## Campaign Design
 
 Keep historical controllers and pins unchanged. Authenticate the inherited
 462-input owner closure and completion-control sources, then require the exact
@@ -110,5 +112,9 @@ this inherited proof-body delta, not a historical evidence repin. With that
 change, the full extended development root verifies 1,282 obligations with zero
 errors and no diagnostics. The earlier failures remain diagnostic evidence.
 
-The signed-source campaign and retained replay are still required before
-acceptance. A passing whole-root development run is not their substitute.
+The signed-source campaign now passes both 1,282-obligation whole-effect
+brackets, both eight-obligation control brackets, all 30 logical negatives and
+the frozen 1,271-obligation owner regression. Retained replay, six packet
+calibration groups and five inherited cleanup tests pass. Both owned scratch
+trees are fully retained before exact removal and independent absence. A
+passing whole-root development run alone was not used as their substitute.

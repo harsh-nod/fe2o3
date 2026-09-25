@@ -1,0 +1,306 @@
+[
+  {
+    "name": "checker-tests",
+    "files": {
+      "record.json": "c42bdbbbdb5939ee277f53e4c23946b777fff8bc00b9d2f76096e1d327166229",
+      "stdout.log": "a503a70741cde4b567999940ba6a0ba68b17403b37704de8ac60de4f4885f74a",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "closure-before",
+    "files": {
+      "record.json": "d6e8b7f78172895a44ca7cf9d2a88f9a3d5270fd1fe9b471e118d222f9fe8dd3",
+      "stdout.log": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "effects-positive-before",
+    "files": {
+      "record.json": "986128da13c08ef5716fcafc6312890a94b958deb202dc209225cb983185fe0d",
+      "stdout.log": "c54ef7b6a91c7f74131bed40568093ea1065113ddf518022532cc19550d1477c",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "control-positive-before",
+    "files": {
+      "record.json": "7ca469e6811d31f528146f0d95de9ed2a67a920a744591e37cbd822c1b6cc18a",
+      "stdout.log": "341c6fcf31b652fdd1caac0024795ba1362bbda65c625ceed3ade7c02c9fe249",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "control-swap-0",
+    "files": {
+      "record.json": "a436bd9091ce0d5579f38abb60a9893e78e0c47b0ea3580ba2e7054671306a65",
+      "stdout.log": "bcf9296f4cf375b268919bcada9d7ca8b5e23ee0bcbb1d4109c96c32714329c7",
+      "stderr.log": "ff526ea01c8471759b4e773058ce8d03535e3c8f7cd7b1c5b17e3ee14e2660c7"
+    }
+  },
+  {
+    "name": "control-swap-1",
+    "files": {
+      "record.json": "ec8d08e823285233982a823dfdccdbb75491af3ffeb94bd8056dfc32ce78da90",
+      "stdout.log": "0d5580fcaef6f9b10b48023eaf82d68e4e739b2f7c9661185439eb51fa4b0a43",
+      "stderr.log": "eea29bac88cfac00a01b759ff81657fdee51197c3c3f924c57b1c2161f1aae8b"
+    }
+  },
+  {
+    "name": "control-early-publication",
+    "files": {
+      "record.json": "03abb6656e440093aa0212ddda5ad41f7dfd283c8a198c56a3f0dc75f0002702",
+      "stdout.log": "c6a50a35809a7224cba223e8feb87eeeb58152bbdac64fce0b46baf56a9908c4",
+      "stderr.log": "253ce03a43d7dd5618d94288ede0e5f59f5e27b0ffa90e150a70309ebca19216"
+    }
+  },
+  {
+    "name": "control-omit-0",
+    "files": {
+      "record.json": "5e75eee49ac0dce2dc30b28c330b9723db4db17e95dc9c4c326364b53872b49a",
+      "stdout.log": "a648de3831ad7c2440942aaa8ac3902b1fc7ca420c96fa36b014da87f52d869f",
+      "stderr.log": "6defe7c8ea3025067dc1485b8875e2afd9ebaeaeaa1ad55847f1c371689e9ff5"
+    }
+  },
+  {
+    "name": "control-duplicate-0",
+    "files": {
+      "record.json": "b253f70131d2d219ab13f36cddcfbf26526893dd6e63a99765bf791f0f935cc9",
+      "stdout.log": "aa300e92a825914844a7dddcd495658feef2fa62e9c992d204b433f722dbb275",
+      "stderr.log": "be0742f83d9a61e8c9723198c886066a2435aaa19747f2c9401ec5d5f87f62aa"
+    }
+  },
+  {
+    "name": "control-continue-error-0",
+    "files": {
+      "record.json": "5d8a3f8111843078498ac4cd8be7bd600ff42e9671058d18ed2e65b04d9a5d01",
+      "stdout.log": "d3f6b0ebde92274c2534a12958c61e56fffd8cf0e0f6f0412a4c2635add221e8",
+      "stderr.log": "4d9fdaf9ff9ccd2be05517ff17197474dd2e59cddca69ba4fb606dd64ebe879f"
+    }
+  },
+  {
+    "name": "control-omit-1",
+    "files": {
+      "record.json": "242f5298ec8d0e121aa6156ea6c077fb2d54ca1a08f55bb3d59a85234e8b4f1e",
+      "stdout.log": "e59c66d2b2754f9eb5f0ee5c29223633ba0a54337e7cabaf39eff7b17c8d7d25",
+      "stderr.log": "23aa74fd132bca39bc08abcace4c21b4a81f667b494721c55c9de6c29268a015"
+    }
+  },
+  {
+    "name": "control-duplicate-1",
+    "files": {
+      "record.json": "4de90e3ace229dfdc0b066605f53c1ec5100ec3bd21f16e00a9ccda280d25b74",
+      "stdout.log": "50f664a68702be7b3bf9c7666672e6db3b3cc2de8793903a48256188d06f9b37",
+      "stderr.log": "54a5e8e14c7ceb9a9030b796af2765d64bd896e722877cf6379bc2b928492519"
+    }
+  },
+  {
+    "name": "control-continue-error-1",
+    "files": {
+      "record.json": "bc0b215f1c40e382fcfcd1c9dde08480c554f93c92c7004ea61f86ce24733ebc",
+      "stdout.log": "3b82594f320b3b0c175ee823266b502d3c48733801ab4438fa4e1b9b0007182c",
+      "stderr.log": "360b353c395710ecc53bee8c4205cba77c0d034743d236777b35b8985f06287b"
+    }
+  },
+  {
+    "name": "control-omit-2",
+    "files": {
+      "record.json": "dc51c8c746f0ddd0dd27b2ea51648b8ca383212b879520238c4102dd897e36b4",
+      "stdout.log": "b0c89bf2940c7306eb332d983a38b6f69fd08aff129133460d67e57b6d9a8adb",
+      "stderr.log": "6f2ea4205cdd8a7a266e5d1309dbb3814272337678d7278a90093aba2f8dc656"
+    }
+  },
+  {
+    "name": "control-duplicate-2",
+    "files": {
+      "record.json": "3c8356947832c02b4be1b663318e4776bc36dabbea82aa65241dc63ae8b080f2",
+      "stdout.log": "80f1bbef10a6067165eb77877143273b5f3dd9e215c0697829b69cb6a6b86c4b",
+      "stderr.log": "12de2eb43019519c6e979453819519527a47bcbefcb8344c2cdd0d6fcf68a72f"
+    }
+  },
+  {
+    "name": "control-continue-error-2",
+    "files": {
+      "record.json": "b2c49b0c75172d6c0db12c68d2a169d558ff5cccacad7ba5613ce85392c6fdc1",
+      "stdout.log": "e5cc0349b141ccdfc948e5f0f5b32ecf76ee16a15e3bdb0c6a38721fa7c9a2fb",
+      "stderr.log": "0cba3c0d41317ab966df88a86e93baa5f8ebea30d5553af0c7127613fe7949f9"
+    }
+  },
+  {
+    "name": "control-wrong-submission-0",
+    "files": {
+      "record.json": "2efe9376ab42f0485ddbd9d1804bfa322b51a76365ee2435ce9041f8cb4e911a",
+      "stdout.log": "f7f6377d3d7c2bfeb3ec40031177f959cfaa1c02ee8b3ccea201d40c419560d3",
+      "stderr.log": "609f10b0ade6151dbea1bbc81370feea0e4c4bad6d865674e737ddc912d33249"
+    }
+  },
+  {
+    "name": "control-wrong-submission-1",
+    "files": {
+      "record.json": "0bb60f6a387ea066d3a42922d91610199ea21cd4dacdda1485fc49af37254197",
+      "stdout.log": "87c19bbc6ef0c0c5d1e1362611431d023dfb7aa20ba45c3bb74b81bc58e3e258",
+      "stderr.log": "60d622bba3ed9a113af304ecfcf24a1e2d3dc343d7a46fcbe3849f1d867e67bd"
+    }
+  },
+  {
+    "name": "control-wrong-submission-2",
+    "files": {
+      "record.json": "aa9158c82924810ad1e6213b3999ea4eb2ddcd060d56f80e785fee65e1fff9d8",
+      "stdout.log": "2950f34e7ca4c7c78f0f057f35b56e6a8a7f11b562d2f0365b14ed6860b2be55",
+      "stderr.log": "cf4f962845c5d5cb5f1a9c923e873657b17278791f7727e0bc47e2949628f846"
+    }
+  },
+  {
+    "name": "control-wrong-submission-3",
+    "files": {
+      "record.json": "01f662718fd33c0a8f2ccc7b316b04869c424699c7c5a4372a2c45792ca7a2e4",
+      "stdout.log": "047c999efc4496280f1fb7734d3ca17026e87b1567d41653f1bab424e1ff897b",
+      "stderr.log": "4af82b98504220b40a530c21db4ebd9fa01dc031fb36226e8715c0e031342988"
+    }
+  },
+  {
+    "name": "control-wrong-outcome",
+    "files": {
+      "record.json": "73543255d6fcdd4894589567259ed3d98b3498bc6f2e48a226b965695b0f50f9",
+      "stdout.log": "9674f2ecff04b2a082175db53b88c5dd42eb92a634cdebb2c225a029d000c3a2",
+      "stderr.log": "202eef9a1a2b421654ad821eef46fbebc91170168a65ba6ca4ac4f85dc55978b"
+    }
+  },
+  {
+    "name": "control-wrong-status",
+    "files": {
+      "record.json": "bbbf9e02d3c55302fb0c89213a238d7dde2e81af598557bb70a37ec9798317bc",
+      "stdout.log": "2fb9a18c8e88fba382b6ab9cd453044d4402ee435b9298cd0ea78153c17e5925",
+      "stderr.log": "4f98571449cbeb12949ce3beb604748896611e25c9bc215e8a24f1652e03341a"
+    }
+  },
+  {
+    "name": "control-omit-publication",
+    "files": {
+      "record.json": "8310d2cae36fa56bc50de9d044d15890dd26c34c0eda3b18661fe8e0faedc105",
+      "stdout.log": "57b3cc35cf312c7dffcab9066a383da2e08b2920a274c91c224ad691ab71d9bd",
+      "stderr.log": "48bb6a65d3ae94c10ca67c9eb560ebf19aeb2ea3eb572636d5d0785ced26b55b"
+    }
+  },
+  {
+    "name": "control-discard-result",
+    "files": {
+      "record.json": "8b301ec788cbea84318c19691f0153cbf31f34abdcc7b8c8fbcc1f73d9cbf31c",
+      "stdout.log": "8087a58e03695b64ecf8713cae9e9e9dd94a06f0667629d59d7942f564836138",
+      "stderr.log": "361d81bec8d3a8060c67dbaf6f505940d93b1c241a50ec2653f2ead8247ef5b3"
+    }
+  },
+  {
+    "name": "control-swallow-publication-error",
+    "files": {
+      "record.json": "aee30e63a10d5d13969d65c6511d2e4145bc98002df4bccbde22a40929dcb1ea",
+      "stdout.log": "23a038286f15e158f033c034ad85872636dae0946a5d7965dfd3aba6b0379299",
+      "stderr.log": "a4d0ed47bce15b2859ebbf8d9e845569f944e319856b587bb97cc2799f79c089"
+    }
+  },
+  {
+    "name": "control-duplicate-publication",
+    "files": {
+      "record.json": "8798900ed125af62e71b3cc20fcd53a635065c76e20db22aaf638bda934960a6",
+      "stdout.log": "0f6c0b1ed2c07c52bbadf3c8a74450b3590fc35b5b3b9e3207b5ee671d89d3b6",
+      "stderr.log": "0f42d34fd5eaa84807bf95052b06f3abe0b8be2716d1b97ef9d845ada03cbd97"
+    }
+  },
+  {
+    "name": "effect-skip-stable",
+    "files": {
+      "record.json": "792e3229b8e608b9e39d040261a3dfa6ea7f74b236cc6f3cb6327b3e13d3b8d4",
+      "stdout.log": "c888d11e19c7bfe28e6406da0c180b668d079aa102f87f8c414ab6963c2d66eb",
+      "stderr.log": "63f470fe4413cafac153b70b44911439cc189b29bd3f9f83c7cc0ea656891c00"
+    }
+  },
+  {
+    "name": "effect-continue-stable-error",
+    "files": {
+      "record.json": "818126533f7022a066450822fb4a11b0b747233a444862ff87fbc92d52fe1901",
+      "stdout.log": "92ca015c80401d31a1f95f819228a82bc3a05fa6443b527967f8f74a2c026719",
+      "stderr.log": "07f0252d16c9f2d167f9105b56c5d9f04820200b15203ab61a95850121cb07e6"
+    }
+  },
+  {
+    "name": "effect-skip-producer",
+    "files": {
+      "record.json": "3cc9fe88c7fc332a948a5205b791b765973e90557091443710054f6fdec49394",
+      "stdout.log": "13ab2700cca10075a7ff3fa91aaf176a66025d498a446342c14340ff8f397465",
+      "stderr.log": "eed1841a2df89b3257d6b0b818549638dc0078bc82c86d6838f3d632668fdb7c"
+    }
+  },
+  {
+    "name": "effect-invert-producer-presence",
+    "files": {
+      "record.json": "142aac51df3b911ec1f27e24cef1bd801329a55838db0fd81f3fe68bc8f13085",
+      "stdout.log": "988c29a75dc85d5d6878106bb9aeefc92253e8bbd34cb883df9c5eb7d5daf41f",
+      "stderr.log": "fa678d45133ade6d7aa8554be9ae9680895e874e41d81e8e58c193f96f102611"
+    }
+  },
+  {
+    "name": "effect-swallow-producer-error",
+    "files": {
+      "record.json": "d09b61edace239d2fdf0dcc1927e4a8d1fe9285cb6f996760febe6bd2efe988b",
+      "stdout.log": "c13468bb067dc958ab1a7d380d8649d414473d493740cdd8d65df564d0869337",
+      "stderr.log": "2ce0cbb18aab10903d04f89f3ed055b5dfd78cadd9d24827cae3c3c8ab87f77f"
+    }
+  },
+  {
+    "name": "effect-swap-success-no-effect",
+    "files": {
+      "record.json": "158a6d6ee4e02884232a3f1807a722d00131b36a6849f711cd9b8bc406682477",
+      "stdout.log": "efb115c3c1f9845f0a72e5916ef26fedf6d6108033775b1d5d186e7a2fa6c6ef",
+      "stderr.log": "69dcfee2e7357469f6375a292c229df1074884c9d8061c64e74ec8fdcd86414b"
+    }
+  },
+  {
+    "name": "effect-settle-unknown",
+    "files": {
+      "record.json": "bb4aa7a25ab7b9a0ef5e12081ee812ea4a6f6f860727a8eecbb4a91052bab67a",
+      "stdout.log": "90652211ec4d9ed240e95be1b6e5628072dd69c1bcabb90ae91d87da5ae3a994",
+      "stderr.log": "00e87e3a21e65b060438ffcc899330a4ab91eb0164a2fe3393f30ed4a5110729"
+    }
+  },
+  {
+    "name": "effect-discard-writer-error",
+    "files": {
+      "record.json": "a6a9904b539356822c7c76d3ba566ce6ddb25c99c51b0417b8a2248d9e146388",
+      "stdout.log": "f9c8c2d16652ca65de93ea80f97001adfda70451c7f5a57eb8aeb676a3b9cdc4",
+      "stderr.log": "7db23f892e566902cf56a181debfc1cf1f849db2f5f5574d99cb0c5908306e6f"
+    }
+  },
+  {
+    "name": "effects-positive-after",
+    "files": {
+      "record.json": "260f612d074aa7428a33d9f43cc170795e755946fdb39cd309bba21495841fbd",
+      "stdout.log": "6dbbadd637d5f273a97a425c96ba270aa3a5e52d99b7d63260ddf16e69f3a40c",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "control-positive-after",
+    "files": {
+      "record.json": "b0f269b7e92312e497339d7584632537400f6911da64e66cd50232306e775d93",
+      "stdout.log": "c6669ca098dac56517c725c7c943c6bab6684d6ca683a85f4e4e02aba0ddd4ca",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "owner-regression",
+    "files": {
+      "record.json": "0a3fce0dfa8b860bf20cfeb6d695e046bd8a061d84ec7fbbb3d26f2131bd243c",
+      "stdout.log": "07d95907710417850d7588f1556440e2d0cab59e79cf5c1f766074ff62198668",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "closure-after",
+    "files": {
+      "record.json": "82554229e81c05026bda943214ae2d72330fb1f7e73d188b38d40c84f3353a46",
+      "stdout.log": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+]

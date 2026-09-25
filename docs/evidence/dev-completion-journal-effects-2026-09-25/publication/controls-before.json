@@ -1,0 +1,10 @@
+{
+  "crates/fe2o3-runtime-model/verus/check-completion-journal-effects.py": "aa66c149b5f694f4604154c34bd1a63308520bd0aebcf16e6f755f80f2f2ec7d",
+  "crates/fe2o3-runtime-model/verus/test-completion-journal-effects.py": "ef5fd7c17396c08f1adc37af2603510ceea064b84fd1a199d0b87e1b53dae6d5",
+  "docs/evidence/dev-completion-journal-effects-2026-09-25/audit.py": "9b58ee00ad6cafcbb6baaed2a1ca1f22f3284aff07f0af5272ea48d8289269fa",
+  "docs/evidence/dev-completion-journal-effects-2026-09-25/collect.py": "7b45d7dec2905dc7932122e7006b1e9f4eb7acb602bfcc653e38b245d2d42008",
+  "docs/evidence/dev-completion-journal-effects-2026-09-25/test_audit.py": "ea9490d51adacb555e1b113254d8f3183b9b2fb4d44fc4df5838473f71bf7404",
+  "docs/evidence/dev-mixed-acquisition-proof-2026-09-24/audit.py": "b33da903896766a11dc61d3c26b4d60e1bbe983eef7be8c066c83fd66118b1f2",
+  "docs/evidence/dev-native-producer-mi300x-2026-09-24/collect.py": "9c9c629aa7ce73e52f565dee51f89810ae96a152ad3b2fb4c9f272f864c3f9cf",
+  "docs/evidence/dev-native-producer-mi300x-2026-09-24/verify.py": "017830908daa2a9383f67f5038606434f890635249f82fa8ddbe602dfa4598b9"
+}

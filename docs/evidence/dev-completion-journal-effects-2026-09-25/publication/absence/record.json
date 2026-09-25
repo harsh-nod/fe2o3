@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "-c",
+    "import os,sys; assert all(not os.path.lexists(p) for p in sys.argv[1:])",
+    "/home/harsh/.codex-tmp/fe2o3-completion-effects-20260925-a9zy6WtN",
+    "/home/harsh/.codex-tmp/fe2o3-completion-qualification-20260925-q7ssMxzt"
+  ],
+  "started_ns": 1790358598213405763,
+  "process_group": 18790,
+  "group_absent": true,
+  "finished_ns": 1790358598259730608,
+  "status": 0
+}

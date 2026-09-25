@@ -1,0 +1,20 @@
+
+running 1 test
+test context::tests::producer_launch_tests::producer_launch_completion_preserves_optional_roots_and_writer_outcomes ... FAILED
+
+failures:
+
+---- context::tests::producer_launch_tests::producer_launch_completion_preserves_optional_roots_and_writer_outcomes stdout ----
+
+thread 'context::tests::producer_launch_tests::producer_launch_completion_preserves_optional_roots_and_writer_outcomes' (3302745) panicked at crates/fe2o3-runtime/src/context/tests/producer_launch_tests.rs:666:21:
+assertion `left == right` failed
+  left: true
+ right: false
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context::tests::producer_launch_tests::producer_launch_completion_preserves_optional_roots_and_writer_outcomes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1428 filtered out; finished in 0.01s
+

@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest completion qualification (2026-09-25): the
+[shared journal-effect packet](evidence/dev-completion-journal-effects-2026-09-25/README.md)
+passes all 38 stages from signed `957c5ce64`. Both extended whole-root brackets
+verify 1,282 obligations; both control brackets verify eight; all 30 logical
+mutations reject; the frozen owner regression verifies 1,271. Exact source/tool
+brackets, retained replay, eight checker groups, six packet groups and five
+cleanup tests pass. All 1,227 scratch files are retained before exact-owned
+removal and independent absence, reclaiming 24,326,144 allocated bytes.
+The one inherited invariant-opacity directive changes no assertions, contracts
+or limits. Earlier resource failures remain rejected. Production runtime code
+and its previous 1,407-test GNU/musl results are unchanged; no new native or
+performance claim is added. Context map/quarantine binding and producer-first
+reconciliation remain open, as do generated execution, aggregate resources,
+A1/A2 and all broader accepted checkpoints. The development notes below are
+history, not remaining gates for this completed bounded campaign.
+
 Latest proof-gate development (2026-09-25): the full completion journal-effect
 root now verifies 1,282 obligations with zero errors and no diagnostics. One
 local invariant-opacity directive in an inherited disposal witness resolves

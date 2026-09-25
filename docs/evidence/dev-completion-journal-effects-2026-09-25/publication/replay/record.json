@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-completion-journal-effects.py",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-completion-journal-effects-2026-09-25/raw/qualification/campaign1",
+    "--verify"
+  ],
+  "started_ns": 1790358562501734897,
+  "process_group": 14523,
+  "group_absent": true,
+  "finished_ns": 1790358596275558831,
+  "status": 0
+}

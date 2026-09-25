@@ -1,0 +1,12 @@
+diff --git a/crates/fe2o3-runtime-model/verus/context_owner_constructor_witnesses_v1.rs b/crates/fe2o3-runtime-model/verus/context_owner_constructor_witnesses_v1.rs
+index e7018dd4b..c79c831f5 100644
+--- a/crates/fe2o3-runtime-model/verus/context_owner_constructor_witnesses_v1.rs
++++ b/crates/fe2o3-runtime-model/verus/context_owner_constructor_witnesses_v1.rs
+@@ -367,6 +367,7 @@ fn owner_constructor_unknown_fixture_v1() -> (result: (ContextProducerReadJourna
+ fn owner_constructor_unknown_disposal_witness_v1() -> (result: bool)
+     ensures result,
+ {
++    hide(logical::producer_invariant_v1);
+     let (mut actual, mut model, writer, model_writer) = owner_constructor_unknown_fixture_v1();
+     let ghost storage = logical::witness_storage_v1(3, 1);
+     let ghost history = seq![model_writer];
