@@ -2,7 +2,7 @@
 
 ## Milestone Snapshot
 
-As of 2026-09-24, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
+As of 2026-09-25, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
 remains open. These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -35,6 +35,19 @@ frozen regressions and final replay remain required. Production runtime sources
 are unchanged. A1/A2 and the accepted lane checkpoints remain unchanged. Next is
 the signed-source campaign, then production completion-reconciliation refinement
 and the remaining generated/native/resource gates.
+
+Qualification update (2026-09-25): the first signed-source campaign from
+`145c19485` is now rejected, not running:
+the opening whole-root positive verifies 1,271 obligations with zero errors and
+eight logical mutations reject as intended. The ninth (`missing-atomic-event`)
+reports both a postcondition failure and solver resource exhaustion, so the
+checker refuses it as a logical negative. The closing positive, frozen
+regressions and final closure were not reached. The complete failed attempt is
+retained in task-owned local scratch; the evidence collection draft remains
+unaccepted and no cleanup or packet-publication success is claimed. This does
+not establish a production runtime defect or advance A1/A2. The next step is a
+bounded, discriminating atomic-event mutation before a fresh full campaign,
+without raising solver limits or weakening the rejection policy.
 
 Latest mixed-input correspondence (2026-09-24): the
 [independent proof packet](evidence/dev-mixed-acquisition-proof-2026-09-24/README.md)
