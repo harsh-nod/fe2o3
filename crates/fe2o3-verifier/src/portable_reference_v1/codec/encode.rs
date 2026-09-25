@@ -22,13 +22,13 @@ pub(super) fn frame(
     require(axes <= MAX_REFERENCE_POINT_AXES_V1, "point axes")?;
     let ir = input.replay.effect_ir;
     require(
-        ir.local_count > ir.argument_count && ir.local_count <= HARD_MAX_LOCALS_V1,
+        ir.local_count > ir.argument_count && u64::from(ir.local_count) <= HARD_MAX_LOCALS_V1,
         "local count",
     )?;
     require(!ir.blocks.is_empty(), "empty blocks")?;
     require(ir.loop_summaries.is_empty(), "loop summaries unsupported")?;
     require(
-        input.association.semantic_root < HARD_MAX_FUNCTIONS_V1,
+        u64::from(input.association.semantic_root) < HARD_MAX_FUNCTIONS_V1,
         "semantic root",
     )?;
     let mut w = Writer {
@@ -162,7 +162,11 @@ impl Writer<'_, '_, '_, '_> {
         self.put(text.as_bytes())
     }
     fn scalar(&mut self, scalar: ReferenceScalarTypeV1) -> Result<(), Error> {
-        self.u8(tag(SCALARS, &scalar)?)
+        self.enum_tag(SCALARS, &scalar)
+    }
+    fn enum_tag<T: PartialEq>(&mut self, table: &[(u8, T)], value: &T) -> Result<(), Error> {
+        self.s.work(table.len())?;
+        self.u8(tag(table, value)?)
     }
     fn identity(&mut self, identity: &ReferenceFunctionIdentityV1) -> Result<(), Error> {
         self.put(&identity.def_path_hash)?;
@@ -341,14 +345,14 @@ impl Writer<'_, '_, '_, '_> {
                 checked,
             } => {
                 self.u8(1)?;
-                self.u8(tag(BINARY, operation)?)?;
+                self.enum_tag(BINARY, operation)?;
                 self.boolean(*checked)?;
                 self.operand(lhs)?;
                 self.operand(rhs)
             }
             ReferenceValueV1::Unary { operation, operand } => {
                 self.u8(2)?;
-                self.u8(tag(UNARY, operation)?)?;
+                self.enum_tag(UNARY, operation)?;
                 self.operand(operand)
             }
             ReferenceValueV1::Cast {
@@ -358,7 +362,7 @@ impl Writer<'_, '_, '_, '_> {
                 operand,
             } => {
                 self.u8(3)?;
-                self.u8(tag(CASTS, kind)?)?;
+                self.enum_tag(CASTS, kind)?;
                 self.scalar(*source)?;
                 self.scalar(*target)?;
                 self.operand(operand)
@@ -459,14 +463,14 @@ impl Writer<'_, '_, '_, '_> {
                 checked,
             } => {
                 self.u8(3)?;
-                self.u8(tag(BINARY, operation)?)?;
+                self.enum_tag(BINARY, operation)?;
                 self.boolean(*checked)?;
                 self.expression(lhs, depth + 1, nodes)?;
                 self.expression(rhs, depth + 1, nodes)
             }
             ReferenceEffectExpressionV1::Unary { operation, operand } => {
                 self.u8(4)?;
-                self.u8(tag(UNARY, operation)?)?;
+                self.enum_tag(UNARY, operation)?;
                 self.expression(operand, depth + 1, nodes)
             }
             ReferenceEffectExpressionV1::Cast {
@@ -476,7 +480,7 @@ impl Writer<'_, '_, '_, '_> {
                 operand,
             } => {
                 self.u8(5)?;
-                self.u8(tag(CASTS, kind)?)?;
+                self.enum_tag(CASTS, kind)?;
                 self.scalar(*source)?;
                 self.scalar(*target)?;
                 self.expression(operand, depth + 1, nodes)
@@ -553,6 +557,14 @@ impl Writer<'_, '_, '_, '_> {
         require(
             (effect.argument as usize) < self.kernel_count,
             "effect argument",
+        )?;
+        let raw = add(self.axes, effect.argument as usize)?;
+        require(
+            matches!(self.ir.relations.get(raw),
+            Some(ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. }
+                | ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. })
+                if *argument == effect.argument),
+            "effect output relation",
         )?;
         let ir = self.ir;
         let block = ir

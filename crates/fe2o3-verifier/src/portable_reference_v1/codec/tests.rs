@@ -2,6 +2,13 @@
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 
+#[path = "hostile_tests.rs"]
+mod hostile;
+#[path = "resource_tests.rs"]
+mod resources;
+#[path = "roundtrip_tests.rs"]
+mod roundtrips;
+
 struct Fixture {
     signature: ReferenceLogicalSignaturePreimageV1,
     ir: ReferenceEffectIrV1,

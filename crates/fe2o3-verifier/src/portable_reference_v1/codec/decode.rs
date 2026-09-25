@@ -16,7 +16,10 @@ pub(super) fn frame(bytes: &[u8], s: &mut Scope<'_, '_>) -> Result<DecodedNative
     r.s.reserve(size_of::<DecodedNativeCpuInputV1>())?;
     let semantic_mir_sha256 = r.array()?;
     let semantic_root = r.u32()?;
-    require(semantic_root < HARD_MAX_FUNCTIONS_V1, "semantic root")?;
+    require(
+        u64::from(semantic_root) < HARD_MAX_FUNCTIONS_V1,
+        "semantic root",
+    )?;
     let registration_path = r.text()?;
     let logical_kernel_name = r.text()?;
     let kernel = r.identity()?;
@@ -40,7 +43,7 @@ pub(super) fn frame(bytes: &[u8], s: &mut Scope<'_, '_>) -> Result<DecodedNative
     let argument_count = r.u32()?;
     let local_count = r.u32()?;
     require(
-        local_count > argument_count && local_count <= HARD_MAX_LOCALS_V1,
+        local_count > argument_count && u64::from(local_count) <= HARD_MAX_LOCALS_V1,
         "local count",
     )?;
     let relations = r.rows(MAX_REFERENCE_SIGNATURE_INPUTS_V1, 6, |r| r.relation())?;
@@ -139,6 +142,7 @@ impl<'a> Reader<'a, '_, '_, '_> {
     }
     fn enum_value<T: Copy>(&mut self, values: &[(u8, T)]) -> Result<T, Error> {
         let tag = self.u8()?;
+        self.s.work(values.len())?;
         values
             .iter()
             .find_map(|(wire, value)| (*wire == tag).then_some(*value))
