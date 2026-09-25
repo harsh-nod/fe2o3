@@ -19,6 +19,7 @@ use super::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
     KfdTargetRuntimeDebugQueueV1, QueueExceptionWaitObservationV1,
 };
+use crate::conditional_dispatch_v1::{ConditionalDispatchPremisesV1, require_same_mapping_v1};
 use crate::queue_linux::LinuxKfdRuntimeEnabledV1;
 use crate::shared_memory::{
     ExecutableGttV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
@@ -155,6 +156,7 @@ pub enum Gfx942KfdDispatchRequestErrorV1 {
     PrivateSegmentUnsupported,
     GroupSegmentTooLarge,
     InvalidTimeout,
+    ConditionalPremise(crate::ConditionalDispatchErrorV1),
 }
 
 impl fmt::Display for Gfx942KfdDispatchRequestErrorV1 {
@@ -183,6 +185,7 @@ pub struct Gfx942KfdDispatchRequestV1 {
     private_segment_size: u32,
     group_segment_size: u32,
     timeout_milliseconds: u32,
+    conditional_premises: Option<ConditionalDispatchPremisesV1>,
 }
 
 impl fmt::Debug for Gfx942KfdDispatchRequestV1 {
@@ -199,11 +202,18 @@ impl fmt::Debug for Gfx942KfdDispatchRequestV1 {
             .field("private_segment_size", &self.private_segment_size)
             .field("group_segment_size", &self.group_segment_size)
             .field("timeout_milliseconds", &self.timeout_milliseconds)
+            .field("conditional_premises", &self.conditional_premises)
             .finish()
     }
 }
 
 impl Gfx942KfdDispatchRequestV1 {
+    /// Immutable inspection of the actual attached payload. It cannot be removed
+    /// or replaced and never authenticates the executable or descriptor.
+    pub fn conditional_premises_v1(&self) -> Option<&ConditionalDispatchPremisesV1> {
+        self.conditional_premises.as_ref()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         executable_image: Vec<u8>,
@@ -240,7 +250,32 @@ impl Gfx942KfdDispatchRequestV1 {
             private_segment_size,
             group_segment_size,
             timeout_milliseconds,
+            conditional_premises: None,
         })
+    }
+
+    /// Binds inert conditional data to this exact immutable request. This grants
+    /// no executable or proof authority; the existing unsafe execution boundary
+    /// and the safe runtime's retained Worker admission remain mandatory.
+    pub fn with_conditional_premises_v1(
+        mut self,
+        premises: ConditionalDispatchPremisesV1,
+    ) -> Result<Self, Gfx942KfdDispatchRequestErrorV1> {
+        if self.conditional_premises.is_some() {
+            return Err(Gfx942KfdDispatchRequestErrorV1::ConditionalPremise(
+                crate::ConditionalDispatchErrorV1::Binding,
+            ));
+        }
+        premises
+            .check_request(
+                &self.kernarg_template,
+                &self.pointer_fixups,
+                self.buffers.iter().map(|b| b.bytes.len()),
+                self.geometry,
+            )
+            .map_err(Gfx942KfdDispatchRequestErrorV1::ConditionalPremise)?;
+        self.conditional_premises = Some(premises);
+        Ok(self)
     }
 }
 
@@ -818,6 +853,11 @@ fn prepare_dispatch_resources(
         .iter()
         .map(|buffer| memory.mapped_resource_facts(buffer))
         .collect::<Result<Vec<_>, _>>()?;
+    if let Some(premises) = &request.conditional_premises {
+        premises.check_live(&buffer_facts).map_err(|_| {
+            ComputeAqlQueueSessionErrorV1::Contract("conditional live invocation premise")
+        })?;
+    }
     memory.with_bytes_mut(&mut kernarg, |bytes| {
         patch_kernarg_pointers(bytes, &request.pointer_fixups, &buffer_facts)
     })??;
@@ -827,6 +867,14 @@ fn prepare_dispatch_resources(
     let executable_facts = memory.mapped_resource_facts(&executable)?;
     let kernarg_facts = memory.mapped_resource_facts(&kernarg)?;
     let signal_facts = memory.mapped_resource_facts(&signal)?;
+    if request.conditional_premises.is_some() {
+        for (token, before) in mapped_buffers.iter().zip(&buffer_facts) {
+            let now = memory.mapped_resource_facts(token)?;
+            require_same_mapping_v1(before, &now).map_err(|_| {
+                ComputeAqlQueueSessionErrorV1::Contract("conditional mapping generation changed")
+            })?;
+        }
+    }
     let kernel_object = executable_facts
         .checked_gpu_subrange(
             request.descriptor_offset,

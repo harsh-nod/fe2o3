@@ -16,6 +16,9 @@ use std::{fmt, marker::PhantomData, num::NonZeroU64, sync::Arc};
 #[path = "generated_nominal_argument_plan_v3.rs"]
 pub(crate) mod nominal_v3;
 
+#[path = "generated_argument_plan_clone_v1.rs"]
+mod conditional_clone;
+
 mod generated_device_scalar_seal {
     pub trait Sealed {}
 }
@@ -172,7 +175,7 @@ impl_generated_device_integer_scalar_v1!(
 );
 impl_generated_device_float_scalar_v1!((f32, u32, F32, F32), (f64, u64, F64, F64));
 
-fn canonical_scalar_layout_v1(
+pub(crate) fn canonical_scalar_layout_v1(
     scalar: RustScalarElementTypeV1,
     pointer_width: PointerWidth,
 ) -> RustLayoutEvidenceV1 {
@@ -197,7 +200,7 @@ fn canonical_scalar_layout_v1(
     .expect("supported scalar layout is canonical")
 }
 
-fn canonical_slice_layout_v1(
+pub(crate) fn canonical_slice_layout_v1(
     element: RustScalarElementTypeV1,
     pointer_width: PointerWidth,
     disjoint: bool,
@@ -217,7 +220,7 @@ fn canonical_slice_layout_v1(
     )
 }
 
-fn canonical_disjoint_slice_layout_v1(
+pub(crate) fn canonical_disjoint_slice_layout_v1(
     element: RustScalarElementTypeV1,
     pointer_width: PointerWidth,
     index_space: RustDisjointIndexSpaceV1,
@@ -2575,7 +2578,7 @@ fn worker_v3_component_property(
     .find_map(|(matches, property)| (!matches).then_some(property))
 }
 
-const fn descriptor_scalar_to_artifact(value: ScalarTypeV1) -> ScalarType {
+pub(crate) const fn descriptor_scalar_to_artifact(value: ScalarTypeV1) -> ScalarType {
     match value {
         ScalarTypeV1::I8 => ScalarType::I8,
         ScalarTypeV1::U8 => ScalarType::U8,
@@ -2591,7 +2594,9 @@ const fn descriptor_scalar_to_artifact(value: ScalarTypeV1) -> ScalarType {
     }
 }
 
-const fn descriptor_scalar_to_rust_layout(value: ScalarTypeV1) -> RustScalarElementTypeV1 {
+pub(crate) const fn descriptor_scalar_to_rust_layout(
+    value: ScalarTypeV1,
+) -> RustScalarElementTypeV1 {
     match value {
         ScalarTypeV1::I8 => RustScalarElementTypeV1::I8,
         ScalarTypeV1::U8 => RustScalarElementTypeV1::U8,

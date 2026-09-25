@@ -79,6 +79,14 @@ mod memory;
 mod shared_memory;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod conditional_dispatch_v1;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use conditional_dispatch_v1::{
+    ConditionalDispatchDomainV1, ConditionalDispatchErrorV1, ConditionalDispatchPremisesV1,
+    ConditionalDispatchReadV1, ConditionalDispatchSliceV1,
+};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod persistent_allocation;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

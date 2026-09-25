@@ -5,6 +5,7 @@
 mod async_engine;
 #[allow(unsafe_code)]
 mod authorized_execution;
+mod conditional_transport_v1;
 mod context;
 #[allow(unsafe_code)]
 mod kfd_backend;
@@ -23,6 +24,7 @@ pub use authorized_execution::{
     execute_authorized_gfx942_runtime_debug_target_dispatch_v2,
     execute_authorized_gfx942_runtime_dispatch_v1,
 };
+pub use conditional_transport_v1::Gfx942RuntimeInvocationBindingV1;
 pub use context::*;
 pub use fe2o3_host_api as contract;
 pub use fe2o3_profiler_protocol as profiler;
@@ -146,6 +148,7 @@ impl Gfx942RuntimeDispatchBufferV1 {
 /// Complete caller-owned data needed before loader and ABI admission.
 #[must_use]
 pub struct Gfx942RuntimeDispatchInputsV1 {
+    invocation: conditional_transport_v1::RuntimeInvocationPremisesV1,
     explicit_kernarg: Vec<u8>,
     buffers: Vec<Gfx942RuntimeDispatchBufferV1>,
     pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
@@ -165,6 +168,7 @@ impl Gfx942RuntimeDispatchInputsV1 {
     ) -> Self {
         Self {
             explicit_kernarg,
+            invocation: conditional_transport_v1::RuntimeInvocationPremisesV1::OrdinaryV1,
             buffers,
             pointer_fixups,
             geometry,
@@ -218,6 +222,11 @@ impl fmt::Debug for PreparedGfx942RuntimeDispatchV1 {
 }
 
 impl PreparedGfx942RuntimeDispatchV1 {
+    /// Derived from the exact attached request, not a detached family/hash cache.
+    pub fn invocation_binding(&self) -> Gfx942RuntimeInvocationBindingV1 {
+        conditional_transport_v1::request_binding(&self.request)
+    }
+
     pub const fn identity(&self) -> KernelIdentityInputsV1 {
         self.identity
     }
@@ -290,6 +299,7 @@ pub enum Gfx942RuntimePreparationErrorV1 {
     KernargLayout,
     HiddenArgument { index: usize, detail: &'static str },
     KfdRequest(Gfx942KfdDispatchRequestErrorV1),
+    ConditionalPremisesAlreadyBound,
 }
 
 impl fmt::Display for Gfx942RuntimePreparationErrorV1 {
@@ -446,6 +456,11 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
         packet_group_segment_bytes,
         inputs.timeout_milliseconds,
     )?;
+    let request = inputs.invocation.attach(request)?;
+    let dispatch_contract_sha256 = conditional_transport_v1::dispatch_identity(
+        dispatch_contract_sha256,
+        conditional_transport_v1::request_binding(&request),
+    );
     Ok(PreparedGfx942RuntimeDispatchV1 {
         request,
         buffer_policies,
@@ -820,6 +835,22 @@ mod tests {
         let baseline = DispatchContractCaseV1::baseline();
         let expected = baseline.identity();
         assert_eq!(baseline.identity(), expected);
+        // Pinned pre-conditional byte stream; independently hashed with Node crypto.
+        assert_eq!(
+            expected,
+            [
+                0x81, 0x01, 0xcb, 0xaf, 0x72, 0x11, 0xa4, 0x9e, 0xe9, 0xf7, 0x87, 0xc0, 0x36, 0x64,
+                0x73, 0x48, 0x2f, 0x4c, 0x82, 0x83, 0x1e, 0x3a, 0xd7, 0x81, 0x83, 0xf6, 0xdf, 0x79,
+                0xb4, 0xff, 0xaa, 0x32,
+            ]
+        );
+        assert_eq!(
+            conditional_transport_v1::dispatch_identity(
+                expected,
+                Gfx942RuntimeInvocationBindingV1::OrdinaryV1
+            ),
+            expected
+        );
 
         let mut mutations = Vec::new();
         let mut changed = baseline.clone();

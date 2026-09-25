@@ -1,6 +1,9 @@
 use super::{module, module_with_resources};
 use crate::*;
 
+#[path = "runtime_conditional_preparation_tests.rs"]
+mod conditional;
+
 const PARTIAL_GRIDS: [[u32; 3]; 4] = [[17, 8, 4], [16, 9, 4], [16, 8, 5], [17, 9, 5]];
 const WORKGROUP: [u32; 3] = [8, 4, 2];
 

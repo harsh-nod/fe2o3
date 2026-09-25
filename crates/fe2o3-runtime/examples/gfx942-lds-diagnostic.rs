@@ -56,6 +56,10 @@ unsafe impl WorkerV3Gfx942ExecutionAuthorityV1 for PinnedDiagnosticAuthorityV1 {
         self.dispatch_contract_sha256
     }
 
+    fn invocation_binding(&self) -> fe2o3_runtime::Gfx942RuntimeInvocationBindingV1 {
+        fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::OrdinaryV1
+    }
+
     fn device_unique_id(&self) -> u64 {
         self.device_unique_id
     }

@@ -44,6 +44,17 @@ pub enum GeneratedWorkerV3KfdDifferentialAvailabilityV1 {
 /// gfx942 device. The private authority cannot be extracted or exchanged with another prepared
 /// request or device. The explicit test-only synthetic lane retains non-executable qualification
 /// custody; native execution requires the protected production variant.
+///
+/// A public nominal descriptor remains inert, even after canonical decode.
+///
+/// ```compile_fail,E0277
+/// use fe2o3_kernel_descriptor::DeviceDescriptorTableV4;
+/// use fe2o3_runtime::WorkerV3Gfx942ExecutionAuthorityV1;
+/// fn needs_authority<T: WorkerV3Gfx942ExecutionAuthorityV1>(_: T) {}
+/// fn raw_table_is_not_authority(table: DeviceDescriptorTableV4<'_>) {
+///     needs_authority(table);
+/// }
+/// ```
 #[must_use = "a prepared KFD invocation retains output borrows and application custody"]
 pub struct GeneratedWorkerV3KfdInvocation<'allocation, K> {
     authority: GeneratedWorkerV3KfdInvocationAuthorityV1<K>,
@@ -605,6 +616,12 @@ unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3Gfx942ExecutionAuth
         self.dispatch_contract_sha256
     }
 
+    fn invocation_binding(&self) -> fe2o3_runtime::Gfx942RuntimeInvocationBindingV1 {
+        // This owner still retains V1 admission. A nominal V4 owner must be
+        // implemented by the admission boundary, never inferred from input bytes.
+        fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::OrdinaryV1
+    }
+
     fn device_unique_id(&self) -> u64 {
         self.device_unique_id
     }
@@ -659,6 +676,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         )
         .map_err(GeneratedWorkerV3KfdInvocationError::RuntimePreparation)?;
         validate_runtime_binding(&self, &prepared)?;
+        require_ordinary_runtime_family(prepared.invocation_binding())?;
         let mut differential = differential;
         if let Some(binding) = differential.as_mut() {
             binding.dispatch_contract_sha256 = prepared.dispatch_contract_sha256();
@@ -1084,6 +1102,17 @@ fn validate_runtime_binding<K: CompilerGeneratedKernelExpectationV1>(
     )
 }
 
+fn require_ordinary_runtime_family(
+    binding: fe2o3_runtime::Gfx942RuntimeInvocationBindingV1,
+) -> Result<(), GeneratedWorkerV3KfdInvocationError> {
+    match binding {
+        fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::OrdinaryV1 => Ok(()),
+        fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalNominalV4 { .. } => {
+            Err(GeneratedWorkerV3KfdInvocationError::ConditionalAdmissionUnavailable)
+        }
+    }
+}
+
 fn validate_runtime_identity_fields(
     expected_sha256: [u8; 32],
     expected_length: u64,
@@ -1116,6 +1145,7 @@ pub enum GeneratedWorkerV3KfdInvocationError {
     ArtifactIdentityMismatch,
     ArtifactLengthMismatch,
     KernelNameMismatch,
+    ConditionalAdmissionUnavailable,
 }
 
 impl fmt::Display for GeneratedWorkerV3KfdInvocationError {
@@ -1147,6 +1177,9 @@ impl fmt::Display for GeneratedWorkerV3KfdInvocationError {
             Self::KernelNameMismatch => {
                 formatter.write_str("runtime prepared a different kernel entry")
             }
+            Self::ConditionalAdmissionUnavailable => {
+                formatter.write_str("conditional nominal V4 application admission is not available")
+            }
         }
     }
 }
@@ -1162,7 +1195,8 @@ impl Error for GeneratedWorkerV3KfdInvocationError {
             | Self::ProtectedProductionEvidenceUnavailable
             | Self::ArtifactIdentityMismatch
             | Self::ArtifactLengthMismatch
-            | Self::KernelNameMismatch => None,
+            | Self::KernelNameMismatch
+            | Self::ConditionalAdmissionUnavailable => None,
         }
     }
 }
@@ -1207,6 +1241,19 @@ impl Error for GeneratedWorkerV3KfdExecutionError {
 mod tests {
     use super::*;
     use crate::worker_v3_verification_admission::admitted_semantic_machine_refinement_for_test_v1;
+
+    #[test]
+    fn existing_v1_admission_never_promotes_conditional_transport() {
+        use fe2o3_runtime::Gfx942RuntimeInvocationBindingV1 as Binding;
+        assert!(super::require_ordinary_runtime_family(Binding::OrdinaryV1).is_ok());
+        assert!(matches!(
+            super::require_ordinary_runtime_family(Binding::ConditionalNominalV4 {
+                contract_identity: [1; 32],
+                premise_identity: [2; 32],
+            }),
+            Err(super::GeneratedWorkerV3KfdInvocationError::ConditionalAdmissionUnavailable)
+        ));
+    }
 
     fn application_coordinates_fixture() -> WorkerV3ApplicationExecutionCoordinatesV1 {
         WorkerV3ApplicationExecutionCoordinatesV1 {
