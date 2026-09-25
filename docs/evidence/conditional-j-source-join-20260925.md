@@ -48,7 +48,7 @@ owner. The first backend build caught a test-only nonexistent target accessor;
 the fixture now compares the retained canonical target name without exposing a
 new production accessor. Existing unrelated warnings remain.
 
-## Remaining Failures And Gaps
+## Earlier Failure And Gaps
 
 The broad final-entry failures share `CanonicalAssertions(Resource(Accounting))`
 at `production_ranked_projection_v1/checked_output_admission_policy3_v1_fixture.rs:383`,
@@ -61,8 +61,11 @@ baseline log SHA256 is
 `eb61d1c1eaf9a8bfb91f4fa83340f0addd2ad5f57b2879c7323cd8e38ca5c2be`.
 The archived binary enables internal proof staging; the current suite uses
 default features. The failure occurs in both configurations and predates J.
-This is not a passing ordinary final-graph regression matrix; the shared
-accounting defect remains under investigation.
+This was not a passing ordinary final-graph regression matrix. The shared
+accounting defect is addressed in the subsequent
+[induction entry fix](induction-entry-accounting-20260925.md), whose focused
+tests and representative final-graph regression pass. The full 98-test matrix
+has not yet been completed on that final candidate.
 
 An independent read-only review found no concrete soundness, account or route
 regression in the new integration, but identified uncovered failure boundaries:
