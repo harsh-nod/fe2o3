@@ -123,6 +123,83 @@ fn independently_valid_foreign_i_and_reordered_reads_cannot_replace_actual_occur
     });
 }
 
+#[test]
+fn same_parameter_read_swaps_reach_exact_occurrence_mapping() {
+    use fe2o3_kernel_ir::ConditionalTotalViewReadV1 as Read;
+
+    let module = fixture::module_with_input_arguments(false, [1, 1]);
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        fixture::with_module_prefix(profile, &module, |n, b, p6, target| {
+            p6.replay(b, target).unwrap();
+            let target_work = target.work();
+            let target_floor = target.storage();
+            let mut work = Work::new(WORK);
+            let mut source = Budget::new(&mut work, STORAGE);
+            source.reserve_storage(FLOOR).unwrap();
+            source.charge_work(7).unwrap();
+            let account = source.work_ledger_identity_v1();
+            for swap_original in [false, true] {
+                scoped(&mut source, |source| {
+                    let before = facts(n, &KernelId::new("entry"), source)?;
+                    let after = facts(p6.owner(), &KernelId::new("entry"), source)?;
+                    let mut original = occurrences::reads(&before, source)?;
+                    let mut final_reads = occurrences::reads(&after, source)?;
+                    assert_eq!(original.len(), 2);
+                    assert_eq!(final_reads.len(), 2);
+                    assert_ne!(original[0].location(), original[1].location());
+                    assert_ne!(final_reads[0].location(), final_reads[1].location());
+                    let metadata = |read: &Read| {
+                        (
+                            read.parameter(),
+                            read.access_domain(),
+                            read.address_domain(),
+                            read.element_bytes(),
+                            read.alignment(),
+                        )
+                    };
+                    assert_eq!(original[0].parameter(), 1);
+                    // Every pre-mapping read comparison must survive either swap.
+                    for read in original.iter().chain(&final_reads) {
+                        assert_eq!(metadata(read), metadata(&original[0]));
+                    }
+                    occurrences::coverage(
+                        &before,
+                        &after,
+                        p6,
+                        &original,
+                        &final_reads,
+                        source,
+                    )?;
+                    if swap_original {
+                        original.swap(0, 1);
+                    } else {
+                        final_reads.swap(0, 1);
+                    }
+                    let paid = source.work();
+                    assert!(matches!(
+                        occurrences::coverage(
+                            &before,
+                            &after,
+                            p6,
+                            &original,
+                            &final_reads,
+                            source,
+                        ),
+                        Err(Error::Mismatch("final memory occurrence"))
+                    ));
+                    assert!(source.work() > paid);
+                    Ok(())
+                })
+                .unwrap();
+                assert_eq!(source.storage(), FLOOR);
+                assert!(source.work_ledger_identity_v1() == account);
+                assert_eq!(target.work(), target_work);
+                assert_eq!(target.storage(), target_floor);
+            }
+        });
+    }
+}
+
 fn projected(
     after: &Facts<'_>,
     reads: &[fe2o3_kernel_ir::ConditionalTotalViewReadV1],

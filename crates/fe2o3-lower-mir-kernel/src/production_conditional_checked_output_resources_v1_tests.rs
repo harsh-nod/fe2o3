@@ -1,3 +1,8 @@
+//! Component accounting only: `inspect` does not obtain a live source request.
+//! Full two-account join coverage needs a genuine staged reference-effect receipt
+//! before `with_conditional_root_request_v1` can lend its checked request. The
+//! existing no-output lower fixture cannot reach that callback; do not replace
+//! the missing production input with a manufactured request or test-signed proof.
 use super::*;
 
 #[test]

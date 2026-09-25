@@ -15,6 +15,13 @@ fn op(id: u32, ty: Type, kind: Kind) -> Operation {
 }
 
 pub(super) fn module(global_input_address: bool) -> Module {
+    module_with_input_arguments(global_input_address, [1, 2])
+}
+
+pub(super) fn module_with_input_arguments(
+    global_input_address: bool,
+    input_arguments: [u32; 2],
+) -> Module {
     let scalar = Type::Scalar(ScalarType::U32);
     let pointer = |access| Type::pointer(scalar.clone(), AddressSpace::Global, access);
     let slice = |access| Type::slice(scalar.clone(), AddressSpace::Global, access);
@@ -60,7 +67,10 @@ pub(super) fn module(global_input_address: bool) -> Module {
             },
         ),
     ];
-    for (argument, base, at, value) in [(1, 30, 31, 32), (2, 40, 41, 42)] {
+    for (argument, base, at, value) in [
+        (input_arguments[0], 30, 31, 32),
+        (input_arguments[1], 40, 41, 42),
+    ] {
         let addresses = [
             op(
                 base,
@@ -170,10 +180,18 @@ pub(super) fn with_prefix(
     profile: Profile,
     run: impl FnOnce(&Graph, &Graph, &Prefix, &mut Budget<'_>),
 ) {
+    with_module_prefix(profile, &module(false), run)
+}
+
+pub(super) fn with_module_prefix(
+    profile: Profile,
+    module: &Module,
+    run: impl FnOnce(&Graph, &Graph, &Prefix, &mut Budget<'_>),
+) {
     let mut work = Work::new(WORK);
     let mut target = Budget::new(&mut work, STORAGE);
     target.reserve_storage(FLOOR).unwrap();
-    let n = graph(&module(false), &mut target);
+    let n = graph(module, &mut target);
     let binding = dialect_amdgcn::bind_production_target_v1(n.module(), profile).unwrap();
     let b = graph(binding.module(), &mut target);
     drop(binding);
