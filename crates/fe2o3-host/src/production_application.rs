@@ -222,52 +222,6 @@ where
         })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Debug)]
-    struct VerifierErrorV1;
-
-    impl fmt::Display for VerifierErrorV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("verifier error")
-        }
-    }
-
-    impl Error for VerifierErrorV1 {}
-
-    #[test]
-    fn bootstrap_error_mapping_preserves_public_variants() {
-        let handoff = preparation_error_from_authentication_v1::<VerifierErrorV1>(
-            ProductionWorkerV3AuthenticationErrorV1::Handoff(
-                WorkerV3ApplicationDescriptorHandoffErrorV1::AlreadyConsumed,
-            ),
-        );
-        assert!(matches!(
-            handoff,
-            ProductionWorkerV3KfdApplicationErrorV1::Handoff(
-                WorkerV3ApplicationDescriptorHandoffErrorV1::AlreadyConsumed
-            )
-        ));
-
-        let verification =
-            preparation_error_from_authentication_v1(ProductionWorkerV3AuthenticationErrorV1::<
-                VerifierErrorV1,
-            >::Verification(
-                WorkerV3VerificationAuthenticationErrorV1::UnsupportedGeneratedProfile,
-            ));
-        assert!(matches!(
-            verification,
-            ProductionWorkerV3KfdApplicationErrorV1::Preparation(
-                ProductionWorkerV3KfdPreparationErrorV1::Verification(
-                    WorkerV3VerificationAuthenticationErrorV1::UnsupportedGeneratedProfile
-                )
-            )
-        ));
-    }
-}
-
 /// Prepares an already-admitted Worker V3 artifact through the canonical pure-KFD boundary.
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
@@ -409,4 +363,50 @@ where
     authorized
         .load()
         .map_err(ProductionWorkerV3ApplicationLoadErrorV1::ExecutableLoad)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct VerifierErrorV1;
+
+    impl fmt::Display for VerifierErrorV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("verifier error")
+        }
+    }
+
+    impl Error for VerifierErrorV1 {}
+
+    #[test]
+    fn bootstrap_error_mapping_preserves_public_variants() {
+        let handoff = preparation_error_from_authentication_v1::<VerifierErrorV1>(
+            ProductionWorkerV3AuthenticationErrorV1::Handoff(
+                WorkerV3ApplicationDescriptorHandoffErrorV1::AlreadyConsumed,
+            ),
+        );
+        assert!(matches!(
+            handoff,
+            ProductionWorkerV3KfdApplicationErrorV1::Handoff(
+                WorkerV3ApplicationDescriptorHandoffErrorV1::AlreadyConsumed
+            )
+        ));
+
+        let verification =
+            preparation_error_from_authentication_v1(ProductionWorkerV3AuthenticationErrorV1::<
+                VerifierErrorV1,
+            >::Verification(
+                WorkerV3VerificationAuthenticationErrorV1::UnsupportedGeneratedProfile,
+            ));
+        assert!(matches!(
+            verification,
+            ProductionWorkerV3KfdApplicationErrorV1::Preparation(
+                ProductionWorkerV3KfdPreparationErrorV1::Verification(
+                    WorkerV3VerificationAuthenticationErrorV1::UnsupportedGeneratedProfile
+                )
+            )
+        ));
+    }
 }
