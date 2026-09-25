@@ -23,8 +23,10 @@ The check returns no verification owner. It does not establish final native
 graph F, native V4 source recovery, publication, safe launch or machine refinement.
 The updated annotated Vecadd test requires Direct source ownership and calls
 the fixed production policy6 facade rather than the older policy4 test dispatch.
-Its fresh protected execution is still pending; component tests do not substitute
-for that execution or for the full production transaction.
+Its fresh protected execution subsequently
+[passed for both targets](conditional-policy6-protected-replay-20260925.md).
+Neither component tests nor that bounded replay establish the full production
+transaction.
 
 ## Local Validation
 
@@ -90,7 +92,7 @@ completed private worker worktrees were removed. No host package installation,
 shared runtime/image mutation or GPU execution occurred.
 
 This is construction, static inspection and reproducibility evidence, not
-runtime qualification. Nothing was deployed. The older external r9 runner's
-99-package branch must not be treated as admitting this new base. A reviewed
-integration and fresh protected policy6 source replay remain required, followed
-by final-graph custody, native recovery, safe launch and the tutorial matrix.
+runtime qualification. The older external r9 runner's 99-package branch must
+not be treated as admitting this new base. A reviewed r10 integration later
+used the exact base for the linked protected policy6 replay. Final-graph custody,
+native recovery, safe launch and the tutorial matrix remain incomplete.
