@@ -8,6 +8,11 @@ use fe2o3_runtime_model::{
     ContextJournalDeviceKeyV1, ContextProducerReadJournalV1, ContextVersionJournalErrorV1,
 };
 
+macro_rules! completion_journal_rust_syntax {
+    ($($tokens:tt)*) => { $($tokens)* };
+}
+include!("versions/settlement_bodies.rs");
+
 mod generated;
 mod producer_readers;
 mod readers;

@@ -604,6 +604,132 @@ fn producer_launch_mixed_acquisition_handles_each_empty_side_and_no_inputs() {
 }
 
 #[test]
+fn producer_launch_completion_preserves_optional_roots_and_writer_outcomes() {
+    for stable_input in [false, true] {
+        for pending_input in [false, true] {
+            for writable in [false, true] {
+                for case in 0..5 {
+                    let observation = match case {
+                        1 => Some(Observation::Failed),
+                        2 => Some(Observation::Quiescent),
+                        3 => Some(Observation::Terminal),
+                        _ => None,
+                    };
+                    let mut f = Fixture::new(4);
+                    let (mut producers, events) = f.producers();
+                    let mut regions = Vec::new();
+                    if stable_input {
+                        regions.push(region(f.allocations[2], RuntimeAccessV1::Read, 3));
+                    }
+                    if pending_input {
+                        regions.push(region(f.allocations[0], RuntimeAccessV1::Read, 12));
+                    }
+                    if writable {
+                        regions.push(region(f.allocations[3], RuntimeAccessV1::Write, 4));
+                    }
+                    let mut consumer = f.launch(2, regions, &events).unwrap();
+                    let before = state(&f.context, f.allocations[3]);
+                    for event in events {
+                        f.context.release_event(event).unwrap();
+                    }
+                    match observation {
+                        None if case == 4 => {
+                            f.context.backend.cancel_before_publication = true;
+                            assert_eq!(
+                                f.context.cancel(&mut consumer).unwrap(),
+                                RuntimeCancellationV1::Cancelled
+                            );
+                        }
+                        None => f.complete(&mut consumer),
+                        Some(observation) => {
+                            f.context
+                                .backend
+                                .producer_launch
+                                .observations
+                                .insert(consumer.backend_submission, observation);
+                            let result = f.context.poll(&mut consumer);
+                            match observation {
+                                Observation::Failed => {
+                                    assert!(matches!(result, Ok(RuntimePollV1::Failed { code: 7 })))
+                                }
+                                Observation::Quiescent => assert!(matches!(
+                                    result,
+                                    Err(RuntimeErrorV1::BackendQuiescent(_))
+                                )),
+                                Observation::Terminal => assert!(matches!(
+                                    result,
+                                    Err(RuntimeErrorV1::BackendTerminal(_))
+                                )),
+                                _ => unreachable!(),
+                            }
+                        }
+                    }
+                    let retained = matches!(observation, Some(Observation::Terminal));
+                    let record = &f.context.submissions[&consumer.id];
+                    let status = match case {
+                        0 => RuntimeCompletionStatusV1::Succeeded,
+                        1 => RuntimeCompletionStatusV1::Failed(
+                            RuntimeCompletionFailureV1::BackendCode(7),
+                        ),
+                        2 => RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                        3 => RuntimeCompletionStatusV1::Pending,
+                        4 => {
+                            RuntimeCompletionStatusV1::Failed(RuntimeCompletionFailureV1::Cancelled)
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(record.status, status);
+                    assert_eq!(record.quiescent, !retained);
+                    assert_eq!(record.journal_read.is_some(), retained && stable_input);
+                    assert_eq!(
+                        record.journal_producer_read.is_some(),
+                        retained && pending_input
+                    );
+                    assert_eq!(
+                        record.journal_writer.is_some(),
+                        observation.is_some() && writable
+                    );
+                    assert_eq!(
+                        f.context.version_journal_read_records_v1(),
+                        Some(if retained {
+                            usize::from(stable_input) + usize::from(pending_input)
+                        } else {
+                            0
+                        })
+                    );
+                    assert_eq!(f.context.terminal, retained);
+                    let after = state(&f.context, f.allocations[3]);
+                    if observation.is_some() && writable {
+                        assert_eq!(after, before);
+                        assert_eq!(
+                            writer_state(&f.context, f.allocations[3]),
+                            ContextWriterStateV1::Unknown { member_count: 1 }
+                        );
+                    } else {
+                        let mut expected = before;
+                        expected.pending_writer = None;
+                        expected.content_lineage += u64::from(writable && case == 0);
+                        assert_eq!(after, expected);
+                    }
+                    for producer in &producers {
+                        assert_eq!(
+                            f.context.submissions[&producer.id].dependency_retains,
+                            usize::from(retained)
+                        );
+                    }
+                    if !retained {
+                        for producer in &mut producers {
+                            f.complete(producer);
+                        }
+                        assert!(f.context.cleanup().is_complete());
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn producer_launch_mixed_release_prevalidates_both_complete_rosters() {
     for corruption in 0..4 {
         let mut f = Fixture::new(4);

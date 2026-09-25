@@ -24,6 +24,23 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest development (2026-09-25): the
+[completion journal-effect composition](runtime-completion-journal-effects-v1.md)
+shares the input-release sequence, writer outcome declaration/dispatch and
+completion prefix with production. The separate journal adapter and logical
+executor pass eleven module obligations, including constructor-origin mixed-input
+capacity failures and writer-only Success/NoEffect/Unknown witnesses. The
+unchanged control harness passes eight obligations against the nested body.
+GNU/musl each pass 1,407 runtime tests with 22 hardware-only ignores; the new
+40-case Context regression covers all optional input/writer combinations across
+success, failure, quiescence, terminal ambiguity and confirmed cancellation.
+This is development evidence, not the successor authenticated campaign. The
+initial missing-intermediate proof failure, shorter whole-root timeout, witness
+assertion/resource failures and corrected test expectation remain recorded.
+Error-prefix journal states are pre-quarantine, not final Context-return states.
+Context maps/quarantine, reconciliation, generated/native/resource gates and
+A1/A2 remain open; the accepted lane checkpoints are unchanged.
+
 Latest control-flow qualification (2026-09-25): the
 [production completion-settlement control body](runtime-completion-settlement-control-v1.md)
 is shared by Rust and Verus without changing its prechecks or call semantics.

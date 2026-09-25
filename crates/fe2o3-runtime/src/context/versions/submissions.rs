@@ -36,12 +36,7 @@ pub(in crate::context) struct PreparedSubmissionWriterV1 {
     members: Vec<ContextAllocationWriteV1>,
 }
 
-#[derive(Clone, Copy)]
-pub(in crate::context) enum SubmissionWriterOutcomeV1 {
-    Success,
-    NoEffect,
-    Unknown,
-}
+completion_writer_outcome_declaration!(completion_journal_rust_syntax, pub(in crate::context));
 
 #[cfg(test)]
 impl ContextVersionsV1 {
@@ -476,15 +471,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             {
                 return Err(ContextVersionJournalErrorV1::InvalidReference);
             }
-            match outcome {
-                SubmissionWriterOutcomeV1::Success => versions
-                    .journal
-                    .settle_success(writer, &ContextWriterSuccessEvidenceV1 { writer })?,
-                SubmissionWriterOutcomeV1::NoEffect => versions
-                    .journal
-                    .settle_no_effect(writer, &ContextWriterNoEffectEvidenceV1 { writer })?,
-                SubmissionWriterOutcomeV1::Unknown => versions.journal.mark_unknown(writer)?,
-            }
+            completion_writer_effect_body!(
+                completion_journal_rust_syntax,
+                versions.journal,
+                writer,
+                outcome,
+                settle_success,
+                settle_no_effect,
+                []
+            )?;
             if !matches!(outcome, SubmissionWriterOutcomeV1::Unknown) {
                 versions.submission_writers.remove(&id);
                 if let Some(record) = self.submissions.get_mut(&id) {

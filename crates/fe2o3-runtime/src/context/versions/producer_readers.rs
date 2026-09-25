@@ -715,6 +715,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.journal_result_v1(result)
     }
 
+    #[allow(clippy::question_mark)] // Explicit early exits are shared with Verus.
     pub(in crate::context) fn release_submission_inputs_v1(
         &mut self,
         id: RuntimeSubmissionIdV1,
@@ -733,10 +734,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
         };
         // Validate both complete rosters before releasing either class of input.
-        self.release_submission_readers_v1(id)?;
-        if !producer {
-            return Ok(());
-        }
+        completion_input_release_body!(completion_journal_rust_syntax, self, id, producer, [], [])
+    }
+
+    fn release_validated_submission_producer_readers_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let versions = self.versions.as_mut().expect("validated producer inputs");
             let root = &versions.producer_readers[&id];
