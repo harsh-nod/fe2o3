@@ -301,7 +301,7 @@ impl rustc_driver::Callbacks for Callbacks {
         };
         let record = results::Child {
             schema: results::CHILD_SCHEMA.into(),
-            target: expected.device_target().into(),
+            target: expected.cpu().into(),
             mode: self.mode.clone(),
             callbacks: self.calls as u64,
             agreements: AGREEMENTS.load(Ordering::SeqCst) as u64,
@@ -322,7 +322,9 @@ impl rustc_driver::Callbacks for Callbacks {
             grants_artifact_or_launch_authority: false,
             native_output_emitted: false,
         };
-        record.check(expected.device_target(), &self.mode).unwrap();
+        record
+            .check(expected.cpu(), &self.mode)
+            .unwrap_or_else(|error| panic!("{error}: {record:?}"));
         self.result = Some(record);
         rustc_driver::Compilation::Stop
     }
