@@ -222,11 +222,21 @@ impl Scope<'_, '_> {
         Ok(rows)
     }
     fn boxed<T>(&mut self, value: T) -> Result<Box<T>, Error> {
+        // Codec recursive nodes are non-ZST. Reject ZST explicitly rather than
+        // rely on Vec's usize::MAX ZST capacity to fail the exact-capacity guard.
+        if size_of::<T>() == 0 {
+            return Err(Resource::Allocation.into());
+        }
         let mut row = self.vector(1)?;
         row.push(value);
         let row = row.into_boxed_slice();
-        // SAFETY: an exactly-one-element owned slice has the same allocation
-        // layout as T. The sole initialized element and allocation move once.
+        // SAFETY: vector(1) prepaid and fallibly obtained capacity exactly one
+        // non-ZST T from the global allocator, with alignment align_of::<T>().
+        // After the single push, len == capacity == 1, so into_boxed_slice has
+        // no excess capacity to shrink. Its allocation layout is exactly T's.
+        // into_raw transfers the sole owner; the cast removes only slice length
+        // metadata. from_raw takes that same initialized allocation once, with
+        // the same allocator/layout and no surviving alias or second drop.
         Ok(unsafe { Box::from_raw(Box::into_raw(row) as *mut T) })
     }
 }

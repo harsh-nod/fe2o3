@@ -188,3 +188,53 @@ fn allocation_arithmetic_checked_before_reservation() {
     .unwrap();
     assert_eq!(budget.storage(), 0);
 }
+
+#[test]
+fn fallible_box_rejects_zst_and_preserves_alignment_and_exactly_one_drop() {
+    use std::cell::Cell;
+    #[repr(align(128))]
+    struct Aligned<'a>(&'a Cell<usize>);
+    impl Drop for Aligned<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let drops = Cell::new(0);
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    assert_eq!(
+        scoped(&mut budget, |s| s.boxed(()).map(drop)),
+        Err(Error::Resource(Resource::Allocation))
+    );
+    assert_eq!(
+        (budget.work(), budget.storage(), budget.peak_storage()),
+        (0, 0, 0)
+    );
+    scoped(&mut budget, |s| {
+        let boxed = s.boxed(Aligned(&drops))?;
+        assert_eq!((&*boxed as *const Aligned<'_> as usize) % 128, 0);
+        assert_eq!(drops.get(), 0);
+        drop(boxed);
+        assert_eq!(drops.get(), 1);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(budget.storage(), 0);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let _: Result<(), Error> = scoped(&mut budget, |s| {
+            let _boxed = s.boxed(Aligned(&drops))?;
+            panic!("owned box unwind");
+        });
+    }));
+    assert!(result.is_err());
+    assert_eq!(drops.get(), 2);
+    assert_eq!(budget.storage(), 0);
+    let mut work = Work::new(usize::MAX);
+    let mut denied = Budget::new(&mut work, 0);
+    assert!(matches!(
+        scoped(&mut denied, |s| s.boxed(Aligned(&drops)).map(drop)),
+        Err(Error::Resource(Resource::Storage(_)))
+    ));
+    assert_eq!(drops.get(), 3);
+    assert_eq!(denied.storage(), 0);
+}
