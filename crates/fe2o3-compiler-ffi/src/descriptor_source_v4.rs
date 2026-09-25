@@ -1,22 +1,22 @@
 //! Owned nominal descriptor bytes. Structural validity is not compiler authority.
 use fe2o3_kernel_descriptor::{
-    DESCRIPTOR_READER_SCRATCH_STORAGE_V3, DESCRIPTOR_TABLE_VIEW_STORAGE_V3, DescriptorWireErrorV3,
-    DeviceDescriptorTableV3, decode_device_descriptor_table_v3,
+    DESCRIPTOR_READER_SCRATCH_STORAGE_V4, DESCRIPTOR_TABLE_VIEW_STORAGE_V4, DescriptorWireErrorV4,
+    DeviceDescriptorTableV4, decode_device_descriptor_table_v4,
 };
 use sha2::Sha256;
 use std::{error::Error, fmt, mem::size_of};
 
-/// Distinct ELF section for nominal V3 descriptors; V1 is not reinterpreted.
-pub const COMPILER_DESCRIPTOR_SECTION_NAME_V3: &str = ".fe2o3.kd.v3";
+/// Distinct ELF section for nominal V4 descriptors; V1 is not reinterpreted.
+pub const COMPILER_DESCRIPTOR_SECTION_NAME_V4: &str = ".fe2o3.kd.v4";
 /// SHA-256 preimage is domain, little-endian u64 byte length, then exact bytes.
-pub const COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V3: &[u8] = b"FE2O3/COMPILER-DESCRIPTOR-SOURCE/V3\0";
+pub const COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V4: &[u8] = b"FE2O3/COMPILER-DESCRIPTOR-SOURCE/V4\0";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CompilerDescriptorSourceIdentityV3 {
+pub struct CompilerDescriptorSourceIdentityV4 {
     sha256: [u8; 32],
     byte_len: u64,
 }
-impl CompilerDescriptorSourceIdentityV3 {
+impl CompilerDescriptorSourceIdentityV4 {
     pub const fn sha256(&self) -> &[u8; 32] {
         &self.sha256
     }
@@ -28,128 +28,132 @@ impl CompilerDescriptorSourceIdentityV3 {
 /// Complete owner header plus its actual transferred Vec capacity, not an
 /// allocation request or an additional-storage credit. This number is inert.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CompilerDescriptorSourceStorageV3(usize);
-impl CompilerDescriptorSourceStorageV3 {
+pub struct CompilerDescriptorSourceStorageV4(usize);
+impl CompilerDescriptorSourceStorageV4 {
     pub const fn retained_storage(self) -> usize {
         self.0
     }
 }
 
-/// Move-only zero-digest V3 descriptor source, with no self-borrowed table.
+/// Move-only zero-digest mandatory-conditional V4 source, with no self-borrowed table.
 ///
 /// Public construction proves canonical structure and content identity only.
 /// It does not authenticate rustc, nominal source correspondence, executable
 /// semantics, signatures, publication or device execution.
 ///
 /// ```compile_fail
-/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV3;
-/// fn duplicate(source: CompilerDescriptorSourceV3) { let _ = source.clone(); }
+/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV4;
+/// fn duplicate(source: CompilerDescriptorSourceV4) { let _ = source.clone(); }
 /// ```
 /// ```compile_fail
-/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV3;
-/// fn forge() -> CompilerDescriptorSourceV3 { CompilerDescriptorSourceV3::default() }
+/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV4;
+/// fn forge() -> CompilerDescriptorSourceV4 { CompilerDescriptorSourceV4::default() }
 /// ```
 /// ```compile_fail
-/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV3;
-/// fn mutate(source: CompilerDescriptorSourceV3) { source.canonical_bytes()[0] = 0; }
+/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV4;
+/// fn mutate(source: CompilerDescriptorSourceV4) { source.canonical_bytes()[0] = 0; }
 /// ```
 /// ```compile_fail
-/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV3;
-/// use fe2o3_kernel_descriptor::DeviceDescriptorTableV3;
-/// fn escape(source: CompilerDescriptorSourceV3) -> DeviceDescriptorTableV3<'static> {
+/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV4;
+/// use fe2o3_kernel_descriptor::DeviceDescriptorTableV4;
+/// fn escape(source: CompilerDescriptorSourceV4) -> DeviceDescriptorTableV4<'static> {
 ///     source.table(usize::MAX, &mut |_| Ok::<(), ()>(())).unwrap()
 /// }
 /// ```
 /// ```compile_fail
-/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV3;
-/// fn move_while_borrowed(source: CompilerDescriptorSourceV3) {
+/// use fe2o3_compiler_ffi::CompilerDescriptorSourceV4;
+/// fn move_while_borrowed(source: CompilerDescriptorSourceV4) {
 ///     let table = source.table(usize::MAX, &mut |_| Ok::<(), ()>(())).unwrap();
 ///     drop(source);
 ///     let _ = table.kernel_count();
 /// }
 /// ```
 /// ```compile_fail
-/// use fe2o3_compiler_ffi::{CompilerDescriptorSourceV1, CompilerDescriptorSourceV3};
-/// fn relabel(source: CompilerDescriptorSourceV3) -> CompilerDescriptorSourceV1 { source.into() }
+/// use fe2o3_compiler_ffi::{CompilerDescriptorSourceV1, CompilerDescriptorSourceV4};
+/// fn relabel(source: CompilerDescriptorSourceV4) -> CompilerDescriptorSourceV1 { source.into() }
 /// ```
-pub struct CompilerDescriptorSourceV3 {
+/// ```compile_fail
+/// use fe2o3_compiler_ffi::{CompilerDescriptorSourceV3, CompilerDescriptorSourceV4};
+/// fn downgrade(source: CompilerDescriptorSourceV4) -> CompilerDescriptorSourceV3 { source.into() }
+/// ```
+pub struct CompilerDescriptorSourceV4 {
     canonical_bytes: Vec<u8>,
-    identity: CompilerDescriptorSourceIdentityV3,
-    storage: CompilerDescriptorSourceStorageV3,
+    identity: CompilerDescriptorSourceIdentityV4,
+    storage: CompilerDescriptorSourceStorageV4,
 }
-impl fmt::Debug for CompilerDescriptorSourceV3 {
+impl fmt::Debug for CompilerDescriptorSourceV4 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CompilerDescriptorSourceV3")
+        f.debug_struct("CompilerDescriptorSourceV4")
             .field("identity", &self.identity)
             .field("storage", &self.storage)
             .finish_non_exhaustive()
     }
 }
 
-pub const COMPILER_DESCRIPTOR_SOURCE_HEADER_STORAGE_V3: usize =
-    size_of::<CompilerDescriptorSourceV3>();
-pub const COMPILER_DESCRIPTOR_SOURCE_HASH_STORAGE_V3: usize = size_of::<Sha256>()
-    + size_of::<CompilerDescriptorSourceIdentityV3>()
+pub const COMPILER_DESCRIPTOR_SOURCE_HEADER_STORAGE_V4: usize =
+    size_of::<CompilerDescriptorSourceV4>();
+pub const COMPILER_DESCRIPTOR_SOURCE_HASH_STORAGE_V4: usize = size_of::<Sha256>()
+    + size_of::<CompilerDescriptorSourceIdentityV4>()
     + size_of::<[u8; 8]>()
     + size_of::<[u8; 32]>()
     + 128;
 /// Includes the returned VIEW, which stays paid after reader scratch is released.
-pub const COMPILER_DESCRIPTOR_SOURCE_TABLE_STORAGE_V3: usize =
-    DESCRIPTOR_TABLE_VIEW_STORAGE_V3 + DESCRIPTOR_READER_SCRATCH_STORAGE_V3;
+pub const COMPILER_DESCRIPTOR_SOURCE_TABLE_STORAGE_V4: usize =
+    DESCRIPTOR_TABLE_VIEW_STORAGE_V4 + DESCRIPTOR_READER_SCRATCH_STORAGE_V4;
 /// Conservative simultaneous typed extent, excluding the separately paid owner.
-pub const COMPILER_DESCRIPTOR_SOURCE_VALIDATION_STORAGE_V3: usize =
-    COMPILER_DESCRIPTOR_SOURCE_TABLE_STORAGE_V3 + COMPILER_DESCRIPTOR_SOURCE_HASH_STORAGE_V3;
+pub const COMPILER_DESCRIPTOR_SOURCE_VALIDATION_STORAGE_V4: usize =
+    COMPILER_DESCRIPTOR_SOURCE_TABLE_STORAGE_V4 + COMPILER_DESCRIPTOR_SOURCE_HASH_STORAGE_V4;
 
 /// Checked full-owner extent; call before transferring an allocated Vec.
-pub fn compiler_descriptor_source_retained_storage_v3(
+pub fn compiler_descriptor_source_retained_storage_v4(
     capacity: usize,
-) -> Option<CompilerDescriptorSourceStorageV3> {
-    COMPILER_DESCRIPTOR_SOURCE_HEADER_STORAGE_V3
+) -> Option<CompilerDescriptorSourceStorageV4> {
+    COMPILER_DESCRIPTOR_SOURCE_HEADER_STORAGE_V4
         .checked_add(capacity)
-        .map(CompilerDescriptorSourceStorageV3)
+        .map(CompilerDescriptorSourceStorageV4)
 }
 /// Checked minimum for construction or revalidation, including actual capacity.
-pub fn compiler_descriptor_source_validation_storage_v3(capacity: usize) -> Option<usize> {
-    compiler_descriptor_source_retained_storage_v3(capacity)?
+pub fn compiler_descriptor_source_validation_storage_v4(capacity: usize) -> Option<usize> {
+    compiler_descriptor_source_retained_storage_v4(capacity)?
         .0
-        .checked_add(COMPILER_DESCRIPTOR_SOURCE_VALIDATION_STORAGE_V3)
+        .checked_add(COMPILER_DESCRIPTOR_SOURCE_VALIDATION_STORAGE_V4)
 }
 /// Checked minimum for returning a fresh borrowed table.
-pub fn compiler_descriptor_source_table_storage_v3(capacity: usize) -> Option<usize> {
-    compiler_descriptor_source_retained_storage_v3(capacity)?
+pub fn compiler_descriptor_source_table_storage_v4(capacity: usize) -> Option<usize> {
+    compiler_descriptor_source_retained_storage_v4(capacity)?
         .0
-        .checked_add(COMPILER_DESCRIPTOR_SOURCE_TABLE_STORAGE_V3)
+        .checked_add(COMPILER_DESCRIPTOR_SOURCE_TABLE_STORAGE_V4)
 }
 
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum CompilerDescriptorSourceErrorV3<E> {
-    Wire(DescriptorWireErrorV3<E>),
+pub enum CompilerDescriptorSourceErrorV4<E> {
+    Wire(DescriptorWireErrorV4<E>),
     Work(E),
     Storage { required: usize, prepaid: usize },
     Arithmetic,
     FinalizedDigest,
     IdentityMismatch,
 }
-type ResultV3<T, E> = Result<T, CompilerDescriptorSourceErrorV3<E>>;
-impl<E: fmt::Display> fmt::Display for CompilerDescriptorSourceErrorV3<E> {
+type ResultV4<T, E> = Result<T, CompilerDescriptorSourceErrorV4<E>>;
+impl<E: fmt::Display> fmt::Display for CompilerDescriptorSourceErrorV4<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Wire(error) => write!(f, "invalid V3 compiler descriptor source: {error}"),
-            Self::Work(error) => write!(f, "V3 compiler descriptor source work refused: {error}"),
+            Self::Wire(error) => write!(f, "invalid V4 compiler descriptor source: {error}"),
+            Self::Work(error) => write!(f, "V4 compiler descriptor source work refused: {error}"),
             Self::Storage { required, prepaid } => write!(
                 f,
-                "V3 compiler descriptor source requires {required} prepaid bytes, got {prepaid}"
+                "V4 compiler descriptor source requires {required} prepaid bytes, got {prepaid}"
             ),
-            Self::Arithmetic => f.write_str("V3 compiler descriptor source extent overflow"),
+            Self::Arithmetic => f.write_str("V4 compiler descriptor source extent overflow"),
             Self::FinalizedDigest => {
-                f.write_str("V3 compiler descriptor source digest must be zero")
+                f.write_str("V4 compiler descriptor source digest must be zero")
             }
-            Self::IdentityMismatch => f.write_str("V3 compiler descriptor source identity changed"),
+            Self::IdentityMismatch => f.write_str("V4 compiler descriptor source identity changed"),
         }
     }
 }
-impl<E: Error + 'static> Error for CompilerDescriptorSourceErrorV3<E> {
+impl<E: Error + 'static> Error for CompilerDescriptorSourceErrorV4<E> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Wire(error) => Some(error),
@@ -159,10 +163,10 @@ impl<E: Error + 'static> Error for CompilerDescriptorSourceErrorV3<E> {
     }
 }
 
-fn prepaid<E>(required: Option<usize>, actual: usize) -> ResultV3<(), E> {
-    let required = required.ok_or(CompilerDescriptorSourceErrorV3::Arithmetic)?;
+fn prepaid<E>(required: Option<usize>, actual: usize) -> ResultV4<(), E> {
+    let required = required.ok_or(CompilerDescriptorSourceErrorV4::Arithmetic)?;
     if actual < required {
-        return Err(CompilerDescriptorSourceErrorV3::Storage {
+        return Err(CompilerDescriptorSourceErrorV4::Storage {
             required,
             prepaid: actual,
         });
@@ -172,13 +176,13 @@ fn prepaid<E>(required: Option<usize>, actual: usize) -> ResultV3<(), E> {
 fn decode_zero<'a, E>(
     bytes: &'a [u8],
     charge: &mut impl FnMut(usize) -> Result<(), E>,
-) -> ResultV3<DeviceDescriptorTableV3<'a>, E> {
-    charge(1).map_err(CompilerDescriptorSourceErrorV3::Work)?;
-    let table = decode_device_descriptor_table_v3(bytes, charge)
-        .map_err(CompilerDescriptorSourceErrorV3::Wire)?;
-    charge(32).map_err(CompilerDescriptorSourceErrorV3::Work)?;
+) -> ResultV4<DeviceDescriptorTableV4<'a>, E> {
+    charge(1).map_err(CompilerDescriptorSourceErrorV4::Work)?;
+    let table = decode_device_descriptor_table_v4(bytes, charge)
+        .map_err(CompilerDescriptorSourceErrorV4::Wire)?;
+    charge(32).map_err(CompilerDescriptorSourceErrorV4::Work)?;
     if table.canonical_code_object_digest().as_bytes() != &[0; 32] {
-        return Err(CompilerDescriptorSourceErrorV3::FinalizedDigest);
+        return Err(CompilerDescriptorSourceErrorV4::FinalizedDigest);
     }
     Ok(table)
 }
@@ -187,31 +191,31 @@ fn validate<E>(
     capacity: usize,
     prepaid_storage: usize,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
-) -> ResultV3<CompilerDescriptorSourceIdentityV3, E> {
+) -> ResultV4<CompilerDescriptorSourceIdentityV4, E> {
     prepaid(
-        compiler_descriptor_source_validation_storage_v3(capacity),
+        compiler_descriptor_source_validation_storage_v4(capacity),
         prepaid_storage,
     )?;
     {
         let _table = decode_zero(bytes, charge)?;
     }
     let (sha256, byte_len) = crate::descriptor_source_common::identity(
-        COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V3,
+        COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V4,
         bytes,
         charge,
     )
     .map_err(|e| match e {
         crate::descriptor_source_common::HashError::Arithmetic => {
-            CompilerDescriptorSourceErrorV3::Arithmetic
+            CompilerDescriptorSourceErrorV4::Arithmetic
         }
         crate::descriptor_source_common::HashError::Work(e) => {
-            CompilerDescriptorSourceErrorV3::Work(e)
+            CompilerDescriptorSourceErrorV4::Work(e)
         }
     })?;
-    Ok(CompilerDescriptorSourceIdentityV3 { sha256, byte_len })
+    Ok(CompilerDescriptorSourceIdentityV4 { sha256, byte_len })
 }
 
-impl CompilerDescriptorSourceV3 {
+impl CompilerDescriptorSourceV4 {
     /// Consumes caller-allocated backing without allocating, copying or shrinking.
     /// Call the checked validation-storage helper before moving the Vec; prepay
     /// the full owner header, actual capacity and validation scratch. If the Vec
@@ -226,9 +230,9 @@ impl CompilerDescriptorSourceV3 {
         bytes: Vec<u8>,
         prepaid_storage: usize,
         charge: &mut impl FnMut(usize) -> Result<(), E>,
-    ) -> ResultV3<Self, E> {
-        let storage = compiler_descriptor_source_retained_storage_v3(bytes.capacity())
-            .ok_or(CompilerDescriptorSourceErrorV3::Arithmetic)?;
+    ) -> ResultV4<Self, E> {
+        let storage = compiler_descriptor_source_retained_storage_v4(bytes.capacity())
+            .ok_or(CompilerDescriptorSourceErrorV4::Arithmetic)?;
         let identity = validate(&bytes, bytes.capacity(), prepaid_storage, charge)?;
         Ok(Self {
             canonical_bytes: bytes,
@@ -244,9 +248,9 @@ impl CompilerDescriptorSourceV3 {
         &self,
         prepaid_storage: usize,
         charge: &mut impl FnMut(usize) -> Result<(), E>,
-    ) -> ResultV3<DeviceDescriptorTableV3<'_>, E> {
+    ) -> ResultV4<DeviceDescriptorTableV4<'_>, E> {
         prepaid(
-            compiler_descriptor_source_table_storage_v3(self.canonical_bytes.capacity()),
+            compiler_descriptor_source_table_storage_v4(self.canonical_bytes.capacity()),
             prepaid_storage,
         )?;
         decode_zero(&self.canonical_bytes, charge)
@@ -257,17 +261,17 @@ impl CompilerDescriptorSourceV3 {
         &self,
         prepaid_storage: usize,
         charge: &mut impl FnMut(usize) -> Result<(), E>,
-    ) -> ResultV3<(), E> {
+    ) -> ResultV4<(), E> {
         let identity = validate(
             &self.canonical_bytes,
             self.canonical_bytes.capacity(),
             prepaid_storage,
             charge,
         )?;
-        charge(size_of::<CompilerDescriptorSourceIdentityV3>() + 1)
-            .map_err(CompilerDescriptorSourceErrorV3::Work)?;
+        charge(size_of::<CompilerDescriptorSourceIdentityV4>() + 1)
+            .map_err(CompilerDescriptorSourceErrorV4::Work)?;
         if identity != self.identity {
-            return Err(CompilerDescriptorSourceErrorV3::IdentityMismatch);
+            return Err(CompilerDescriptorSourceErrorV4::IdentityMismatch);
         }
         Ok(())
     }
@@ -275,10 +279,10 @@ impl CompilerDescriptorSourceV3 {
         &self.canonical_bytes
     }
     /// Cached identity, an O(1) copy with no new hash or source authentication.
-    pub const fn identity(&self) -> CompilerDescriptorSourceIdentityV3 {
+    pub const fn identity(&self) -> CompilerDescriptorSourceIdentityV4 {
         self.identity
     }
-    pub const fn storage(&self) -> CompilerDescriptorSourceStorageV3 {
+    pub const fn storage(&self) -> CompilerDescriptorSourceStorageV4 {
         self.storage
     }
     pub const fn authenticates_compiler_origin(&self) -> bool {
@@ -296,5 +300,5 @@ impl CompilerDescriptorSourceV3 {
 }
 
 #[cfg(test)]
-#[path = "descriptor_source_v3_tests.rs"]
+#[path = "descriptor_source_v4_tests.rs"]
 mod tests;

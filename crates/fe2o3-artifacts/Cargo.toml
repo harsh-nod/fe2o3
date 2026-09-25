@@ -13,4 +13,5 @@ name = "fe2o3_artifacts"
 
 [dependencies]
 fe2o3-artifact-transaction.workspace = true
+fe2o3-kernel-descriptor.workspace = true
 sha2 = { version = "0.11.0", default-features = false }

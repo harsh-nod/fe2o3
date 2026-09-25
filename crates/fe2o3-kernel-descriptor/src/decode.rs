@@ -451,17 +451,17 @@ fn require_tag(actual: u8, expected: u8, kind: &'static str) -> Result<(), Decod
     }
 }
 
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
     position: usize,
 }
 
 impl<'a> Reader<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, position: 0 }
     }
 
-    fn take(&mut self, count: usize) -> Result<&'a [u8], DecodeError> {
+    pub(crate) fn take(&mut self, count: usize) -> Result<&'a [u8], DecodeError> {
         let end = self
             .position
             .checked_add(count)
@@ -474,20 +474,24 @@ impl<'a> Reader<'a> {
         Ok(value)
     }
 
-    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
+    pub(crate) fn fixed<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
         self.take(N)?.try_into().map_err(|_| DecodeError::Truncated)
     }
 
-    fn u8(&mut self) -> Result<u8, DecodeError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, DecodeError> {
         Ok(self.fixed::<1>()?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, DecodeError> {
+    pub(crate) fn u16(&mut self) -> Result<u16, DecodeError> {
         Ok(u16::from_le_bytes(self.fixed()?))
     }
 
-    fn u32(&mut self) -> Result<u32, DecodeError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, DecodeError> {
         Ok(u32::from_le_bytes(self.fixed()?))
+    }
+
+    pub(crate) fn u64(&mut self) -> Result<u64, DecodeError> {
+        Ok(u64::from_le_bytes(self.fixed()?))
     }
 
     fn count(&mut self, field: &'static str, max: usize) -> Result<usize, DecodeError> {

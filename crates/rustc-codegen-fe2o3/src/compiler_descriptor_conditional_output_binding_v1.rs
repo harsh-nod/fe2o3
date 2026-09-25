@@ -177,7 +177,7 @@ pub(crate) fn bind_conditional_output_descriptor_v1<'a, 'owner>(
     })
 }
 
-fn select_typed_root_v1<'a>(
+pub(super) fn select_typed_root_v1<'a>(
     typed_roots: &'a [TypedDescriptorRootV1],
     semantic: &AdmittedInertSemanticMirV1,
     selected: SemanticFunctionIdV1,
@@ -222,7 +222,7 @@ fn select_typed_root_v1<'a>(
     found.ok_or(Error::Root)
 }
 
-fn require_flat_abi_v1(
+pub(super) fn require_flat_abi_v1(
     abi: &SemanticFunctionAbiV1,
     types: &[SemanticTypeDeclV1],
     budget: &mut Budget<'_>,

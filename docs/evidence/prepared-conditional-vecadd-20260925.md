@@ -94,8 +94,9 @@ workspace rerun; real capture was not repeated after the concurrent merge.
 
 ## Remaining Gates
 
-Protected actual-source replay, the generated-field descriptor bridge,
-conditional finalization, applicable machine/numerical refinement, native
+The [generated-field check and inert V4 transport](conditional-generated-fields-20260925.md)
+are now integrated. Protected actual-source replay, authenticated contract
+serialization, conditional finalization, applicable machine/numerical refinement, native
 issuance, and generated safe host launch remain required. This checkpoint
 adds no ISA-equivalence or floating-point error-bound theorem and makes no
 new kernel qualification claim.

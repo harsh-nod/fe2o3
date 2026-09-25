@@ -7,6 +7,12 @@ pub const RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1: &str = "rustc-codegen-fe2o3";
 pub const RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1: &str =
     "rustc-codegen-fe2o3-production-v3";
 
+pub mod conditional_invocation;
+mod conditional_invocation_codec_v1;
+mod conditional_invocation_rows_v1;
+mod conditional_invocation_v1;
+mod conditional_invocation_validate_v1;
+mod conditional_v4;
 mod decode;
 mod digest;
 mod encode;
@@ -16,9 +22,14 @@ mod launch_policy;
 mod model;
 mod nominal_v3;
 mod requirements_v2;
+mod wire_common;
 mod wire_v2;
 mod wire_v3;
+mod wire_v4;
+mod wire_v4_join;
 
+pub use conditional_invocation::*;
+pub use conditional_v4::*;
 pub use decode::decode_device_descriptor_table_v1;
 pub use digest::{
     CANONICAL_CODE_OBJECT_DOMAIN_V1, CanonicalCodeObjectDigest, DEVICE_DESCRIPTOR_TABLE_DOMAIN_V1,
@@ -66,6 +77,10 @@ pub use wire_v2::{
     decode_device_descriptor_table_v2, encode_device_descriptor_table_v2,
 };
 pub use wire_v3::decode_device_descriptor_table_v3;
+pub use wire_v4::{
+    decode_device_descriptor_table_v4, encode_device_descriptor_table_v4,
+    encoded_device_descriptor_table_v4_len,
+};
 
 #[cfg(test)]
 mod tests;
