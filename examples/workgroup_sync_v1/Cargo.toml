@@ -15,6 +15,7 @@ publish = false
 default = ["lds-kernel", "scoped-atomic-kernel"]
 lds-kernel = []
 lds-u32-kernel = []
+row-affine-u32-kernel = []
 lds-f32-kernel = []
 lds-scan-u32-kernel = []
 lds-scan-u32-65-kernel = []

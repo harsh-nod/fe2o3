@@ -1,3 +1,4 @@
+#[cfg(feature = "lds-kernel")]
 use fe2o3_workgroup_sync_v1::LDS_REDUCTION_WORKGROUP_V1;
 
 const REDUCTION_SOURCE: &str = include_str!("../src/kernel.rs");
@@ -7,6 +8,7 @@ const README: &str = include_str!("../README.md");
 #[test]
 fn reduction_is_ordinary_attributed_rust_with_neutral_workgroup_contract() {
     syn::parse_file(REDUCTION_SOURCE).expect("reduction source parses as Rust");
+    #[cfg(feature = "lds-kernel")]
     assert_eq!(LDS_REDUCTION_WORKGROUP_V1, [64, 1, 1]);
     for marker in [
         "#[kernel(",

@@ -45,6 +45,62 @@ every acquire-release barrier phase. Unsupported scalar types, operations,
 geometry, provider identity, and target profiles fail before target-bound
 Kernel IR is created.
 
+## Masked wrapping row transform/reduction
+
+The opt-in `row-affine-u32-kernel` feature selects the explicit SIMT
+`row_affine_sum_u32_v1` source. A checked shared view specifies an element
+offset, rows, columns and row stride. For every logical row the result is
+`sum(value * scale + bias) mod 2^32`, over active columns only.
+
+The initial contract admits 0..=128 columns and complete 64-lane workgroups,
+with one group per row or extra inactive groups, 256 bytes of LDS and at least
+`rows` output elements. Each lane handles columns `2 * lane` and
+`2 * lane + 1`; every lane reaches the existing target-neutral reduction.
+Only lane zero stores through checked row-striped output ownership. Empty rows
+perform no stores; empty columns produce zero without applying bias. Trailing
+output elements remain unchanged.
+
+Invalid widths, output extents, physical geometry, insufficient groups and
+invalid checked input views trap before writes. Nonempty views require
+`row_stride >= columns` and only the last logical element, not trailing row
+padding, must fit the input. Empty views still require `offset <= input.len()`.
+The caller must supply complete groups: a rounded physical launch extent is
+not evidence that a simulator request contains every lane.
+
+`row_affine_oracle` supplies the independent u128 logical-row specification
+and shared boundary corpus, including true zero-length views. Host oracle
+tests are not device-kernel execution. The required source-to-SIM test uses the
+existing production driver, not a second CPU kernel body. It exports the
+ordinary Rust source for gfx942 and gfx950 profiles, then checks all 86 cases
+with canonical and seeded schedules and persisted replay. Input bytes,
+initialization masks, output canaries, invalid requests and stale replay
+bindings are checked. These are CPU semantic checks, not hardware execution or
+performance predictions.
+
+Run the source-to-SIM regression with the repository's pinned nightly:
+
+```sh
+cargo test --locked -p rustc-codegen-fe2o3 \
+  --test production_neutral_workgroup_reduce_driver_v1 \
+  ordinary_row_affine_source_matches_oracle_and_replay -- --ignored --exact
+```
+
+This does not establish the required structured tile or mixed variant,
+generated host/artifact admission, direct-KFD execution or M2 completion.
+Curriculum source-tab and paired-inventory binding also remain pending under
+[issue #275](https://github.com/harsh-nod/fe2o3/issues/275); a separately pinned
+CPU checkpoint does not complete a tutorial pair.
+Hardware launch representability is a separate runtime contract. The old
+`run-gfx942.sh` and protected scalar driver still select their existing
+reduction profiles and do not qualify this new ABI.
+
+Run the feature-isolated host tests through the normal binding driver:
+
+```sh
+cargo fe2o3 test --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml \
+  --no-default-features --features row-affine-u32-kernel --test row_affine
+```
+
 ## Scoped atomic add
 
 The second profile admits one coherent global `u32` atomic object, relaxed
@@ -61,6 +117,13 @@ The macro registration binds global address space, mutability, pointee type,
 physical pointer layout, and exclusive alias admission.
 
 ## Evidence boundary
+
+The 2026-09-25 integration check does not qualify the broad native LLVM gate:
+its first gfx942 LDS reduction fails generic formal memory admission with an
+inter-invocation conflict. The coverage described below remains an acceptance
+requirement, not a claim that every current gate passes. Historical native
+results retain their original source/compiler identities; row CPU results
+grant neither native artifact nor GPU execution authority.
 
 The checked CPU oracles and deterministic debug/release tests are usable now.
 They fail before output mutation and reject missing or divergent barriers,
