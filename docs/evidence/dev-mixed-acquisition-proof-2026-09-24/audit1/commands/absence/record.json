@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "-c",
+    "import os,sys; assert not os.path.lexists(sys.argv[1])",
+    "/home/harsh/.codex-tmp/fe2o3-mixed-proof-20260924-65fWJbkW"
+  ],
+  "started_ns": 1790313869407683061,
+  "process_group": 1027510,
+  "group_absent": true,
+  "finished_ns": 1790313869438223838,
+  "status": 0
+}

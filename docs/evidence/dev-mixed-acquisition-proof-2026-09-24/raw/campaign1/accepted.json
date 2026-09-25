@@ -1,0 +1,122 @@
+[
+  {
+    "name": "checker-tests",
+    "files": {
+      "record.json": "9cb6e2c9ccbe4a09a2fec5577f681e6a37ad74504aab68d52203f1ce7b2c2b8c",
+      "stdout.log": "450af0045064ec9dc279ea4910e0d3612cec4cbe00db6bbd13bf8472382d3d91",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "closure-before",
+    "files": {
+      "record.json": "6ce34bd0b5e1b41162eebab5da0bf5673e1a39e9109820f0c71d8856bf4bed79",
+      "stdout.log": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "positive-before",
+    "files": {
+      "record.json": "983b33529aba8f7e77d5a09cf81af06cec95c4827be9c5cd7e8089c8cc7df2f7",
+      "stdout.log": "862bfac0ecc4825eba4b7732deeb1af47318fc14b5bce49af7766cc0f6754033",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "stable-before-preflight",
+    "files": {
+      "record.json": "bea3831ea45ce082d4e9399e2a2718c01da8e9d4be43a093164733f90ecb6075",
+      "stdout.log": "31aaad458e389d632ee246caedea1d55409e72d7c6fb735392ab87478e1b9436",
+      "stderr.log": "4b7888f9375525cf227ed967cfc1af41254fd00b40b281518e06976526888192"
+    }
+  },
+  {
+    "name": "combined-budget",
+    "files": {
+      "record.json": "129196ecff47f6a2615ad0be3c75049422ea2eb62530330b3addf8ca8abb36df",
+      "stdout.log": "849eb14c7d6c649b9e87c250584f31f1d25de99f178853a6e2ebe2a4a94fcaa0",
+      "stderr.log": "cb3947d763d6d7ae10282958c9752e26826b72e960583a1ebc40484a45c44a77"
+    }
+  },
+  {
+    "name": "pending-preflight",
+    "files": {
+      "record.json": "63a50f927cf7f245919b144bb8f82050b9c5e7fa2048f127d1a1224b7355ccba",
+      "stdout.log": "f64258fd482a71340a5387d02967d5d6c91198df5ff2450d0190448d0ea542b9",
+      "stderr.log": "983c0558e571b91e4a4e2a693f7ccf901f1e9b9fd156a122994ac30215ec8922"
+    }
+  },
+  {
+    "name": "stable-commit",
+    "files": {
+      "record.json": "d4df517640f4ddd657caed4a9da55e595cf5d1973ce20ec4e673e52316d79b7b",
+      "stdout.log": "b083483d901b3435434d04b65c544f7a8696afa548f600d357a76ebad557cc22",
+      "stderr.log": "a055eefefc0b2930fe0dfe128910af8ed4ca2a466b515caa031031db3ff97962"
+    }
+  },
+  {
+    "name": "producer-commit",
+    "files": {
+      "record.json": "63a7d6c5815d32b97dae6d4036528747fd981579a546c8c84741d945dc32a577",
+      "stdout.log": "9aec2ffe3f019395b83e8eff9660bda1d627957100a50bdc09dda0d6ba51d212",
+      "stderr.log": "2705c027ebf7d65f3cc8573b623bcbb8e5f4e0ecffeb7af65a992f845e1fb664"
+    }
+  },
+  {
+    "name": "early-error-frame",
+    "files": {
+      "record.json": "d1ce41e181ac9e6b576f66f32d5306aa55abafb666ea53e804609678079fd473",
+      "stdout.log": "c854fb6d3e9a7353976f6455b920303a8f2215d0d3e69dea435b7684be6e07eb",
+      "stderr.log": "7e73278c1428aa5641c5d5b0b49a5330c1c0ad6db8565af11ac412133cd60e8d"
+    }
+  },
+  {
+    "name": "pending-headroom",
+    "files": {
+      "record.json": "9b92beb3e16ede9afe6153a7e38704504cfc946c2158312340983cd8946d5d1d",
+      "stdout.log": "8012672053a8ae2928822aafcd3766ac3d95c856e0f79f2d966fe5ad7be79a61",
+      "stderr.log": "3b47c42ace7be9b1ceaaefbdbe1057e09503dc3d9032ef879670163a625a2b55"
+    }
+  },
+  {
+    "name": "bridge-actual-executor",
+    "files": {
+      "record.json": "9b396c329d9b772f73b9d18eb91bca569250986d4fd4f7d4d14fcf16daee35e8",
+      "stdout.log": "9a34b2c833f4f3f0d64f7f7d420f410528fc6f5d8a8d58757f6c1dca8d614b03",
+      "stderr.log": "838601308fc508c768813b266a40dbbb68b6accbbe95d10f0f281d550200daf3"
+    }
+  },
+  {
+    "name": "bridge-logical-executor",
+    "files": {
+      "record.json": "89e3680700e26e05cebd590815e8f4888b4e8c6a1c42482de482fd990a323654",
+      "stdout.log": "f82fea751553f64d5663233ef112595849381c23e8977bfe757b6d9b2f292161",
+      "stderr.log": "91d490506fbcbffaa3eb2bd319c5da6ee8a9bd16b277a3ff2026659f03fbeb7d"
+    }
+  },
+  {
+    "name": "positive-after",
+    "files": {
+      "record.json": "dddc92097bb3b51a954186f8713075063cc38f784861acb01a4c501cebcce61b",
+      "stdout.log": "b0b95f9e5f08e663bfda000733873a233766a620f937bd03a6853282fa10228c",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "stable-regression",
+    "files": {
+      "record.json": "ea99f8318203163b85d84a6ab54be3bc49b2fa3aecf10f3e8e2e31db327499af",
+      "stdout.log": "bf33fbd1a891979e5fceaab01bb3cce04927e667267fb9c2d0af35693ef323eb",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "name": "closure-after",
+    "files": {
+      "record.json": "55e8032f8b085d517e4ca001094eaca9491f772ce96578d16dd78fa238787509",
+      "stdout.log": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+]

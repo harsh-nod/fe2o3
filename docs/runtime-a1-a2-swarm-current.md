@@ -10,7 +10,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | --- | --- | --- |
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Active, incomplete | Protected generated execution, native high-depth/out-of-order qualification, aggregate accounting and production refinement |
-| A2: dependencies and overlap | Active, incomplete | Repeated generated compute/copy graphs, proved mixed-input acquisition/reconciliation, physical overlap and bounded residency |
+| A2: dependencies and overlap | Active, incomplete | Repeated generated compute/copy graphs, constructor-origin mixed-input/reconciliation proofs, physical overlap and bounded residency |
 | A3: local multi-GPU | Partial foundations | XGMI copy witnesses exist; unified compute, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
@@ -23,6 +23,28 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+Latest mixed-input correspondence (2026-09-24): the
+[independent proof packet](evidence/dev-mixed-acquisition-proof-2026-09-24/README.md)
+passes all fifteen signed-source campaign stages. Both whole-root positives
+verify 738 obligations with zero errors, all nine logical mutations reject, and
+the unchanged stable-reader regression verifies 720. The logical model derives
+exact results, both output rosters and final represented ownership independently
+of the shared production method. Synthetic witnesses cover late rejection,
+mixed success and shared-capacity rejection; they are not constructor-origin
+traces. Eleven checker groups, relocated replay, packet/collector tests and
+source/tool continuity pass. All 78 scratch artifacts are retained before
+exact-owned cleanup and independent absence. Scoped process diagnostics retain
+inaccessible fields rather than asserting global absence. The initial cleanup-
+transcript audit refusal is retained; corrected six-group replay and publication
+receipt corruption tests pass. No new CPU-runtime,
+native or performance result is added. Global proof registration, constructor-
+origin mixed lifecycle integration, Context maps/binding coverage, writer/read
+transaction composition, async carriage and completion reconciliation remain
+open. A1/A2 remain incomplete; the accepted Native R125, Admission R118B
+C1/C2/C3 and Resources R116/V3 checkpoints are unchanged. Next is one mixed operation
+in the existing constructor-origin lifecycle, then production reconciliation
+correspondence and the remaining native/generated/resource gates.
 
 Latest mixed-input qualification (2026-09-24): the
 [atomic acquisition CPU packet](evidence/dev-mixed-input-acquisition-cpu-2026-09-24/README.md)

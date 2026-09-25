@@ -1,0 +1,17 @@
+.....E
+======================================================================
+ERROR: test_finalization_corruptions (__main__.CleanupEvidenceCalibration.test_finalization_corruptions)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24/test_audit.py", line 150, in test_finalization_corruptions
+    AUDIT.check_finalization(REPO, PACKET)
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24/audit.py", line 206, in check_finalization
+    need(re.fullmatch(r'\.{5}\n-{70}\nRan 5 tests in [0-9]+\.[0-9]+s\n\nOK\n', stderr), 'complete cleanup tests')
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24/audit.py", line 28, in need
+    raise ValueError(message)
+ValueError: complete cleanup tests
+
+----------------------------------------------------------------------
+Ran 6 tests in 210.626s
+
+FAILED (errors=1)

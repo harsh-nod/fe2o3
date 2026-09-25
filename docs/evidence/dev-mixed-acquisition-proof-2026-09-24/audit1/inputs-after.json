@@ -1,0 +1,11 @@
+{
+  "docs/evidence/dev-mixed-acquisition-proof-2026-09-24/README.md": "bad4f3cfae673898c5af6d055fde417bd0df1d911083602ac943c4d2d72c4c33",
+  "docs/evidence/dev-mixed-acquisition-proof-2026-09-24/audit.py": "5212f2e9697e14aec1b55a5b21468723e3d59186bfd359b57b61c836b39805be",
+  "docs/evidence/dev-mixed-acquisition-proof-2026-09-24/finalize.py": "46ed611b5cd1277720efc1480fdf5829bfce0788a45b8f366d98d78ef03d5d80",
+  "docs/evidence/dev-mixed-acquisition-proof-2026-09-24/test_audit.py": "34846bf4b8bc735944407d65e81fbeecfe139ba9152da396359f9e21325e460b",
+  "docs/evidence/dev-mixed-acquisition-proof-2026-09-24/test_finalize.py": "45b9eecbc5e898ede661aefe1bcb7acff79cffeed20e7f8919f088b2085978a9",
+  "docs/evidence/dev-mixed-input-acquisition-cpu-2026-09-24/finalize.py": "bf983ff06018137b73f02820e67ac03746a9a64ed71c4abb63f4be517e89875d",
+  "docs/evidence/dev-native-producer-mi300x-2026-09-24/collect.py": "9c9c629aa7ce73e52f565dee51f89810ae96a152ad3b2fb4c9f272f864c3f9cf",
+  "docs/evidence/dev-native-producer-mi300x-2026-09-24/test_verify.py": "61971db898f5db1e3c5d56e7339ae1d6425dea265a06eccde6083ca93523feea",
+  "docs/evidence/dev-native-producer-mi300x-2026-09-24/verify.py": "017830908daa2a9383f67f5038606434f890635249f82fa8ddbe602dfa4598b9"
+}

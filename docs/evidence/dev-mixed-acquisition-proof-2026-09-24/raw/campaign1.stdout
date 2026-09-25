@@ -1,0 +1,13 @@
+positive-before {'encountered-error': False, 'encountered-vir-error': False, 'success': True, 'verified': 738, 'errors': 0, 'is-verifying-entire-crate': True}
+stable-before-preflight {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+combined-budget {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+pending-preflight {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+stable-commit {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+producer-commit {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+early-error-frame {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+pending-headroom {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+bridge-actual-executor {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+bridge-logical-executor {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+positive-after {'encountered-error': False, 'encountered-vir-error': False, 'success': True, 'verified': 738, 'errors': 0, 'is-verifying-entire-crate': True}
+stable-regression {'encountered-error': False, 'encountered-vir-error': False, 'success': True, 'verified': 720, 'errors': 0, 'is-verifying-entire-crate': True}
+PASS: independent mixed-acquisition developer campaign

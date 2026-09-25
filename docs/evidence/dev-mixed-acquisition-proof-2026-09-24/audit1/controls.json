@@ -1,0 +1,41 @@
+{
+  "commands": {
+    "cleanup-tests": [
+      "/usr/bin/python3",
+      "-I",
+      "-B",
+      "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-native-producer-mi300x-2026-09-24/test_verify.py",
+      "CleanupTests"
+    ],
+    "finalizer-tests": [
+      "/usr/bin/python3",
+      "-I",
+      "-B",
+      "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24/test_finalize.py"
+    ],
+    "packet-tests": [
+      "/usr/bin/python3",
+      "-I",
+      "-B",
+      "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24/test_audit.py",
+      "--raw",
+      "/home/harsh/.codex-tmp/fe2o3-mixed-proof-20260924-65fWJbkW/campaign1"
+    ],
+    "replay": [
+      "/usr/bin/python3",
+      "-I",
+      "-B",
+      "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-mixed-acquire.py",
+      "--output",
+      "/home/harsh/.codex-tmp/fe2o3-mixed-proof-20260924-65fWJbkW/campaign1",
+      "--verify"
+    ]
+  },
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "timeout_seconds": 900
+}

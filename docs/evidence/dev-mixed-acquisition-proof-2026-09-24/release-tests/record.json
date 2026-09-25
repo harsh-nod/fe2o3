@@ -1,0 +1,14 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24/release.py",
+    "--self-test"
+  ],
+  "started_ns": 1790314457633252538,
+  "process_group": 1189733,
+  "group_absent": true,
+  "finished_ns": 1790314457976507428,
+  "status": 0
+}

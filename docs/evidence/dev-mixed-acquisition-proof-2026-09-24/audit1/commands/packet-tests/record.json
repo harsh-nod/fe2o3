@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24/test_audit.py",
+    "--raw",
+    "/home/harsh/.codex-tmp/fe2o3-mixed-proof-20260924-65fWJbkW/campaign1"
+  ],
+  "started_ns": 1790313653443996900,
+  "process_group": 958823,
+  "group_absent": true,
+  "finished_ns": 1790313868319769591,
+  "status": 0
+}

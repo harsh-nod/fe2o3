@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/bin/sh",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/examples/row_softmax_v1/verify-verus-closure.sh",
+    "/home/harsh/.codex-tmp/r56-verus-0.2026.08.09/install/verus-x86-linux",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/VERUS_CLOSURE_MANIFEST"
+  ],
+  "started_ns": 1790313627756698378,
+  "process_group": 954711,
+  "group_absent": true,
+  "finished_ns": 1790313630953082311,
+  "status": 0
+}

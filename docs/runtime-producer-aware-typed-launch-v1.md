@@ -1,7 +1,7 @@
 # Producer-Aware Typed Launches
 
 Development toward A1/A2 in #182. This profile is not protected Worker V3
-execution, a new formal-refinement result, aggregate-memory acceptance or
+execution, end-to-end production refinement, aggregate-memory acceptance or
 HIP/HSA parity. It extends the existing ordinary launch lifecycle rather than
 creating a second executor or changing Worker transport.
 
@@ -74,12 +74,24 @@ the roots and journal leases and seals the Context; it does not roll back the
 transaction. Output-writer Begin, dependency retention and these two input
 classes are not one formally proved all-or-nothing transaction.
 
-The shared-body Verus candidate specifies error preservation, the two exact
+The shared-body Verus definition specifies error preservation, the two exact
 commit relations and combined-budget preservation under storage-domain
-preconditions. Its root includes inherited paired proofs but does not yet add
-independent logical mixed-acquisition correspondence, constructor-origin mixed
-traces, Context-map authentication, panic recovery or completion reconciliation.
-These remain distinct obligations, even if the candidate's solver run passes.
+preconditions. The subsequent
+[independent correspondence packet](evidence/dev-mixed-acquisition-proof-2026-09-24/README.md)
+adds a separately implemented logical model and derives exact result agreement,
+both output rosters, final represented ownership and the logical invariant. Its
+paired executor calls the actual shared method and logical model separately;
+neither final representation nor output agreement is a premise. Both full-root
+positives verify 738 obligations with zero errors, nine logical negative
+controls reject, and the unchanged stable root verifies 720. The fifteen-stage
+campaign authenticates its signed source and fixed tool closure without
+changing historical proof pins.
+
+The new witnesses start from synthetic represented storage. Constructor-origin
+mixed lifecycle traces, Context-map authentication, the complete writer/read
+transaction, panic recovery, async carriage and completion reconciliation remain
+distinct obligations. The developer extension is not yet registered in the
+global proof inventory and does not extend native execution authority.
 
 The [mixed-acquisition CPU packet](evidence/dev-mixed-input-acquisition-cpu-2026-09-24/README.md)
 passes full GNU/musl runtime and model suites and 73 doctests. Its whole-root

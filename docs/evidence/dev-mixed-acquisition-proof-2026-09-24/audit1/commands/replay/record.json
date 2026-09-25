@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-mixed-acquire.py",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-mixed-proof-20260924-65fWJbkW/campaign1",
+    "--verify"
+  ],
+  "started_ns": 1790313638203395561,
+  "process_group": 956313,
+  "group_absent": true,
+  "finished_ns": 1790313653441149200,
+  "status": 0
+}

@@ -1,0 +1,17 @@
+.....E..
+======================================================================
+ERROR: test_root_and_independence (__main__.Calibration.test_root_and_independence)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/test-mixed-acquire.py", line 86, in test_root_and_independence
+    self.deps['inspection'].independent_model(source, self.deps['policy'])
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-constructor.py", line 277, in independent_model
+    need(re.findall(r'\b([A-Za-z_][A-Za-z0-9_]*)\s*!\s*[({\[]', code) == ['verus'],
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-constructor.py", line 173, in need
+    raise ValueError(message)
+ValueError: no shared macro invocation in independent model
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.216s
+
+FAILED (errors=1)

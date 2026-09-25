@@ -1,0 +1,762 @@
+{
+  ".": [
+    16832,
+    1000,
+    2096,
+    1784293,
+    4096,
+    null
+  ],
+  "campaign1": [
+    16877,
+    1000,
+    2096,
+    2955284,
+    4096,
+    null
+  ],
+  "campaign1.lock": [
+    33188,
+    1000,
+    2096,
+    2955283,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "campaign1.stderr": [
+    33188,
+    1000,
+    2096,
+    2955257,
+    330,
+    "5bdeea9aff46b0132a4643ad2c89b26889720ab5afe57a658d1f4343f4844dda"
+  ],
+  "campaign1.stdout": [
+    33188,
+    1000,
+    2096,
+    2955256,
+    1819,
+    "721d300487b35cc4cfaee833e1ea61ee696567ac2022653c28911a276131413a"
+  ],
+  "campaign1/accepted.json": [
+    33188,
+    1000,
+    2096,
+    2955403,
+    4900,
+    "aa9a28343c769fed6d4f1c1f4a45f82b6beaddc20e4b0dfb0f59fa7cffc449d1"
+  ],
+  "campaign1/bridge-actual-executor": [
+    16877,
+    1000,
+    2096,
+    6109101,
+    4096,
+    null
+  ],
+  "campaign1/bridge-actual-executor/record.json": [
+    33188,
+    1000,
+    2096,
+    6131853,
+    815,
+    "9b396c329d9b772f73b9d18eb91bca569250986d4fd4f7d4d14fcf16daee35e8"
+  ],
+  "campaign1/bridge-actual-executor/stderr.log": [
+    33188,
+    1000,
+    2096,
+    6131855,
+    9709,
+    "838601308fc508c768813b266a40dbbb68b6accbbe95d10f0f281d550200daf3"
+  ],
+  "campaign1/bridge-actual-executor/stdout.log": [
+    33188,
+    1000,
+    2096,
+    6131854,
+    134664,
+    "9a34b2c833f4f3f0d64f7f7d420f410528fc6f5d8a8d58757f6c1dca8d614b03"
+  ],
+  "campaign1/bridge-logical-executor": [
+    16877,
+    1000,
+    2096,
+    6130157,
+    4096,
+    null
+  ],
+  "campaign1/bridge-logical-executor/record.json": [
+    33188,
+    1000,
+    2096,
+    6131871,
+    815,
+    "89e3680700e26e05cebd590815e8f4888b4e8c6a1c42482de482fd990a323654"
+  ],
+  "campaign1/bridge-logical-executor/stderr.log": [
+    33188,
+    1000,
+    2096,
+    6131873,
+    10179,
+    "91d490506fbcbffaa3eb2bd319c5da6ee8a9bd16b277a3ff2026659f03fbeb7d"
+  ],
+  "campaign1/bridge-logical-executor/stdout.log": [
+    33188,
+    1000,
+    2096,
+    6131872,
+    134501,
+    "f82fea751553f64d5663233ef112595849381c23e8977bfe757b6d9b2f292161"
+  ],
+  "campaign1/checker-tests": [
+    16877,
+    1000,
+    2096,
+    2955297,
+    4096,
+    null
+  ],
+  "campaign1/checker-tests/record.json": [
+    33188,
+    1000,
+    2096,
+    1783635,
+    312,
+    "9cb6e2c9ccbe4a09a2fec5577f681e6a37ad74504aab68d52203f1ce7b2c2b8c"
+  ],
+  "campaign1/checker-tests/stderr.log": [
+    33188,
+    1000,
+    2096,
+    2955345,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "campaign1/checker-tests/stdout.log": [
+    33188,
+    1000,
+    2096,
+    2955343,
+    56,
+    "450af0045064ec9dc279ea4910e0d3612cec4cbe00db6bbd13bf8472382d3d91"
+  ],
+  "campaign1/closure-after": [
+    16877,
+    1000,
+    2096,
+    2955384,
+    4096,
+    null
+  ],
+  "campaign1/closure-after/record.json": [
+    33188,
+    1000,
+    2096,
+    2955385,
+    464,
+    "55e8032f8b085d517e4ca001094eaca9491f772ce96578d16dd78fa238787509"
+  ],
+  "campaign1/closure-after/stderr.log": [
+    33188,
+    1000,
+    2096,
+    2955392,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "campaign1/closure-after/stdout.log": [
+    33188,
+    1000,
+    2096,
+    2955391,
+    92,
+    "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0"
+  ],
+  "campaign1/closure-before": [
+    16877,
+    1000,
+    2096,
+    2955296,
+    4096,
+    null
+  ],
+  "campaign1/closure-before/record.json": [
+    33188,
+    1000,
+    2096,
+    2955347,
+    464,
+    "6ce34bd0b5e1b41162eebab5da0bf5673e1a39e9109820f0c71d8856bf4bed79"
+  ],
+  "campaign1/closure-before/stderr.log": [
+    33188,
+    1000,
+    2096,
+    2955349,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "campaign1/closure-before/stdout.log": [
+    33188,
+    1000,
+    2096,
+    2955348,
+    92,
+    "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0"
+  ],
+  "campaign1/combined-budget": [
+    16877,
+    1000,
+    2096,
+    3114445,
+    4096,
+    null
+  ],
+  "campaign1/combined-budget/record.json": [
+    33188,
+    1000,
+    2096,
+    6109008,
+    836,
+    "129196ecff47f6a2615ad0be3c75049422ea2eb62530330b3addf8ca8abb36df"
+  ],
+  "campaign1/combined-budget/stderr.log": [
+    33188,
+    1000,
+    2096,
+    6109011,
+    19028,
+    "cb3947d763d6d7ae10282958c9752e26826b72e960583a1ebc40484a45c44a77"
+  ],
+  "campaign1/combined-budget/stdout.log": [
+    33188,
+    1000,
+    2096,
+    6109010,
+    134664,
+    "849eb14c7d6c649b9e87c250584f31f1d25de99f178853a6e2ebe2a4a94fcaa0"
+  ],
+  "campaign1/early-error-frame": [
+    16877,
+    1000,
+    2096,
+    6109070,
+    4096,
+    null
+  ],
+  "campaign1/early-error-frame/record.json": [
+    33188,
+    1000,
+    2096,
+    6109089,
+    836,
+    "d1ce41e181ac9e6b576f66f32d5306aa55abafb666ea53e804609678079fd473"
+  ],
+  "campaign1/early-error-frame/stderr.log": [
+    33188,
+    1000,
+    2096,
+    6109091,
+    7810,
+    "7e73278c1428aa5641c5d5b0b49a5330c1c0ad6db8565af11ac412133cd60e8d"
+  ],
+  "campaign1/early-error-frame/stdout.log": [
+    33188,
+    1000,
+    2096,
+    6109090,
+    134664,
+    "c854fb6d3e9a7353976f6455b920303a8f2215d0d3e69dea435b7684be6e07eb"
+  ],
+  "campaign1/inputs-after.json": [
+    33188,
+    1000,
+    2096,
+    2955404,
+    66355,
+    "3ba7bb8d0635fb810c44f783e45125d34d26de5389eada713243bbdad6e5a9a6"
+  ],
+  "campaign1/pending-headroom": [
+    16877,
+    1000,
+    2096,
+    6109102,
+    4096,
+    null
+  ],
+  "campaign1/pending-headroom/record.json": [
+    33188,
+    1000,
+    2096,
+    6129954,
+    827,
+    "9b92beb3e16ede9afe6153a7e38704504cfc946c2158312340983cd8946d5d1d"
+  ],
+  "campaign1/pending-headroom/stderr.log": [
+    33188,
+    1000,
+    2096,
+    6129959,
+    1546,
+    "3b47c42ace7be9b1ceaaefbdbe1057e09503dc3d9032ef879670163a625a2b55"
+  ],
+  "campaign1/pending-headroom/stdout.log": [
+    33188,
+    1000,
+    2096,
+    6129958,
+    19289,
+    "8012672053a8ae2928822aafcd3766ac3d95c856e0f79f2d966fe5ad7be79a61"
+  ],
+  "campaign1/pending-preflight": [
+    16877,
+    1000,
+    2096,
+    3114292,
+    4096,
+    null
+  ],
+  "campaign1/pending-preflight/record.json": [
+    33188,
+    1000,
+    2096,
+    6109038,
+    836,
+    "63a50f927cf7f245919b144bb8f82050b9c5e7fa2048f127d1a1224b7355ccba"
+  ],
+  "campaign1/pending-preflight/stderr.log": [
+    33188,
+    1000,
+    2096,
+    6109040,
+    15688,
+    "983c0558e571b91e4a4e2a693f7ccf901f1e9b9fd156a122994ac30215ec8922"
+  ],
+  "campaign1/pending-preflight/stdout.log": [
+    33188,
+    1000,
+    2096,
+    6109039,
+    134664,
+    "f64258fd482a71340a5387d02967d5d6c91198df5ff2450d0190448d0ea542b9"
+  ],
+  "campaign1/positive-after": [
+    16877,
+    1000,
+    2096,
+    6131836,
+    4096,
+    null
+  ],
+  "campaign1/positive-after/record.json": [
+    33188,
+    1000,
+    2096,
+    7284321,
+    709,
+    "dddc92097bb3b51a954186f8713075063cc38f784861acb01a4c501cebcce61b"
+  ],
+  "campaign1/positive-after/stderr.log": [
+    33188,
+    1000,
+    2096,
+    7284331,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "campaign1/positive-after/stdout.log": [
+    33188,
+    1000,
+    2096,
+    7284322,
+    204513,
+    "b0b95f9e5f08e663bfda000733873a233766a620f937bd03a6853282fa10228c"
+  ],
+  "campaign1/positive-before": [
+    16877,
+    1000,
+    2096,
+    2958024,
+    4096,
+    null
+  ],
+  "campaign1/positive-before/record.json": [
+    33188,
+    1000,
+    2096,
+    3113760,
+    709,
+    "983b33529aba8f7e77d5a09cf81af06cec95c4827be9c5cd7e8089c8cc7df2f7"
+  ],
+  "campaign1/positive-before/stderr.log": [
+    33188,
+    1000,
+    2096,
+    3113864,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "campaign1/positive-before/stdout.log": [
+    33188,
+    1000,
+    2096,
+    3113767,
+    204513,
+    "862bfac0ecc4825eba4b7732deeb1af47318fc14b5bce49af7766cc0f6754033"
+  ],
+  "campaign1/producer-commit": [
+    16877,
+    1000,
+    2096,
+    6109041,
+    4096,
+    null
+  ],
+  "campaign1/producer-commit/record.json": [
+    33188,
+    1000,
+    2096,
+    2954873,
+    836,
+    "63a7d6c5815d32b97dae6d4036528747fd981579a546c8c84741d945dc32a577"
+  ],
+  "campaign1/producer-commit/stderr.log": [
+    33188,
+    1000,
+    2096,
+    6109072,
+    2380,
+    "2705c027ebf7d65f3cc8573b623bcbb8e5f4e0ecffeb7af65a992f845e1fb664"
+  ],
+  "campaign1/producer-commit/stdout.log": [
+    33188,
+    1000,
+    2096,
+    6109071,
+    134664,
+    "9aec2ffe3f019395b83e8eff9660bda1d627957100a50bdc09dda0d6ba51d212"
+  ],
+  "campaign1/results.json": [
+    33188,
+    1000,
+    2096,
+    2955405,
+    137936,
+    "d0a1bb8937112915e7573f2db3df77f4dd1831fa24c519f2846fd8daff1633df"
+  ],
+  "campaign1/source.json": [
+    33188,
+    1000,
+    2096,
+    2955295,
+    67722,
+    "31c7045d304445f742c4d596ba8bfd8d198391fa6b5f74a007b1827bb0783f4b"
+  ],
+  "campaign1/stable-before-preflight": [
+    16877,
+    1000,
+    2096,
+    2955831,
+    4096,
+    null
+  ],
+  "campaign1/stable-before-preflight/record.json": [
+    33188,
+    1000,
+    2096,
+    3107558,
+    836,
+    "bea3831ea45ce082d4e9399e2a2718c01da8e9d4be43a093164733f90ecb6075"
+  ],
+  "campaign1/stable-before-preflight/stderr.log": [
+    33188,
+    1000,
+    2096,
+    3113887,
+    17584,
+    "4b7888f9375525cf227ed967cfc1af41254fd00b40b281518e06976526888192"
+  ],
+  "campaign1/stable-before-preflight/stdout.log": [
+    33188,
+    1000,
+    2096,
+    3113886,
+    134664,
+    "31aaad458e389d632ee246caedea1d55409e72d7c6fb735392ab87478e1b9436"
+  ],
+  "campaign1/stable-commit": [
+    16877,
+    1000,
+    2096,
+    6109012,
+    4096,
+    null
+  ],
+  "campaign1/stable-commit/record.json": [
+    33188,
+    1000,
+    2096,
+    6109066,
+    836,
+    "d4df517640f4ddd657caed4a9da55e595cf5d1973ce20ec4e673e52316d79b7b"
+  ],
+  "campaign1/stable-commit/stderr.log": [
+    33188,
+    1000,
+    2096,
+    6109069,
+    2449,
+    "a055eefefc0b2930fe0dfe128910af8ed4ca2a466b515caa031031db3ff97962"
+  ],
+  "campaign1/stable-commit/stdout.log": [
+    33188,
+    1000,
+    2096,
+    6109068,
+    134664,
+    "b083483d901b3435434d04b65c544f7a8696afa548f600d357a76ebad557cc22"
+  ],
+  "campaign1/stable-regression": [
+    16877,
+    1000,
+    2096,
+    6131874,
+    4096,
+    null
+  ],
+  "campaign1/stable-regression/record.json": [
+    33188,
+    1000,
+    2096,
+    7299578,
+    711,
+    "ea99f8318203163b85d84a6ab54be3bc49b2fa3aecf10f3e8e2e31db327499af"
+  ],
+  "campaign1/stable-regression/stderr.log": [
+    33188,
+    1000,
+    2096,
+    7299584,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "campaign1/stable-regression/stdout.log": [
+    33188,
+    1000,
+    2096,
+    7299580,
+    201942,
+    "bf33fbd1a891979e5fceaab01bb3cce04927e667267fb9c2d0af35693ef323eb"
+  ],
+  "checker-test1.stderr": [
+    33188,
+    1000,
+    2096,
+    2954438,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "checker-test1.stdout": [
+    33188,
+    1000,
+    2096,
+    2954437,
+    1054,
+    "2250648a317e8b97f43f361c6d34e8aca314983b95f95b5075a2325f375d424a"
+  ],
+  "checker-test2.stderr": [
+    33188,
+    1000,
+    2096,
+    2954752,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "checker-test2.stdout": [
+    33188,
+    1000,
+    2096,
+    2954751,
+    1223,
+    "4661fc1209aa8a2691ac83c7206ddffcf3bf0419c2a8b4246eca9a0057126f7b"
+  ],
+  "checker-test3.stderr": [
+    33188,
+    1000,
+    2096,
+    2954757,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "checker-test3.stdout": [
+    33188,
+    1000,
+    2096,
+    2954756,
+    56,
+    "450af0045064ec9dc279ea4910e0d3612cec4cbe00db6bbd13bf8472382d3d91"
+  ],
+  "checker-test4.stderr": [
+    33188,
+    1000,
+    2096,
+    2954915,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "checker-test4.stdout": [
+    33188,
+    1000,
+    2096,
+    2954904,
+    56,
+    "450af0045064ec9dc279ea4910e0d3612cec4cbe00db6bbd13bf8472382d3d91"
+  ],
+  "dev1.stderr": [
+    33188,
+    1000,
+    2096,
+    1784305,
+    67,
+    "76771f1b0dd519196fda721e8b052af33d888b9988ff8c883700882b38dbf075"
+  ],
+  "dev1.stdout": [
+    33188,
+    1000,
+    2096,
+    1784126,
+    482,
+    "5109706dad88680facf5cf9096b5c2ff5d31a12819905fd2d816e554efe4ab4f"
+  ],
+  "dev2.stderr": [
+    33188,
+    1000,
+    2096,
+    1784345,
+    1762,
+    "8905ed268ea520024f7a8f4820ca24cb96c7cd51b148e94a5a6a904a527f622c"
+  ],
+  "dev2.stdout": [
+    33188,
+    1000,
+    2096,
+    1537269,
+    482,
+    "5109706dad88680facf5cf9096b5c2ff5d31a12819905fd2d816e554efe4ab4f"
+  ],
+  "dev3.stderr": [
+    33188,
+    1000,
+    2096,
+    1784377,
+    12669,
+    "688412b42e2520e15045f0e72b375ba1b2e99557e4f50ed4853c341ee19356e6"
+  ],
+  "dev3.stdout": [
+    33188,
+    1000,
+    2096,
+    1784376,
+    19310,
+    "17c7399fda51e53298dc1ff0cc64bbb1884190663cd3d1a885462ccfcdc77793"
+  ],
+  "dev4.stderr": [
+    33188,
+    1000,
+    2096,
+    1785051,
+    2518,
+    "da02f593e5c714374715495da257e0e89f72dedb51d6b7cfc74440406c316872"
+  ],
+  "dev4.stdout": [
+    33188,
+    1000,
+    2096,
+    1785050,
+    133778,
+    "c7369567aec48ac67fb5949cdf6f4c0d6d277765e4e4a3e1084e33dc1413ebcf"
+  ],
+  "dev5.stderr": [
+    33188,
+    1000,
+    2096,
+    2830378,
+    216,
+    "f7f15c873ea6d4fbe233c4655a6f8b68eabd2e985d9d5ce09abcd10d43595756"
+  ],
+  "dev5.stdout": [
+    33188,
+    1000,
+    2096,
+    2830377,
+    133779,
+    "9809cc90127808c2e6dbbf574de45a15d0a2db5454943003cdcd7bcebac6afda"
+  ],
+  "dev6.stderr": [
+    33188,
+    1000,
+    2096,
+    2830531,
+    2125,
+    "6730249ec681c285ab2d53aba639f4844e698ef915468ecbba3f222f3e319008"
+  ],
+  "dev6.stdout": [
+    33188,
+    1000,
+    2096,
+    2830530,
+    134322,
+    "c6e6fd76a3d2c0d4ea9b95a3617447faac30666739da5eff5ca99ba6d2abe55e"
+  ],
+  "dev7.stderr": [
+    33188,
+    1000,
+    2096,
+    2954057,
+    1818,
+    "1c3f01d41591830024172db3170db3d98af9bbf5ea7b2254a4b225e81f83b52f"
+  ],
+  "dev7.stdout": [
+    33188,
+    1000,
+    2096,
+    2954056,
+    134665,
+    "28c1c820e90ff254d6f5c251707d110f2bf21952ec95384eeb61f08aef80505e"
+  ],
+  "dev8.stderr": [
+    33188,
+    1000,
+    2096,
+    2954182,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "dev8.stdout": [
+    33188,
+    1000,
+    2096,
+    2954181,
+    204513,
+    "9be6a97de8a0a7f305088a6298bcd8ff20951d4e4906d895fecdecd01f8fb876"
+  ],
+  "dev9.stderr": [
+    33188,
+    1000,
+    2096,
+    2954747,
+    0,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "dev9.stdout": [
+    33188,
+    1000,
+    2096,
+    2954743,
+    201942,
+    "8e956e345c5441a41cd195c656fa9fce2ccf769b07ac95b119f42433ad35183c"
+  ]
+}

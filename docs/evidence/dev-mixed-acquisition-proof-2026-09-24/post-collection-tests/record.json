@@ -1,0 +1,17 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24/test_audit.py",
+    "--raw",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24/raw/campaign1",
+    "--finalization-packet",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-acquisition-proof-2026-09-24"
+  ],
+  "started_ns": 1790313889970555415,
+  "process_group": 1027747,
+  "group_absent": true,
+  "finished_ns": 1790314100734510492,
+  "status": 1
+}

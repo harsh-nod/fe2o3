@@ -1,0 +1,416 @@
+{
+  "collector_reference": "only read-only campaign lock; source copy reads already closed",
+  "excluded_collector_pid": 956299,
+  "inspected_processes": 117,
+  "observed_private_references": 0,
+  "scope": "same-uid-best-effort-not-global-absence",
+  "uninspectable": [
+    {
+      "errno": 13,
+      "field": "cwd",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "maps",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/0",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/1",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/2",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/3",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/4",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/5",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/6",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/7",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/9",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/10",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/11",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/12",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/13",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/14",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/15",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/16",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/17",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/18",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/19",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/20",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/21",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/22",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/27",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/28",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/29",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/30",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/31",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/32",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/33",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/34",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/35",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/36",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/37",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/38",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/39",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/40",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd/41",
+      "process_identity": {
+        "pid": 455,
+        "start_time_ticks": 751,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "cwd",
+      "process_identity": {
+        "pid": 481,
+        "start_time_ticks": 755,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "maps",
+      "process_identity": {
+        "pid": 481,
+        "start_time_ticks": 755,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd",
+      "process_identity": {
+        "pid": 481,
+        "start_time_ticks": 755,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "cwd",
+      "process_identity": {
+        "pid": 1002,
+        "start_time_ticks": 860,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "maps",
+      "process_identity": {
+        "pid": 1002,
+        "start_time_ticks": 860,
+        "uid": 1000
+      }
+    },
+    {
+      "errno": 13,
+      "field": "fd",
+      "process_identity": {
+        "pid": 1002,
+        "start_time_ticks": 860,
+        "uid": 1000
+      }
+    }
+  ],
+  "uninspectable_count": 45,
+  "vanished": []
+}
