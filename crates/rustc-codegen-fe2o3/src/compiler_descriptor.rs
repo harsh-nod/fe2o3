@@ -20,6 +20,8 @@ pub(crate) mod checked_output_policy3_v1;
 #[path = "compiler_descriptor_laid_out_plan_v1.rs"]
 mod laid_out_plan_v1;
 
+#[path = "compiler_descriptor_conditional_contract_projection_v1.rs"]
+pub(crate) mod conditional_contract_projection_v1;
 #[path = "compiler_descriptor_conditional_generated_fields_v1.rs"]
 pub(crate) mod conditional_generated_fields_v1;
 #[path = "compiler_descriptor_conditional_output_binding_v1.rs"]

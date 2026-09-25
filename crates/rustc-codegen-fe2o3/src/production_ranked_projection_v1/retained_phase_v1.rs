@@ -114,7 +114,7 @@ impl ProductionRankedSemanticProgramV1 {
             &fe2o3_verifier::ProductionConditionalFormulaExecutionV1,
             &mut Budget<'_>,
         ) -> Result<
-            (),
+            crate::production_pipeline::conditional_generated_fields_v1::RetainedConditionalContractV1,
             crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2,
         >,
     ) -> Result<Self, Error> {

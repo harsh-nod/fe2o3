@@ -167,9 +167,7 @@ fn assert_row_affine_bundle(path: &Path, target: &str) {
     assert!(!map.sites().is_empty());
 }
 
-#[test]
-#[ignore = "requires the pinned nightly rust-src component and AMD targets"]
-fn ordinary_row_affine_source_matches_oracle_and_replay() {
+fn row_affine_source_matches_oracle_and_replay() {
     use fe2o3_kir_sim::{PersistedSimulationScheduleDocumentV1, SimulationScheduleRequestV1};
     use fe2o3_kir_sim_cli::{load_debug_simulation_bundle_v5, load_debug_simulation_schedule_v1};
 

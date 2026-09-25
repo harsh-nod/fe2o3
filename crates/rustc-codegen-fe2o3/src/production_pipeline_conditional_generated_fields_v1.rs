@@ -2,13 +2,19 @@
 //! No reconstructed root slice or source digest can construct this scope.
 use super::AuthenticatedProductionBindings;
 use crate::compiler_descriptor::{
-    TypedDescriptorRootV1, conditional_generated_fields_v1::with_generated_fields_v1,
+    TypedDescriptorRootV1,
+    conditional_contract_projection_v1::with_conditional_contract_projection_v1,
+    conditional_generated_fields_v1::{ConditionalGeneratedFieldErrorV1, with_generated_fields_v1},
 };
 use crate::production_ranked_projection_v1::{
     ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1,
 };
 use crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2;
 use fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1;
+
+#[path = "production_pipeline_conditional_contract_retention_v1.rs"]
+mod retention;
+pub(crate) use retention::RetainedConditionalContractV1;
 
 #[cfg(test)]
 pub(crate) use crate::compiler_descriptor::conditional_generated_fields_v1::observation;
@@ -51,10 +57,18 @@ pub(super) fn replay_conditional_roots_v1(
                     fields.require_replayed_root_v1(root, budget)?;
                     #[cfg(test)]
                     observation::projection_callback(&fields, execution, budget);
-                    // Inspection only. This callback neither serializes a
-                    // contract nor converts the conditional receipt to V5.
-                    let _ = execution;
-                    Ok(())
+                    with_conditional_contract_projection_v1(
+                        &fields,
+                        execution,
+                        budget,
+                        |view, budget| {
+                            RetainedConditionalContractV1::copy_unreserved(
+                                view.canonical_bytes(),
+                                budget,
+                            )
+                        },
+                    )
+                    .map_err(ConditionalGeneratedFieldErrorV1::Contract)?
                 },
             )
             .map_err(|error| {

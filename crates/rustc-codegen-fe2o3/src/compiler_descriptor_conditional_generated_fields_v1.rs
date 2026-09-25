@@ -56,6 +56,7 @@ pub(crate) enum ConditionalGeneratedFieldErrorV1 {
     Argument(ProductionSourceArgumentErrorV1),
     Replay(ProductionConditionalAggregateErrorV1),
     Nominal(nominal_v3::NominalDescriptorErrorV3),
+    Contract(super::conditional_contract_projection_v1::ConditionalContractProjectionErrorV1),
     Mismatch(&'static str),
 }
 type Error = ConditionalGeneratedFieldErrorV1;

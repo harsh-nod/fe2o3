@@ -40,6 +40,12 @@ fn workspace() -> PathBuf {
 include!("production_neutral_workgroup_reduce_driver_v1/target_llvm_v1.rs");
 include!("production_neutral_workgroup_reduce_driver_v1/row_affine_v1.rs");
 
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD targets"]
+fn ordinary_row_affine_source_matches_oracle_and_replay() {
+    row_affine_source_matches_oracle_and_replay();
+}
+
 #[derive(Clone, Copy)]
 struct ScanCase {
     feature: &'static str,

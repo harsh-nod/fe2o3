@@ -1,5 +1,6 @@
 //! Passive actual-owner observations for source fixtures. No event admits a proof.
 //! Callback entry and acceptance after all postchecks are deliberately distinct.
+use crate::production_pipeline::conditional_generated_fields_v1::RetainedConditionalContractV1;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrOwnedVerificationResourceBudgetV1 as OwnedBudget,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -96,6 +97,8 @@ pub(crate) enum Event {
     ReplayAccepted {
         root: u32,
         receipt: Receipt,
+        reserved_contract_bytes: usize,
+        contract: Vec<u8>,
         work: usize,
         storage: usize,
     },
@@ -187,10 +190,17 @@ pub(crate) fn replay_callback(
     });
 }
 
-pub(crate) fn replay_accepted(root: u32, proof: &Retained, budget: &Budget<'_>) {
+pub(crate) fn replay_accepted(
+    root: u32,
+    proof: &Retained,
+    contract: &RetainedConditionalContractV1,
+    budget: &Budget<'_>,
+) {
     record(|| Event::ReplayAccepted {
         root,
         receipt: Receipt::from_report(proof.report()),
+        reserved_contract_bytes: contract.retained_storage_v1(),
+        contract: contract.observed_bytes().to_vec(),
         work: budget.work(),
         storage: budget.storage(),
     });

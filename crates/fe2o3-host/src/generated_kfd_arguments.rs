@@ -26,6 +26,9 @@ use fe2o3_artifacts::RustDisjointIndexSpaceV1;
 
 const PACKING_OBSERVATION_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-PACKING-OBSERVATION/V1\0";
 
+#[path = "generated_kfd_conditional_premises_v1.rs"]
+pub(crate) mod conditional;
+
 /// Compiler-generated address-free argument bridge for one exact kernel signature.
 ///
 /// # Safety
@@ -465,6 +468,8 @@ impl<'allocation> GeneratedKfdArgumentBinding<'allocation> {
         };
         packing_observation.identity = packing_observation_identity(&packing_observation)?;
         Ok(GeneratedKfdPackedArguments {
+            source_plan: None,
+            source_plan_storage: 0,
             kernel_id: packed.kernel_id(),
             alignment: packed.alignment(),
             explicit_kernarg: packed.bytes().to_vec(),
@@ -481,6 +486,8 @@ impl<'allocation> GeneratedKfdArgumentBinding<'allocation> {
 /// Address-free generated kernarg bytes and owned KFD buffers for one invocation.
 #[doc(hidden)]
 pub struct GeneratedKfdPackedArguments<'allocation> {
+    source_plan: Option<GeneratedArgumentPackingPlanV1>,
+    source_plan_storage: usize,
     kernel_id: KernelId,
     alignment: u32,
     explicit_kernarg: Vec<u8>,
@@ -948,6 +955,7 @@ impl std::error::Error for GeneratedKfdCompletionError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("generated_kfd_conditional_premises_v1_tests.rs");
     use crate::generated_argument_plan::{
         CompilerGeneratedArgumentLayoutV1, validate_argument_packing,
     };

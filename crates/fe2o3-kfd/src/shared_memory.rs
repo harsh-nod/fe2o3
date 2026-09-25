@@ -798,6 +798,45 @@ pub(crate) struct SharedGttMappedResourceFactsV1 {
 
 #[allow(dead_code)]
 impl SharedGttMappedResourceFactsV1 {
+    #[cfg(test)]
+    pub(crate) fn conditional_test_facts_v1(
+        gpu_va: u64,
+        logical_bytes: usize,
+        mapped_bytes: u64,
+        id: u64,
+        generation: u64,
+    ) -> Self {
+        let device = DeviceKeyV1 {
+            physical: fe2o3_runtime_model::PhysicalDeviceIdV1(9),
+            generation: fe2o3_runtime_model::DeviceGenerationV1(1),
+        };
+        let (_, _, mapping) = model_keys(
+            VmKeyV1 {
+                device,
+                id: VmIdV1(11),
+            },
+            id,
+            generation,
+        );
+        Self {
+            gpu_va,
+            logical_bytes,
+            cpu_mapping_bytes: mapped_bytes as usize,
+            gpu_va_bytes: mapped_bytes,
+            mapping,
+            publication: MemoryPublicationKeyV1 {
+                mapping,
+                id: MemoryPublicationIdV1(id),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_conditional_test_publication_v1(mut self, id: u64) -> Self {
+        self.publication.id = MemoryPublicationIdV1(id);
+        self
+    }
+
     pub(crate) const fn gpu_va(&self) -> u64 {
         self.gpu_va
     }

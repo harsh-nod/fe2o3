@@ -18,8 +18,8 @@ use fe2o3_kfd::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Gfx942RuntimeBufferAccessV1, Gfx942RuntimePreparedBufferPolicyV1,
-    PreparedGfx942RuntimeDispatchV1,
+    Gfx942RuntimeBufferAccessV1, Gfx942RuntimeInvocationBindingV1,
+    Gfx942RuntimePreparedBufferPolicyV1, PreparedGfx942RuntimeDispatchV1,
 };
 
 /// Authenticated, invocation-specific Worker V3 authority for one gfx942 dispatch.
@@ -43,6 +43,25 @@ use crate::{
 ///     fn finalized_hsaco_length(&self) -> u64 { 0 }
 ///     fn kernel_name(&self) -> &str { "forged" }
 ///     fn dispatch_contract_sha256(&self) -> [u8; 32] { [0; 32] }
+///     fn invocation_binding(&self) -> fe2o3_runtime::Gfx942RuntimeInvocationBindingV1 {
+///         fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::OrdinaryV1
+///     }
+///     fn device_unique_id(&self) -> u64 { 0 }
+///     fn revalidate_currentness(&self) -> Result<(), Self::CurrentnessError> { Ok(()) }
+/// }
+/// ```
+///
+/// Implementations cannot accidentally inherit an ordinary-family default.
+///
+/// ```compile_fail,E0046
+/// use fe2o3_runtime::WorkerV3Gfx942ExecutionAuthorityV1;
+/// struct MissingFamily;
+/// unsafe impl WorkerV3Gfx942ExecutionAuthorityV1 for MissingFamily {
+///     type CurrentnessError = core::convert::Infallible;
+///     fn finalized_hsaco_sha256(&self) -> [u8; 32] { [0; 32] }
+///     fn finalized_hsaco_length(&self) -> u64 { 0 }
+///     fn kernel_name(&self) -> &str { "fixture" }
+///     fn dispatch_contract_sha256(&self) -> [u8; 32] { [0; 32] }
 ///     fn device_unique_id(&self) -> u64 { 0 }
 ///     fn revalidate_currentness(&self) -> Result<(), Self::CurrentnessError> { Ok(()) }
 /// }
@@ -56,6 +75,10 @@ use crate::{
 /// quantified kernel theorem, but a trusted composition boundary must then instantiate it with
 /// the exact invocation arguments, launch geometry, alias and race discipline, bounds,
 /// initialization, and completion policy represented by the returned dispatch-contract identity.
+/// `invocation_binding` must name the family's exact independently authenticated descriptor
+/// contract and bound invocation premises. It must not be copied from untrusted runtime input.
+/// Ordinary authority cannot cover a conditional request, or the reverse. This remains an unsafe
+/// trusted boundary; a public inert descriptor or prepared hash supplies no authority.
 /// `device_unique_id` must identify the same checked KFD device retained by that composition.
 /// `revalidate_currentness` must retain and recheck the same publication and evidence custody
 /// through the call. A false implementation can make safe code execute unauthorised native GPU
@@ -70,6 +93,8 @@ pub unsafe trait WorkerV3Gfx942ExecutionAuthorityV1 {
     fn kernel_name(&self) -> &str;
 
     fn dispatch_contract_sha256(&self) -> [u8; 32];
+
+    fn invocation_binding(&self) -> Gfx942RuntimeInvocationBindingV1;
 
     fn device_unique_id(&self) -> u64;
 
@@ -86,6 +111,7 @@ pub enum Gfx942AuthorizedRuntimeExecutionErrorV1<E> {
     ArtifactLengthMismatch,
     KernelNameMismatch,
     DispatchContractMismatch,
+    InvocationFamilyMismatch,
     DeviceIdentityMismatch,
     CompletedBufferCardinalityMismatch,
     CompletedBufferLengthMismatch { index: usize },
@@ -119,6 +145,9 @@ impl<E: fmt::Display> fmt::Display for Gfx942AuthorizedRuntimeExecutionErrorV1<E
             }
             Self::DispatchContractMismatch => {
                 formatter.write_str("Worker V3 invocation contract mismatch")
+            }
+            Self::InvocationFamilyMismatch => {
+                formatter.write_str("Worker V3 invocation family or conditional payload mismatch")
             }
             Self::DeviceIdentityMismatch => {
                 formatter.write_str("Worker V3 KFD device identity mismatch")
@@ -340,9 +369,6 @@ pub fn execute_authorized_gfx942_runtime_dispatch_v1<A>(
 where
     A: WorkerV3Gfx942ExecutionAuthorityV1,
 {
-    authority
-        .revalidate_currentness()
-        .map_err(Gfx942AuthorizedRuntimeExecutionErrorV1::CurrentnessBeforeDispatch)?;
     validate_authority_v1(&authority, &device, &prepared)?;
     let (request, buffer_policies) = prepared.into_authorized_execution_parts();
     // SAFETY: the unsafe authority implementation promises the complete semantic obligations for
@@ -379,9 +405,6 @@ pub fn execute_authorized_gfx942_runtime_debug_target_dispatch_v1<A>(
 where
     A: WorkerV3Gfx942ExecutionAuthorityV1,
 {
-    authority
-        .revalidate_currentness()
-        .map_err(Gfx942AuthorizedRuntimeExecutionErrorV1::CurrentnessBeforeDispatch)?;
     validate_authority_v1(&authority, &device, &prepared)?;
 
     let telemetry_facts = telemetry
@@ -455,10 +478,6 @@ pub fn execute_authorized_gfx942_runtime_debug_target_dispatch_v2<A>(
 where
     A: WorkerV3Gfx942ExecutionAuthorityV1,
 {
-    authority
-        .revalidate_currentness()
-        .map_err(Gfx942AuthorizedRuntimeExecutionErrorV1::CurrentnessBeforeDispatch)
-        .map_err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::Preflight)?;
     validate_authority_v1(&authority, &device, &prepared)
         .map_err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::Preflight)?;
     let facts = DebugTelemetryFactsV1::from_prepared(&prepared)
@@ -864,6 +883,7 @@ where
         prepared.finalized_hsaco_length(),
         prepared.kernel_name(),
         prepared.dispatch_contract_sha256(),
+        prepared.invocation_binding(),
         device.observation().unique_id(),
     )
 }
@@ -874,11 +894,20 @@ fn validate_authority_bindings_v1<A>(
     finalized_hsaco_length: u64,
     kernel_name: &str,
     dispatch_contract_sha256: [u8; 32],
+    invocation_binding: Gfx942RuntimeInvocationBindingV1,
     device_unique_id: u64,
 ) -> Result<(), Gfx942AuthorizedRuntimeExecutionErrorV1<A::CurrentnessError>>
 where
     A: WorkerV3Gfx942ExecutionAuthorityV1,
 {
+    // Family/payload comparison precedes callbacks, telemetry and native effects
+    // in all three execution entrypoints. A matching ordinary hash is insufficient.
+    if authority.invocation_binding() != invocation_binding {
+        return Err(Gfx942AuthorizedRuntimeExecutionErrorV1::InvocationFamilyMismatch);
+    }
+    authority
+        .revalidate_currentness()
+        .map_err(Gfx942AuthorizedRuntimeExecutionErrorV1::CurrentnessBeforeDispatch)?;
     if authority.finalized_hsaco_sha256() != finalized_hsaco_sha256 {
         return Err(Gfx942AuthorizedRuntimeExecutionErrorV1::ArtifactIdentityMismatch);
     }
@@ -896,6 +925,10 @@ where
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "conditional_authority_tests.rs"]
+mod conditional_authority_tests;
 
 #[cfg(test)]
 mod tests {
@@ -959,6 +992,10 @@ mod tests {
             self.dispatch
         }
 
+        fn invocation_binding(&self) -> Gfx942RuntimeInvocationBindingV1 {
+            Gfx942RuntimeInvocationBindingV1::OrdinaryV1
+        }
+
         fn device_unique_id(&self) -> u64 {
             self.device
         }
@@ -981,7 +1018,15 @@ mod tests {
     fn validate(
         authority: &TestAuthorityV1,
     ) -> Result<(), Gfx942AuthorizedRuntimeExecutionErrorV1<core::convert::Infallible>> {
-        validate_authority_bindings_v1(authority, [1; 32], 7_000, "kernel_v1", [2; 32], 0x1234)
+        validate_authority_bindings_v1(
+            authority,
+            [1; 32],
+            7_000,
+            "kernel_v1",
+            [2; 32],
+            Gfx942RuntimeInvocationBindingV1::OrdinaryV1,
+            0x1234,
+        )
     }
 
     #[test]
