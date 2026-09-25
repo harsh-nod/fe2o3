@@ -273,6 +273,96 @@ fn cpu_replay_rejects_callback_account_substitution_and_floor_release() {
     }
 }
 
+#[test]
+fn portable_entry_and_live_binding_adapter_have_identical_results_and_costs() {
+    fn observe(
+        binding: &AuthenticatedReferenceEffectBindingV1,
+        portable_entry: bool,
+        work_limit: usize,
+        storage_limit: usize,
+    ) -> (
+        Result<
+            (
+                Vec<ReferenceOutputWriteV1>,
+                Vec<(u32, u32, ReferenceEffectExpressionV1)>,
+                Vec<ResolvedReferenceBoundsCheckV1>,
+            ),
+            ReferenceBindingErrorV1,
+        >,
+        usize,
+        usize,
+        usize,
+    ) {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.charge_work(17).unwrap();
+        budget.reserve_storage(31).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        let consume = |replay: &ReplayedCpuEffectsV1, budget: &mut Budget<'_>| {
+            assert!(budget.work_ledger_identity_v1() == account);
+            (
+                replay.writes.clone(),
+                replay
+                    .values
+                    .iter()
+                    .map(|value| (value.block, value.statement, value.expression.clone()))
+                    .collect(),
+                replay.bounds.clone(),
+            )
+        };
+        let result = if portable_entry {
+            portable::with_replayed_output_writes_v1(
+                ReferenceReplayInputV1 {
+                    signature_preimage: &binding.signature_preimage,
+                    effect_ir: &binding.effect_ir,
+                    effect_ir_sha256: binding.effect_ir_sha256,
+                    observable_output_writes: &binding.observable_output_writes,
+                },
+                &mut budget,
+                consume,
+            )
+        } else {
+            binding.with_replayed_output_writes_v1(&mut budget, consume)
+        };
+        (
+            result,
+            budget.work(),
+            budget.peak_storage(),
+            budget.storage(),
+        )
+    }
+
+    for fixture in [fixture(false), fixture(true), bounded_fixture()] {
+        for mutation in 0..4 {
+            let mut binding = fixture.clone();
+            match mutation {
+                0 => {}
+                1 => binding.effect_ir_sha256[0] ^= 1,
+                2 => binding.observable_output_writes[0].statement += 1,
+                3 => {
+                    binding.effect_ir.blocks[0].terminator =
+                        ReferenceTerminatorV1::Goto { target: 0 };
+                    binding.effect_ir_sha256 = binding.effect_ir.canonical_sha256_v1();
+                }
+                _ => unreachable!(),
+            }
+            let live = observe(&binding, false, usize::MAX, usize::MAX);
+            assert_eq!(live, observe(&binding, true, usize::MAX, usize::MAX));
+            assert_eq!(live.3, 31);
+            assert_eq!(live.0.is_ok(), mutation == 0);
+            if mutation == 0 {
+                let (work, storage) = (live.1, live.2);
+                for (work, storage) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
+                    assert_eq!(
+                        observe(&binding, false, work, storage),
+                        observe(&binding, true, work, storage),
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn local(local: u32) -> ReferencePlaceV1 {
     ReferencePlaceV1 {
         local,

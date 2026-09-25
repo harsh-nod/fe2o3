@@ -13,17 +13,7 @@ use fe2o3_pliron::ProductionConditionalRuntimePremiseV1 as Premise;
 
 type CpuExpr = ReferenceEffectExpressionV1;
 
-pub(crate) struct ReplayedCpuValueV1 {
-    pub(crate) block: u32,
-    pub(crate) statement: u32,
-    pub(crate) expression: CpuExpr,
-}
-
-pub(crate) struct ReplayedCpuEffectsV1 {
-    pub(crate) writes: Vec<ReferenceOutputWriteV1>,
-    pub(crate) values: Vec<ReplayedCpuValueV1>,
-    pub(crate) bounds: Vec<ResolvedReferenceBoundsCheckV1>,
-}
+pub(crate) use fe2o3_verifier::portable_reference_v1::{ReplayedCpuEffectsV1, ReplayedCpuValueV1};
 
 fn premise(premises: &[Premise], required: Premise, budget: &mut Budget<'_>) -> Result<(), Error> {
     for actual in premises {
