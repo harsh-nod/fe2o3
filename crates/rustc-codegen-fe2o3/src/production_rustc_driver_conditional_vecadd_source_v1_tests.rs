@@ -23,6 +23,9 @@ const GUARD_MISMATCH: &str =
     "GPU write has a logical path guard outside the exact memory-bounds selection";
 const AMBIGUOUS_LOAD: &str = "safe reference load matches multiple ranked GPU reads";
 
+#[path = "production_rustc_driver_conditional_vecadd_prepared_v1_tests.rs"]
+mod prepared_inputs;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum Case {
     Manifest,

@@ -62,6 +62,23 @@ fn failed(stage: SourceStage, message: impl std::fmt::Display) -> SourceFailure 
     SourceFailure::new(stage, message)
 }
 
+fn capture_command(cargo: &Path) -> Result<Command, SourceFailure> {
+    let cargo = cargo
+        .canonicalize()
+        .map_err(|e| failed(SourceStage::Invocation, e))?;
+    let rustc = cargo
+        .parent()
+        .ok_or_else(|| failed(SourceStage::Invocation, "Cargo has no tool directory"))?
+        .join("rustc")
+        .canonicalize()
+        .map_err(|e| failed(SourceStage::Invocation, e))?;
+    // Bind dependency builds and the recorded root to Cargo's actual toolchain,
+    // rather than resolving a different compiler through the inherited PATH.
+    let mut command = clean_command(cargo);
+    command.env("RUSTC", rustc);
+    Ok(command)
+}
+
 fn feature_args(command: &mut Command, fixture: &Fixture) {
     if !fixture.compiler_input.default_features {
         command.arg("--no-default-features");
@@ -233,7 +250,7 @@ pub(super) fn capture(
     let package_dir = manifest
         .parent()
         .ok_or_else(|| failed(SourceStage::CargoMetadata, "manifest has no parent"))?;
-    let mut metadata_command = clean_command(env!("CARGO"));
+    let mut metadata_command = capture_command(Path::new(env!("CARGO")))?;
     metadata_command
         .current_dir(workspace)
         .args([
@@ -310,7 +327,7 @@ pub(super) fn capture(
         .map_err(|e| failed(SourceStage::Invocation, e))?;
     let argv_file = case.join("cargo-root.argv");
     let env_file = case.join("cargo-root.env");
-    let mut command = clean_command(env!("CARGO"));
+    let mut command = capture_command(Path::new(env!("CARGO")))?;
     command.current_dir(&cargo_workspace).args([
         "check", "--offline", "--locked", "--release", "-Zbuild-std=core", "--lib",
         "--target", "amdgcn-amd-amdhsa", "--message-format=json-render-diagnostics", "--manifest-path",
@@ -437,6 +454,24 @@ pub(super) fn capture(
         cfg,
         cargo_diagnostics,
     })
+}
+
+#[test]
+fn cargo_capture_binds_the_compiler_to_the_actual_cargo_toolchain() {
+    let cargo = Path::new(env!("CARGO")).canonicalize().unwrap();
+    let rustc = cargo
+        .parent()
+        .unwrap()
+        .join("rustc")
+        .canonicalize()
+        .unwrap();
+    let command = capture_command(Path::new(env!("CARGO"))).unwrap();
+    assert_eq!(command.get_program(), cargo.as_os_str());
+    assert_eq!(
+        command.get_envs().find(|(key, _)| *key == "RUSTC"),
+        Some((std::ffi::OsStr::new("RUSTC"), Some(rustc.as_os_str())))
+    );
+    assert!(capture_command(Path::new("/nonexistent/fe2o3-capture/cargo")).is_err());
 }
 
 #[test]

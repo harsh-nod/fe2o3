@@ -103,8 +103,9 @@ case with two distinct reads of one parameter remains to be added. The ordinary
 early-refusal test observes real account cleanup, but not independent source/root
 destructor liveness; the drop-order fix also relies on Rust's lexical drop order.
 
-The prepared Vecadd exporter, generated-field descriptor bridge and host-premise
-patches remain separate, unintegrated work. Protected source replay must first
+The [prepared Vecadd exporter](prepared-conditional-vecadd-20260925.md) is now
+integrated as test infrastructure. The generated-field descriptor bridge and
+host-premise patches remain separate, unintegrated work. Protected source replay must first
 demonstrate retention and consumption in the real transaction. Conditional target
 admission, applicable machine/numerical refinement, native issuance and generated
 safe host launch are still required. This change retains an existing theorem; it
