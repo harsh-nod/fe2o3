@@ -94,10 +94,7 @@ fn v4_intent_persistence_and_restart_stay_structural_and_cannot_downgrade() {
     let record = persisted.storage_record();
     assert_eq!(persisted.finalized_evidence().identity(), identity);
     drop(persisted);
-    for after_finish in [false, true] {
-        if after_finish {
-            finish_build_attempt(&directory.0, &producer(), attempt).unwrap();
-        }
+    for _ in 0..2 {
         assert!(matches!(
             recover_protected_worker_v3_hsaco_publication_v1(&directory.0, &producer(), attempt),
             Err(WorkerV3HsacoPublicationErrorV1::DescriptorSchemaMismatch)
@@ -124,6 +121,27 @@ fn v4_intent_persistence_and_restart_stay_structural_and_cannot_downgrade() {
         assert!(!recovered.grants_compiler_authority() && !recovered.grants_proof_authority());
         assert!(!recovered.grants_publication_authority());
         assert!(!recovered.grants_load_authority() && !recovered.grants_launch_authority());
+    }
+
+    // Structural intent recovery never authorizes backend completion. Finishing
+    // this attempt fails it, so subsequent recovery must respect the terminal phase.
+    let error = finish_build_attempt(&directory.0, &producer(), attempt).unwrap_err();
+    assert!(matches!(
+        error,
+        fe2o3_artifact_transaction::EmitError::BuildAttempt { reason }
+            if reason == "build completed without an authorized device backend"
+    ));
+    let v1 = recover_protected_worker_v3_hsaco_publication_v1(&directory.0, &producer(), attempt)
+        .map(|_| ());
+    let v3 = recover_nominal_worker_publication_v3(&directory.0, &producer(), attempt).map(|_| ());
+    let v4 = recover_nominal_worker_publication_v4(&directory.0, &producer(), attempt).map(|_| ());
+    for result in [v1, v3, v4] {
+        assert!(matches!(
+            result,
+            Err(WorkerV3HsacoPublicationErrorV1::Storage(
+                fe2o3_artifact_transaction::WorkerV3PublicationIntentErrorV1::Attempt { reason }
+            )) if reason == "build occurrence cannot recover restart state in its current phase"
+        ));
     }
 }
 
