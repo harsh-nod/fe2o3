@@ -20,6 +20,8 @@ use sha2::{Digest, Sha256};
 
 #[path = "public_api/nominal_v3.rs"]
 mod nominal_v3;
+#[path = "public_api/nominal_v4.rs"]
+mod nominal_v4;
 
 const ELF_HEADER_BYTES: usize = 64;
 const PROGRAM_HEADER_BYTES: usize = 56;

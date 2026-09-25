@@ -33,8 +33,10 @@ mod native_worker_finalization;
 mod native_worker_publication;
 mod native_worker_replay;
 mod native_worker_replay_resources;
+mod nominal_descriptor_common;
 mod nominal_descriptor_finalization_v3;
-mod nominal_descriptor_physical_v3;
+mod nominal_descriptor_finalization_v4;
+mod nominal_descriptor_physical;
 mod nominal_worker_finalization_v3;
 mod production_kir_v7_structural_bridge_v1;
 mod production_profiler_kir_archive_v1;
@@ -150,6 +152,12 @@ pub use nominal_descriptor_finalization_v3::{
     NominalFinalizationErrorV3, derive_unfinalized_nominal_hsaco_v3,
     finalize_unfinalized_nominal_hsaco_v3, inspect_finalized_nominal_hsaco_v3,
     inspect_unfinalized_nominal_hsaco_v3,
+};
+pub use nominal_descriptor_finalization_v4::{
+    FinalizedNominalHsacoV4, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4, NominalDescriptorInspectionV4,
+    NominalFinalizationErrorV4, derive_unfinalized_nominal_hsaco_v4,
+    finalize_unfinalized_nominal_hsaco_v4, inspect_finalized_nominal_hsaco_v4,
+    inspect_unfinalized_nominal_hsaco_v4,
 };
 pub use nominal_worker_finalization_v3::{
     NominalWorkerFinalizationErrorV3, PreparedFinalizedNominalWorkerHsacoV3,
@@ -1484,13 +1492,11 @@ fn locate_versioned_descriptor_section(
         let name_offset = usize::try_from(read_u32(bytes, header + ELF64_SECTION_NAME_OFFSET)?)
             .map_err(|_| FinalizationError::InvalidElf("section name offset overflows usize"))?;
         let is_descriptor = fixed_section_name_matches(shstr, name_offset, section_name)?;
-        for known in [
-            DEVICE_DESCRIPTOR_SECTION_NAME,
-            fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V3,
-        ] {
-            if known != section_name && fixed_section_name_matches(shstr, name_offset, known)? {
-                return Err(FinalizationError::DescriptorSectionVersionMismatch);
-            }
+        // Reserve the entire descriptor namespace, including future schemas.
+        // The exact-name check validated the offset; this bounded prefix check
+        // never scans hostile unbounded section-name suffixes.
+        if !is_descriptor && shstr[name_offset..].starts_with(b".fe2o3.kd.") {
+            return Err(FinalizationError::DescriptorSectionVersionMismatch);
         }
         let section_type = read_u32(bytes, header + ELF64_SECTION_TYPE_OFFSET)?;
         let range = section_file_range(bytes, header)?;

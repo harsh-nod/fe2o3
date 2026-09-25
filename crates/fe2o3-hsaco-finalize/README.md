@@ -2,7 +2,8 @@
 
 `fe2o3-hsaco-finalize` performs bounded post-link finalization of an already embedded canonical
 descriptor table in an AMDHSA HSACO. The V1 API uses `.fe2o3.kd.v1`; the explicit nominal
-V3 API uses `.fe2o3.kd.v3`. Each is an 8-byte-aligned, file-backed `SHT_PROGBITS` section with no ELF flags,
+V3 API uses `.fe2o3.kd.v3`, and the conditional nominal V4 API uses `.fe2o3.kd.v4`.
+Each is an 8-byte-aligned, file-backed `SHT_PROGBITS` section with no ELF flags,
 so it is neither allocated, writable, executable, nor compressed.
 
 The finalizer accepts at most `fe2o3_hsaco::MAX_HSACO_BYTES` and one descriptor table of at most
@@ -43,8 +44,9 @@ or compiler-correctness evidence.
 
 `finalize_unfinalized_nominal_hsaco_v3` requires exact zero-digest source bytes and retains
 the nominal V3 wire in a move-only artifact. `usize`/`u64` and `isize`/`i64` remain distinct
-even when their physical ABI is identical. V1 and V3 inspectors reject mixed sections and
-the other version; neither falls back or converts nominal wire into a V1 table.
+even when their physical ABI is identical. All inspectors reserve `.fe2o3.kd.*` and reject
+mixed sections or any other schema, including unknown future names. No inspector falls
+back or converts nominal wire into a V1 table.
 
 V3 shares the ELF placement and physical argument/launch checks with V1. It additionally
 checks the declared wavefront requirement. Its COV6 contract declares explicit size plus
@@ -69,6 +71,61 @@ metadata are a separate bounded allocation domain, not a transfer of input credi
 `artifact_byte_capacity` observes only the returned byte-buffer capacity, not a full
 owner storage receipt. Tests include hand-authored ELF
 and fixture-worker transactions; neither is protected proof or GPU qualification.
+
+## Conditional nominal V4 structural stage
+
+`inspect_unfinalized_nominal_hsaco_v4`, `inspect_finalized_nominal_hsaco_v4`,
+`finalize_unfinalized_nominal_hsaco_v4` and `derive_unfinalized_nominal_hsaco_v4`
+use the existing V4 codec and compiler FFI section-name constant. Every kernel must
+retain its mandatory conditional contract, including the nominal field/type/layout
+joins. The public inspection returns only `DeviceDescriptorTableV4`; there is no V3
+table conversion. The distinct move-only `FinalizedNominalHsacoV4` retains exact V4
+bytes and independently inspected physical metadata.
+
+Finalization compares the entire embedded zero-digest descriptor against the exact
+caller-provided source. It patches only the code-object digest and independently
+rechecks the output. Canonical alternative contracts still fail that source comparison.
+V3 and V4 share physical ABI checks, normalized hashing, copying, and reconstruction;
+their public types, codecs and required contracts remain distinct. V1 behavior is
+unchanged except for rejecting other names in the reserved descriptor namespace.
+
+Both nominal scratch constants now explicitly include shared `Format`/`Inspection`
+headers and physical projection, launch and ABI copies in addition to the versioned
+codec/query declarations. These are conservative logical typed extents, not measured
+compiler stack layouts or whole-process accounting. The existing ELF/AMDHSA allocation,
+caller storage, callback state and returned artifact exclusions still apply. Work
+refusal returns no partial owner and never mutates caller bytes.
+
+This is issue #272's inert structural artifact stage, not milestone closure. Public
+descriptor/source hashes do not authenticate compiler origin, conditional source proof,
+machine refinement, publication currentness or launch authority. No V4 Worker finalizer
+or host admission is enabled. Remaining integration must carry the exact retained
+conditional proof/contract owner and original resource account through target lowering,
+applicable machine evidence, authenticated Worker finalization/publication and safe-host
+admission. Protected actual-source replay and target-matched hardware qualification
+remain separate requirements.
+
+The `public_api::nominal_v4` fixtures cover exact roundtrips for both COV6 forms,
+multi-entry contract retention, source substitution, contract mutation/removal/rebinding,
+V3/V4 relabeling, duplicate/mixed/future sections, physical ABI disagreement, digest
+tampering, and scratch/work refusal. Compile-fail doctests keep the V4 owner move-only
+and prevent typed V3 downgrade. These are structural tests, not proof or hardware credit.
+
+No Cargo build or test was run in the artifact worktree while primary guarded runs
+were active. Primary serial integration should run the pinned, guarded equivalents of:
+
+```text
+cargo test -p fe2o3-hsaco-finalize --test public_api
+cargo test -p fe2o3-hsaco-finalize --lib
+cargo test -p fe2o3-hsaco-finalize --test worker_v3_hsaco_admission
+cargo test -p fe2o3-hsaco-finalize --doc
+cargo check -p fe2o3-hsaco-finalize --all-targets
+```
+
+The full public API target includes existing V1/V3 regressions; the library and Worker
+admission selections cover the existing ordinary/native/nominal paths after the shared
+refactor. Keep the primary runner's offline/locked, single-job/thread and disabled-GPU
+constraints. Formatting and static review alone are not compilation or test evidence.
 
 ## Multi-input native link plans
 
