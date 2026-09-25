@@ -385,8 +385,9 @@ V3 regression, identity domains and exact/one-short resource limits. Opt-in
 fixture Worker and real recovered native owners to check V1-only refusals,
 original-budget exhaustion and unchanged legacy independent replay/custody.
 Compile-fail docs cover owner fabrication, downgrade, private core access and
-legacy publication/compact entrypoints. These selections require the primary
-serial guard; no Cargo/build/test execution was performed for this sidecar edit.
+legacy publication/compact entrypoints. See the
+[integration evidence](../../docs/evidence/conditional-call-coverage-native-v4-20260925.md)
+for executed tests and remaining production boundaries.
 
 `prepare_native_worker_hsaco_publication_v1` retains the finalized owner while
 deriving a native-domain plan. Persistence and recovery reuse the existing opaque

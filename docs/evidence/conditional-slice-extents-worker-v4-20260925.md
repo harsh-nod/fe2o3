@@ -1,5 +1,9 @@
 # Slice Extents and Structural Worker V4
 
+Follow-up: [conditional call coverage and native V4](conditional-call-coverage-native-v4-20260925.md)
+resolves the source-coverage failure below and passes Vecadd preparation on both
+targets. Protected proof and end-to-end qualification remain outstanding.
+
 Continuation of [V4 artifacts and context fields](conditional-v4-context-validation-20260925.md)
 for #272. **No milestone closes and no kernel gains end-to-end qualification.**
 The ordinary slice-extent projection and structural Worker recovery tests pass.
