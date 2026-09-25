@@ -1,0 +1,15 @@
+{
+  "command": [
+    "cargo",
+    "check",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime"
+  ],
+  "started_ns": 1790375971638062209,
+  "process_group": 335572,
+  "group_absent": true,
+  "finished_ns": 1790375998791774804,
+  "status": 0
+}

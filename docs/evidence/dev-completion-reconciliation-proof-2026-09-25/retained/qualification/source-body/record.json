@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-completion-reconciliation-source.py",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-reconciliation-proof-requal-20260925-pWhjaneC/qualification/body-comparison"
+  ],
+  "started_ns": 1790375419295212568,
+  "process_group": 233215,
+  "group_absent": true,
+  "finished_ns": 1790375419543261706,
+  "status": 0
+}

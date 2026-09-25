@@ -1,0 +1,33 @@
+{
+  "absent_paths": [
+    "/home/harsh/.codex-tmp/fe2o3-reconciliation-proof-requal-20260925-pWhjaneC",
+    "/dev/shm/fe2o3-reconciliation-proof-requal-20260925-9SGsXJDH"
+  ],
+  "observed_at": "2026-09-25T23:53:08.561950+00:00",
+  "path_accounted_allocated_bytes_removed": 1940582400,
+  "previously_absent": [],
+  "remote_resources_created": false,
+  "removed_paths": [
+    "/home/harsh/.codex-tmp/fe2o3-reconciliation-proof-requal-20260925-pWhjaneC",
+    "/dev/shm/fe2o3-reconciliation-proof-requal-20260925-9SGsXJDH"
+  ],
+  "retained_files": 69,
+  "retained_hashes_match": true,
+  "scope": "Signed-source planner development; not final logical-mutation, outcome-witness, relocated-replay or native qualification",
+  "terminal_groups_absent": [
+    233111,
+    336316,
+    372503,
+    233250,
+    335572,
+    334607,
+    355252,
+    245360,
+    291389,
+    364321,
+    234738,
+    233215,
+    233118,
+    233129
+  ]
+}

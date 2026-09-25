@@ -1,0 +1,26 @@
+    Checking fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Checking fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+    Checking pin-project-lite v0.2.17
+    Checking fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+    Checking fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+    Checking fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+    Checking num-traits v0.2.19
+    Checking fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+    Checking fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+    Checking fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+    Checking fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+    Checking fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+    Checking slab v0.4.12
+    Checking futures-core v0.3.34
+    Checking futures-task v0.3.34
+    Checking futures-util v0.3.34
+    Checking rmp v0.8.15
+    Checking rmpv v1.3.1
+    Checking tokio v1.47.1
+    Checking fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+    Checking futures-executor v0.3.34
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 38s

@@ -1,0 +1,17 @@
+{
+  "observed_utc": "2026-09-25T22:29:33Z",
+  "source_commit": "7935918fcb08b931a70a41015a039f0b7c1e08c2",
+  "prior_session": 95065,
+  "session_lookup": "Unknown process id",
+  "matching_runner_processes": 0,
+  "absent_paths": [
+    "/dev/shm/fe2o3-reconciliation-proof-20260925-CmkwwmzU",
+    "/dev/shm/fe2o3-reconciliation-proof-target-20260925-kEBXCqW3"
+  ],
+  "removal_cause": "Unknown",
+  "raw_development_attempts_retained": false,
+  "prior_qualification_accepted": false,
+  "cleanup_claim": false,
+  "scope": "Current absence observation, not a reconstructed receipt or proof of cleanup",
+  "next_action": "Requalify unchanged signed source with persistent logs and an ephemeral build target"
+}

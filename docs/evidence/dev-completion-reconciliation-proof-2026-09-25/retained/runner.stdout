@@ -1,0 +1,14 @@
+baseline-signature: PASS
+source-signature: PASS
+source-tests: PASS
+source-body: PASS
+closure-before: PASS
+proof-before: PASS
+gnu: PASS
+musl: PASS
+doctests: PASS
+default: PASS
+clippy: PASS
+format: PASS
+proof-after: PASS
+closure-after: PASS
