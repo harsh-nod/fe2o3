@@ -1,0 +1,37 @@
+{
+  "commands": {
+    "absence": [
+      "/usr/bin/python3",
+      "-I",
+      "-B",
+      "-c",
+      "import os,sys; assert not os.path.lexists(sys.argv[1])",
+      "/home/harsh/.codex-tmp/fe2o3-mixed-lifecycle-20260924-rzYF3c6z"
+    ],
+    "calibration": [
+      "/usr/bin/python3",
+      "-I",
+      "-B",
+      "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/test-owner-mixed-lifecycle.py",
+      "--campaign",
+      "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-owner-mixed-lifecycle-2026-09-24/raw/campaign2"
+    ],
+    "replay": [
+      "/usr/bin/python3",
+      "-I",
+      "-B",
+      "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-mixed-lifecycle.py",
+      "--output",
+      "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-owner-mixed-lifecycle-2026-09-24/raw/campaign2",
+      "--verify"
+    ]
+  },
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "source": "33b4606f4134045757ce6f6d340e829ba79e2314",
+  "timeout_seconds": 900
+}

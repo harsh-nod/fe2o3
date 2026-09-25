@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-mixed-lifecycle.py",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-owner-mixed-lifecycle-2026-09-24/raw/campaign2",
+    "--verify"
+  ],
+  "started_ns": 1790350588907176979,
+  "process_group": 2797255,
+  "group_absent": true,
+  "finished_ns": 1790350606234012220,
+  "status": 0
+}

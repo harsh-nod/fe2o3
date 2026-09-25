@@ -79,15 +79,19 @@ whole mixed witness append: its signed campaign reported both a postcondition
 failure and resource exhaustion, and was rejected. The helper-local development
 case reports only logical postcondition failures at the original limits. Checker
 calibration also rejects combined logical-failure/resource-exhaustion reports.
-This control correction changes no proved source, contract or expected count;
-a fresh signed campaign is still required.
+This control correction changes no proved source, contract or expected count.
+The subsequent signed-source campaign passes with the corrected control.
 
 The checker calibration has eight CPU-only groups. Its optional `--campaign`
 mode adds relocated read-only replay and four rehashed-receipt corruptions;
 those two groups require an already complete campaign and never launch Verus.
 
-Source-bound campaign acceptance is pending. Scoped development results do not
-replace that gate. Global proof-inventory registration, Context maps and original
+The [source-bound qualification packet](evidence/dev-owner-mixed-lifecycle-2026-09-24/README.md)
+passes all sixteen stages: 1,271-obligation positive brackets, nine logical
+negatives, frozen 738/720 regressions and source/tool continuity. Retained replay,
+ten checker groups, byte-exact collection and exact-owned cleanup pass. The
+rejected first campaign remains preserved. Global proof-inventory registration,
+Context maps and original
 binding authentication, writer/read transaction composition, panic/unwind,
 async carriage and producer-first completion reconciliation remain separate
 obligations.

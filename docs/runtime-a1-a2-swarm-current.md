@@ -10,7 +10,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | --- | --- | --- |
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Active, incomplete | Protected generated execution, native high-depth/out-of-order qualification, aggregate accounting and production refinement |
-| A2: dependencies and overlap | Active, incomplete | Repeated generated compute/copy graphs, constructor-origin mixed-input/reconciliation proofs, physical overlap and bounded residency |
+| A2: dependencies and overlap | Active, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
 | A3: local multi-GPU | Partial foundations | XGMI copy witnesses exist; unified compute, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
@@ -23,6 +23,24 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+Latest proof qualification (2026-09-25): the
+[constructor-origin mixed lifecycle packet](evidence/dev-owner-mixed-lifecycle-2026-09-24/README.md)
+passes all sixteen stages from signed `33b4606f4`: both whole-root positives
+verify 1,271 obligations with zero errors, all nine logical mutations reject,
+and the frozen mixed/stable regressions verify 738/720. Retained replay, ten
+checker groups, four publication-test groups and source/tool continuity pass.
+All 1,068 scratch artifacts, including the rejected first campaign, are retained
+before exact-owned removal and independent absence; cleanup removes 23,113,728
+path-accounted allocated bytes. A separate test-only CPU regression covers
+discarded producer results after physical consumer success: GNU/musl each pass
+1,404 runtime tests with 22 hardware-only ignores; 46 doctests, strict Clippy and
+formatting pass. This closes the bounded constructor-origin mixed-lifecycle
+campaign, not Context reconciliation, global proof registration, protected
+generated execution, aggregate resources, native overlap or performance.
+A1/A2 and all broader accepted checkpoints remain unchanged. Next is production
+completion-settlement correspondence and the remaining generated/native/resource
+gates. The earlier development and rejected campaign records below are history.
 
 Latest development (2026-09-24): [constructor-origin mixed input
 lifecycle](runtime-context-mixed-lifecycle-v1.md) integrates one acquisition event

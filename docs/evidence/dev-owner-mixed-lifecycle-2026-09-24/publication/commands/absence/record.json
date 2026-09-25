@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "-c",
+    "import os,sys; assert not os.path.lexists(sys.argv[1])",
+    "/home/harsh/.codex-tmp/fe2o3-mixed-lifecycle-20260924-rzYF3c6z"
+  ],
+  "started_ns": 1790350716257439877,
+  "process_group": 2832936,
+  "group_absent": true,
+  "finished_ns": 1790350716287213083,
+  "status": 0
+}

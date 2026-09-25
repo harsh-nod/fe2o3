@@ -1,0 +1,125 @@
+diff --git a/crates/fe2o3-runtime/src/context/tests/producer_launch_tests.rs b/crates/fe2o3-runtime/src/context/tests/producer_launch_tests.rs
+index 51cbd1473..3e89b6e10 100644
+--- a/crates/fe2o3-runtime/src/context/tests/producer_launch_tests.rs
++++ b/crates/fe2o3-runtime/src/context/tests/producer_launch_tests.rs
+@@ -1,7 +1,7 @@
+-use super::async_journal_tests::{MixedArguments, region, state};
++use super::async_journal_tests::{MixedArguments, region, state, writer_state};
+ use super::peer_directed_tests::Observation;
+ use super::*;
+-use fe2o3_runtime_model::ContextProducerReadStatusV1;
++use fe2o3_runtime_model::{ContextProducerReadStatusV1, ContextWriterStateV1};
+ use std::sync::{Arc, Mutex};
+ 
+ type Context = RuntimeContextV1<MockBackend>;
+@@ -1142,6 +1142,110 @@ fn producer_launch_retained_consumer_success_cannot_override_producer_results()
+     }
+ }
+ 
++#[test]
++fn producer_launch_discarded_producer_result_preserves_quiescence_without_success() {
++    for writable in [false, true] {
++        for discarded in 0..2 {
++            let mut f = Fixture::new(4);
++            let (mut producers, events) = f.producers();
++            let mut consumer = f.launch(2, f.mixed(writable), &events).unwrap();
++            for event in events {
++                f.context.release_event(event).unwrap();
++            }
++            let callbacks = Arc::new(Mutex::new(Vec::new()));
++            for submission in [&producers[0], &producers[1], &consumer] {
++                let calls = callbacks.clone();
++                let id = submission.id;
++                f.context
++                    .on_completion(submission, move |status| {
++                        calls.lock().unwrap().push((id, status))
++                    })
++                    .unwrap();
++            }
++            assert_eq!(
++                f.context.poll(&mut consumer).unwrap(),
++                RuntimePollV1::Pending
++            );
++            for submission in [&producers[0], &producers[1], &consumer] {
++                assert_eq!(
++                    f.context.backend.producer_launch.completed[&submission.backend_submission],
++                    BackendPollV1::Succeeded
++                );
++            }
++            f.assert_mixed_bytes(consumer.backend_submission, &producers);
++            for _ in 0..discarded {
++                assert_eq!(
++                    f.context.poll(&mut consumer).unwrap(),
++                    RuntimePollV1::Pending
++                );
++            }
++            f.context.backend.producer_launch.observations.insert(
++                producers[discarded].backend_submission,
++                Observation::Quiescent,
++            );
++            assert!(matches!(
++                f.context.poll(&mut consumer),
++                Err(RuntimeErrorV1::BackendQuiescent(MockError(
++                    "producer launch quiescent"
++                )))
++            ));
++            let unknown = RuntimeCompletionStatusV1::QuiescentWithoutResult;
++            assert_eq!(f.context.query_submission(&consumer).unwrap(), unknown);
++            assert!(f.context.retained_directed_success_v1(consumer.id));
++            assert_eq!(
++                f.context.query_submission(&producers[discarded]).unwrap(),
++                unknown
++            );
++            assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
++            assert!(!f.context.terminal);
++            for producer in &producers {
++                assert_eq!(f.context.submissions[&producer.id].dependency_retains, 0);
++            }
++            assert_eq!(
++                writer_state(&f.context, f.allocations[discarded]),
++                ContextWriterStateV1::Unknown { member_count: 1 }
++            );
++            if writable {
++                assert_eq!(
++                    writer_state(&f.context, f.allocations[3]),
++                    ContextWriterStateV1::Unknown { member_count: 1 }
++                );
++            }
++            let mut expected: Vec<_> = producers[..discarded]
++                .iter()
++                .map(|producer| (producer.id, RuntimeCompletionStatusV1::Succeeded))
++                .collect();
++            expected.extend([(producers[discarded].id, unknown), (consumer.id, unknown)]);
++            assert_eq!(*callbacks.lock().unwrap(), expected);
++            let calls = f.context.backend.producer_launch.calls.len();
++            for submission in [&mut producers[discarded], &mut consumer] {
++                assert_eq!(
++                    f.context.poll(submission).unwrap(),
++                    RuntimePollV1::Failed {
++                        code: RUNTIME_QUIESCENT_WITHOUT_RESULT_CODE_V1
++                    }
++                );
++            }
++            assert_eq!(f.context.backend.producer_launch.calls.len(), calls);
++            assert_eq!(*callbacks.lock().unwrap(), expected);
++            for producer in &mut producers[discarded + 1..] {
++                assert_eq!(
++                    f.context.query_submission(producer).unwrap(),
++                    RuntimeCompletionStatusV1::Pending
++                );
++                f.complete(producer);
++                expected.push((producer.id, RuntimeCompletionStatusV1::Succeeded));
++            }
++            assert_eq!(*callbacks.lock().unwrap(), expected);
++            assert_eq!(
++                f.context.version_journal_writer_records_v1(),
++                Some(1 + usize::from(writable))
++            );
++            assert!(f.context.cleanup().is_complete());
++        }
++    }
++}
++
+ #[test]
+ fn producer_launch_resolved_reservation_survives_writer_slot_reuse() {
+     for cancel in [false, true] {

@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/test-owner-mixed-lifecycle.py"
+  ],
+  "started_ns": 1790348138605216638,
+  "process_group": 2363806,
+  "group_absent": true,
+  "finished_ns": 1790348162858343390,
+  "status": 0
+}

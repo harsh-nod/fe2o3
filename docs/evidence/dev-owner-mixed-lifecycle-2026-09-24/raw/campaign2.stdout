@@ -1,0 +1,14 @@
+positive-before {'encountered-error': False, 'encountered-vir-error': False, 'success': True, 'verified': 1271, 'errors': 0, 'is-verifying-entire-crate': True}
+stable-history {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+producer-history {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+result-answer {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+stable-answer {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+producer-answer {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+mixed-domain {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+stable-original {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+producer-original {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+missing-atomic-event {'encountered-error': True, 'encountered-vir-error': False, 'verified': 0, 'errors': 1, 'is-verifying-entire-crate': False}
+positive-after {'encountered-error': False, 'encountered-vir-error': False, 'success': True, 'verified': 1271, 'errors': 0, 'is-verifying-entire-crate': True}
+mixed-regression {'encountered-error': False, 'encountered-vir-error': False, 'success': True, 'verified': 738, 'errors': 0, 'is-verifying-entire-crate': True}
+stable-regression {'encountered-error': False, 'encountered-vir-error': False, 'success': True, 'verified': 720, 'errors': 0, 'is-verifying-entire-crate': True}
+PASS: constructor-origin mixed-lifecycle developer campaign

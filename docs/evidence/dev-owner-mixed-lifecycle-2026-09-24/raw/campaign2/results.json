@@ -1,0 +1,1299 @@
+{
+  "positive-before": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 1271,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable-history": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 8389,
+            "byte_end": 8468,
+            "line_start": 130,
+            "line_end": 130,
+            "column_start": 9,
+            "column_end": 88,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        LifecycleStepV1::AcquireStable { consumer, requests, original, output, result } => {",
+                "highlight_start": 9,
+                "highlight_end": 88
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 7745,
+            "byte_end": 7835,
+            "line_start": 122,
+            "line_end": 122,
+            "column_start": 13,
+            "column_end": 103,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures lifecycle_stable_history_v1(after.stable, lifecycle_next_history_v1(history, step).stable),",
+                "highlight_start": 13,
+                "highlight_end": 103
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs:122:13\n    |\n122 |     ensures lifecycle_stable_history_v1(after.stable, lifecycle_next_history_v1(history, step).stable),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n130 |         LifecycleStepV1::AcquireStable { consumer, requests, original, output, result } => {\n    |         ------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 8389,
+            "byte_end": 8468,
+            "line_start": 130,
+            "line_end": 130,
+            "column_start": 9,
+            "column_end": 88,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        LifecycleStepV1::AcquireStable { consumer, requests, original, output, result } => {",
+                "highlight_start": 9,
+                "highlight_end": 88
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 7942,
+            "byte_end": 8059,
+            "line_start": 124,
+            "line_end": 124,
+            "column_start": 9,
+            "column_end": 126,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        reader_epoch_step_v1(before.stable.next_incarnation, after.stable.next_incarnation, lifecycle_stable_minted_v1(step)),",
+                "highlight_start": 9,
+                "highlight_end": 126
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs:124:9\n    |\n124 |         reader_epoch_step_v1(before.stable.next_incarnation, after.stable.next_incarnation, lifecycle_stable_minted_v1(step)),\n    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n130 |         LifecycleStepV1::AcquireStable { consumer, requests, original, output, result } => {\n    |         ------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 7355,
+            "byte_end": 7514,
+            "line_start": 118,
+            "line_end": 119,
+            "column_start": 1,
+            "column_end": 56,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "pub proof fn lifecycle_step_histories_v1(before: ProducerReadContentsV1, after: ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 104
+              },
+              {
+                "text": "    step: LifecycleStepV1, history: LifecycleHistoryV1)",
+                "highlight_start": 1,
+                "highlight_end": 56
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs:118:1\n    |\n118 | / pub proof fn lifecycle_step_histories_v1(before: ProducerReadContentsV1, after: ProducerReadContentsV1,\n119 | |     step: LifecycleStepV1, history: LifecycleHistoryV1)\n    | |_______________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module owner_lifecycle_preservation, function context_owner_lifecycle_paired_v1::owner_lifecycle_preservation::lifecycle_step_histories_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module owner_lifecycle_preservation, function context_owner_lifecycle_paired_v1::owner_lifecycle_preservation::lifecycle_step_histories_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer-history": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 8389,
+            "byte_end": 8468,
+            "line_start": 130,
+            "line_end": 130,
+            "column_start": 9,
+            "column_end": 88,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        LifecycleStepV1::AcquireStable { consumer, requests, original, output, result } => {",
+                "highlight_start": 9,
+                "highlight_end": 88
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 7845,
+            "byte_end": 7932,
+            "line_start": 123,
+            "line_end": 123,
+            "column_start": 9,
+            "column_end": 96,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        lifecycle_producer_history_v1(after, lifecycle_next_history_v1(history, step).producer),",
+                "highlight_start": 9,
+                "highlight_end": 96
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs:123:9\n    |\n123 |         lifecycle_producer_history_v1(after, lifecycle_next_history_v1(history, step).producer),\n    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n130 |         LifecycleStepV1::AcquireStable { consumer, requests, original, output, result } => {\n    |         ------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 8389,
+            "byte_end": 8468,
+            "line_start": 130,
+            "line_end": 130,
+            "column_start": 9,
+            "column_end": 88,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        LifecycleStepV1::AcquireStable { consumer, requests, original, output, result } => {",
+                "highlight_start": 9,
+                "highlight_end": 88
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 8069,
+            "byte_end": 8186,
+            "line_start": 125,
+            "line_end": 125,
+            "column_start": 9,
+            "column_end": 126,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        lifecycle_producer_epoch_step_v1(before.next_incarnation, after.next_incarnation, lifecycle_producer_minted_v1(step)),",
+                "highlight_start": 9,
+                "highlight_end": 126
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs:125:9\n    |\n125 |         lifecycle_producer_epoch_step_v1(before.next_incarnation, after.next_incarnation, lifecycle_producer_minted_v1(step)),\n    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n130 |         LifecycleStepV1::AcquireStable { consumer, requests, original, output, result } => {\n    |         ------------------------------------------------------------------------------- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs",
+            "byte_start": 7355,
+            "byte_end": 7514,
+            "line_start": 118,
+            "line_end": 119,
+            "column_start": 1,
+            "column_end": 56,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "pub proof fn lifecycle_step_histories_v1(before: ProducerReadContentsV1, after: ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 104
+              },
+              {
+                "text": "    step: LifecycleStepV1, history: LifecycleHistoryV1)",
+                "highlight_start": 1,
+                "highlight_end": 56
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_preservation_v1.rs:118:1\n    |\n118 | / pub proof fn lifecycle_step_histories_v1(before: ProducerReadContentsV1, after: ProducerReadContentsV1,\n119 | |     step: LifecycleStepV1, history: LifecycleHistoryV1)\n    | |_______________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module owner_lifecycle_preservation, function context_owner_lifecycle_paired_v1::owner_lifecycle_preservation::lifecycle_step_histories_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module owner_lifecycle_preservation, function context_owner_lifecycle_paired_v1::owner_lifecycle_preservation::lifecycle_step_histories_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "result-answer": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs",
+            "byte_start": 10745,
+            "byte_end": 10849,
+            "line_start": 115,
+            "line_end": 115,
+            "column_start": 7,
+            "column_end": 111,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn lifecycle_mixed_answers_projection_v1(actual: LifecycleActualStepV1, model: logical::LifecycleStepV1)",
+                "highlight_start": 7,
+                "highlight_end": 111
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs",
+            "byte_start": 11059,
+            "byte_end": 11498,
+            "line_start": 119,
+            "line_end": 125,
+            "column_start": 13,
+            "column_end": 6,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures match (actual, model) {",
+                "highlight_start": 13,
+                "highlight_end": 36
+              },
+              {
+                "text": "        (LifecycleActualStepV1::AcquireMixed { result, stable_output, producer_output, .. },",
+                "highlight_start": 1,
+                "highlight_end": 93
+              },
+              {
+                "text": "            logical::LifecycleStepV1::AcquireMixed { result: expected, stable_output: stable, producer_output: producer, .. }) =>",
+                "highlight_start": 1,
+                "highlight_end": 130
+              },
+              {
+                "text": "            result == begin_result_from(expected) && stable_output_view(stable_output) == stable",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                && producer_output_view(producer_output) == producer,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        _ => false,",
+                "highlight_start": 1,
+                "highlight_end": 20
+              },
+              {
+                "text": "    },",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs:119:13\n    |\n115 |   proof fn lifecycle_mixed_answers_projection_v1(actual: LifecycleActualStepV1, model: logical::LifecycleStepV1)\n    |         -------------------------------------------------------------------------------------------------------- at the end of the function body\n...\n119 |       ensures match (actual, model) {\n    |  _____________^\n120 | |         (LifecycleActualStepV1::AcquireMixed { result, stable_output, producer_output, .. },\n121 | |             logical::LifecycleStepV1::AcquireMixed { result: expected, stable_output: stable, producer_output: producer, .. }) =>\n122 | |             result == begin_result_from(expected) && stable_output_view(stable_output) == stable\n123 | |                 && producer_output_view(producer_output) == producer,\n124 | |         _ => false,\n125 | |     },\n    | |_____^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable-answer": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs",
+            "byte_start": 10745,
+            "byte_end": 10849,
+            "line_start": 115,
+            "line_end": 115,
+            "column_start": 7,
+            "column_end": 111,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn lifecycle_mixed_answers_projection_v1(actual: LifecycleActualStepV1, model: logical::LifecycleStepV1)",
+                "highlight_start": 7,
+                "highlight_end": 111
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs",
+            "byte_start": 11059,
+            "byte_end": 11498,
+            "line_start": 119,
+            "line_end": 125,
+            "column_start": 13,
+            "column_end": 6,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures match (actual, model) {",
+                "highlight_start": 13,
+                "highlight_end": 36
+              },
+              {
+                "text": "        (LifecycleActualStepV1::AcquireMixed { result, stable_output, producer_output, .. },",
+                "highlight_start": 1,
+                "highlight_end": 93
+              },
+              {
+                "text": "            logical::LifecycleStepV1::AcquireMixed { result: expected, stable_output: stable, producer_output: producer, .. }) =>",
+                "highlight_start": 1,
+                "highlight_end": 130
+              },
+              {
+                "text": "            result == begin_result_from(expected) && stable_output_view(stable_output) == stable",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                && producer_output_view(producer_output) == producer,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        _ => false,",
+                "highlight_start": 1,
+                "highlight_end": 20
+              },
+              {
+                "text": "    },",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs:119:13\n    |\n115 |   proof fn lifecycle_mixed_answers_projection_v1(actual: LifecycleActualStepV1, model: logical::LifecycleStepV1)\n    |         -------------------------------------------------------------------------------------------------------- at the end of the function body\n...\n119 |       ensures match (actual, model) {\n    |  _____________^\n120 | |         (LifecycleActualStepV1::AcquireMixed { result, stable_output, producer_output, .. },\n121 | |             logical::LifecycleStepV1::AcquireMixed { result: expected, stable_output: stable, producer_output: producer, .. }) =>\n122 | |             result == begin_result_from(expected) && stable_output_view(stable_output) == stable\n123 | |                 && producer_output_view(producer_output) == producer,\n124 | |         _ => false,\n125 | |     },\n    | |_____^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer-answer": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs",
+            "byte_start": 10745,
+            "byte_end": 10849,
+            "line_start": 115,
+            "line_end": 115,
+            "column_start": 7,
+            "column_end": 111,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn lifecycle_mixed_answers_projection_v1(actual: LifecycleActualStepV1, model: logical::LifecycleStepV1)",
+                "highlight_start": 7,
+                "highlight_end": 111
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs",
+            "byte_start": 11059,
+            "byte_end": 11498,
+            "line_start": 119,
+            "line_end": 125,
+            "column_start": 13,
+            "column_end": 6,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures match (actual, model) {",
+                "highlight_start": 13,
+                "highlight_end": 36
+              },
+              {
+                "text": "        (LifecycleActualStepV1::AcquireMixed { result, stable_output, producer_output, .. },",
+                "highlight_start": 1,
+                "highlight_end": 93
+              },
+              {
+                "text": "            logical::LifecycleStepV1::AcquireMixed { result: expected, stable_output: stable, producer_output: producer, .. }) =>",
+                "highlight_start": 1,
+                "highlight_end": 130
+              },
+              {
+                "text": "            result == begin_result_from(expected) && stable_output_view(stable_output) == stable",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "                && producer_output_view(producer_output) == producer,",
+                "highlight_start": 1,
+                "highlight_end": 70
+              },
+              {
+                "text": "        _ => false,",
+                "highlight_start": 1,
+                "highlight_end": 20
+              },
+              {
+                "text": "    },",
+                "highlight_start": 1,
+                "highlight_end": 6
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs:119:13\n    |\n115 |   proof fn lifecycle_mixed_answers_projection_v1(actual: LifecycleActualStepV1, model: logical::LifecycleStepV1)\n    |         -------------------------------------------------------------------------------------------------------- at the end of the function body\n...\n119 |       ensures match (actual, model) {\n    |  _____________^\n120 | |         (LifecycleActualStepV1::AcquireMixed { result, stable_output, producer_output, .. },\n121 | |             logical::LifecycleStepV1::AcquireMixed { result: expected, stable_output: stable, producer_output: producer, .. }) =>\n122 | |             result == begin_result_from(expected) && stable_output_view(stable_output) == stable\n123 | |                 && producer_output_view(producer_output) == producer,\n124 | |         _ => false,\n125 | |     },\n    | |_____^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "mixed-domain": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_domain_v1.rs",
+            "byte_start": 2738,
+            "byte_end": 2843,
+            "line_start": 42,
+            "line_end": 42,
+            "column_start": 7,
+            "column_end": 112,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "proof fn lifecycle_mixed_domain_projection_v1(owner: ContextProducerReadJournalV1, step: LifecycleActualStepV1)",
+                "highlight_start": 7,
+                "highlight_end": 112
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_domain_v1.rs",
+            "byte_start": 2972,
+            "byte_end": 3003,
+            "line_start": 44,
+            "line_end": 44,
+            "column_start": 13,
+            "column_end": 44,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures mixed_acquire_storage_v1(owner),",
+                "highlight_start": 13,
+                "highlight_end": 44
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n  --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_domain_v1.rs:44:13\n   |\n42 | proof fn lifecycle_mixed_domain_projection_v1(owner: ContextProducerReadJournalV1, step: LifecycleActualStepV1)\n   |       --------------------------------------------------------------------------------------------------------- at the end of the function body\n43 |     requires lifecycle_mutation_domain_v1(owner, step), matches!(step, LifecycleActualStepV1::AcquireMixed { .. }),\n44 |     ensures mixed_acquire_storage_v1(owner),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable-original": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_mixed_acquire_correspondence_v1.rs",
+            "byte_start": 2467,
+            "byte_end": 2772,
+            "line_start": 34,
+            "line_end": 36,
+            "column_start": 9,
+            "column_end": 142,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::mixed_acquire_relation_v1(model_before, model_after, writer_key_view(consumer),",
+                "highlight_start": 9,
+                "highlight_end": 97
+              },
+              {
+                "text": "            stable_requests_view(stable), producer_requests_view(pending),",
+                "highlight_start": 1,
+                "highlight_end": 75
+              },
+              {
+                "text": "            stable_output_view(stable_before), model_stable_after, producer_output_view(producer_before), model_producer_after, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 142
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs",
+            "byte_start": 18584,
+            "byte_end": 18790,
+            "line_start": 211,
+            "line_end": 212,
+            "column_start": 13,
+            "column_end": 103,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            mixed_acquire_paired_transition_v1(before, after, model_before, model_after, consumer, stable, pending,",
+                "highlight_start": 13,
+                "highlight_end": 116
+              },
+              {
+                "text": "                stable_original, stable_output, producer_original, producer_output, so, po, result, m);",
+                "highlight_start": 1,
+                "highlight_end": 103
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs:211:13\n    |\n211 | /             mixed_acquire_paired_transition_v1(before, after, model_before, model_after, consumer, stable, pending,\n212 | |                 stable_original, stable_output, producer_original, producer_output, so, po, result, m);\n    | |______________________________________________________________________________________________________^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_mixed_acquire_correspondence_v1.rs:34:9\n    |\n 34 | /         logical::mixed_acquire_relation_v1(model_before, model_after, writer_key_view(consumer),\n 35 | |             stable_requests_view(stable), producer_requests_view(pending),\n 36 | |             stable_output_view(stable_before), model_stable_after, producer_output_view(producer_before), model_producer_after, model_result),\n    | |_____________________________________________________________________________________________________________________________________________- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_owner_lifecycle_paired_v1::production::lifecycle_mutation_correspondence_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_owner_lifecycle_paired_v1::production::lifecycle_mutation_correspondence_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "producer-original": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 1 previous error",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 1 previous error\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "precondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_mixed_acquire_correspondence_v1.rs",
+            "byte_start": 2467,
+            "byte_end": 2772,
+            "line_start": 34,
+            "line_end": 36,
+            "column_start": 9,
+            "column_end": 142,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "        logical::mixed_acquire_relation_v1(model_before, model_after, writer_key_view(consumer),",
+                "highlight_start": 9,
+                "highlight_end": 97
+              },
+              {
+                "text": "            stable_requests_view(stable), producer_requests_view(pending),",
+                "highlight_start": 1,
+                "highlight_end": 75
+              },
+              {
+                "text": "            stable_output_view(stable_before), model_stable_after, producer_output_view(producer_before), model_producer_after, model_result),",
+                "highlight_start": 1,
+                "highlight_end": 142
+              }
+            ],
+            "label": "failed precondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs",
+            "byte_start": 18580,
+            "byte_end": 18786,
+            "line_start": 211,
+            "line_end": 212,
+            "column_start": 13,
+            "column_end": 103,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "            mixed_acquire_paired_transition_v1(before, after, model_before, model_after, consumer, stable, pending,",
+                "highlight_start": 13,
+                "highlight_end": 116
+              },
+              {
+                "text": "                stable_original, stable_output, producer_original, producer_output, so, po, result, m);",
+                "highlight_start": 1,
+                "highlight_end": 103
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: precondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_correspondence_v1.rs:211:13\n    |\n211 | /             mixed_acquire_paired_transition_v1(before, after, model_before, model_after, consumer, stable, pending,\n212 | |                 stable_original, stable_output, producer_original, producer_output, so, po, result, m);\n    | |______________________________________________________________________________________________________^\n    |\n   ::: <CASE>/crates/fe2o3-runtime-model/verus/context_mixed_acquire_correspondence_v1.rs:34:9\n    |\n 34 | /         logical::mixed_acquire_relation_v1(model_before, model_after, writer_key_view(consumer),\n 35 | |             stable_requests_view(stable), producer_requests_view(pending),\n 36 | |             stable_output_view(stable_before), model_stable_after, producer_output_view(producer_before), model_producer_after, model_result),\n    | |_____________________________________________________________________________________________________________________________________________- failed precondition\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_owner_lifecycle_paired_v1::production::lifecycle_mutation_correspondence_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_owner_lifecycle_paired_v1::production::lifecycle_mutation_correspondence_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "missing-atomic-event": {
+    "result": {
+      "encountered-error": true,
+      "encountered-vir-error": false,
+      "verified": 0,
+      "errors": 1,
+      "is-verifying-entire-crate": false
+    },
+    "diagnostics": [
+      {
+        "$message_type": "diagnostic",
+        "message": "aborting due to 2 previous errors",
+        "code": null,
+        "level": "error",
+        "spans": [],
+        "children": [],
+        "rendered": "error: aborting due to 2 previous errors\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_reader_witnesses_v1.rs",
+            "byte_start": 9927,
+            "byte_end": 9931,
+            "line_start": 160,
+            "line_end": 160,
+            "column_start": 5,
+            "column_end": 9,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    next",
+                "highlight_start": 5,
+                "highlight_end": 9
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_reader_witnesses_v1.rs",
+            "byte_start": 8869,
+            "byte_end": 8920,
+            "line_start": 144,
+            "line_end": 144,
+            "column_start": 13,
+            "column_end": 64,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "    ensures lifecycle_reader_trace_v1(next, after, model_after),",
+                "highlight_start": 13,
+                "highlight_end": 64
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_reader_witnesses_v1.rs:144:13\n    |\n144 |     ensures lifecycle_reader_trace_v1(next, after, model_after),\n    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n160 |     next\n    |     ---- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "postcondition not satisfied",
+        "code": null,
+        "level": "error",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_reader_witnesses_v1.rs",
+            "byte_start": 9927,
+            "byte_end": 9931,
+            "line_start": 160,
+            "line_end": 160,
+            "column_start": 5,
+            "column_end": 9,
+            "is_primary": false,
+            "text": [
+              {
+                "text": "    next",
+                "highlight_start": 5,
+                "highlight_end": 9
+              }
+            ],
+            "label": "at the end of the function body",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          },
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_reader_witnesses_v1.rs",
+            "byte_start": 8930,
+            "byte_end": 8969,
+            "line_start": 145,
+            "line_end": 145,
+            "column_start": 9,
+            "column_end": 48,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "        next.events == trace.events.push(event), next.origin == trace.origin,",
+                "highlight_start": 9,
+                "highlight_end": 48
+              }
+            ],
+            "label": "failed this postcondition",
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "error: postcondition not satisfied\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_reader_witnesses_v1.rs:145:9\n    |\n145 |         next.events == trace.events.push(event), next.origin == trace.origin,\n    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n...\n160 |     next\n    |     ---- at the end of the function body\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+        "code": null,
+        "level": "note",
+        "spans": [
+          {
+            "file_name": "<CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_reader_witnesses_v1.rs",
+            "byte_start": 8343,
+            "byte_end": 8653,
+            "line_start": 137,
+            "line_end": 140,
+            "column_start": 7,
+            "column_end": 68,
+            "is_primary": true,
+            "text": [
+              {
+                "text": "proof fn lifecycle_reader_append_event_v1(trace: LifecycleReaderTraceV1,",
+                "highlight_start": 7,
+                "highlight_end": 73
+              },
+              {
+                "text": "    before: ContextProducerReadJournalV1, after: ContextProducerReadJournalV1,",
+                "highlight_start": 1,
+                "highlight_end": 79
+              },
+              {
+                "text": "    model_before: logical::ProducerReadContentsV1, model_after: logical::ProducerReadContentsV1,",
+                "highlight_start": 1,
+                "highlight_end": 97
+              },
+              {
+                "text": "    event: LifecyclePairedEventV1) -> (next: LifecycleReaderTraceV1)",
+                "highlight_start": 1,
+                "highlight_end": 68
+              }
+            ],
+            "label": null,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "expansion": null
+          }
+        ],
+        "children": [],
+        "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n   --> <CASE>/crates/fe2o3-runtime-model/verus/context_owner_lifecycle_reader_witnesses_v1.rs:137:7\n    |\n137 |   proof fn lifecycle_reader_append_event_v1(trace: LifecycleReaderTraceV1,\n    |  _______^\n138 | |     before: ContextProducerReadJournalV1, after: ContextProducerReadJournalV1,\n139 | |     model_before: logical::ProducerReadContentsV1, model_after: logical::ProducerReadContentsV1,\n140 | |     event: LifecyclePairedEventV1) -> (next: LifecycleReaderTraceV1)\n    | |___________________________________________________________________^\n\n"
+      },
+      {
+        "$message_type": "diagnostic",
+        "message": "verifying module production, function context_owner_lifecycle_paired_v1::production::lifecycle_reader_append_event_v1 (selected functions)",
+        "code": null,
+        "level": "note",
+        "spans": [],
+        "children": [],
+        "rendered": "note: verifying module production, function context_owner_lifecycle_paired_v1::production::lifecycle_reader_append_event_v1 (selected functions)\n\n"
+      }
+    ],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "positive-after": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 1271,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "mixed-regression": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 738,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  },
+  "stable-regression": {
+    "result": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "success": true,
+      "verified": 720,
+      "errors": 0,
+      "is-verifying-entire-crate": true
+    },
+    "diagnostics": [],
+    "verus": {
+      "profile": "release",
+      "version": "0.2026.08.09.92f466f",
+      "platform": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587"
+    }
+  }
+}

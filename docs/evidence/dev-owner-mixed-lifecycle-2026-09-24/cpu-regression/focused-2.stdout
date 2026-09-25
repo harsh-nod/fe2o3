@@ -1,0 +1,6 @@
+
+running 1 test
+test context::tests::producer_launch_tests::producer_launch_discarded_producer_result_preserves_quiescence_without_success ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1425 filtered out; finished in 0.01s
+

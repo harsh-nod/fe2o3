@@ -1,0 +1,9 @@
+{
+  "crates/fe2o3-runtime-model/verus/check-owner-mixed-lifecycle.py": "ec0fb0c1ad835683321d8aad84dda11ad919c88c9542ff9db1ede84584531e59",
+  "crates/fe2o3-runtime-model/verus/test-owner-mixed-lifecycle.py": "a066630935071cf9bc30404d27c70655f3f298292d49c051c1bb1f9eabbf8f21",
+  "docs/evidence/dev-mixed-acquisition-proof-2026-09-24/audit.py": "b33da903896766a11dc61d3c26b4d60e1bbe983eef7be8c066c83fd66118b1f2",
+  "docs/evidence/dev-native-producer-mi300x-2026-09-24/collect.py": "9c9c629aa7ce73e52f565dee51f89810ae96a152ad3b2fb4c9f272f864c3f9cf",
+  "docs/evidence/dev-owner-mixed-lifecycle-2026-09-24/audit.py": "7fbc7e6edafe156be17909de0299be511061c488ac8a8674f09977569d5e169a",
+  "docs/evidence/dev-owner-mixed-lifecycle-2026-09-24/collect.py": "e92b28dc2cc5b5d69f9c70a8911e09c9d73c03d5558783ae4716067cd360cf54",
+  "docs/evidence/dev-owner-mixed-lifecycle-2026-09-24/test_audit.py": "a39fe101e3fa7315805a28fb2aaac2cb5a07054bc9316391574ca437b169c38a"
+}

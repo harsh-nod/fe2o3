@@ -1,0 +1,21 @@
+Good "git" signature for harmenon@amd.com with ED25519 key SHA256:q8oGVYZ11904aFzlMkSiEwyeSP+6hbuiZGbNVGRZVCg
+Good "git" signature for harmenon@amd.com with ED25519 key SHA256:q8oGVYZ11904aFzlMkSiEwyeSP+6hbuiZGbNVGRZVCg
+Good "git" signature for harmenon@amd.com with ED25519 key SHA256:q8oGVYZ11904aFzlMkSiEwyeSP+6hbuiZGbNVGRZVCg
+Good "git" signature for harmenon@amd.com with ED25519 key SHA256:q8oGVYZ11904aFzlMkSiEwyeSP+6hbuiZGbNVGRZVCg
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-mixed-lifecycle.py", line 374, in <module>
+    main()
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-mixed-lifecycle.py", line 355, in main
+    campaign.run(name, old.command(legacy, verus, stage / root_for(name), change),
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-scalar-enrollment.py", line 218, in run
+    self.check(name, row, stdout, stderr)
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-scalar-enrollment.py", line 193, in check
+    result = self.validate(name, row, stdout, stderr)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-mixed-lifecycle.py", line 302, in validate
+    lifecycle.check_negative(scalar, name, row['status'], observed)
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-constructor.py", line 352, in check_negative
+    need(any(row['message'] in allowed for row in errors)
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-owner-constructor.py", line 173, in need
+    raise ValueError(message)
+ValueError: logical failure, not arithmetic, syntax, timeout, or solver resource exhaustion
