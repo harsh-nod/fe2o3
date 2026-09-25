@@ -73,6 +73,31 @@ fn canonical_table_sorted_but_read_multiplicity_and_order_preserved() {
 }
 
 #[test]
+fn elided_field_coordinate_does_not_rewrite_source_or_canonical_identity() {
+    ample(|budget| {
+        // Inert projection rows test table bookkeeping only. Context admission
+        // is independently tested with the original private compiler receipt.
+        let mut output = row(8, 1, Role::Output);
+        output.projection.generated_field = 0;
+        let mut input = row(2, 2, Role::Input);
+        input.projection.generated_field = 1;
+        let mut scratch = Scratch::new();
+        scratch.insert(output, budget).unwrap();
+        scratch.insert(input, budget).unwrap();
+        scratch.push_read(read(2, 3), budget).unwrap();
+        assert_eq!(scratch.finish(8, 1, budget).unwrap(), 1);
+        assert_eq!(scratch.arguments(), &[input, output]);
+        assert_eq!(scratch.read_arguments(), &[0]);
+        assert_eq!(output.projection().source_argument, 1);
+        assert_eq!(output.projection().adjusted_argument, 1);
+        assert_eq!(output.projection().canonical_parameter, 8);
+        assert_eq!(output.projection().generated_field, 0);
+        assert_eq!(output.allocation_origin(), 2);
+        assert_eq!(output.canonical_value(), ValueId(18));
+    });
+}
+
+#[test]
 fn output_only_is_complete_without_a_fabricated_read_row() {
     ample(|budget| {
         let mut scratch = Scratch::new();
@@ -479,19 +504,57 @@ fn root_selection_is_exact_owner_export_not_name_parsing_or_function_ordinal() {
 }
 
 #[test]
-fn generated_field_lookup_refuses_hidden_expanded_and_out_of_wire_range_slots() {
-    assert_eq!(checked_field_index(1, 1, 3).unwrap(), 1);
-    assert_eq!(checked_field_index(63, 63, 64).unwrap(), 63);
-    for (source, adjusted, count) in [
-        (1, 2, 3),
-        (2, 1, 3),
-        (0, 0, 0),
-        (3, 3, 3),
-        (64, 64, 65),
-        (u32::MAX, u32::MAX, usize::MAX),
-    ] {
-        assert!(checked_field_index(source, adjusted, count).is_err());
-    }
+fn generated_field_lookup_uses_admitted_coordinates_and_complete_field_count() {
+    let semantic = fixture::source(vec![fixture::subtract()]);
+    let root = semantic.roots()[0];
+    ample(|budget| {
+        for source in 0..2 {
+            for case in 0..7 {
+                let mut query = GeneratedFieldCoordinatesV1 {
+                    source,
+                    adjusted: source,
+                    local: SemanticLocalIdV1::from_index(source + 1),
+                    ty: fixture::WORD,
+                };
+                let mut count = 2;
+                match case {
+                    0 => {}
+                    1 => query.adjusted ^= 1,
+                    2 => query.local = SemanticLocalIdV1::from_index(2 - source),
+                    3 => query.ty = fixture::UNIT,
+                    4 => query.source = u32::MAX,
+                    5 => count = 1,
+                    6 => count = MAX_CONDITIONAL_ARGUMENTS_V1 + 1,
+                    _ => unreachable!(),
+                }
+                let result =
+                    checked_generated_field_v1(&semantic, (root, root), None, query, count, budget);
+                if case == 0 {
+                    assert_eq!(result.unwrap(), source as usize);
+                } else {
+                    assert!(result.is_err(), "source {source}, coordinate {case}");
+                }
+                assert_eq!(budget.storage(), 0);
+            }
+        }
+        assert!(
+            checked_generated_field_v1(
+                &semantic,
+                (root, SemanticFunctionIdV1::from_index(1)),
+                None,
+                GeneratedFieldCoordinatesV1 {
+                    source: 0,
+                    adjusted: 0,
+                    local: SemanticLocalIdV1::from_index(1),
+                    ty: fixture::WORD,
+                },
+                2,
+                budget,
+            )
+            .is_err(),
+            "same signature does not authenticate a selected helper"
+        );
+    });
 }
 
 #[test]

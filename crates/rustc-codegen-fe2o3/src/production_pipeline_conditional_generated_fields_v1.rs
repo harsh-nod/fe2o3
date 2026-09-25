@@ -24,6 +24,7 @@ pub(crate) use crate::compiler_descriptor::conditional_generated_fields_v1::obse
 pub(crate) struct ConditionalGeneratedFieldOwnerV1<'a> {
     source: &'a ProductionPreRankedKirOwnerV1,
     roots: &'a [TypedDescriptorRootV1],
+    contexts: &'a crate::collector::RetainedContextEntriesV29,
 }
 
 impl ConditionalGeneratedFieldOwnerV1<'_> {
@@ -32,6 +33,9 @@ impl ConditionalGeneratedFieldOwnerV1<'_> {
     }
     pub(crate) fn roots(&self) -> &[TypedDescriptorRootV1] {
         self.roots
+    }
+    pub(crate) fn contexts(&self) -> &crate::collector::RetainedContextEntriesV29 {
+        self.contexts
     }
 }
 
@@ -50,6 +54,7 @@ pub(super) fn replay_conditional_roots_v1(
                 &ConditionalGeneratedFieldOwnerV1 {
                     source,
                     roots: &bindings.typed_descriptor_roots,
+                    contexts: &bindings.context_entries,
                 },
                 request,
                 budget,
