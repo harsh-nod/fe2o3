@@ -30,7 +30,8 @@ readonly output_name
 [[ -z "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" ]] ||
   fail 'qualification base images require a clean source checkout'
 
-for tool in apt-cache apt-get dpkg dpkg-deb mksquashfs unsquashfs sha256sum; do
+# Host Python/readelf inspect the image closure without executing its programs.
+for tool in apt-cache apt-get dpkg dpkg-deb mksquashfs unsquashfs sha256sum python3 readelf; do
   command -v "${tool}" >/dev/null 2>&1 || fail "required tool is missing: ${tool}"
 done
 
@@ -71,8 +72,11 @@ readonly package_roots=(
   bash
   coreutils
   dbus-broker
+  diffutils
+  findutils
   init-system-helpers
   libnss-systemd
+  mawk
   mount
   passwd
   systemd
@@ -219,6 +223,13 @@ readonly base_info
 for package in "${packages[@]}"; do
   dpkg-deb --extract "${deb_paths[${package}]}" "${root}"
 done
+
+# Extraction never runs mawk's update-alternatives maintainer script.
+[[ ! -e "${root}/usr/bin/awk" && ! -L "${root}/usr/bin/awk" ]] ||
+  fail 'unexpected awk entry in extracted packages'
+ln -s mawk "${root}/usr/bin/awk"
+python3 -I -B "${repo_root}/scripts/compiler-execution-qualification-base-audit-tools.py" \
+  --root "${root}" || fail 'runtime audit command closure is incomplete'
 
 nspawn="${root}/usr/bin/systemd-nspawn"
 loader="${root}/lib64/ld-linux-x86-64.so.2"

@@ -7,6 +7,7 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly repo_root
 readonly builder="${repo_root}/scripts/build-compiler-execution-qualification-base.sh"
 readonly package_lock="${repo_root}/scripts/compiler-execution-qualification-base-packages-v1.lock"
+readonly audit_tools="${repo_root}/scripts/compiler-execution-qualification-base-audit-tools.py"
 readonly qualification_target="${repo_root}/deployment/qualification/systemd/fe2o3-qualification.target"
 readonly qualification_client_service="${repo_root}/deployment/qualification/systemd/fe2o3-qualification-client-check.service"
 readonly qualification_client_sysusers="${repo_root}/deployment/qualification/sysusers.d/fe2o3-qualification-client.conf"
@@ -28,7 +29,7 @@ status=$?
 set -e
 [[ ${status} -eq 2 && "${usage}" == usage:* ]] || fail 'builder argument gate changed'
 
-python3 - "${package_lock}" <<'PY'
+python3 -I -B - "${package_lock}" "${builder}" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -69,12 +70,18 @@ if names != sorted(set(names)):
     raise SystemExit("package lock records are not uniquely sorted")
 required = {
     "base-files", "base-passwd", "bash", "coreutils", "dbus-broker",
-    "init-system-helpers", "libnss-systemd", "mount", "passwd", "systemd",
+    "diffutils", "findutils", "init-system-helpers", "libnss-systemd", "mawk", "mount", "passwd", "systemd",
     "systemd-container", "systemd-sysv", "util-linux",
 }
 if not required.issubset(names):
     raise SystemExit("package lock omits a fixed root package")
+builder = Path(sys.argv[2]).read_text()
+seeds = re.search(r"readonly package_roots=\(\n(.*?)\n\)", builder, re.S)
+if seeds is None or seeds.group(1).split() != sorted(required):
+    raise SystemExit("builder root package set differs from the source contract")
 PY
+
+python3 -I -B "${audit_tools}" --self-test
 
 for expected in \
   'Requires=basic.target' \
@@ -130,6 +137,10 @@ for expected in \
   'systemd 255 (255.4-1ubuntu8.17)' \
   'fe2o3-qualification-client-check.service' \
   'fe2o3-qualification-client.conf' \
+  'ln -s mawk "${root}/usr/bin/awk"' \
+  'compiler-execution-qualification-base-audit-tools.py' \
+  'python3 -I -B' \
+  '--root "${root}"' \
   "sha256sum \"\${deb}\"" \
   '-noappend -all-root -no-xattrs -no-progress -no-exports' \
   '-comp zstd -b 131072 -processors 1 -reproducible' \
@@ -189,7 +200,7 @@ verify_bundle() {
   grep -Fqx -- $'architecture\tamd64' "${info}" || fail 'base architecture changed'
   grep -Fqx -- $'mksquashfs_version\t4.6.1' "${info}" ||
     fail 'base SquashFS tool version changed'
-  grep -Fqx -- $'package_count\t99' "${info}" || fail 'base package count changed'
+  grep -Fqx -- "$(sed -n '5p' "${package_lock}")" "${info}" || fail 'base package count changed'
   diff -u <(tail -n +6 "${package_lock}") <(tail -n +9 "${info}") >/dev/null ||
     fail 'embedded package identities differ from the package lock'
 
@@ -214,6 +225,8 @@ verify_bundle() {
     fail 'embedded qualification client identity changed'
   unsquashfs -cat "${image}" usr/bin/systemd-nspawn >/dev/null 2>&1 ||
     fail 'pinned systemd-nspawn is missing from the image'
+  python3 -I -B "${audit_tools}" --image "${image}" ||
+    fail 'image runtime audit command closure is incomplete'
 }
 
 verify_bundle "$1"
