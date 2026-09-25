@@ -15,6 +15,7 @@ PATH = Path(__file__).resolve().parents[1] / "tutorial_kernel_identities.py"
 SPEC = importlib.util.spec_from_file_location("tutorial_kernel_identities", PATH)
 IDENTITIES = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(IDENTITIES)
+COUNT_KEYS = ("knownVariantObligationCount", "pendingVariantCount", "unregisteredDisplayItemCount")
 
 
 def scan(source):
@@ -128,6 +129,7 @@ class KernelIdentitiesTests(unittest.TestCase):
         self.assertTrue(result["inventoryComplete"])
         self.assertEqual(result["requiredPairCount"], 1)
         self.assertEqual(result["knownKernelIdentityCount"], 1)
+        self.assertEqual([result[key] for key in COUNT_KEYS], [2, 2, 0])
         self.assertEqual(result["kernelIdentities"][0]["selectionSha256"],
                          selection_digest(self.manifest["compilerFixtures"][0]["compilerInput"], "good"))
         self.assertEqual(result["negativeCaseCount"], 1)
@@ -139,6 +141,7 @@ class KernelIdentitiesTests(unittest.TestCase):
 
     def test_without_runtime_never_claims_complete_or_hides_missing_joins(self):
         result = self.validate(False)
+        self.assertEqual([result[key] for key in COUNT_KEYS], [2, 2, 0])
         self.assertFalse(result["runtimeCensusValidated"])
         self.assertFalse(result["inventoryComplete"])
         self.assertIsNone(result["requiredPairCount"])
@@ -177,7 +180,9 @@ class KernelIdentitiesTests(unittest.TestCase):
         self.manifest["compilerFixtures"].append(fixture)
         ref = {"kind": "fixture", "fixtureId": "other-target", "kernelSymbol": "good"}
         self.inventory()["kernels"][0]["selections"].append(ref)
-        self.assertEqual(self.validate()["requiredPairCount"], 1)
+        result = self.validate()
+        self.assertEqual(result["requiredPairCount"], 1)
+        self.assertEqual([result[key] for key in COUNT_KEYS], [2, 2, 0])
         self.inventory()["kernels"][0]["selections"].pop()
         self.inventory()["kernels"].append({"kernelId": "other", "selections": [ref], "variants": variants()})
         self.assert_refused("identical source selections must share")
@@ -193,6 +198,21 @@ class KernelIdentitiesTests(unittest.TestCase):
         self.assertFalse(result["inventoryComplete"])
         self.assertIsNone(result["requiredPairCount"])
         self.assertIn(ref, [row.get("selection") for row in result["unresolvedBindings"]])
+
+    def test_unregistered_occurrences_are_not_stale_bindings_or_new_identities(self):
+        self.inventory()["displayItems"][0]["bindingStatus"] = "pending"
+        for unregistered in range(3):
+            if unregistered:
+                self.add_tab("#[kernel] fn unknown() {}")
+            for runtime in (False, True):
+                with self.subTest(unregistered=unregistered, runtime=runtime):
+                    result = self.validate(runtime)
+                    self.assertEqual([result[key] for key in COUNT_KEYS], [2, 2, unregistered])
+                    self.assertEqual(result["pendingDisplayItemCount"], unregistered + 1)
+                    self.assertEqual(result["knownKernelIdentityCount"], 1)
+                    self.assertEqual(result["runtimeCensusValidated"], runtime)
+                    self.assertFalse(result["inventoryComplete"])
+                    self.assertIsNone(result["requiredPairCount"])
 
     def test_all_tab_kinds_and_bare_kernel_functions_need_occurrences(self):
         self.add_tab("#[kernel] fn first() {}\n#[kernel] fn first() {}\n", "comparison")
@@ -1010,6 +1030,7 @@ class FixtureDisplayTests(unittest.TestCase):
         before = copy.deepcopy((self.manifest, self.runtime, self.sources))
         result = self.validate()
         self.assertEqual(result["sourceBoundVariantCount"], 1)
+        self.assertEqual([result[key] for key in COUNT_KEYS], [2, 1, 1])
         self.assertEqual(result["sourceBoundPairCount"], 0)
         self.assertEqual(result["variantBindingStatus"], "partial")
         self.assertFalse(result["inventoryComplete"])
@@ -1034,12 +1055,27 @@ class FixtureDisplayTests(unittest.TestCase):
         self.assertEqual(loader.call_count, 2)
         self.assertEqual(result["sourceBoundVariantCount"], 2)
         self.assertEqual(result["sourceBoundPairCount"], 1)
+        self.assertEqual([result[key] for key in COUNT_KEYS], [4, 2, 0])
         self.assertEqual(result["knownKernelIdentityCount"], 2)
         self.assertEqual(result["variantBindingStatus"], "partial")
         self.assertIsNone(result["requiredPairCount"])
         self.assertFalse(result["inventoryComplete"])
         self.assertEqual(result["kernelIdentities"][1]["variants"], variants())
         self.assertEqual([row["kernelId"] for row in result["kernelIdentities"]], ["left", "right"])
+
+    def test_mixed_binding_changes_variant_counts_not_pair_counts(self):
+        self.manifest["kernelInventory"]["kernels"][0]["variants"].append({**variants()[0], "kind": "mixed"})
+        result = self.validate()
+        self.assertEqual([result[key] for key in COUNT_KEYS], [3, 3, 0])
+        self.bind("simt")
+        self.bind("tile")
+        for pending in (1, 0):
+            if not pending:
+                self.bind("mixed")
+            result = self.validate()
+            self.assertEqual([result[key] for key in COUNT_KEYS], [3, pending, 0])
+            self.assertEqual(result["sourceBoundVariantCount"], 3 - pending)
+            self.assertEqual(result["sourceBoundPairCount"], 1)
 
     def test_source_binding_rejects_stale_fields_and_foreign_identity(self):
         mutations = (

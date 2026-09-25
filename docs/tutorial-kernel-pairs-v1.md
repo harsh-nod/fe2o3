@@ -342,6 +342,20 @@ remains, and `qualified` stays false with zero qualified pairs. Stages are
 `not-evaluated` unless a diagnostic source report is bound. The separate runtime census and source/display join rules for
 `requiredPairCount` remain unchanged.
 
+The V2 report also derives `knownVariantObligationCount` from registered
+SIMT, tile and optional mixed variants. `pendingVariantCount` counts those
+without a source binding, not the number awaiting execution qualification.
+`unregisteredDisplayItemCount` counts positive kernel display occurrences
+without an identity; it excludes helpers and required negatives, and differs
+from `pendingDisplayItemCount`, which also includes stale registered bindings.
+Repeated display occurrences and identical source selections across targets do
+not by themselves add identities. Distinct feature-selected or source-closure
+identities retain separate obligations, even when their kernel names match.
+Unregistered occurrences are not a count of additional distinct kernels.
+When `runtimeCensusValidated` is false these are declared inventory counts,
+not a validated live census. None of these fields establishes an exhaustive
+denominator or changes qualification. Legacy V1 reports omit these fields.
+
 ## Remaining Integration
 
 Resolve the remaining exact source/display joins and coordinate the website
