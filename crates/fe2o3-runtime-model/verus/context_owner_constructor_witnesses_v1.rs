@@ -367,6 +367,7 @@ fn owner_constructor_unknown_fixture_v1() -> (result: (ContextProducerReadJourna
 fn owner_constructor_unknown_disposal_witness_v1() -> (result: bool)
     ensures result,
 {
+    hide(logical::producer_invariant_v1);
     let (mut actual, mut model, writer, model_writer) = owner_constructor_unknown_fixture_v1();
     let ghost storage = logical::witness_storage_v1(3, 1);
     let ghost history = seq![model_writer];

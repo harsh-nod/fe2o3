@@ -30,6 +30,8 @@ stable/producer/writer presence, and stage-entry capacity observations. Missing
 input roots are no-ops, not empty-roster journal releases. A writer, when present,
 belongs to the same consumer. The journal theorem does not establish that these
 values came from the actual Context maps or allocator observations.
+Constructing a matching journal quiescence-evidence value does not prove device
+quiescence; that observation remains a Context/backend premise.
 
 The intended correspondence covers:
 
@@ -62,3 +64,51 @@ Whole-root development proof results and CPU regression results are separate
 from that authenticated campaign. Global proof registration, Context map and
 quarantine correspondence, producer-first reconciliation, protected generated
 execution, native/resource qualification and matched performance remain open.
+
+## Successor Campaign Design
+
+Keep historical controllers and pins unchanged. Authenticate the inherited
+462-input owner closure and completion-control sources, then require the exact
+new root extension, production delta and unchanged inherited contracts.
+Qualification needs whole-effect and control positive brackets, not only the
+eleven-obligation completion module. Record the exact verifier command and
+selection; the development JSON reports `is-verifying-entire-crate: true` even
+for `--verify-only-module production::completion` and is not scope authority.
+
+Preserve all 22 historical control mutations. Input/writer mutations belong in
+the new prefix; dependency/publication mutations remain in the outer body. The
+writer/dependency swap must move only the dependency block into the prefix
+between input release and writer settlement, removing its outer occurrence.
+Moving the whole prefix after dependency release tests a different defect.
+
+Add shared-body effect mutations for skipped stable release, continued stable
+error, skipped/inverted producer presence, swallowed producer error, swapped
+Success/NoEffect, Unknown routed through settlement, and discarded writer
+results. Freeze logical-oracle bytes and calibrate mutation names, file sets,
+selectors and commands. Reuse the authenticated owned runner, strict logical
+negative classifier, tool/source brackets and retained replay. Resource-limit
+failures are rejected attempts, never accepted negatives.
+
+## Implemented Qualification Gate
+
+`check-completion-journal-effects.py` authenticates 477 exact inputs, including
+the two historical closures, the signed `024f2f78f` production integration and
+the new checker/calibration sources. Historical checkers are unchanged. Each
+of the 22 adapted control mutations must flatten to its exact historical defect;
+eight additional shared-body mutations leave the logical oracle unchanged.
+The 38-stage campaign requires whole-effect and control positive brackets,
+all 30 logical negatives, the frozen 1,271-obligation owner regression and
+source/tool continuity. Its eight CPU calibration groups pass.
+
+The extended development root initially exceeded the solver resource limit in
+`owner_constructor_unknown_disposal_witness_v1`; preserving the old crate name
+did not resolve it. One local `hide(logical::producer_invariant_v1)` prevents
+unnecessary invariant expansion in that caller. The callee already exports
+invariant preservation. All old assertions and contracts remain unchanged,
+and no solver limit or trusted premise changes. The new gate permits exactly
+this inherited proof-body delta, not a historical evidence repin. With that
+change, the full extended development root verifies 1,282 obligations with zero
+errors and no diagnostics. The earlier failures remain diagnostic evidence.
+
+The signed-source campaign and retained replay are still required before
+acceptance. A passing whole-root development run is not their substitute.

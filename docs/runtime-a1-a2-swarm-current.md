@@ -24,6 +24,16 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest proof-gate development (2026-09-25): the full completion journal-effect
+root now verifies 1,282 obligations with zero errors and no diagnostics. One
+local invariant-opacity directive in an inherited disposal witness resolves
+the earlier resource-limit failure; assertions, contracts, solver limits and
+production runtime code are unchanged. The new 477-input successor checker
+preserves all 22 historical control defects and adds eight shared-body effect
+mutations. All eight CPU calibration groups pass. The signed-source positive
+brackets, logical negatives, frozen regression and retained replay remain
+required before qualification. A1/A2 and accepted lane checkpoints are unchanged.
+
 Latest development (2026-09-25): the
 [completion journal-effect composition](runtime-completion-journal-effects-v1.md)
 shares the input-release sequence, writer outcome declaration/dispatch and
