@@ -7,6 +7,9 @@ mod scope_tests;
 #[path = "kernel_context_custody_v29_tests/projection_tests.rs"]
 mod projection_tests;
 
+#[path = "../compiler_descriptor_conditional_output_binding_context_v1_tests.rs"]
+mod conditional_fields_tests;
+
 fn projection_storage(entries: &RetainedContextEntriesV29) -> usize {
     let source = RetainedExecutionSourceV29 {
         semantic_sha256: &entries.semantic_sha256,

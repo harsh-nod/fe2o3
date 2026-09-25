@@ -1,23 +1,113 @@
-//! Physical checks consume V3 cursors without erasing the stored nominal types.
+//! Shared physical checks borrow nominal rows; public V4 tables retain their contracts.
 
 use fe2o3_hsaco::{COV6_IMPLICIT_ARGUMENT_BYTES, InspectedKernelBindings};
 use fe2o3_kernel_descriptor::{
-    CodeObjectVersion, DeviceDescriptorTableV3, RequiredWavefrontWidthV2,
+    ArgumentCursorV3, CodeObjectVersion, DescriptorWireErrorV3, DeviceDescriptorTableV3,
+    DeviceDescriptorTableV4, DeviceTargetV1, KernelAbiLayoutV1, KernelTargetRequirementsV2,
+    LaunchConstraintsV1, RequiredWavefrontWidthV2, RustTypeIdentity, SourceTypeRecordV3,
 };
 
 use crate::{
-    FinalizationError,
-    nominal_descriptor_finalization_v3::{NominalFinalizationErrorV3, ResultV3},
+    FinalizationError, nominal_descriptor_common::Failure,
+    nominal_descriptor_finalization_v3::NominalFinalizationErrorV3,
+    nominal_descriptor_finalization_v4::NominalFinalizationErrorV4,
     validate_kernel_tail_and_launch, validate_physical_argument,
 };
 
-pub(crate) fn cross_check<E>(
+pub(crate) struct PhysicalKernel<'view, 'wire> {
+    entry: &'wire str,
+    symbol: &'wire str,
+    layout: KernelAbiLayoutV1,
+    launch: LaunchConstraintsV1,
+    component_count: usize,
+    arguments: ArgumentCursorV3<'view, 'wire>,
+}
+
+// The codec's QUERY storage covers its native kernel cursor; this additional
+// projection can coexist with it, including the copied launch and ABI values.
+pub(crate) const PHYSICAL_PROJECTION_STORAGE: usize = size_of::<PhysicalKernel<'static, 'static>>()
+    + size_of::<LaunchConstraintsV1>()
+    + size_of::<KernelAbiLayoutV1>();
+
+pub(crate) trait PhysicalTable<'wire, E> {
+    type Error: Failure<E> + From<DescriptorWireErrorV3<E>>;
+    fn code_object_version(&self) -> CodeObjectVersion;
+    fn device_target(&self) -> DeviceTargetV1;
+    fn kernel_count(&self) -> usize;
+    fn kernel(
+        &self,
+        index: usize,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<PhysicalKernel<'_, 'wire>, Self::Error>;
+    fn requirement(
+        &self,
+        index: usize,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<KernelTargetRequirementsV2, Self::Error>;
+    fn source_type(
+        &self,
+        identity: RustTypeIdentity,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<SourceTypeRecordV3, Self::Error>;
+}
+
+// Only the physical projection is shared. Each adapter queries its original
+// validated table, and cannot expose a V3 table from a V4 descriptor.
+macro_rules! physical_table {
+    ($table:ident, $error:ident) => {
+        impl<'wire, E> PhysicalTable<'wire, E> for $table<'wire> {
+            type Error = $error<E>;
+            fn code_object_version(&self) -> CodeObjectVersion {
+                self.code_object_version()
+            }
+            fn device_target(&self) -> DeviceTargetV1 {
+                self.device_target()
+            }
+            fn kernel_count(&self) -> usize {
+                self.kernel_count()
+            }
+            fn kernel(
+                &self,
+                index: usize,
+                charge: &mut impl FnMut(usize) -> Result<(), E>,
+            ) -> Result<PhysicalKernel<'_, 'wire>, Self::Error> {
+                let kernel = self.kernel(index, charge)?;
+                Ok(PhysicalKernel {
+                    entry: kernel.entry_name(),
+                    symbol: kernel.descriptor_symbol(),
+                    layout: kernel.abi_layout(),
+                    launch: kernel.launch().clone(),
+                    component_count: kernel.component_count(),
+                    arguments: kernel.arguments(),
+                })
+            }
+            fn requirement(
+                &self,
+                index: usize,
+                charge: &mut impl FnMut(usize) -> Result<(), E>,
+            ) -> Result<KernelTargetRequirementsV2, Self::Error> {
+                Ok(self.requirement(index, charge)?)
+            }
+            fn source_type(
+                &self,
+                identity: RustTypeIdentity,
+                charge: &mut impl FnMut(usize) -> Result<(), E>,
+            ) -> Result<SourceTypeRecordV3, Self::Error> {
+                Ok(self.source_type(identity, charge)?)
+            }
+        }
+    };
+}
+physical_table!(DeviceDescriptorTableV3, NominalFinalizationErrorV3);
+physical_table!(DeviceDescriptorTableV4, NominalFinalizationErrorV4);
+
+pub(crate) fn cross_check<'wire, E, T: PhysicalTable<'wire, E>>(
     bindings: &InspectedKernelBindings,
-    table: &DeviceDescriptorTableV3<'_>,
+    table: &T,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
-) -> ResultV3<(), E> {
+) -> Result<(), T::Error> {
     // Fixed table facts, independent of the separately charged wire decoder.
-    charge(64).map_err(NominalFinalizationErrorV3::Work)?;
+    charge(64).map_err(T::Error::work)?;
     let hsaco = bindings.inspection();
     let matches = matches!(
         (table.code_object_version(), hsaco.code_object_version()),
@@ -43,10 +133,9 @@ pub(crate) fn cross_check<E>(
     for index in 0..table.kernel_count() {
         let kernel = table.kernel(index, charge)?;
         // Symbol comparison plus fixed ABI, wave, hidden-tail and launch checks.
-        charge(kernel.descriptor_symbol().len() + 128).map_err(NominalFinalizationErrorV3::Work)?;
-        let entry = kernel.entry_name();
-        charge(hsaco.kernels().len() * (entry.len() + 1))
-            .map_err(NominalFinalizationErrorV3::Work)?;
+        charge(kernel.symbol.len() + 128).map_err(T::Error::work)?;
+        let entry = kernel.entry;
+        charge(hsaco.kernels().len() * (entry.len() + 1)).map_err(T::Error::work)?;
         let metadata_index = hsaco
             .kernels()
             .iter()
@@ -55,13 +144,13 @@ pub(crate) fn cross_check<E>(
                 entry_name: entry.to_owned(),
             })?;
         let metadata = &hsaco.kernels()[metadata_index];
-        if kernel.descriptor_symbol() != metadata.symbol() {
+        if kernel.symbol != metadata.symbol() {
             return Err(FinalizationError::KernelDescriptorSymbolMismatch {
                 entry_name: entry.to_owned(),
             }
             .into());
         }
-        charge(bindings.bindings().len()).map_err(NominalFinalizationErrorV3::Work)?;
+        charge(bindings.bindings().len()).map_err(T::Error::work)?;
         let binding = bindings
             .bindings()
             .iter()
@@ -69,7 +158,7 @@ pub(crate) fn cross_check<E>(
             .ok_or_else(|| FinalizationError::KernelBindingClosureMismatch {
                 entry_name: entry.to_owned(),
             })?;
-        let layout = kernel.abi_layout();
+        let layout = kernel.layout;
         let width = match table.requirement(index, charge)?.wavefront_width() {
             RequiredWavefrontWidthV2::Wave32 => 32,
             RequiredWavefrontWidthV2::Wave64 => 64,
@@ -117,21 +206,21 @@ pub(crate) fn cross_check<E>(
             }
             .into());
         }
-        if kernel.component_count() != metadata.explicit_arguments().len() {
+        if kernel.component_count != metadata.explicit_arguments().len() {
             return Err(FinalizationError::ExplicitArgumentCountMismatch {
                 entry_name: entry.to_owned(),
-                descriptor: kernel.component_count(),
+                descriptor: kernel.component_count,
                 metadata: metadata.explicit_arguments().len(),
             }
             .into());
         }
-        let mut arguments = kernel.arguments();
+        let mut arguments = kernel.arguments;
         let mut physical_index = 0;
         while let Some(argument) = arguments.next(charge)? {
             let source = table.source_type(argument.source_type(), charge)?;
             for i in 0..argument.component_count() {
                 let p = argument.component(i, charge)?;
-                charge(32).map_err(NominalFinalizationErrorV3::Work)?;
+                charge(32).map_err(T::Error::work)?;
                 validate_physical_argument(
                     entry,
                     physical_index,
@@ -147,7 +236,7 @@ pub(crate) fn cross_check<E>(
                 physical_index += 1;
             }
         }
-        validate_kernel_tail_and_launch(entry, layout, kernel.launch(), metadata, *binding)?;
+        validate_kernel_tail_and_launch(entry, layout, &kernel.launch, metadata, *binding)?;
     }
     Ok(())
 }

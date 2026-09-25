@@ -13,7 +13,8 @@ use super::{
     AccessMode, CompilerDescriptorError, DescriptorArgumentKindV1 as Kind,
     TypedDescriptorArgumentV1, TypedDescriptorRootV1,
     conditional_output_binding_v1::{
-        CompilerConditionalOutputDescriptorErrorV1, require_flat_abi_v1, select_typed_root_v1,
+        CompilerConditionalOutputDescriptorErrorV1, GeneratedFieldCoordinatesV1,
+        checked_generated_field_v1, select_typed_root_v1,
     },
     nominal_v3, production_descriptor_argument_matches_kernel_type_v1,
     require_production_descriptor_argument_semantic_type_v1,
@@ -209,11 +210,6 @@ fn project<'w, T>(
     let (root_id, body_id) = select_source(semantic, recipe.function_name(), budget)?;
     let typed_root =
         select_typed_root_v1(owner.roots(), semantic, root_id, budget).map_err(Error::Profile)?;
-    let body = semantic
-        .functions()
-        .get(body_id.index() as usize)
-        .ok_or(Error::Mismatch("selected semantic body"))?;
-    require_flat_abi_v1(body.abi(), semantic.types(), budget).map_err(Error::Profile)?;
     // Fresh relation, used and dropped while the original Work borrow
     // is live. The aggregate's separate replay above protects its exact
     // canonical/source association; this relation maps generated fields.
@@ -227,8 +223,8 @@ fn project<'w, T>(
         return Err(Error::Mismatch("output canonical parameter"));
     }
     let output_row = join_argument(
+        owner,
         typed_root,
-        semantic,
         &relation,
         &request.arguments()[0],
         output.source(),
@@ -245,8 +241,8 @@ fn project<'w, T>(
             return Err(Error::Mismatch("read canonical occurrence"));
         }
         let row = join_argument(
+            owner,
             typed_root,
-            semantic,
             &relation,
             &request.arguments()[index + 1],
             read.source(),
@@ -360,8 +356,8 @@ fn select_source(
 }
 
 fn join_argument(
+    owner: &ConditionalGeneratedFieldOwnerV1<'_>,
     root: &TypedDescriptorRootV1,
-    semantic: &AdmittedInertSemanticMirV1,
     relation: &ProductionSourceArgumentRelationV1<'_, '_>,
     request_row: &ProductionConditionalSourceArgumentV1,
     source: ProductionConditionalSourceCoordinatesV1,
@@ -369,6 +365,7 @@ fn join_argument(
     budget: &mut Budget<'_>,
 ) -> Result<ConditionalGeneratedArgumentV1, Error> {
     budget.charge_work(16)?;
+    let semantic = owner.source().semantic_ssa().source_semantic();
     if request_row.canonical_parameter() != source.canonical_parameter()
         || request_row.source_argument() != source.source_argument()
         || request_row.adjusted_argument() != source.adjusted_argument()
@@ -394,13 +391,25 @@ fn join_argument(
     {
         return Err(Error::Mismatch("fresh whole source argument replay"));
     }
-    // This bounded profile admits only whole flat arguments. Source/adjusted
-    // equality is checked, not assumed or used to compact hidden parameters.
-    let field = checked_field_index(
-        binding.source_argument(),
-        binding.adjusted_argument(),
+    // The fresh relation supplies source coordinates; only the original
+    // compiler context receipt may remove a logical argument from packing.
+    let field = checked_generated_field_v1(
+        semantic,
+        (
+            relation.association().correspondence_owner(),
+            relation.association().semantic_function(),
+        ),
+        Some(owner.contexts()),
+        GeneratedFieldCoordinatesV1 {
+            source: binding.source_argument(),
+            adjusted: binding.adjusted_argument(),
+            local: binding.semantic_local(),
+            ty: binding.semantic_type(),
+        },
         root.arguments.len(),
-    )?;
+        budget,
+    )
+    .map_err(Error::Profile)?;
     let argument = root
         .arguments
         .as_slice()
@@ -473,17 +482,6 @@ fn check_field(
         return Err(Error::Mismatch("whole slice kind/access/physical type"));
     }
     Ok(())
-}
-
-fn checked_field_index(source: u32, adjusted: u32, count: usize) -> Result<usize, Error> {
-    if source != adjusted {
-        return Err(Error::Mismatch("flat generated/source/adjusted ABI"));
-    }
-    let field = usize::try_from(source).map_err(|_| Resource::Arithmetic)?;
-    if field >= count || field >= MAX_CONDITIONAL_ARGUMENTS_V1 {
-        return Err(Error::Mismatch("bounded generated logical field"));
-    }
-    Ok(field)
 }
 
 fn require_replayed_root(selected: SemanticFunctionIdV1, replayed: u32) -> Result<(), Error> {

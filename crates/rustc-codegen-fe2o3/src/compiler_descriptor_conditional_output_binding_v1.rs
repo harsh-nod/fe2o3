@@ -19,6 +19,10 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use std::fmt;
 
+#[path = "compiler_descriptor_conditional_output_binding_mapping_v1.rs"]
+mod mapping;
+pub(crate) use mapping::{GeneratedFieldCoordinatesV1, checked_generated_field_v1};
+
 /// Failure of descriptive agreement or the caller's cumulative resource budget.
 #[derive(Debug)]
 pub(crate) enum CompilerConditionalOutputDescriptorErrorV1 {
@@ -28,6 +32,8 @@ pub(crate) enum CompilerConditionalOutputDescriptorErrorV1 {
     Root,
     /// Generated packing does not support this source/adjusted ABI profile.
     UnsupportedAbi,
+    /// Logical context elision lacks the original compiler admission.
+    ContextAdmission,
     /// The certified whole output does not select an exact writable slice field.
     OutputArgument,
     /// An existing descriptor/semantic identity check failed unchanged.
@@ -107,12 +113,12 @@ impl<'a, 'owner> CompilerConditionalOutputDescriptorBindingV1<'a, 'owner> {
 /// Production must pass the transaction's own `expected_owner` and typed roots;
 /// pointer equality below does not authenticate the supplied root slice. The
 /// caller must already reserve `expected_owner.retained_analysis_storage_v1()`.
-/// This allocation-free leaf charges its new scans, including existing pure
-/// descriptor validation, on the incoming ledger and never changes its storage
-/// floor. Existing source/SSA/typed-root retention exclusions remain unchanged.
+/// New scans and temporary logical maps are prepaid on the incoming ledger;
+/// their scope restores the caller's storage floor. Existing source/SSA/typed-root
+/// retention exclusions remain unchanged.
 ///
-/// The sealed binding already used `with_checked_arguments_v1` and checked exact
-/// transparent Result forwarding. No argument map or wrapper parser is rebuilt.
+/// The sealed binding already checked source/KIR argument correspondence. This
+/// query independently replays the admitted ABI map and transparent-body selection.
 /// Tuple expansion, ignored/hidden inputs and context forwarding are unsupported;
 /// no argument is compacted or skipped to manufacture a generated field index.
 pub(crate) fn bind_conditional_output_descriptor_v1<'a, 'owner>(
@@ -144,17 +150,24 @@ pub(crate) fn bind_conditional_output_descriptor_v1<'a, 'owner>(
     if typed_root.entry_symbol() != binding.coverage().kernel().id.as_str() {
         return Err(Error::Root);
     }
-    let body = semantic
-        .functions()
-        .get(association.semantic_function().index() as usize)
-        .ok_or(Error::Root)?;
-    require_flat_abi_v1(body.abi(), semantic.types(), budget)?;
-    let index = usize::try_from(binding.source_argument()).map_err(|_| Error::OutputArgument)?;
-    if binding.source_argument() != binding.adjusted_argument()
-        || body.abi().source_input_types().get(index) != Some(&binding.semantic_type())
-    {
-        return Err(Error::OutputArgument);
-    }
+    // This descriptive API has no compiler context custody. A logical context
+    // therefore remains inadmissible, even if its semantic type looks correct.
+    let index = checked_generated_field_v1(
+        semantic,
+        (
+            association.correspondence_owner(),
+            association.semantic_function(),
+        ),
+        None,
+        GeneratedFieldCoordinatesV1 {
+            source: binding.source_argument(),
+            adjusted: binding.adjusted_argument(),
+            local: binding.semantic_local(),
+            ty: binding.semantic_type(),
+        },
+        typed_root.arguments.len(),
+        budget,
+    )?;
     let semantic_type = semantic
         .types()
         .get(binding.semantic_type().index() as usize)

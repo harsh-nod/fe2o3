@@ -1,5 +1,7 @@
 # Conditional contract retention and runtime transport
 
+Follow-up: [V4 artifacts, context fields and protected replay](conditional-v4-context-validation-20260925.md).
+
 Continuation of [generated-field projection](conditional-generated-fields-20260925.md)
 for issue #272. This is implementation progress, not closure of M1 or a new
 47-kernel qualification result.

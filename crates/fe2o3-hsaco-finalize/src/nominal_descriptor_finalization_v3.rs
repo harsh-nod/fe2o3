@@ -7,28 +7,32 @@
 use std::{error::Error, fmt, mem::size_of};
 
 use fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V3;
-use fe2o3_hsaco::{InspectedKernelBindings, MAX_HSACO_BYTES, inspect_and_bind_kernel_descriptors};
+use fe2o3_hsaco::InspectedKernelBindings;
 use fe2o3_kernel_descriptor::{
-    CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V3, CANONICAL_CODE_OBJECT_DOMAIN_V1,
-    CanonicalCodeObjectDigest, DESCRIPTOR_QUERY_STORAGE_V3, DESCRIPTOR_READER_SCRATCH_STORAGE_V3,
-    DESCRIPTOR_TABLE_VIEW_STORAGE_V3, DescriptorWireErrorV3, DeviceDescriptorTableV3,
-    decode_device_descriptor_table_v3,
+    CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V3, CanonicalCodeObjectDigest, DESCRIPTOR_QUERY_STORAGE_V3,
+    DESCRIPTOR_READER_SCRATCH_STORAGE_V3, DESCRIPTOR_TABLE_VIEW_STORAGE_V3, DescriptorWireErrorV3,
+    DeviceDescriptorTableV3, decode_device_descriptor_table_v3,
 };
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 use crate::{
-    DescriptorPlacementV1, DescriptorSectionLocation, FinalizationError,
-    locate_versioned_descriptor_section, nominal_descriptor_physical_v3::cross_check,
+    DescriptorSectionLocation, FinalizationError,
+    nominal_descriptor_common::{self as common, Failure, Format, Inspection},
+    nominal_descriptor_physical::cross_check,
 };
 
 /// Simultaneous descriptor view, reader/query results and hash scratch. Does not
 /// include caller bytes, callback state, the returned owner, or ELF/AMDHSA allocations.
 /// This number is a storage declaration, not an authenticated reservation.
+/// Includes the shared inspection/format headers and physical projection/launch
+/// copies. It is a logical typed extent, not compiler stack or whole-process usage.
 pub const NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3: usize = DESCRIPTOR_TABLE_VIEW_STORAGE_V3
     + DESCRIPTOR_READER_SCRATCH_STORAGE_V3
     + DESCRIPTOR_QUERY_STORAGE_V3
     + size_of::<Sha256>()
     + size_of::<NominalDescriptorInspectionV3<'static>>()
+    + common::COMMON_STORAGE
+    + crate::nominal_descriptor_physical::PHYSICAL_PROJECTION_STORAGE
     + 256;
 
 #[derive(Debug)]
@@ -81,6 +85,17 @@ impl<E> From<DescriptorWireErrorV3<E>> for NominalFinalizationErrorV3<E> {
         Self::Wire(e)
     }
 }
+impl<E> Failure<E> for NominalFinalizationErrorV3<E> {
+    fn work(error: E) -> Self {
+        Self::Work(error)
+    }
+    fn scratch(required: usize, prepaid: usize) -> Self {
+        Self::Scratch { required, prepaid }
+    }
+    fn source_mismatch() -> Self {
+        Self::DescriptorSourceMismatch
+    }
+}
 pub(crate) type ResultV3<T, E> = Result<T, NominalFinalizationErrorV3<E>>;
 
 /// Borrowed exact nominal wire plus independently inspected physical bindings.
@@ -118,6 +133,13 @@ impl<'a> NominalDescriptorInspectionV3<'a> {
     }
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+    fn into_inspection(self) -> Inspection {
+        Inspection {
+            digest: self.digest(),
+            bindings: self.bindings,
+            location: self.location,
+        }
     }
 }
 
@@ -176,54 +198,32 @@ fn inspect<'a, E>(
     prepaid_scratch: usize,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> ResultV3<NominalDescriptorInspectionV3<'a>, E> {
-    if prepaid_scratch < NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3 {
-        return Err(NominalFinalizationErrorV3::Scratch {
-            required: NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3,
-            prepaid: prepaid_scratch,
-        });
-    }
-    if bytes.len() > MAX_HSACO_BYTES {
-        return Err(FinalizationError::InputTooLarge.into());
-    }
-    charge(1).map_err(NominalFinalizationErrorV3::Work)?;
-    let bindings = inspect_and_bind_kernel_descriptors(bytes).map_err(FinalizationError::from)?;
-    let section = locate_versioned_descriptor_section(
+    let (table, inspected) = common::inspect(
         bytes,
-        DescriptorPlacementV1::Detached,
-        COMPILER_DESCRIPTOR_SECTION_NAME_V3,
+        finalized,
+        prepaid_scratch,
+        Format {
+            section_name: COMPILER_DESCRIPTOR_SECTION_NAME_V3,
+            digest_offset: CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V3,
+            scratch: NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3,
+        },
+        charge,
+        |wire, bindings, charge| {
+            let table = decode_device_descriptor_table_v3(wire, charge)?;
+            cross_check(bindings, &table, charge)?;
+            let digest = table.canonical_code_object_digest();
+            Ok::<_, NominalFinalizationErrorV3<E>>((table, digest))
+        },
     )?;
-    let table = decode_device_descriptor_table_v3(&bytes[section.range.clone()], charge)?;
-    cross_check(&bindings, &table, charge)?;
-    let location = DescriptorSectionLocation {
-        offset: section.range.start,
-        size: section.range.len(),
-        digest_offset: section.range.start + CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V3,
-    };
-    let declared = table.canonical_code_object_digest();
-    charge(32).map_err(NominalFinalizationErrorV3::Work)?;
-    if finalized {
-        if declared.as_bytes() == &[0; 32] {
-            return Err(FinalizationError::ExpectedFinalizedDigest.into());
-        }
-        let calculated = normalized_digest(bytes, location, charge)?;
-        if declared != calculated {
-            return Err(FinalizationError::CanonicalDigestMismatch {
-                declared,
-                calculated,
-            }
-            .into());
-        }
-    } else if declared.as_bytes() != &[0; 32] {
-        return Err(FinalizationError::ExpectedZeroDigest.into());
-    }
     Ok(NominalDescriptorInspectionV3 {
-        bindings,
+        bindings: inspected.bindings,
         table,
-        location,
+        location: inspected.location,
     })
 }
 
-/// Inspect exactly one detached `.fe2o3.kd.v3`; reject V1, mixed and duplicate sections.
+/// Inspect exactly one detached `.fe2o3.kd.v3`; reject duplicates and every other
+/// schema in the reserved `.fe2o3.kd.*` namespace, including unknown future names.
 /// COV6 requires a declared explicit-size + 256 ABI, with physical metadata and
 /// hardware descriptors agreeing on either explicit-only or complete hidden-tail form.
 pub fn inspect_unfinalized_nominal_hsaco_v3<'a, E>(
@@ -243,36 +243,6 @@ pub fn inspect_finalized_nominal_hsaco_v3<'a, E>(
     inspect(bytes, true, prepaid_scratch, charge)
 }
 
-fn normalized_digest<E>(
-    bytes: &[u8],
-    location: DescriptorSectionLocation,
-    charge: &mut impl FnMut(usize) -> Result<(), E>,
-) -> ResultV3<CanonicalCodeObjectDigest, E> {
-    charge(bytes.len() + CANONICAL_CODE_OBJECT_DOMAIN_V1.len() + 8 + 128)
-        .map_err(NominalFinalizationErrorV3::Work)?;
-    let mut hash = Sha256::new();
-    hash.update(CANONICAL_CODE_OBJECT_DOMAIN_V1);
-    hash.update((bytes.len() as u64).to_le_bytes());
-    hash.update(&bytes[..location.digest_offset]);
-    hash.update([0; 32]);
-    hash.update(&bytes[location.digest_offset + 32..]);
-    Ok(CanonicalCodeObjectDigest::from_bytes(
-        hash.finalize().into(),
-    ))
-}
-
-fn copy_bytes<E>(
-    bytes: &[u8],
-    charge: &mut impl FnMut(usize) -> Result<(), E>,
-) -> ResultV3<Vec<u8>, E> {
-    charge(bytes.len()).map_err(NominalFinalizationErrorV3::Work)?;
-    let mut copy = Vec::new();
-    copy.try_reserve_exact(bytes.len())
-        .map_err(|_| FinalizationError::AllocationFailed)?;
-    copy.extend_from_slice(bytes);
-    Ok(copy)
-}
-
 /// Require exact zero-digest source bytes, patch only the digest, then independently
 /// inspect the result. Public source bytes are an integrity claim, not authentication.
 pub fn finalize_unfinalized_nominal_hsaco_v3<E>(
@@ -281,37 +251,21 @@ pub fn finalize_unfinalized_nominal_hsaco_v3<E>(
     prepaid_scratch: usize,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> ResultV3<FinalizedNominalHsacoV3, E> {
-    let location = {
-        let raw = inspect_unfinalized_nominal_hsaco_v3(bytes, prepaid_scratch, charge)?;
-        charge(raw.table.canonical_bytes().len()).map_err(NominalFinalizationErrorV3::Work)?;
-        if raw.table.canonical_bytes() != expected_descriptor_source {
-            return Err(NominalFinalizationErrorV3::DescriptorSourceMismatch);
-        }
-        raw.location
-    };
-    let digest = normalized_digest(bytes, location, charge)?;
-    let mut output = copy_bytes(bytes, charge)?;
-    output[location.digest_offset..location.digest_offset + 32].copy_from_slice(digest.as_bytes());
-    charge(bytes.len()).map_err(NominalFinalizationErrorV3::Work)?;
-    if output[..location.digest_offset] != bytes[..location.digest_offset]
-        || output[location.digest_offset + 32..] != bytes[location.digest_offset + 32..]
-    {
-        return Err(
-            FinalizationError::OutputVerification("bytes outside nominal digest changed").into(),
-        );
-    }
-    let verified = inspect_finalized_nominal_hsaco_v3(&output, prepaid_scratch, charge)?;
-    if verified.location != location || verified.digest() != digest {
-        return Err(
-            FinalizationError::OutputVerification("nominal digest or location changed").into(),
-        );
-    }
-    let bindings = verified.bindings;
+    let (output, verified) = common::finalize(
+        bytes,
+        expected_descriptor_source,
+        charge,
+        |bytes, finalized, charge| {
+            Ok::<_, NominalFinalizationErrorV3<E>>(
+                inspect(bytes, finalized, prepaid_scratch, charge)?.into_inspection(),
+            )
+        },
+    )?;
     Ok(FinalizedNominalHsacoV3 {
         bytes: output,
-        bindings,
-        location,
-        digest,
+        bindings: verified.bindings,
+        location: verified.location,
+        digest: verified.digest,
     })
 }
 
@@ -321,17 +275,7 @@ pub fn derive_unfinalized_nominal_hsaco_v3<E>(
     prepaid_scratch: usize,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> ResultV3<Vec<u8>, E> {
-    let (location, digest) = {
-        let verified = inspect_finalized_nominal_hsaco_v3(bytes, prepaid_scratch, charge)?;
-        (verified.location, verified.digest())
-    };
-    let mut raw = copy_bytes(bytes, charge)?;
-    raw[location.digest_offset..location.digest_offset + 32].fill(0);
-    let verified = inspect_unfinalized_nominal_hsaco_v3(&raw, prepaid_scratch, charge)?;
-    if verified.location != location || normalized_digest(&raw, location, charge)? != digest {
-        return Err(
-            FinalizationError::OutputVerification("nominal raw reconstruction changed").into(),
-        );
-    }
-    Ok(raw)
+    common::derive_unfinalized(bytes, charge, |bytes, finalized, charge| {
+        Ok(inspect(bytes, finalized, prepaid_scratch, charge)?.into_inspection())
+    })
 }
