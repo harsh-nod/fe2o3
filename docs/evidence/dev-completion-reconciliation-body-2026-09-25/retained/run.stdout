@@ -1,0 +1,9 @@
+runner-tests: PASS
+source-body: PASS
+rustc: PASS
+gnu: PASS
+musl: PASS
+doctests: PASS
+default: PASS
+clippy: PASS
+format: PASS

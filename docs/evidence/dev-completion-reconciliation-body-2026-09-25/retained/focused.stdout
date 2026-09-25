@@ -1,0 +1,8 @@
+
+running 3 tests
+test context::tests::peer_directed_tests::reconciliation_tests::directed_reconciliation_graph_can_exceed_the_dependency_and_stack_bound ... ok
+test context::tests::peer_directed_tests::reconciliation_tests::directed_reconciliation_retains_successful_cursor_prefix_before_later_failure ... ok
+test context::tests::peer_directed_tests::reconciliation_tests::directed_reconciliation_yields_at_exact_fuel_and_resumes_retained_prefix ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1435 filtered out; finished in 0.98s
+

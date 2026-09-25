@@ -1,0 +1,112 @@
+{
+  "comparison": {
+    "baseline": "b8804de3ec7513d7bb41be52bbaa7d25570ba9c3",
+    "formatted_equal": true,
+    "previous_sha256": "70a057b41d5ef6e94c4ce56fd55264154c577a31e6cab4f172d1d37929314344",
+    "shared_sha256": "70a057b41d5ef6e94c4ce56fd55264154c577a31e6cab4f172d1d37929314344"
+  },
+  "observed_at": "2026-09-25T21:10:10.651254+00:00",
+  "owned_paths": [
+    {
+      "allocated_bytes": 2281472,
+      "device": 2096,
+      "inode": 8873304,
+      "path": "/home/harsh/.codex-tmp/fe2o3-reconciliation-body-20260925-Y8aMf0bG",
+      "uid": 1000
+    },
+    {
+      "allocated_bytes": 1938120704,
+      "device": 63,
+      "inode": 346434,
+      "path": "/dev/shm/fe2o3-reconciliation-body-20260925-AkmFQUvg",
+      "uid": 1000
+    }
+  ],
+  "phases": {
+    "clippy": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    },
+    "default": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    },
+    "doctests": {
+      "counts": [
+        [
+          4,
+          0,
+          0
+        ],
+        [
+          42,
+          0,
+          0
+        ]
+      ],
+      "passed": true,
+      "status": 0
+    },
+    "format": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    },
+    "gnu": {
+      "counts": [
+        [
+          1416,
+          22,
+          0
+        ]
+      ],
+      "passed": true,
+      "status": 0
+    },
+    "musl": {
+      "counts": [
+        [
+          1416,
+          22,
+          0
+        ]
+      ],
+      "passed": true,
+      "status": 0
+    },
+    "runner-tests": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    },
+    "rustc": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    },
+    "source-body": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    }
+  },
+  "retained_bytes_equal": true,
+  "retained_files": 52,
+  "scope": "Planner extraction/CPU development, not Verus, native qualification or relocated replay",
+  "source_commit": "53aba0d658f0d874f3c4f7ef18ff35f971504375",
+  "source_continuity": true,
+  "source_inputs": 5955,
+  "terminal_groups": [
+    1806384,
+    1805906,
+    1804928,
+    1806419,
+    1738106,
+    1761240,
+    1737947,
+    1738086,
+    1738048
+  ]
+}

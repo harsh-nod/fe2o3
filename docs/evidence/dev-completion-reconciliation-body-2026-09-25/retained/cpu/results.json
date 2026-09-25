@@ -1,0 +1,70 @@
+{
+  "clippy": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "default": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "doctests": {
+    "counts": [
+      [
+        4,
+        0,
+        0
+      ],
+      [
+        42,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "format": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "gnu": {
+    "counts": [
+      [
+        1416,
+        22,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "musl": {
+    "counts": [
+      [
+        1416,
+        22,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "runner-tests": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "rustc": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "source-body": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  }
+}

@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest planner development (2026-09-25): the
+[shared completion reconciliation packet](evidence/dev-completion-reconciliation-body-2026-09-25/README.md)
+extracts the complete bounded production planner unchanged and adds three
+real-Context regressions. A 256-node chain resumes after exact 513/513/219-step
+passes; a later dependency failure preserves its successful cursor prefix; a
+303-operation graph distinguishes total graph size from the 256-entry roster
+and stack bounds. All nine phases pass from signed `53aba0d65`: GNU/musl each
+pass 1,416 runtime tests with 22 hardware-only ignores, all 46 doctests, strict
+Clippy, default-feature checks, formatting and six checker tests pass. Parsed
+old/new bodies match exactly, and both source brackets match 5,955 inputs.
+All 52 scratch artifacts are retained before exact-owned cleanup and independent
+absence, removing 1,940,402,176 allocated bytes. This is extraction and CPU
+regression evidence, not a new Verus theorem, full Context refinement, native
+qualification or performance result. The complete finite-graph proof remains
+open; A1/A2 and accepted lane checkpoints remain unchanged.
+
 Latest host-data development (2026-09-25): the
 [completed-result input packet](evidence/dev-completed-result-input-2026-09-25/README.md)
 adds a consuming read-only input constructor that preserves the original typed
@@ -2841,6 +2857,7 @@ their implementation to an idle runtime lane:
 | Mixed SIMT/tile consumer | [#275](https://github.com/harsh-nod/fe2o3/issues/275), with #134/#271/#272: generated launch/resource contracts and kernel-family qualification through the existing pipeline. Reconcile exact compiler-owner handoffs; do not duplicate their active work or wait for all distributed milestones before developing the initial admitted path. |
 | Protected kernels | #89/#88/#98/#104/#105/#123 plus the compiler-owned device-language G2/G4 milestones; exact ABI/effect contracts, independent output/layout oracles and architecture-specific execution |
 | Release and diagnostics | Offline installation #252, disposable-machine deployment #253 and debugger descendant containment #269; keep deployment and debugger ownership separate from queue construction |
+| Threaded release closure | [#277](https://github.com/harsh-nod/fe2o3/issues/277): resolve the strict ELF rejection of the GNU threaded VecAdd benchmark without weakening policy, add release CI coverage and separately investigate the observed teardown failure; functional kernel checks do not establish full-smoke or release qualification |
 | Broad qualification | G8 and A6/A7: differential testing, supported-target evidence, isolated fault campaigns and matched complete-output performance, not CPU suite wall time |
 
 These are coordination queues, not additional running agents. Worker V3's

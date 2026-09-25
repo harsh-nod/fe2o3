@@ -1,0 +1,28 @@
+[
+  {
+    "command": [
+      "git",
+      "-c",
+      "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-protocol-v2-20260918/allowed-signers",
+      "verify-commit",
+      "53aba0d658f0d874f3c4f7ef18ff35f971504375"
+    ],
+    "commit": "53aba0d658f0d874f3c4f7ef18ff35f971504375",
+    "status": 0,
+    "stderr": "Good \"git\" signature for harmenon@amd.com with ED25519 key SHA256:q8oGVYZ11904aFzlMkSiEwyeSP+6hbuiZGbNVGRZVCg\n",
+    "stdout": ""
+  },
+  {
+    "command": [
+      "git",
+      "-c",
+      "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-protocol-v2-20260918/allowed-signers",
+      "verify-commit",
+      "b8804de3ec7513d7bb41be52bbaa7d25570ba9c3"
+    ],
+    "commit": "b8804de3ec7513d7bb41be52bbaa7d25570ba9c3",
+    "status": 0,
+    "stderr": "Good \"git\" signature for harmenon@amd.com with ED25519 key SHA256:q8oGVYZ11904aFzlMkSiEwyeSP+6hbuiZGbNVGRZVCg\n",
+    "stdout": ""
+  }
+]

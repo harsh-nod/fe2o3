@@ -22,8 +22,26 @@ more than once, and adapter validation costs are separate from the step count.
 
 ## Checks
 
-Validation is in progress. No campaign success is claimed until final results,
-source continuity and cleanup records are retained.
+All nine campaign phases pass from signed source
+`53aba0d658f0d874f3c4f7ef18ff35f971504375`:
+
+| Check | Result |
+| --- | --- |
+| Runner calibration | Six tests pass |
+| Source-body extraction | Rustfmt-parsed bodies match exactly |
+| Rust compiler identity | Retained |
+| GNU runtime, all features | 1,416 pass, 22 hardware-only ignores |
+| musl runtime, all features | 1,416 pass, 22 hardware-only ignores |
+| Runtime doctests | 46 pass |
+| Default-feature check | Pass |
+| All-feature/all-target strict Clippy | Pass |
+| Workspace formatting | Pass |
+
+The opening and closing source brackets match all 5,955 inputs. The baseline
+`b8804de3ec7513d7bb41be52bbaa7d25570ba9c3` and final source signatures were
+verified. Preliminary focused tests, checker calibration and Clippy logs are
+also retained; final full suites cover the final source, including the counted
+helper's nested function.
 
 The new real-Context tests cover:
 
@@ -45,9 +63,22 @@ macro body using Rustfmt, after expanding the fixed Context/identity parameters
 and empty production hook. Exact formatted equality is an extraction check,
 not a Rust semantic theorem. Its negative controls preserve valid Rust syntax.
 
+## Retention And Cleanup
+
+[retention.json](retention.json) inventories all 52 scratch artifacts copied
+byte-for-byte into `retained/`, including phase commands, outputs, results,
+source brackets, signature receipts and both formatted function bodies.
+[cleanup-before.json](cleanup-before.json) records exact owned path identities
+and all nine terminal process groups. [cleanup-after.json](cleanup-after.json)
+records successful exact-owned removal, independent lstat and parent-listing
+absence, continued process-group absence and matching retained hashes.
+The two removed paths accounted for 1,940,402,176 allocated bytes. No remote
+resources were created. `SHA256SUMS` seals the packet files except itself.
+
 ## Reproduction
 
-From a committed tree and an existing task-owned Cargo target:
+From a committed tree, with the baseline Git object, pinned toolchains and
+dependencies available, and an existing task-owned Cargo target:
 
 ```sh
 python3 -I -B docs/evidence/dev-completion-reconciliation-body-2026-09-25/run.py --output OUTPUT --target CARGO_TARGET

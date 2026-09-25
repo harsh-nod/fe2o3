@@ -1,0 +1,41 @@
+{
+  "absence": [
+    {
+      "lstat_absent": true,
+      "parent_listing_absent": true,
+      "path": "/home/harsh/.codex-tmp/fe2o3-reconciliation-body-20260925-Y8aMf0bG"
+    },
+    {
+      "lstat_absent": true,
+      "parent_listing_absent": true,
+      "path": "/dev/shm/fe2o3-reconciliation-body-20260925-AkmFQUvg"
+    }
+  ],
+  "command": [
+    "rm",
+    "-r",
+    "--",
+    "/home/harsh/.codex-tmp/fe2o3-reconciliation-body-20260925-Y8aMf0bG",
+    "/dev/shm/fe2o3-reconciliation-body-20260925-AkmFQUvg"
+  ],
+  "observed_at": "2026-09-25T21:13:06.384304+00:00",
+  "path_accounted_allocated_bytes_removed": 1940402176,
+  "remote_resources_created": false,
+  "retained_files": 52,
+  "retained_hashes_match": true,
+  "scope": "Planner extraction/CPU development, not Verus, native qualification or relocated replay",
+  "status": 0,
+  "stderr": "",
+  "stdout": "",
+  "terminal_groups_absent": [
+    1806384,
+    1805906,
+    1804928,
+    1806419,
+    1738106,
+    1761240,
+    1737947,
+    1738086,
+    1738048
+  ]
+}

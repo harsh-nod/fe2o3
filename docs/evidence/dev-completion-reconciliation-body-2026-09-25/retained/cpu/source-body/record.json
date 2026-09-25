@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-completion-reconciliation-body-2026-09-25/run.py",
+    "--compare-body",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-reconciliation-body-20260925-Y8aMf0bG/cpu/body-comparison"
+  ],
+  "started_ns": 1790370161072699624,
+  "process_group": 1738048,
+  "group_absent": true,
+  "finished_ns": 1790370161292762341,
+  "status": 0
+}
