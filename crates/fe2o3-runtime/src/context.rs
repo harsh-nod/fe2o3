@@ -10,6 +10,13 @@ use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+macro_rules! completion_settlement_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
+include!("context/completion_settlement_body.rs");
+
 mod graph;
 pub(crate) use graph::*;
 mod allocation_admission;
@@ -1624,6 +1631,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.settle_terminal_submission_v1(submission, status, outcome)
     }
 
+    #[allow(clippy::question_mark)] // Explicit matches are shared with Verus.
     fn settle_terminal_submission_v1(
         &mut self,
         submission: RuntimeSubmissionIdV1,
@@ -1645,10 +1653,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if status == RuntimeCompletionStatusV1::Succeeded {
             self.require_directed_success_v1(submission)?;
         }
-        self.release_submission_inputs_v1(submission)?;
-        self.settle_submission_writer_v1(submission, outcome)?;
-        self.release_operation_dependencies_v1(submission)?;
-        self.publish_submission_status_v1(submission, status)
+        completion_settlement_execution_body!(
+            completion_settlement_rust_expr,
+            self,
+            submission,
+            status,
+            outcome
+        )
     }
 
     // Generated callers must settle their receipt-bound writer separately.
@@ -3721,6 +3732,7 @@ mod tests {
     mod allocation_admission_tests;
     mod allocation_outcome_tests;
     mod async_journal_tests;
+    mod completion_settlement_tests;
     mod copy_source_lease_tests;
     mod kernel_read_lease_tests;
     mod peer_batch_tests;

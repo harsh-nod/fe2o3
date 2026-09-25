@@ -24,6 +24,16 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest development (2026-09-25): the
+[production completion-settlement control body](runtime-completion-settlement-control-v1.md)
+is shared by Rust and Verus without changing its prechecks or call semantics.
+Eight development obligations prove ordered Result control flow and exact
+argument/result forwarding, not Context method effects or callback behavior.
+Two new CPU tests and the full 1,406-test GNU runtime suite pass, with 22 native
+ignores. Four checker groups pass; the signed-source 22-mutation campaign and
+remaining CPU qualification are next. Journal/Context composition, producer-first
+reconciliation, generated/native/resource gates and A1/A2 remain open.
+
 Latest proof qualification (2026-09-25): the
 [constructor-origin mixed lifecycle packet](evidence/dev-owner-mixed-lifecycle-2026-09-24/README.md)
 passes all sixteen stages from signed `33b4606f4`: both whole-root positives
