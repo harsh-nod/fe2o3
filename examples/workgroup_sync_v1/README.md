@@ -87,9 +87,11 @@ cargo test --locked -p rustc-codegen-fe2o3 \
 
 This does not establish the required structured tile or mixed variant,
 generated host/artifact admission, direct-KFD execution or M2 completion.
-Curriculum source-tab and paired-inventory binding also remain pending under
-[issue #275](https://github.com/harsh-nod/fe2o3/issues/275); a separately pinned
-CPU checkpoint does not complete a tutorial pair.
+The CPU simulation lesson's whole-file tab 6 and paired inventory bind this
+exact SIMT source through its production test and feature selection. Tile and
+mixed source variants remain pending under
+[issue #275](https://github.com/harsh-nod/fe2o3/issues/275); this source association
+and the separately pinned CPU checkpoint do not complete a tutorial pair.
 Hardware launch representability is a separate runtime contract. The old
 `run-gfx942.sh` and protected scalar driver still select their existing
 reduction profiles and do not qualify this new ABI.

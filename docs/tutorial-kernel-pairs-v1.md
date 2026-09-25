@@ -132,7 +132,7 @@ Do not add these collections to obtain a kernel count. They can overlap, repeat
 symbols under different features, and omit still-unbound kernel identities.
 For the current incomplete inventory, `requiredPairCount` is null,
 `qualifiedPairCount` is zero, and `inventoryComplete` and `qualified` are false.
-One SIMT variant has an exact source association; the remaining 119 variants
+Two SIMT variants have exact source associations; the remaining 121 variants
 are pending and no pair is source-bound. Stages are not evaluated unless a
 diagnostic source report is bound; binding that report does not qualify a pair.
 Existing historical successes do not
@@ -144,6 +144,18 @@ The current library adds an independent CPU point reference. Its old display
 therefore has a pending current-source binding, not a fixture-source contract.
 The tutorial's recorded no-GPU execution keeps its historical source pin; the
 source migration supplies no new execution or tile-pair qualification.
+
+The CPU simulation lesson's whole-file tab 6 binds
+`row_affine_sum_u32_v1` from
+`examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs` through the existing
+source-driver contract, with `row-affine-u32-kernel` and default features disabled.
+The associated production test exports Bundle V5 and compares 86 independent
+oracle cases on the gfx942 and gfx950 CPU profiles, including execution and
+exact persisted replay. This is the second source-bound SIMT variant, not a
+new native fixture or a completed pair. Tile and mixed implementations,
+native artifact/generated-host admission, and direct-KFD GPU validation remain
+pending for gfx942/mi300x and gfx950/mi350. The inventory does not ingest these
+CPU test results as per-variant target qualification receipts.
 
 The report is bounded to 4096 charged projection/inventory records, including
 input tabs, references and scanned items, and 16 MiB of encoded JSON. Each Rust
@@ -242,8 +254,9 @@ display bindings and the historical
 GEMM lesson's source gap unresolved. The two attention variants are required
 positive compile obligations with separate pending-design simulation requests;
 neither inherits another variant's retained KIR or execution evidence. These
-registrations bring known kernel identities to 60, not completed pairs or a
-proven final curriculum denominator.
+registrations, together with the explicit SIMT row source above, bring known
+kernel identities to 61, not completed pairs or a proven final curriculum
+denominator.
 The systems occurrences cover routing, expert computation, expert combination,
 gradient staging, Muon update, n-gram gather and speculative verification,
 including repeated performance excerpts. They bind eleven existing

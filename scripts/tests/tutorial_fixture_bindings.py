@@ -396,5 +396,183 @@ class AttentionCfgSelectionTests(unittest.TestCase):
                 self.declarations(self.kernel, [feature])
 
 
+class RowSourceBindingTests(unittest.TestCase):
+    lesson_id = "cpu-semantic-simulation"
+    kernel_id = "source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1"
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "row_binding_parent", ROOT / "scripts/validate-tutorial-kernel-manifest.py")
+        cls.parent = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.parent)
+        cls.original = cls.parent.load_manifest(ROOT / "config/tutorial-kernel-manifest-v1.json")
+
+    def row(self, document):
+        lesson = next(row for row in document["curriculum"]["lessons"]
+                      if row["lessonId"] == self.lesson_id)
+        kernel = next(row for row in document["kernelInventory"]["kernels"]
+                      if row["kernelId"] == self.kernel_id)
+        return lesson["codeTabs"][6], kernel
+
+    def test_registered_row_binds_exact_source_but_does_not_qualify_a_pair(self):
+        document = copy.deepcopy(self.original)
+        before = copy.deepcopy(document)
+        tab, kernel = self.row(document)
+        self.parent.validate_curriculum_tab(tab, 6, self.lesson_id, "executable", source_items=True)
+        self.parent.validate_source_item(ROOT, self.lesson_id, tab, {})
+        report = self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
+        self.assertEqual(document, before)
+        item = tab["sourceItem"]
+        self.assertEqual(item["cases"], [{
+            "features": ["row-affine-u32-kernel"], "kernelSymbol": "row_affine_sum_u32_v1",
+            "target": "gfx942", "displayedFragmentOrdinal": 0,
+            "testFunction": "ordinary_row_affine_source_matches_oracle_and_replay",
+            "expectation": {"kind": "verified-bundle-export", "bundleVersion": 5},
+        }])
+        self.assertFalse(item["compilerInput"]["defaultFeatures"])
+        self.assertEqual(item["driver"]["path"],
+                         "crates/rustc-codegen-fe2o3/tests/production_neutral_workgroup_reduce_driver_v1.rs")
+        self.assertEqual(item["sourceRanges"], [{"byteOffset": 0, "byteLength": 2668}])
+        self.assertEqual(tab["sourcePath"], "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs")
+        raw = (ROOT / tab["sourcePath"]).read_bytes()
+        self.assertEqual(len(raw), 2668)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         "07adc0c50f24e51cb3d6c6bcb6cc1c8c6ff2a772c45ee2153435601eca2f39df")
+        self.assertEqual(raw.index(b"row_affine_sum_u32_v1"), 885)
+        self.assertEqual([(row["kind"], row["status"]) for row in kernel["variants"]],
+                         [("simt", "source-bound"), ("tile", "pending"), ("mixed", "pending")])
+        binding = kernel["variants"][0]["source"]
+        self.assertEqual(binding["selection"], kernel["selections"][0])
+        self.assertEqual(binding["implementationKernelId"], self.kernel_id)
+        self.assertEqual(binding["functionUtf8Offset"], 885)
+        self.assertEqual(binding["sourceSha256"], tab["sourceSha256"])
+        for variant in kernel["variants"]:
+            self.assertIn("gfx942/mi300x and gfx950/mi350", variant["blocker"]["reason"])
+        self.assertEqual(report["knownKernelIdentityCount"], 61)
+        self.assertEqual(report["sourceBoundVariantCount"], 2)
+        self.assertEqual(report["sourceBoundPairCount"], 0)
+        self.assertFalse(report["inventoryComplete"])
+        self.assertIsNone(report["requiredPairCount"])
+        self.assertEqual([(row["target"], row["deterministicSemanticRunnerAvailability"])
+                          for row in document["qualification"]["hardwareTargets"]],
+                         [("gfx942", "unavailable"), ("gfx950", "unavailable")])
+
+    def component(self):
+        """One actual row component, not the full-site runtime census."""
+        document = copy.deepcopy(self.original)
+        tab, kernel = self.row(document)
+        lesson = next(row for row in document["curriculum"]["lessons"]
+                      if row["lessonId"] == self.lesson_id)
+        lesson["codeTabs"] = [tab]
+        tab["ordinal"] = 0
+        tab["sourceItem"]["contractSha256"] = self.parent.source_item_contract_sha256(self.lesson_id, tab)
+        kernel["selections"][0]["tabOrdinal"] = 0
+        kernel["variants"][0]["source"]["selection"]["tabOrdinal"] = 0
+        display = next(row for row in document["kernelInventory"]["displayItems"]
+                       if row["lessonId"] == self.lesson_id and row["tabOrdinal"] == 6)
+        display["tabOrdinal"] = 0
+        document["compilerFixtures"] = []
+        document["curriculum"]["lessons"] = [lesson]
+        document["kernelInventory"].update(kernels=[kernel], negativeCases=[], displayItems=[display])
+        binding = kernel["variants"][0]["source"]
+        kernel["variants"][0].update(status="pending", source=None)
+        report = self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
+        binding["selectionSha256"] = report["kernelIdentities"][0]["selectionSha256"]
+        kernel["variants"][0].update(status="source-bound", source=binding)
+        runtime = {"schema": self.parent.SITE_INVENTORY_SCHEMA,
+                   "site": document["curriculum"]["site"], "lessons": [{
+                       "id": self.lesson_id, "codeTabs": [{
+                           **tab, "displayedCode": (ROOT / tab["sourcePath"]).read_text(),
+                           "sourceFragments": None,
+                       }],
+                   }]}
+        return document, runtime, tab, kernel, display
+
+    def check(self, document, runtime):
+        self.parent.validate_site_inventory(document["curriculum"], runtime)
+        return self.parent.validate_kernel_inventory(document, runtime, repo_root=ROOT)
+
+    def test_row_component_checks_exact_runtime_bytes_and_association(self):
+        document, runtime, _, _, _ = self.component()
+        before = copy.deepcopy((document, runtime))
+        report = self.check(document, runtime)
+        self.assertEqual(report["knownKernelIdentityCount"], 1)
+        self.assertTrue(report["runtimeCensusValidated"])
+        self.assertEqual(report["displayItemCount"], 1)
+        self.assertEqual(report["sourceBoundVariantCount"], 1)
+        self.assertEqual(report["sourceBoundPairCount"], 0)
+        self.assertEqual((document, runtime), before)
+
+    def test_row_source_and_display_substitutions_fail_closed(self):
+        for field, value in (
+            ("selectionSha256", "0" * 64), ("sourceSha256", "0" * 64),
+            ("sourcePath", "examples/workgroup_sync_v1/src/lib.rs"),
+            ("functionUtf8Offset", 886),
+        ):
+            document, runtime, _, kernel, _ = self.component()
+            kernel["variants"][0]["source"][field] = value
+            with self.subTest(field=field), self.assertRaises(SystemExit):
+                self.check(document, runtime)
+        for mutation in ("missing-identity", "duplicate-identity", "missing-display", "wrong-case",
+                         "changed-display", "wrong-display-offset", "qualified", "extra-qualification"):
+            document, runtime, _, kernel, display = self.component()
+            if mutation == "missing-identity":
+                document["kernelInventory"]["kernels"] = []
+            elif mutation == "duplicate-identity":
+                document["kernelInventory"]["kernels"].append(copy.deepcopy(kernel))
+            elif mutation == "missing-display":
+                document["kernelInventory"]["displayItems"] = []
+            elif mutation == "wrong-case":
+                kernel["variants"][0]["source"]["selection"]["caseOrdinal"] = 1
+            elif mutation == "changed-display":
+                runtime["lessons"][0]["codeTabs"][0]["displayedCode"] += "\n"
+            elif mutation == "wrong-display-offset":
+                display["functionUtf8Offset"] += 1
+            elif mutation == "qualified":
+                kernel["variants"][0]["status"] = "qualified"
+            else:
+                kernel["variants"][0]["qualified"] = True
+            with self.subTest(mutation=mutation), self.assertRaises(SystemExit):
+                self.check(document, runtime)
+
+    def test_rehashed_wrong_feature_and_defaults_reject_physical_binding(self):
+        for defaults in (False, True):
+            document, _, tab, kernel, _ = self.component()
+            item = tab["sourceItem"]
+            if defaults:
+                item["compilerInput"]["defaultFeatures"] = True
+            else:
+                item["cases"][0]["features"] = ["lds-kernel"]
+            item["contractSha256"] = self.parent.source_item_contract_sha256(self.lesson_id, tab)
+            binding = kernel["variants"][0]["source"]
+            kernel["variants"][0].update(status="pending", source=None)
+            report = self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
+            binding["selectionSha256"] = report["kernelIdentities"][0]["selectionSha256"]
+            kernel["variants"][0].update(status="source-bound", source=binding)
+            with self.subTest(defaults=defaults), self.assertRaisesRegex(
+                    SystemExit, "feature-selected fixture kernel roster differs|selected source"):
+                self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
+
+    def test_rehashed_source_item_still_requires_real_feature_test_and_whole_file(self):
+        for mutation in ("feature", "test", "range", "lock", "closure"):
+            document = copy.deepcopy(self.original)
+            tab, _ = self.row(document)
+            item = tab["sourceItem"]
+            if mutation == "feature":
+                item["cases"][0]["features"] = ["missing-row-feature"]
+            elif mutation == "test":
+                item["cases"][0]["testFunction"] = "row_affine_source_matches_oracle_and_replay"
+            elif mutation == "range":
+                item["sourceRanges"][0]["byteLength"] -= 1
+            elif mutation == "lock":
+                item["compilerInput"]["cargoLockSha256"] = "0" * 64
+            else:
+                item["compilerInput"]["sourceClosureSha256"] = "0" * 64
+            item["contractSha256"] = self.parent.source_item_contract_sha256(self.lesson_id, tab)
+            with self.subTest(mutation=mutation), self.assertRaises(SystemExit):
+                self.parent.validate_source_item(ROOT, self.lesson_id, tab, {})
+
+
 if __name__ == "__main__":
     unittest.main()
