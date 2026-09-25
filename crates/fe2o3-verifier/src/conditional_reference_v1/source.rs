@@ -2,6 +2,10 @@
 use super::*;
 use fe2o3_mir_model::semantic_mir_v1::{SemanticFunctionIdV1, SemanticFunctionRoleV1};
 
+#[cfg(test)]
+#[path = "resource_tests.rs"]
+mod resource_tests;
+
 pub(super) fn check_source_identity(
     request: &Request<'_>,
     binding: &ConditionalReferenceInputV1<'_>,

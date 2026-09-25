@@ -34,6 +34,11 @@ mod error;
 pub mod read_premises;
 mod source;
 
+#[cfg(test)]
+mod fixtures;
+#[cfg(test)]
+mod tests;
+
 use conversion::{ReferenceGpuLoadsV2, reference_expression_inner_checked_v2, reference_scalar_v2};
 pub use error::ConditionalReferenceErrorV1;
 /// Low-level source/adjusted-origin check; not source admission.

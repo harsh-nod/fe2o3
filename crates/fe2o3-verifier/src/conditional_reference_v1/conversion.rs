@@ -2,6 +2,10 @@
 use super::*;
 use dialect_kernel::IndexBinaryKindAttr;
 
+#[cfg(test)]
+#[path = "conversion_tests.rs"]
+mod tests;
+
 /// Maps the existing CPU scalar domain without authenticating its origin.
 pub fn reference_scalar_v2(
     scalar: ReferenceScalarTypeV1,

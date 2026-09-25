@@ -753,6 +753,10 @@ use fe2o3_verifier::conditional_reference_v1::conversion::{
     ReferenceGpuLoadsV2, collect_semantic_loads_v2, operation_result_v2, reference_scalar_v2,
 };
 
+#[cfg(test)]
+#[path = "production_conditional_reference_portable_parity_v1_tests.rs"]
+mod portable_parity_tests;
+
 impl From<fe2o3_verifier::conditional_reference_v1::ConditionalReferenceErrorV1>
     for ProductionReferenceEffectJoinErrorV2
 {
