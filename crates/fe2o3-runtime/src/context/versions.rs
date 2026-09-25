@@ -13,6 +13,8 @@ macro_rules! completion_journal_rust_syntax {
 }
 include!("versions/settlement_bodies.rs");
 
+#[cfg(test)]
+pub(in crate::context) mod completion_faults;
 mod generated;
 mod producer_readers;
 mod readers;
@@ -76,6 +78,8 @@ pub(super) struct ContextVersionsV1 {
     producer_readers: HashMap<RuntimeSubmissionIdV1, producer_readers::RetainedProducerReadV1>,
     #[cfg(test)]
     mixed_input_fault: Option<producer_readers::MixedInputFaultV1>,
+    #[cfg(test)]
+    completion_fault: Option<completion_faults::CompletionJournalFaultV1>,
 }
 
 // Dropping this move-only ticket never removes its Context-owned record.
@@ -154,6 +158,8 @@ impl ContextVersionsV1 {
             producer_readers,
             #[cfg(test)]
             mixed_input_fault: None,
+            #[cfg(test)]
+            completion_fault: None,
         })
     }
 

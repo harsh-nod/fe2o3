@@ -743,6 +743,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<(), RuntimeValidationErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let versions = self.versions.as_mut().expect("validated producer inputs");
+            #[cfg(test)]
+            versions.completion_boundary_for_test_v1(
+                id,
+                completion_faults::CompletionJournalStageV1::Producer,
+                completion_faults::CompletionJournalPointV1::BeforeEffect,
+            )?;
             let root = &versions.producer_readers[&id];
             let consumer = root
                 .marker
@@ -753,6 +759,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 consumer,
                 &root.references,
                 &ContextReadQuiescenceEvidenceV1 { consumer },
+            )?;
+            #[cfg(test)]
+            versions.completion_boundary_for_test_v1(
+                id,
+                completion_faults::CompletionJournalStageV1::Producer,
+                completion_faults::CompletionJournalPointV1::AfterEffect,
             )?;
             versions.producer_readers.remove(&id);
             if let Some(record) = self.submissions.get_mut(&id) {

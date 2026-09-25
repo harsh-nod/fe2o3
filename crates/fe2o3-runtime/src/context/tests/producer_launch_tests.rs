@@ -4,6 +4,8 @@ use super::*;
 use fe2o3_runtime_model::{ContextProducerReadStatusV1, ContextWriterStateV1};
 use std::sync::{Arc, Mutex};
 
+mod completion_faults;
+
 type Context = RuntimeContextV1<MockBackend>;
 type Submission = RuntimeSubmissionV1<MixedArguments>;
 

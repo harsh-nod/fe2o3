@@ -374,6 +374,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Ok(());
             }
             let versions = self.versions.as_mut().expect("validated readers");
+            #[cfg(test)]
+            versions.completion_boundary_for_test_v1(
+                id,
+                completion_faults::CompletionJournalStageV1::Stable,
+                completion_faults::CompletionJournalPointV1::BeforeEffect,
+            )?;
             let root = &versions.submission_readers[&id];
             let consumer = ContextWriterKeyV1 {
                 context_generation: id.context_generation,
@@ -384,6 +390,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 consumer,
                 &root.references,
                 &ContextReadQuiescenceEvidenceV1 { consumer },
+            )?;
+            #[cfg(test)]
+            versions.completion_boundary_for_test_v1(
+                id,
+                completion_faults::CompletionJournalStageV1::Stable,
+                completion_faults::CompletionJournalPointV1::AfterEffect,
             )?;
             versions.submission_readers.remove(&id);
             if let Some(record) = self.submissions.get_mut(&id) {

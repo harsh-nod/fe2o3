@@ -471,6 +471,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             {
                 return Err(ContextVersionJournalErrorV1::InvalidReference);
             }
+            #[cfg(test)]
+            versions.completion_boundary_for_test_v1(
+                id,
+                completion_faults::CompletionJournalStageV1::Writer,
+                completion_faults::CompletionJournalPointV1::BeforeEffect,
+            )?;
             completion_writer_effect_body!(
                 completion_journal_rust_syntax,
                 versions.journal,
@@ -479,6 +485,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 settle_success,
                 settle_no_effect,
                 []
+            )?;
+            #[cfg(test)]
+            versions.completion_boundary_for_test_v1(
+                id,
+                completion_faults::CompletionJournalStageV1::Writer,
+                completion_faults::CompletionJournalPointV1::AfterEffect,
             )?;
             if !matches!(outcome, SubmissionWriterOutcomeV1::Unknown) {
                 versions.submission_writers.remove(&id);
