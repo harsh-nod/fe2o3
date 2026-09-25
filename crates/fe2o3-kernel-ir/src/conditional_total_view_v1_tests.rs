@@ -831,8 +831,7 @@ fn readonly_input_value_expression_retains_exact_access_and_address_domains() {
     }
 }
 
-#[test]
-fn exact_input_length_guard_is_implied_without_shrinking_address_domain() {
+fn input_length_guard_fixture() -> Module {
     let mut module = input_expression_fixture(true, false);
     let mut load_block = BasicBlock::new(BlockId(40));
     load_block.operations = std::mem::take(&mut body(&mut module).blocks[1].operations);
@@ -857,6 +856,12 @@ fn exact_input_length_guard_is_implied_without_shrinking_address_domain() {
     let mut trap = BasicBlock::new(BlockId(50));
     trap.terminator = Some(Terminator::Unreachable);
     body(&mut module).blocks.extend([load_block, trap]);
+    module
+}
+
+#[test]
+fn exact_input_length_guard_is_implied_without_shrinking_address_domain() {
+    let mut module = input_length_guard_fixture();
     let ConditionalTotalViewAnalysisV1::Established(facts) = analyze(&module) else {
         panic!("input-length implication");
     };
@@ -901,6 +906,9 @@ fn exact_input_length_guard_is_implied_without_shrinking_address_domain() {
         Unsupported::AbnormalExit { block: BlockId(50) }
     );
 }
+
+#[path = "conditional_total_view_calls_v1_tests.rs"]
+mod calls;
 
 #[test]
 fn input_read_and_expression_refusals_do_not_relax_memory_or_totality() {

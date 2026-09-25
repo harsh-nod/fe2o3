@@ -536,8 +536,9 @@ fn derive<'module>(
                 .ok_or(ResourceError::Arithmetic)?;
             let location = FunctionOperationLocation::new(block.id, ordinal);
             match operation.kind {
-                OperationKind::Call { .. } => return refuse(Unsupported::Call { location }),
-                OperationKind::Constant(_)
+                // Calls are rejected after input premises establish path reachability.
+                OperationKind::Call { .. }
+                | OperationKind::Constant(_)
                 | OperationKind::Intrinsic(_)
                 | OperationKind::Compare { .. }
                 | OperationKind::Cast { .. }

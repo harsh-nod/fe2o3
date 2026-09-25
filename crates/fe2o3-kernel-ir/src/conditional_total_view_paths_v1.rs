@@ -154,7 +154,13 @@ pub(super) fn check_paths(
         for (ordinal, operation) in block.operations.iter().enumerate() {
             budget.charge_work(8)?;
             let location = FunctionOperationLocation::new(block.id, ordinal);
-            if !allowed_operation(operation) {
+            if matches!(operation.kind, OperationKind::Call { .. }) {
+                // The discovery pass cannot yet exclude bounds-panic paths.
+                // No callee identity is trusted: every reachable call still fails.
+                if reads.is_some() && counts != [0, 0] {
+                    return refuse(Unsupported::Call { location });
+                }
+            } else if !allowed_operation(operation) {
                 return refuse(Unsupported::Operation { location });
             }
             if location == pointer_location && !selected_offset && counts[0] != 0 {

@@ -105,15 +105,19 @@ fn inspect(
         let [kernel] = owner.executable().module().kernels.as_slice() else {
             return Err("source test requires exactly one actual kernel".into());
         };
-        let ConditionalTotalViewAnalysisV1::Established(facts) =
-            derive_conditional_total_view_from_verified_v1(
-                owner.executable().verified_module_ref_v1(),
-                &kernel.id,
-                budget,
-            )
-            .map_err(|e| e.to_string())?
-        else {
-            return Err("actual canonical output does not establish conditional coverage".into());
+        let facts = match derive_conditional_total_view_from_verified_v1(
+            owner.executable().verified_module_ref_v1(),
+            &kernel.id,
+            budget,
+        )
+        .map_err(|e| e.to_string())?
+        {
+            ConditionalTotalViewAnalysisV1::Established(facts) => facts,
+            ConditionalTotalViewAnalysisV1::Unsupported(reason) => {
+                return Err(format!(
+                    "actual canonical output does not establish conditional coverage: {reason:?}"
+                ));
+            }
         };
         let binding = owner
             .bind_conditional_output_v1(facts, budget)
@@ -304,35 +308,40 @@ fn check_extent_budget(
     assert!(floor > 0);
     // Separate test measurements, not replacement ledgers in the production
     // phase. Each measurement carries its inherited work through both queries.
-    let run = |work_limit, lose_reservation| {
+    let run = |work_limit, storage_limit, lose_reservation| {
         let mut work = Work::new(work_limit);
-        let mut budget = Budget::new(&mut work, floor);
+        let mut budget = Budget::new(&mut work, storage_limit);
         budget.reserve_storage(floor).unwrap();
         budget.charge_work(17).unwrap();
         let ledger = budget.work_ledger_identity_v1();
-        let joined = binding
-            .inspect_ranked_output_v1(candidate, &mut budget)
-            .unwrap();
+        let joined = binding.inspect_ranked_output_v1(candidate, &mut budget);
         if lose_reservation {
             budget.release_storage(1).unwrap();
         }
-        let result = joined.rederive_output_extent_v1(&mut budget).map(|_| ());
+        let result = joined
+            .and_then(|joined| joined.rederive_output_extent_v1(&mut budget))
+            .map(|_| ());
         assert!(budget.work_ledger_identity_v1() == ledger);
         assert_eq!(budget.storage(), floor - usize::from(lose_reservation));
-        assert_eq!(budget.peak_storage(), floor);
-        (result, budget.work())
+        (result, budget.work(), budget.peak_storage())
     };
-    let (baseline, exact_work) = run(1_000_000, false);
+    let (baseline, exact_work, exact_storage) = run(1_000_000, usize::MAX, false);
     baseline.unwrap();
-    run(exact_work, false).0.unwrap();
+    run(exact_work, exact_storage, false).0.unwrap();
     assert!(matches!(
-        run(exact_work - 1, false).0,
+        run(exact_work - 1, exact_storage, false).0,
         Err(Error::Resource(Resource::Work(_)))
     ));
     assert!(matches!(
-        run(exact_work, true).0,
+        run(exact_work, exact_storage, true).0,
         Err(Error::Resource(Resource::Accounting))
     ));
+    if exact_storage > floor {
+        assert!(matches!(
+            run(exact_work, exact_storage - 1, false).0,
+            Err(Error::Resource(Resource::Storage(_)))
+        ));
+    }
 }
 
 fn check_coverage_budget(
@@ -340,35 +349,42 @@ fn check_coverage_budget(
     candidate: NativeRankedSourceCandidateV1<'_>,
 ) {
     let floor = binding.owner().retained_analysis_storage_v1();
-    let run = |work_limit, lose_reservation| {
+    let run = |work_limit, storage_limit, lose_reservation| {
         let mut work = Work::new(work_limit);
-        let mut budget = Budget::new(&mut work, floor);
+        let mut budget = Budget::new(&mut work, storage_limit);
         budget.reserve_storage(floor).unwrap();
         budget.charge_work(17).unwrap();
         let ledger = budget.work_ledger_identity_v1();
         let joined = binding
             .inspect_ranked_output_v1(candidate, &mut budget)
-            .unwrap();
+            .map_err(CoverageError::from);
         if lose_reservation {
             budget.release_storage(1).unwrap();
         }
-        let result = joined.check_ranked_coverage_v1(&mut budget).map(|_| ());
+        let result = joined
+            .and_then(|joined| joined.check_ranked_coverage_v1(&mut budget))
+            .map(|_| ());
         assert!(budget.work_ledger_identity_v1() == ledger);
         assert_eq!(budget.storage(), floor - usize::from(lose_reservation));
-        assert_eq!(budget.peak_storage(), floor);
-        (result, budget.work())
+        (result, budget.work(), budget.peak_storage())
     };
-    let (baseline, exact_work) = run(1_000_000, false);
+    let (baseline, exact_work, exact_storage) = run(1_000_000, usize::MAX, false);
     baseline.unwrap();
-    run(exact_work, false).0.unwrap();
+    run(exact_work, exact_storage, false).0.unwrap();
     assert!(matches!(
-        run(exact_work - 1, false).0,
+        run(exact_work - 1, exact_storage, false).0,
         Err(CoverageError::Resource(Resource::Work(_)))
     ));
     assert!(matches!(
-        run(exact_work, true).0,
+        run(exact_work, exact_storage, true).0,
         Err(CoverageError::Resource(Resource::Accounting))
     ));
+    if exact_storage > floor {
+        assert!(matches!(
+            run(exact_work, exact_storage - 1, false).0,
+            Err(CoverageError::Resource(Resource::Storage(_)))
+        ));
+    }
 }
 
 #[test]
