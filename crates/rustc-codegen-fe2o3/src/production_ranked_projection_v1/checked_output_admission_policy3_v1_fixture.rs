@@ -277,6 +277,39 @@ fn prepare_backend_checked_ranked_bound_types_functions_v1(
 ) {
     use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
     assert_eq!(budget.storage(), 0);
+    let program = backend_checked_ranked_source_program_v1(stores, transform);
+    let retained = program.materialized.retained_analysis_storage_v1();
+    let binding = dialect_amdgcn::bind_production_target_v1(
+        program.materialized.executable().module(),
+        profile,
+    )
+    .unwrap();
+    const PREFIX: usize = 29;
+    budget.reserve_storage(PREFIX + retained).unwrap();
+    let (bound, bound_storage) =
+        VerifiedCanonicalKernelIrModuleV12::from_module_ref_with_verification_budget_v12(
+            binding.module(),
+            budget,
+        )
+        .unwrap();
+    budget
+        .reserve_storage(bound_storage.retained_storage())
+        .unwrap();
+    drop(binding);
+    let verified = program.into_verified_roster_receipt().unwrap();
+    let (receipt, verification) = verified.into_module_verified_receipt().unwrap();
+    (
+        receipt,
+        bound,
+        verification,
+        bound_storage.retained_storage() + retained,
+    )
+}
+
+fn backend_checked_ranked_source_program_v1(
+    stores: Option<usize>,
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+) -> ProductionRankedSemanticProgramV1 {
     let original = source_launch_test_semantic_v1(70, 0xa1);
     let unit = SemanticTypeIdV1::from_index(0);
     let scalar = SemanticTypeIdV1::from_index(1);
@@ -383,30 +416,25 @@ fn prepare_backend_checked_ranked_bound_types_functions_v1(
     .unwrap();
     assert!(program.all_kernel_checks_are_clean());
     assert_eq!(program.root_count(), 2);
-    let retained = program.materialized.retained_analysis_storage_v1();
-    let binding = dialect_amdgcn::bind_production_target_v1(
-        program.materialized.executable().module(),
-        profile,
-    )
-    .unwrap();
-    const PREFIX: usize = 29;
-    budget.reserve_storage(PREFIX + retained).unwrap();
-    let (bound, bound_storage) =
-        VerifiedCanonicalKernelIrModuleV12::from_module_ref_with_verification_budget_v12(
-            binding.module(),
-            budget,
-        )
-        .unwrap();
-    budget
-        .reserve_storage(bound_storage.retained_storage())
-        .unwrap();
-    drop(binding);
-    let verified = program.into_verified_roster_receipt().unwrap();
-    let (receipt, verification) = verified.into_module_verified_receipt().unwrap();
-    (
-        receipt,
-        bound,
-        verification,
-        bound_storage.retained_storage() + retained,
-    )
+    program
+}
+
+#[test]
+fn canonical_assertion_multi_entry_source_projection_precedes_target_binding() {
+    for looped in [false, true] {
+        let program = backend_checked_ranked_source_program_v1(None, |types, functions| {
+            if looped {
+                let boolean = SemanticTypeIdV1::from_index(types.len() as u32);
+                let wide = SemanticTypeIdV1::from_index(types.len() as u32 + 1);
+                types.push(native_licm_scalar_type_v1(239, true));
+                types.push(native_licm_scalar_type_v1(240, false));
+                native_licm_source_v1(functions, boolean, wide, false);
+            }
+        });
+        // The genuine materialized-source/canonical assertion path ran, but
+        // no B, optimizer, native finalizer or signed proof was fabricated.
+        assert!(!program.has_conditional_roots_v1());
+        assert!(program.all_kernel_checks_are_clean());
+        assert_eq!(program.root_count(), 2);
+    }
 }

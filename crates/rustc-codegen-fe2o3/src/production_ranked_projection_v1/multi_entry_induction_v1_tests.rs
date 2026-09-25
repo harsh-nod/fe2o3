@@ -293,6 +293,127 @@ fn multi_entry_scope_is_lazy_for_historical_paths() {
     );
 }
 
+fn extent_then_induction_replay(
+    function: &SemanticFunctionDeclV1,
+    scope: &mut Scope,
+    facts: &mut Facts<'_, '_>,
+) -> Result<()> {
+    let floor = facts.0.storage();
+    let count = function.locals().len();
+    let proof = slice_extent_projection_v1::with_scope(count, facts, |extent| {
+        let scratch = slice_extent_projection_v1::Scratch {
+            origins: vec![None; count],
+            arguments: vec![None; count],
+            definitions: vec![0; count],
+            escaped: vec![false; count],
+        };
+        extent.retain(&scratch)?;
+        make(function, scope, extent.facts())
+    })?;
+    // The actual extent scope is dead; only the induction's own rows/header
+    // remain. Its outer floor must never include the released inner scratch.
+    assert_eq!(facts.0.storage(), floor + scope.retained);
+    replay(
+        &proof,
+        function,
+        &graph(function),
+        3,
+        4,
+        SemanticLocalIdV1::from_index(1),
+        &mut Context { scope, facts },
+    )
+}
+
+#[test]
+fn multi_entry_outer_account_survives_extent_scratch_with_exact_and_short_budgets() {
+    let run = |work, storage| run_component(work, storage, fixture(), extent_then_induction_replay);
+    let (result, work, peak, a, b) = run(usize::MAX, usize::MAX);
+    assert!(matches!(
+        result,
+        Err(ProductionRankedProjectionErrorV1::Incomplete(DONE))
+    ));
+    assert_eq!((a, b), (None, None));
+    let (result, w, p, a, b) = run(work, peak);
+    assert!(matches!(
+        result,
+        Err(ProductionRankedProjectionErrorV1::Incomplete(DONE))
+    ));
+    assert_eq!((w, p, a, b), (work, peak, None, None));
+    let (result, _, _, a, b) = run(work - 1, peak);
+    assert!(matches!(
+        result,
+        Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+            CanonicalAssertionErrorV1::Resource(Resource::Work(_))
+        ))
+    ));
+    assert_eq!((a, b), (None, Some(work)));
+    let (result, _, _, a, b) = run(work, peak - 1);
+    assert!(matches!(
+        result,
+        Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+            CanonicalAssertionErrorV1::Resource(Resource::Storage(_))
+        ))
+    ));
+    assert_eq!((a, b), (Some(peak), None));
+}
+
+#[test]
+fn multi_entry_outer_account_refuses_foreign_after_extent_and_initial_floor_loss() {
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    budget.reserve_storage(17).unwrap();
+    for foreign in [true, false] {
+        let before = budget.work();
+        let result = with_scope(&mut Facts(&mut budget), |scope, facts| {
+            if foreign {
+                extent_then_induction_replay(&fixture(), scope, facts)?;
+                let mut other_work = Work::new(usize::MAX);
+                let mut other = Budget::new(&mut other_work, usize::MAX);
+                let foreign_floor = facts.0.storage();
+                other.reserve_storage(foreign_floor).unwrap();
+                let result = make(&fixture(), scope, &mut Facts(&mut other));
+                assert_eq!((other.storage(), other.work()), (foreign_floor, 0));
+                result?;
+            } else {
+                facts.0.release_storage(1).unwrap();
+                make(&fixture(), scope, facts)?;
+            }
+            Err(reject(DONE))
+        });
+        assert!(matches!(
+            result,
+            Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                CanonicalAssertionErrorV1::Resource(Resource::Accounting)
+            ))
+        ));
+        assert_eq!(budget.storage(), if foreign { 17 } else { 16 });
+        if foreign {
+            assert!(budget.work() > before);
+        } else {
+            assert_eq!(budget.work(), before);
+        }
+    }
+}
+
+#[test]
+fn multi_entry_outer_account_unwind_after_extent_release_keeps_original_floor() {
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    budget.reserve_storage(17).unwrap();
+    budget.charge_work(13).unwrap();
+    let account = budget.work_ledger_identity_v1();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_scope(&mut Facts(&mut budget), |scope, facts| {
+            extent_then_induction_replay(&fixture(), scope, facts)?;
+            panic!("injected after shorter-lived extent scope");
+        })
+    }));
+    assert!(result.is_err());
+    assert_eq!(budget.storage(), 17);
+    assert!(budget.work_ledger_identity_v1() == account);
+    assert!(budget.work() > 13);
+}
+
 #[test]
 fn multi_entry_source_replay_rejects_missing_reordered_foreign_and_mutated_entries() {
     let function = fixture();

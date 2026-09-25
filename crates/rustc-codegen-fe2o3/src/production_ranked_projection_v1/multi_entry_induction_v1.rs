@@ -58,9 +58,9 @@ fn bytes<T>(count: usize) -> Result<usize> {
         .ok_or_else(|| resource(Resource::Arithmetic))
 }
 
-#[derive(Default)]
 pub(super) struct Scope {
-    ledger: Option<(usize, Ledger, usize)>,
+    ledger: Option<(usize, Ledger)>,
+    floor: usize,
     retained: usize,
 }
 
@@ -73,15 +73,15 @@ impl Scope {
     fn check(&mut self, facts: &mut dyn ProjectedAssertionFactsV1) -> Result<()> {
         let (address, ledger) = facts.helper_value_ledger_v1()?;
         let storage = facts.scalar_private_storage_v1()?;
-        if let Some((expected_address, expected, floor)) = self.ledger {
-            if address != expected_address
-                || ledger != expected
-                || storage < sum(floor, self.retained)?
-            {
+        if storage < sum(self.floor, self.retained)? {
+            return Err(resource(Resource::Accounting));
+        }
+        if let Some((expected_address, expected)) = self.ledger {
+            if address != expected_address || ledger != expected {
                 return Err(resource(Resource::Accounting));
             }
         } else {
-            self.ledger = Some((address, ledger, storage));
+            self.ledger = Some((address, ledger));
             let header = std::mem::size_of::<Scope>();
             facts.reserve_scalar_private_storage_v1(header)?;
             self.retained = header;
@@ -138,7 +138,13 @@ pub(super) fn with_scope<F: ProjectedAssertionFactsV1>(
     facts: &mut F,
     action: impl FnOnce(&mut Scope, &mut F) -> Result<ProductionRankedRootProgramV1>,
 ) -> Result<ProductionRankedRootProgramV1> {
-    let mut scope = Scope::default();
+    // Bind the outer lifetime before slice-extent scratch is reserved. The
+    // first induction query can occur inside that shorter-lived scope.
+    let mut scope = Scope {
+        ledger: None,
+        floor: facts.scalar_private_storage_v1()?,
+        retained: 0,
+    };
     let result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(&mut scope, facts)));
     if scope.ledger.is_some() {
