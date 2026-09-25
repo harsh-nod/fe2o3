@@ -13,7 +13,7 @@ use fe2o3_pliron::ProductionConditionalRuntimePremiseV1 as Premise;
 
 type CpuExpr = ReferenceEffectExpressionV1;
 
-pub(crate) use fe2o3_verifier::portable_reference_v1::{ReplayedCpuEffectsV1, ReplayedCpuValueV1};
+pub(crate) use fe2o3_verifier::portable_reference_v1::ReplayedCpuEffectsV1;
 
 fn premise(premises: &[Premise], required: Premise, budget: &mut Budget<'_>) -> Result<(), Error> {
     for actual in premises {

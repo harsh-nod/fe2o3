@@ -3,7 +3,7 @@
 pub(crate) use fe2o3_verifier::portable_reference_v1::signature::*;
 
 #[cfg(test)]
-use super::{MAX_REFERENCE_POINT_AXES_V1, ReferenceArgumentRelationV1, ReferenceScalarTypeV1};
+use super::{ReferenceArgumentRelationV1, ReferenceScalarTypeV1};
 #[cfg(test)]
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticExternAbiV1, SemanticFunctionSafetyV1, SemanticMutabilityV1,
