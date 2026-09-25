@@ -59,9 +59,15 @@ Build the pinned minimal systemd base used to qualify that offline root:
 $ scripts/build-compiler-execution-qualification-base.sh /tmp/fe2o3-base
 ```
 
-The non-root builder admits exactly 99 package identities from the checked-in
+The non-root builder admits exactly 102 package identities from the checked-in
 version/architecture/SHA-256 lock and emits a deterministic SquashFS image plus
-matching `BASE-INFO` and `SHA256SUMS`. The closure includes the exact
+matching `BASE-INFO` and `SHA256SUMS`. The closure pins `mawk`, `diffutils`, and
+`findutils` for the runtime auditor. Package maintainer scripts never run;
+the builder creates the deterministic `/usr/bin/awk -> mawk` link itself.
+Host Python 3 and `readelf` check audit-command presence, executable modes,
+loader links, and recursive ELF dependencies without executing those commands;
+bundle tests repeat these checks against the image. These are build diagnostics,
+not runtime qualification. The closure includes the exact
 `systemd-container` build used by the isolated boot harness; the builder
 executes its `systemd-nspawn` through the extracted loader and libraries before
 publication. The deployment crate can freshly
