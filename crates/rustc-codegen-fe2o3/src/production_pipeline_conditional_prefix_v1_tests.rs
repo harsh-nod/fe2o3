@@ -176,11 +176,12 @@ impl rustc_driver::Callbacks for Callbacks {
         // Collect from the live rustc session through the existing authenticated
         // constructors. No owner, binding, formal or proof receipt is supplied.
         let target = crate::production_target_v1::RetainedProductionTargetV1::authenticate_live_before_collection(tcx).unwrap();
-        let expected = match target.profile() {
-            Profile::Gfx942 => 942,
-            Profile::Gfx950 => 950,
+        let expected = match TARGET.load(Ordering::SeqCst) {
+            942 => Profile::Gfx942,
+            950 => Profile::Gfx950,
+            value => panic!("unexpected target {value}"),
         };
-        assert_eq!(expected, TARGET.load(Ordering::SeqCst));
+        assert_eq!(target.canonical_name(), expected.device_target());
         let producers = crate::collector::capture_context_producers_v1(tcx).unwrap();
         let partitions = tcx.collect_and_partition_mono_items(());
         assert!(crate::collector::count_kernels_in_cgus(tcx, partitions.codegen_units) > 0);
