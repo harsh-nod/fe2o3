@@ -24,6 +24,7 @@ mod compiler_proof_binding_v3;
 mod compiler_refined_forwarding_output_v1;
 mod compiler_target_lineage_v1;
 mod conditional_ranked_formulas_v1;
+pub mod conditional_reference_v1;
 mod control_flow_binding;
 mod executor;
 mod functional_refinement_receipt_v2;
