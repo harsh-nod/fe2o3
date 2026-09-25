@@ -77,7 +77,7 @@ log SHA256 is `e24ee2fa06d66f5cf76e810d9f6d90de0d304f35b392176488f61d2b4c1069ea`
 This section was added afterward. The separate normal-library check in the
 earlier table remains evidence for pre-merge candidate `3ab46198d`.
 
-## Incomplete Validation
+## Historical Runs And Remaining Validation
 
 The earlier broad 98-test final-entry run on `534d1d7f` was intentionally stopped
 after five completed passes to integrate the reservation-retry review fix.
@@ -87,8 +87,12 @@ It is partial evidence, not a passing full suite. A subsequent build was stopped
 to split the oversized test file before final-candidate validation above.
 Both owned process groups were confirmed empty before source changes.
 
-The entire 98-test matrix has not been completed on the final candidate. The
-three genuine-proof tests selected above remain ignored. Fresh protected J/F
-validation, conditional continuation through the final graph, native recovery,
-safe launch and the full tutorial target matrix remain incomplete. No #272
-milestone closes and no kernel gains 47/47 end-to-end credit from this change.
+The subsequent [conditional F report](conditional-final-source-join-20260925.md)
+records the completed 98-test inventory on baseline `a3efc57a9`: 94 passed, zero
+failed and four ignored, with every name accounted for. It separately records
+new conditional source-through-F implementation and focused candidate tests;
+the baseline results must not be attributed to that newer source revision.
+The genuine-proof tests selected above remain ignored. Fresh protected F
+execution, conditional native recovery, safe launch and the full tutorial target
+matrix remain incomplete. No #272 milestone closes and no kernel gains 47/47
+end-to-end credit from this change.

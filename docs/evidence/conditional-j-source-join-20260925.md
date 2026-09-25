@@ -64,8 +64,10 @@ default features. The failure occurs in both configurations and predates J.
 This was not a passing ordinary final-graph regression matrix. The shared
 accounting defect is addressed in the subsequent
 [induction entry fix](induction-entry-accounting-20260925.md), whose focused
-tests and representative final-graph regression pass. The full 98-test matrix
-has not yet been completed on that final candidate.
+tests and representative final-graph regression pass. The subsequent
+[conditional F report](conditional-final-source-join-20260925.md) records the
+complete 98-test baseline inventory on `a3efc57a9`: 94 passed, zero failed and
+four ignored. That baseline result is separate from the new F candidate tests.
 
 An independent read-only review found no concrete soundness, account or route
 regression in the new integration, but identified uncovered failure boundaries:
@@ -73,8 +75,10 @@ after agreement and before private-owner installation, and late source-account
 refusal/unwind inside genuine proof/postcheck nesting. Current target exhaustion
 tests fail earlier and do not cover these cases.
 
-The two new genuine-source tests are ignored, not passing. Fresh protected
-F-entry/fixed6 separation execution is required. Full conditional continuation
-through K/P/H/L/R/F, source-to-F agreement, native recovery, existing finalizer,
-safe launch and the tutorial target matrix remain incomplete. No #272 milestone
+The two new genuine-source tests are ignored, not passing. The subsequent F
+implementation now retains actual K/P/H/L/R/F and checks source-to-F agreement
+within its documented conditional domain, with local component validation.
+Fresh protected F-entry/fixed6 separation and late-refusal execution remain
+required. Conditional native recovery, existing finalizer integration, safe
+launch and the tutorial target matrix remain incomplete. No #272 milestone
 closes and no tutorial entry gains end-to-end credit.
