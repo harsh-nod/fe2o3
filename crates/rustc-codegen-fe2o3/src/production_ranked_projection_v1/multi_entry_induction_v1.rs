@@ -84,10 +84,10 @@ impl Scope {
             return Err(resource(Resource::Accounting));
         }
         if !self.started {
-            self.started = true;
             let header = std::mem::size_of::<Scope>();
             facts.reserve_scalar_private_storage_v1(header)?;
             self.retained = header;
+            self.started = true;
         }
         Ok(())
     }

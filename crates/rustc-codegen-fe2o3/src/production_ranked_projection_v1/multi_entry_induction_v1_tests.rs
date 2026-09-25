@@ -317,6 +317,157 @@ fn multi_entry_scope_is_lazy_for_historical_paths() {
 }
 
 #[test]
+fn multi_entry_scope_first_header_exact_and_one_byte_short() {
+    let header = std::mem::size_of::<Scope>();
+    for short in [0, 1] {
+        let limit = 17 + header - short;
+        let (result, work, peak, storage_denial, work_denial) =
+            run_component(1, limit, fixture(), |_, scope, facts| {
+                let result = Context { scope, facts }.charge(1);
+                assert_eq!(scope.started, short == 0);
+                assert_eq!(scope.retained, if short == 0 { header } else { 0 });
+                result
+            });
+        if short == 0 {
+            assert!(matches!(
+                result,
+                Err(ProductionRankedProjectionErrorV1::Incomplete(DONE))
+            ));
+            assert_eq!((work, peak, storage_denial), (1, limit, None));
+        } else {
+            let Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                CanonicalAssertionErrorV1::Resource(Resource::Storage(error)),
+            )) = result
+            else {
+                panic!("first header must require its complete reservation")
+            };
+            assert_eq!((error.actual(), error.limit()), (17 + header, limit));
+            assert_eq!((work, peak, storage_denial), (0, 17, Some(17 + header)));
+        }
+        assert_eq!(work_denial, None);
+    }
+}
+
+#[test]
+fn multi_entry_scope_first_header_retry_after_extent_release_keeps_account_history() {
+    // Measure the real zero-local extent header; the retry below uses one account.
+    let extent_storage = {
+        let mut work = Work::new(4);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        slice_extent_projection_v1::with_scope(0, &mut Facts(&mut budget), |extent| {
+            extent.facts().scalar_private_storage_v1()
+        })
+        .unwrap()
+    };
+    let header = std::mem::size_of::<Scope>();
+    let floor = 17;
+    let attempted = floor + extent_storage + header;
+    let mut work = Work::new(18);
+    {
+        let mut budget = Budget::new(&mut work, attempted - 1);
+        budget.reserve_storage(floor).unwrap();
+        budget.charge_work(13).unwrap();
+        assert!(budget.charge_work(7).is_err());
+        let account = Facts(&mut budget).helper_value_ledger_v1().unwrap();
+        let result = with_scope(&mut Facts(&mut budget), |scope, facts| {
+            slice_extent_projection_v1::with_scope(0, facts, |extent| {
+                let facts = extent.facts();
+                assert!(facts.helper_value_ledger_v1()? == account);
+                assert_eq!(facts.scalar_private_storage_v1()?, floor + extent_storage);
+                let result = Context { scope, facts }.charge(1);
+                let Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    CanonicalAssertionErrorV1::Resource(Resource::Storage(error)),
+                )) = result
+                else {
+                    panic!("live extent scratch must deny the first induction header")
+                };
+                assert_eq!((error.actual(), error.limit()), (attempted, attempted - 1));
+                assert!(!scope.started);
+                assert_eq!(scope.retained, 0);
+                Ok(())
+            })?;
+            assert_eq!((facts.0.storage(), facts.0.work()), (floor, 17));
+            assert_eq!(facts.0.failed_storage(), Some(attempted));
+            Context { scope, facts }.charge(1)?;
+            assert!(scope.started);
+            assert_eq!(scope.retained, header);
+            assert!(facts.helper_value_ledger_v1()? == account);
+            assert_eq!((facts.0.storage(), facts.0.work()), (floor + header, 18));
+            let result = Context { scope, facts }.charge(1);
+            assert!(matches!(
+                result,
+                Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    CanonicalAssertionErrorV1::Resource(Resource::Work(_))
+                ))
+            ));
+            Err(reject(DONE))
+        });
+        assert!(matches!(
+            result,
+            Err(ProductionRankedProjectionErrorV1::Incomplete(DONE))
+        ));
+        assert!(Facts(&mut budget).helper_value_ledger_v1().unwrap() == account);
+        assert_eq!((budget.storage(), budget.work()), (floor, 18));
+        assert_eq!(budget.peak_storage(), floor + extent_storage.max(header));
+        assert_eq!(budget.failed_storage(), Some(attempted));
+    }
+    assert_eq!(work.failed_work(), Some(20));
+}
+
+#[test]
+fn multi_entry_scope_cleanup_refuses_lost_floor_and_foreign_ledger_on_return_and_unwind() {
+    let header = std::mem::size_of::<Scope>();
+    for foreign in [false, true] {
+        for unwind in [false, true] {
+            let mut work = Work::new(1);
+            let mut other_work = Work::new(1);
+            let mut budget = Budget::new(&mut work, 17 + header);
+            let mut other = Budget::new(&mut other_work, 17 + header);
+            budget.reserve_storage(17).unwrap();
+            other.reserve_storage(17 + header).unwrap();
+            let account = budget.work_ledger_identity_v1();
+            let other_account = other.work_ledger_identity_v1();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_scope(&mut Facts(&mut budget), |scope, facts| {
+                    Context { scope, facts }.charge(1)?;
+                    if foreign {
+                        std::mem::swap(facts.0, &mut other);
+                    } else {
+                        facts.0.release_storage(1).unwrap();
+                    }
+                    if unwind {
+                        panic!("injected after custody loss");
+                    }
+                    Err(reject(DONE))
+                })
+            }));
+            // Cleanup accounting refusal takes precedence even over a caught panic.
+            assert!(matches!(
+                result,
+                Ok(Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    CanonicalAssertionErrorV1::Resource(Resource::Accounting)
+                )))
+            ));
+            if foreign {
+                assert!(budget.work_ledger_identity_v1() == other_account);
+                assert!(other.work_ledger_identity_v1() == account);
+                std::mem::swap(&mut budget, &mut other);
+            }
+            assert!(budget.work_ledger_identity_v1() == account);
+            assert!(other.work_ledger_identity_v1() == other_account);
+            assert_eq!(
+                (budget.storage(), budget.work(), budget.failed_storage()),
+                (if foreign { 17 + header } else { 16 + header }, 1, None)
+            );
+            assert_eq!(
+                (other.storage(), other.work(), other.failed_storage()),
+                (17 + header, 0, None)
+            );
+        }
+    }
+}
+
+#[test]
 fn multi_entry_scope_keeps_trait_default_custody_optional_without_induction() {
     let mut facts = NoCustodyFacts(0);
     let mut called = false;
