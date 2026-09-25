@@ -180,6 +180,51 @@ fn invocation_read_only_preparation_retains_credit_with_policy_copies() {
 }
 
 #[test]
+fn invocation_completed_input_reuses_host_data_through_read_only_preparation() {
+    let source_budget = GeneratedRuntimeResultBudgetV1::new(32, 1).unwrap();
+    let next_budget = GeneratedRuntimeResultBudgetV1::new(16, 1).unwrap();
+    let result = super::result_input_tests::completed(
+        vec![1u32, 2, 3, 4].into_boxed_slice(),
+        &source_budget,
+    );
+    let input = GeneratedRuntimeReadSlice::from_charged_result(result);
+    let plan = tests::plan::<u32>(&[Access::ReadOnly], None);
+    let prepared = prepare_charged_with_plan(
+        input,
+        &plan,
+        limits(),
+        &next_budget,
+        |input, account| input.account_storage(account),
+        |input, account| {
+            Ok(
+                GeneratedRuntimeArgumentBindingV1::from_compiler_generated_parts(
+                    vec![],
+                    vec![input.bind_argument(&plan, 0, account)?],
+                ),
+            )
+        },
+    )
+    .unwrap();
+    assert_empty(&source_budget);
+    let hsaco = synthetic_cov6::preparation_module();
+    let storage = prepared
+        .into_runtime_inputs(geometry(), 0, 1000)
+        .storage
+        .prepare(&hsaco, "vecadd")
+        .unwrap()
+        .project_persistent(&hsaco)
+        .unwrap();
+    assert_eq!(
+        storage.prepared().buffer_access(0),
+        Some(Gfx942RuntimeBufferAccessV1::ReadOnly)
+    );
+    assert_eq!(next_budget.usage().reserved_peak_bytes, 16);
+    assert_eq!(next_budget.usage().retained_members, 1);
+    drop(storage);
+    assert_empty(&next_budget);
+}
+
+#[test]
 fn invocation_persistent_projection_retains_original_peak_and_no_output_authority() {
     let budget = GeneratedRuntimeResultBudgetV1::new(32, 1).unwrap();
     let (parts, mut observer) = input_parts(&budget);

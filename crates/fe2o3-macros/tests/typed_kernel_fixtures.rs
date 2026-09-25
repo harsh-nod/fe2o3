@@ -181,6 +181,10 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
         ("charged_borrow_escape", &["error[E0308]", "new_charged"]),
         ("charged_result_clone", &["no method named `clone`"]),
         (
+            "charged_result_reuse",
+            &["error[E0382]", "use of moved value: `result`"],
+        ),
+        (
             "charged_result_storage_escape",
             &["no method named `into_boxed_slice`"],
         ),

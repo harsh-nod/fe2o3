@@ -23,9 +23,9 @@ use crate::generated_kfd_arguments::{
     GeneratedKfdPackingObservationV1, GeneratedKfdPrepareError, GeneratedKfdSliceBinding,
 };
 use crate::generated_runtime_results::{
-    ChargedOutputCustodyV1, GeneratedRuntimeChargedResultV1, GeneratedRuntimeResultBudgetV1,
-    ReadResultCreditV1, ResultBindingBudgetV1, ResultDescriptorV1, ResultMemberV1,
-    ResultPreflightV1, ResultReadyGateV1,
+    ChargedOutputCustodyV1, ChargedTypedResultV1, GeneratedRuntimeChargedResultV1,
+    GeneratedRuntimeResultBudgetV1, ReadResultCreditV1, ResultBindingBudgetV1, ResultDescriptorV1,
+    ResultMemberV1, ResultPreflightV1, ResultReadyGateV1,
 };
 use crate::{AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1, KernelId};
 
@@ -395,20 +395,43 @@ fn prepare_charged_with_plan<A>(
 /// let borrowed = GeneratedRuntimeReadSlice::new(&values[..]);
 /// ```
 pub struct GeneratedRuntimeReadSlice<T: GeneratedDeviceScalarV1> {
-    values: Box<[T]>,
+    values: OwnedRuntimeSliceV1<T>,
 }
 
 impl<T: GeneratedDeviceScalarV1> GeneratedRuntimeReadSlice<T> {
     pub fn new(values: Box<[T]>) -> Self {
-        Self { values }
+        Self {
+            values: OwnedRuntimeSliceV1::Seed(values),
+        }
+    }
+
+    /// Moves completed host data into a new immutable input without cloning its typed storage.
+    ///
+    /// The original result credit stays charged until that storage is disposed,
+    /// after encoding or on rejection/drop. Charged preparation independently
+    /// reserves the next invocation's complete result roster before encoding;
+    /// a shared budget therefore needs room for both reservations at that peak.
+    /// This neither forwards a native buffer nor grants completion/launch authority.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_host::{ChargedTypedResultV1, GeneratedRuntimeReadSlice};
+    /// fn reuse(result: ChargedTypedResultV1<u32>) {
+    ///     let input = GeneratedRuntimeReadSlice::from_charged_result(result);
+    ///     let second = GeneratedRuntimeReadSlice::from_charged_result(result);
+    /// }
+    /// ```
+    pub fn from_charged_result(result: ChargedTypedResultV1<T>) -> Self {
+        Self {
+            values: OwnedRuntimeSliceV1::Completed(result),
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.values.as_slice().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.values.as_slice().is_empty()
     }
 
     #[doc(hidden)]
@@ -416,11 +439,7 @@ impl<T: GeneratedDeviceScalarV1> GeneratedRuntimeReadSlice<T> {
         &self,
         budget: &mut GeneratedRuntimeArgumentBudgetV1,
     ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
-        budget.account_slice::<T>(
-            self.values.len(),
-            Gfx942RuntimeBufferAccessV1::ReadOnly,
-            None,
-        )
+        budget.account_slice::<T>(self.len(), Gfx942RuntimeBufferAccessV1::ReadOnly, None)
     }
 
     #[doc(hidden)]
@@ -439,6 +458,20 @@ impl<T: GeneratedDeviceScalarV1> GeneratedRuntimeReadSlice<T> {
             None,
             budget,
         )
+    }
+}
+
+enum OwnedRuntimeSliceV1<T: GeneratedDeviceScalarV1> {
+    Seed(Box<[T]>),
+    Completed(ChargedTypedResultV1<T>),
+}
+
+impl<T: GeneratedDeviceScalarV1> OwnedRuntimeSliceV1<T> {
+    fn as_slice(&self) -> &[T] {
+        match self {
+            Self::Seed(values) => values,
+            Self::Completed(result) => result.as_slice(),
+        }
     }
 }
 
@@ -510,7 +543,7 @@ macro_rules! owned_output_slice {
                 budget: &mut GeneratedRuntimeArgumentBudgetV1,
             ) -> Result<GeneratedRuntimeSliceBindingV1, GeneratedRuntimeArgumentErrorV1> {
                 bind_owned_slice(
-                    self.values,
+                    OwnedRuntimeSliceV1::Seed(self.values),
                     Some(self.custody),
                     plan,
                     argument_index,
@@ -529,7 +562,7 @@ macro_rules! owned_output_slice {
                 budget: &mut GeneratedRuntimeArgumentBudgetV1,
             ) -> Result<GeneratedRuntimeSliceBindingV1, GeneratedRuntimeArgumentErrorV1> {
                 bind_owned_slice(
-                    self.values,
+                    OwnedRuntimeSliceV1::Seed(self.values),
                     Some(self.custody),
                     plan,
                     argument_index,
@@ -547,7 +580,7 @@ owned_output_slice!(GeneratedRuntimeReadWriteSlice, ReadWrite);
 
 #[allow(clippy::too_many_arguments)]
 fn bind_owned_slice<T: GeneratedDeviceScalarV1>(
-    values: Box<[T]>,
+    values: OwnedRuntimeSliceV1<T>,
     custody: Option<OutputCustody>,
     plan: &GeneratedArgumentPackingPlanV1,
     argument_index: usize,
@@ -555,40 +588,45 @@ fn bind_owned_slice<T: GeneratedDeviceScalarV1>(
     index_space: Option<RustDisjointIndexSpaceV1>,
     budget: &mut GeneratedRuntimeArgumentBudgetV1,
 ) -> Result<GeneratedRuntimeSliceBindingV1, GeneratedRuntimeArgumentErrorV1> {
-    let byte_len = values
-        .len()
+    if matches!(&values, OwnedRuntimeSliceV1::Completed(_))
+        && (access != Gfx942RuntimeBufferAccessV1::ReadOnly
+            || custody.is_some()
+            || index_space.is_some())
+    {
+        return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
+    }
+    let elements = values.as_slice().len();
+    let byte_len = elements
         .checked_mul(size_of::<T>())
         .ok_or(GeneratedRuntimeArgumentErrorV1::ByteLength)?;
     let borrow = GeneratedArgumentBorrowV1::new();
     let input = match (access, index_space) {
-        (Gfx942RuntimeBufferAccessV1::ReadOnly, None) => plan
-            .bind_generated_address_free_read_slice_v1::<T>(argument_index, values.len(), borrow),
-        (Gfx942RuntimeBufferAccessV1::WriteOnly, None) => plan
-            .bind_generated_address_free_write_slice_v1::<T>(argument_index, values.len(), borrow),
+        (Gfx942RuntimeBufferAccessV1::ReadOnly, None) => {
+            plan.bind_generated_address_free_read_slice_v1::<T>(argument_index, elements, borrow)
+        }
+        (Gfx942RuntimeBufferAccessV1::WriteOnly, None) => {
+            plan.bind_generated_address_free_write_slice_v1::<T>(argument_index, elements, borrow)
+        }
         (Gfx942RuntimeBufferAccessV1::ReadWrite, None) => plan
-            .bind_generated_address_free_read_write_slice_v1::<T>(
-                argument_index,
-                values.len(),
-                borrow,
-            ),
+            .bind_generated_address_free_read_write_slice_v1::<T>(argument_index, elements, borrow),
         (Gfx942RuntimeBufferAccessV1::WriteOnly, Some(mapping)) => plan
             .bind_generated_address_free_mapped_write_slice_v1::<T>(
                 argument_index,
-                values.len(),
+                elements,
                 mapping,
                 borrow,
             ),
         (Gfx942RuntimeBufferAccessV1::ReadWrite, Some(mapping)) => plan
             .bind_generated_address_free_mapped_read_write_slice_v1::<T>(
                 argument_index,
-                values.len(),
+                elements,
                 mapping,
                 borrow,
             ),
         _ => return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch),
     }
     .map_err(GeneratedRuntimeArgumentErrorV1::Pack)?;
-    let member = budget.bind_slice::<T>(values.len(), access, custody.as_ref())?;
+    let member = budget.bind_slice::<T>(elements, access, custody.as_ref())?;
     if let Some(OutputCustody::Legacy(custody)) = &custody {
         let mut state = custody
             .state
@@ -601,6 +639,9 @@ fn bind_owned_slice<T: GeneratedDeviceScalarV1>(
     }
     let mut read_credit = None;
     let buffer = if let Some(OutputCustody::Charged(custody)) = &custody {
+        let OwnedRuntimeSliceV1::Seed(values) = values else {
+            return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
+        };
         custody.bind_seed(
             values,
             member.ok_or(GeneratedRuntimeArgumentErrorV1::BindingMismatch)?,
@@ -608,7 +649,7 @@ fn bind_owned_slice<T: GeneratedDeviceScalarV1>(
         custody.with_seed::<T, _>(|values| encode_owned_slice(values, byte_len, access))?
     } else {
         read_credit = member.map(ResultMemberV1::retain_read);
-        encode_owned_slice(&values, byte_len, access)?
+        encode_owned_slice(values.as_slice(), byte_len, access)?
     };
     Ok(GeneratedRuntimeSliceBindingV1 {
         binding: GeneratedKfdSliceBinding::from_owned_buffer(

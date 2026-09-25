@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 type Error = GeneratedRuntimeArgumentErrorV1;
 
 mod invocation_tests;
+mod result_input_tests;
 
 fn limits() -> GeneratedRuntimeArgumentLimitsV1 {
     GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 64)

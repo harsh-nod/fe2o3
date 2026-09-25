@@ -65,6 +65,37 @@ existing runtime preparation path may also make read-only initialization copies;
 GEN-2 integration must account for those separately. MEM-DOM/3/4/5 still own
 aggregate native/host accounting, bootstrap headroom and retained metadata.
 
+## Completed Input Chaining
+
+`GeneratedRuntimeReadSlice::from_charged_result` consumes one completed
+`ChargedTypedResultV1<T>` as the next invocation's whole read-only input. It
+preserves the original typed allocation and scalar type without cloning its
+elements, transferring the credit, or extracting an uncharged `Box`. The
+conversion allocates no payload and takes constant time. Preparation still
+allocates and encodes the next input's little-endian bytes in linear time.
+
+The private input owner retains the entire result and its original peak charge
+through preflight, reservation, validation and encoding. Disposal of the typed
+storage precedes refund using the unchanged result destructor. Dropping an
+unbound input, rejected preparation and unwinding follow the same rule;
+preparation consumes its arguments on failure rather than returning them.
+
+The next charged invocation reserves its complete roster independently before
+encoding. For an earlier `b`-byte output reused as a read-only input on the same
+account, this requires `2 * b + b` bytes and two member slots during preparation.
+After encoding, only the next read member's `b`-byte reservation remains. Empty
+results still require overlapping member slots. No early refund or netting is
+used to make admission fit. Legacy preparation keeps its existing uncharged
+encoding behavior after the original charged storage is disposed.
+
+This is completed host-data chaining, not native buffer forwarding or graph
+dependency authority. It grants no receipt, currentness, producer identity or
+launch authority. Frozen generated graph edges still order already-reserved
+inputs; binding an in-flight predecessor output into a successor, device-resident
+dataflow, protected Worker execution and aggregate accounting remain open.
+The [development packet](evidence/dev-completed-result-input-2026-09-25/README.md)
+records the exact host tests and compile checks, not a new Verus or GPU claim.
+
 ## Decode And Disposal
 
 The private decoder validates the complete nonempty-buffer count, exact lengths,

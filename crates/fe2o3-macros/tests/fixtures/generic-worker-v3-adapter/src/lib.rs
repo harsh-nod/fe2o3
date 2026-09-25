@@ -129,6 +129,27 @@ pub fn prepare_charged_generated_arguments(
     Ok((prepared, observer))
 }
 
+// Compile-only: completed host data does not supply executable authority.
+pub fn prepare_chained_generated_arguments(
+    executable: &gpu_host::AuthenticatedWorkerV3ExecutableV1<transform_gpu::Marker>,
+    result: gpu_host::ChargedTypedResultV1<f32>,
+    budget: &gpu_host::GeneratedRuntimeResultBudgetV1,
+) -> Result<
+    (gpu_host::GeneratedRuntimeChargedArgumentsV1, gpu_host::GeneratedRuntimeChargedResultV1<f32>),
+    gpu_host::GeneratedRuntimeArgumentErrorV1,
+> {
+    let (output, observer) = gpu_host::GeneratedRuntimeReadWriteSlice::new_charged(
+        vec![0f32; result.len()].into_boxed_slice(),
+    );
+    let source = gpu_host::GeneratedRuntimeReadSlice::from_charged_result(result);
+    let prepared = executable.prepare_generated_runtime_arguments_charged(
+        transform_gpu::RuntimeArguments::new(2.0, source, output),
+        gpu_host::GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 3),
+        budget,
+    )?;
+    Ok((prepared, observer))
+}
+
 // Compile-only: callers must supply genuine executable and device owners.
 pub fn prepare_owned_generated_invocation(
     executable: gpu_host::AuthenticatedWorkerV3ExecutableV1<transform_gpu::Marker>,
