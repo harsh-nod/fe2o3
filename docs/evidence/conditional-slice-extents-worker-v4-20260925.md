@@ -112,5 +112,11 @@ guard retained a stable 8,156-file inventory:
 These repeated tests do not increase the distinct-test total above. Formatting,
 workspace dependency policy, source hygiene and commit sign-offs also passed.
 The actual-source integration and hardware matrix were not rerun after the merge;
-the source-coverage failure remains open. Only this documentation addition followed
-the combined-tree guards.
+the source-coverage failure remains open. Rust code was unchanged after the
+combined-tree guards.
+
+A subsequent main update, `8bb1c25a3aa8df23c7fff1e2f24e3bc9f286c2a7`, was also
+preserved in a conflict-free merge. It changed only tutorial metadata, documentation
+and Python tests, with no Rust changes. After that merge, all 28 fixture-binding
+tests and all 79 tutorial-manifest tests passed. These Python tests are additional
+to the Rust-test total above; they do not establish production or GPU qualification.

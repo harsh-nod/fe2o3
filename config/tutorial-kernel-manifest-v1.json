@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "edd94cf7e9f50f46e829125e9c0c117cdd5ca001",
-      "tree": "09c61accfb91686011c2962669c37b9b9103cf21"
+      "commit": "2ee23b1fe2a2c4e448cf40d0143009d748ceb0cf",
+      "tree": "977e763899d2bb6a43d2f7c3ecb1bf6b5a8478a4"
     },
     "status": "pending",
     "lessons": [
@@ -405,6 +405,12 @@
             "status": "pending",
             "sourceItems": [],
             "reason": "A genuine structured tile source implementation and checked distribution schedule remain required; tiled ownership indices or existing MFMA names do not satisfy this obligation."
+          },
+          {
+            "kind": "mixed",
+            "status": "pending",
+            "sourceItems": [],
+            "reason": "A genuine mixed SIMT/tile row implementation and per-target qualification remain pending on gfx942/mi300x and gfx950/mi350."
           }
         ],
         "codeTabs": [
@@ -738,6 +744,68 @@
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 6,
+            "kind": "kernel",
+            "label": "SIMT row",
+            "language": "rust",
+            "displayedUtf8Bytes": 2668,
+            "displayedSha256": "07adc0c50f24e51cb3d6c6bcb6cc1c8c6ff2a772c45ee2153435601eca2f39df",
+            "sourcePath": "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs",
+            "sourceCommit": "2f4adb9f41317bfa647b0c96d8f12b13d0830aba",
+            "sourceSha256": "07adc0c50f24e51cb3d6c6bcb6cc1c8c6ff2a772c45ee2153435601eca2f39df",
+            "sourceDigestScope": "file",
+            "sourceFragmentsSha256": null,
+            "explanatory": null,
+            "evidenceId": null,
+            "sourceItem": {
+              "kind": "source-driver",
+              "compilerInput": {
+                "packageManifest": "examples/workgroup_sync_v1/Cargo.toml",
+                "packageManifestSha256": "2f476b82fb77f5bda8b202b354976f27a7a986292fd46515bfea6287e629afa8",
+                "cargoLockPath": "examples/workgroup_sync_v1/Cargo.lock",
+                "cargoLockSha256": "e7f9f93c9517baf10010e09e4c97df11998aa2ed5469f067e70f84cfb7a8fa2a",
+                "sourcePaths": [
+                  "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs"
+                ],
+                "sourceClosureSha256": "9f26935616495277bb53992bc6a0056ec86735c5f732fa2a0fe8c876d292f191",
+                "cargoTarget": {
+                  "kind": "lib",
+                  "name": "fe2o3_workgroup_sync_v1",
+                  "sourcePath": "src/lib.rs"
+                },
+                "defaultFeatures": false
+              },
+              "driver": {
+                "package": "rustc-codegen-fe2o3",
+                "target": "production_neutral_workgroup_reduce_driver_v1",
+                "path": "crates/rustc-codegen-fe2o3/tests/production_neutral_workgroup_reduce_driver_v1.rs"
+              },
+              "sourceRanges": [
+                {
+                  "byteOffset": 0,
+                  "byteLength": 2668
+                }
+              ],
+              "cases": [
+                {
+                  "features": [
+                    "row-affine-u32-kernel"
+                  ],
+                  "kernelSymbol": "row_affine_sum_u32_v1",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 0,
+                  "testFunction": "ordinary_row_affine_source_matches_oracle_and_replay",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 5
+                  }
+                }
+              ],
+              "contractSha256": "8943dc4bd1ed1a008c2c15745ec0bc203d4c0b034a4ce950518e70ea820c1257"
+            },
+            "sourceItemStatus": "contract-bound"
           }
         ]
       },
@@ -13310,6 +13378,61 @@
             }
           }
         ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 6,
+            "caseOrdinal": 0
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1",
+              "selection": {
+                "kind": "source-driver-case",
+                "lessonId": "cpu-semantic-simulation",
+                "tabOrdinal": 6,
+                "caseOrdinal": 0
+              },
+              "selectionSha256": "dc8080ef4dc1ce701d605d83e0e1a0221f5ce1b45389cea29a8b52b448133669",
+              "sourcePath": "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs",
+              "sourceSha256": "07adc0c50f24e51cb3d6c6bcb6cc1c8c6ff2a772c45ee2153435601eca2f39df",
+              "functionUtf8Offset": 885
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "SIMT CPU execution and replay are tested; native artifact, generated-host admission and direct-KFD validation remain pending on gfx942/mi300x and gfx950/mi350."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "A genuine tile source implementation and per-target source, simulator, native artifact, generated-host and direct-KFD qualification remain pending on gfx942/mi300x and gfx950/mi350."
+            }
+          },
+          {
+            "kind": "mixed",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "A genuine mixed source implementation and per-target source, simulator, native artifact, generated-host and direct-KFD qualification remain pending on gfx942/mi300x and gfx950/mi350."
+            }
+          }
+        ]
       }
     ],
     "negativeCases": [
@@ -14786,6 +14909,19 @@
         "negativeCases": [],
         "bindingStatus": "not-applicable",
         "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 6,
+        "functionUtf8Offset": 885,
+        "kernelSymbol": "row_affine_sum_u32_v1",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The whole-file SIMT row display binds the exact production source-driver selection only; tile/mixed implementations and native/generated-host/direct-KFD stage evidence remain pending."
       }
     ]
   }
