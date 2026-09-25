@@ -1,5 +1,9 @@
 # Issue 272 host/runtime worker handoff
 
+Integrated validation is recorded in
+[contract retention and runtime transport](conditional-contract-retention-20260925.md).
+The worker-local test status below describes the handoff, not the later integration run.
+
 Base: `89c8c8992e8ec51f4db5d9fb6a0725e3a5a9f4e6`.
 Branch: `codex/issue272-host-invocation-20260925`.
 Private worktree: `/dev/shm/fe2o3-host-worker.bhBbYbqC`.

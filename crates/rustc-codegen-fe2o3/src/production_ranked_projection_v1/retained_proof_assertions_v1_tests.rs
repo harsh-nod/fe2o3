@@ -26,6 +26,8 @@ pub(crate) fn check(observation: &Observation, formula: &serde_json::Value) {
         Event::ReplayAccepted {
             root: accepted_root,
             receipt: accepted_receipt,
+            reserved_contract_bytes,
+            contract,
             work: accepted_work,
             storage: accepted_storage,
         },
@@ -78,7 +80,37 @@ pub(crate) fn check(observation: &Observation, formula: &serde_json::Value) {
     assert!(initial.work < *callback_work && callback_work <= accepted_work);
     assert!(*accepted_work <= after.work);
     assert!(*callback_storage >= initial.storage && *accepted_storage >= initial.storage);
-    assert_eq!(initial.storage, after.storage);
+    assert!(*reserved_contract_bytes > 0);
+    let contract =
+        fe2o3_kernel_descriptor::decode_conditional_invocation_contract_v1(contract, &mut |_| {
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert_eq!(contract.subjects().exact_graph_identity, *graph);
+    assert_eq!(contract.subjects().aggregate_statement_identity, *aggregate);
+    assert_eq!(contract.subjects().source_semantic_identity, *source);
+    assert_eq!(
+        contract.subjects().safe_reference_identity,
+        receipt.reference_identity
+    );
+    assert_eq!(
+        contract.subjects().safe_reference_mir_hash,
+        receipt.reference_mir
+    );
+    assert_eq!(
+        contract.subjects().kernel_subject_identity,
+        receipt.kernel_identity
+    );
+    assert_eq!(contract.subjects().kernel_mir_hash, receipt.kernel_mir);
+    assert_eq!(contract.theorem().statement_identity, receipt.statement);
+    assert_eq!(
+        contract.theorem().generated_source_identity,
+        receipt.generated_source
+    );
+    assert_eq!(contract.theorem().execution_identity, receipt.execution);
+    assert_eq!(contract.theorem().receipt_identity, receipt.receipt);
+    assert!(*reserved_contract_bytes >= contract.canonical_bytes().len());
+    assert_eq!(initial.storage + reserved_contract_bytes, after.storage);
     assert!(initial.failed_work.is_none() && initial.failed_storage.is_none());
     assert!(after.failed_work.is_none() && after.failed_storage.is_none());
     assert_eq!(after, dropped);

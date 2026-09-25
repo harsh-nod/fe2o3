@@ -1,5 +1,7 @@
 # Conditional Generated Fields and V4 Transport
 
+Follow-up: [contract retention and runtime transport](conditional-contract-retention-20260925.md).
+
 This follows [prepared conditional Vecadd replay](prepared-conditional-vecadd-20260925.md).
 It integrates the generated-field check into the existing production replay and
 adds inert conditional descriptor transport. No #272 milestone closes, and the

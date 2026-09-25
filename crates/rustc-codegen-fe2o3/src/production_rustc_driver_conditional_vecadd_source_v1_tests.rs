@@ -232,6 +232,7 @@ fn check_generated_fields(
         retention::Event::ReplayAccepted {
             root: accepted_root,
             receipt: accepted_receipt,
+            contract,
             work: accepted_work,
             ..
         },
@@ -243,6 +244,50 @@ fn check_generated_fields(
     };
     assert_eq!(fields.root, expected_root);
     assert_eq!(fields.kernel_binding, expected_kernel_binding);
+    let contract =
+        fe2o3_kernel_descriptor::decode_conditional_invocation_contract_v1(contract, &mut |_| {
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert_eq!(contract.subjects().kernel_id, fields.kernel_binding);
+    assert_eq!(contract.argument_count(), fields.arguments.len());
+    assert_eq!(contract.read_count(), fields.reads.len());
+    assert_eq!(contract.output().argument, fields.output_argument);
+    assert_eq!(
+        contract.output().canonical_store.block,
+        fields.canonical_store_block
+    );
+    assert_eq!(
+        contract.output().canonical_store.operation,
+        fields.canonical_store_operation as u64
+    );
+    let mut arguments = contract.arguments();
+    for field in &fields.arguments {
+        let row = arguments.next(&mut |_| Ok::<_, ()>(())).unwrap().unwrap();
+        assert_eq!(row.canonical_parameter, field.canonical_parameter);
+        assert_eq!(row.source_argument, field.source_argument);
+        assert_eq!(row.adjusted_argument, field.adjusted_argument);
+        assert_eq!(row.semantic_local, field.semantic_local);
+        assert_eq!(row.semantic_type, field.semantic_type);
+        assert_eq!(row.generated_field, field.generated_field);
+        assert_eq!(
+            row.role == fe2o3_kernel_descriptor::ConditionalArgumentRoleV1::Output,
+            field.output
+        );
+        assert_eq!(row.source_type_identity, field.source_type_identity);
+        assert_eq!(row.device_layout_identity, field.device_layout_identity);
+    }
+    assert!(arguments.next(&mut |_| Ok::<_, ()>(())).unwrap().is_none());
+    let mut reads = contract.reads();
+    for field in &fields.reads {
+        let row = reads.next(&mut |_| Ok::<_, ()>(())).unwrap().unwrap();
+        assert_eq!(row.argument, field.argument);
+        assert_eq!(row.canonical.block, field.canonical_block);
+        assert_eq!(row.canonical.operation, field.canonical_operation as u64);
+        assert_eq!(row.ranked.block, field.ranked_block);
+        assert_eq!(row.ranked.operation, field.ranked_operation);
+    }
+    assert!(reads.next(&mut |_| Ok::<_, ()>(())).unwrap().is_none());
     for (root, receipt) in [
         (root, receipt),
         (callback_root, callback_receipt),

@@ -1,6 +1,7 @@
 //! Production continuation of the existing protected, bound-reference transaction.
 
 use super::*;
+use crate::production_pipeline::conditional_generated_fields_v1::RetainedConditionalContractV1;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource, ConditionalTotalViewAnalysisV1,
@@ -32,6 +33,7 @@ pub(crate) struct ConditionalReferenceRootV1 {
     _runtime: FunctionalRefinementVerusRuntimeLeaseV1,
     _receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
     proof: fe2o3_verifier::RetainedProductionConditionalFormulaV1,
+    contract: Option<RetainedConditionalContractV1>,
     _cpu_bounds_require_host: Option<u32>,
 }
 
@@ -101,6 +103,13 @@ impl ConditionalReferenceRootV1 {
         self.input
             .retained_storage_v1()?
             .checked_add(self.proof.retained_storage_v1())
+            .and_then(|n| {
+                n.checked_add(
+                    self.contract
+                        .as_ref()
+                        .map_or(0, RetainedConditionalContractV1::retained_storage_v1),
+                )
+            })
             .ok_or(Resource::Arithmetic)
     }
 
@@ -116,11 +125,12 @@ impl ConditionalReferenceRootV1 {
             &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
             &fe2o3_verifier::ProductionConditionalFormulaExecutionV1,
             &mut Budget<'_>,
-        ) -> Result<(), Error>,
+        ) -> Result<RetainedConditionalContractV1, Error>,
     ) -> Result<Self, Error> {
         let Self {
             input,
             proof,
+            contract,
             _runtime,
             _receipts,
             _cpu_bounds_require_host,
@@ -143,7 +153,13 @@ impl ConditionalReferenceRootV1 {
                     |execution, budget| {
                         #[cfg(test)]
                         observation::replay_callback(root, request, execution, budget);
-                        consume(request, execution, budget)
+                        let encoded = consume(request, execution, budget)?;
+                        // Generated-field prepaid scopes return unreserved owners.
+                        // Keep this new charge through every enclosing postcheck.
+                        budget
+                            .reserve_storage(encoded.retained_storage_v1())
+                            .map_err(failure)?;
+                        Ok(encoded)
                     },
                 )
             },
@@ -155,21 +171,19 @@ impl ConditionalReferenceRootV1 {
         }
         match replay {
             Ok((result, input)) => {
-                let expected = floor
-                    .checked_add(transferred)
-                    .ok_or_else(|| failure(Resource::Arithmetic))?;
-                if budget.storage() != expected {
-                    return Err(failure(Resource::Accounting));
-                }
-                budget.release_storage(transferred).map_err(failure)?;
                 // The consumer result is nested inside CPU/formula replay.
-                // Both errors follow all verifier/lower/account postchecks.
-                result??;
+                // On any error, owners die before the terminal original phase
+                // releases their reservations, including late postcheck failures.
+                let encoded = result??;
+                let encoded = encoded
+                    .finish_replay_v1(contract, transferred, floor, budget)
+                    .map_err(failure)?;
                 #[cfg(test)]
-                observation::replay_accepted(root, &proof, budget);
+                observation::replay_accepted(root, &proof, &encoded, budget);
                 Ok(Self {
                     input,
                     proof,
+                    contract: Some(encoded),
                     _runtime,
                     _receipts,
                     _cpu_bounds_require_host,
@@ -290,6 +304,7 @@ pub(crate) fn continue_reference_v1<'a>(
             _runtime: runtime,
             _receipts: signed_receipts,
             proof,
+            contract: None,
             _cpu_bounds_require_host: pending_cpu_bounds,
         }),
         source,
