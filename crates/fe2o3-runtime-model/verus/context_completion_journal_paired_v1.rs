@@ -114,5 +114,7 @@ mod production {
         use super::*;
         include!("context_completion_journal_effects_v1.rs");
         include!("context_completion_journal_witnesses_v1.rs");
+        include!("context_completion_selected_readers_v1.rs");
+        include!("context_completion_selected_reader_witnesses_v1.rs");
     }
 }

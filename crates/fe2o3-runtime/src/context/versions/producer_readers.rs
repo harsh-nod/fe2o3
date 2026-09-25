@@ -737,6 +737,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         completion_input_release_body!(completion_journal_rust_syntax, self, id, producer, [], [])
     }
 
+    #[allow(clippy::question_mark)] // The effect/retirement body is shared with Verus.
     fn release_validated_submission_producer_readers_v1(
         &mut self,
         id: RuntimeSubmissionIdV1,
@@ -749,28 +750,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 completion_faults::CompletionJournalStageV1::Producer,
                 completion_faults::CompletionJournalPointV1::BeforeEffect,
             )?;
-            let root = &versions.producer_readers[&id];
-            let consumer = root
-                .marker
-                .expect("validated producer marker")
-                .first
-                .consumer;
-            versions.journal.release_producer_reads(
-                consumer,
-                &root.references,
-                &ContextReadQuiescenceEvidenceV1 { consumer },
-            )?;
-            #[cfg(test)]
-            versions.completion_boundary_for_test_v1(
-                id,
-                completion_faults::CompletionJournalStageV1::Producer,
-                completion_faults::CompletionJournalPointV1::AfterEffect,
-            )?;
-            versions.producer_readers.remove(&id);
-            if let Some(record) = self.submissions.get_mut(&id) {
-                record.journal_producer_read = None;
-            }
-            Ok(())
+            completion_selected_reader_release_body!(completion_journal_rust_syntax,
+            versions.producer_readers, self.submissions, versions.journal,
+            id, journal_producer_read, release_producer_reads, [
+                #[cfg(test)]
+                versions.completion_boundary_for_test_v1(
+                    id,
+                    completion_faults::CompletionJournalStageV1::Producer,
+                    completion_faults::CompletionJournalPointV1::AfterEffect,
+                )?;
+            ])
         }));
         match result {
             Ok(result) => self.journal_result_v1(result),

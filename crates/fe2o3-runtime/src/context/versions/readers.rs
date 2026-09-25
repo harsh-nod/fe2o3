@@ -269,15 +269,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         })
     }
 
-    // Only exact submission quiescence or definite initial rejection calls here.
-    pub(in crate::context) fn release_submission_readers_v1(
-        &mut self,
-        id: RuntimeSubmissionIdV1,
-    ) -> Result<(), RuntimeValidationErrorV1> {
-        self.require_ordinary_submission_v1(id)?;
-        self.release_readers_in_domain_v1(id, SubmissionWriterDomainV1::Ordinary)
-    }
-
     pub(super) fn validate_submission_readers_v1(
         &self,
         id: RuntimeSubmissionIdV1,
@@ -373,47 +364,64 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             if self.validate_submission_readers_v1(id, domain)?.is_none() {
                 return Ok(());
             }
-            let versions = self.versions.as_mut().expect("validated readers");
-            #[cfg(test)]
-            versions.completion_boundary_for_test_v1(
-                id,
-                completion_faults::CompletionJournalStageV1::Stable,
-                completion_faults::CompletionJournalPointV1::BeforeEffect,
-            )?;
-            let root = &versions.submission_readers[&id];
-            let consumer = ContextWriterKeyV1 {
-                context_generation: id.context_generation,
-                local: id.local,
-                kind: ContextWriterKindV1::Submission,
-            };
-            versions.journal.release_reads(
-                consumer,
-                &root.references,
-                &ContextReadQuiescenceEvidenceV1 { consumer },
-            )?;
-            #[cfg(test)]
-            versions.completion_boundary_for_test_v1(
-                id,
-                completion_faults::CompletionJournalStageV1::Stable,
-                completion_faults::CompletionJournalPointV1::AfterEffect,
-            )?;
-            versions.submission_readers.remove(&id);
-            if let Some(record) = self.submissions.get_mut(&id) {
-                record.journal_read = None;
-            }
-            Ok::<_, ContextVersionJournalErrorV1>(())
+            self.release_validated_readers_v1(id)
         }));
         match result {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) => {
-                self.quarantine_after_async_command_panic_v1();
-                Err(RuntimeValidationErrorV1::InvalidBackendDescription)
-            }
+            Ok(result) => self.journal_result_v1(result),
             Err(payload) => {
                 self.quarantine_after_async_command_panic_v1();
                 core::mem::forget(payload);
                 Err(RuntimeValidationErrorV1::InvalidBackendDescription)
             }
         }
+    }
+
+    // Joint completion has validated both rosters, without intervening mutation.
+    pub(super) fn release_prevalidated_submission_readers_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            if self
+                .versions
+                .as_ref()
+                .is_none_or(|versions| !versions.submission_readers.contains_key(&id))
+            {
+                return Ok(());
+            }
+            self.release_validated_readers_v1(id)
+        }));
+        match result {
+            Ok(result) => self.journal_result_v1(result),
+            Err(payload) => {
+                self.quarantine_after_async_command_panic_v1();
+                core::mem::forget(payload);
+                Err(RuntimeValidationErrorV1::InvalidBackendDescription)
+            }
+        }
+    }
+
+    #[allow(clippy::question_mark)] // The effect/retirement body is shared with Verus.
+    fn release_validated_readers_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        let versions = self.versions.as_mut().expect("validated readers");
+        #[cfg(test)]
+        versions.completion_boundary_for_test_v1(
+            id,
+            completion_faults::CompletionJournalStageV1::Stable,
+            completion_faults::CompletionJournalPointV1::BeforeEffect,
+        )?;
+        completion_selected_reader_release_body!(completion_journal_rust_syntax,
+        versions.submission_readers, self.submissions, versions.journal,
+        id, journal_read, release_reads, [
+            #[cfg(test)]
+            versions.completion_boundary_for_test_v1(
+                id,
+                completion_faults::CompletionJournalStageV1::Stable,
+                completion_faults::CompletionJournalPointV1::AfterEffect,
+            )?;
+        ])
     }
 }

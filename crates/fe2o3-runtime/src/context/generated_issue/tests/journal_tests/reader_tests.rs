@@ -200,7 +200,7 @@ fn generated_read_only_domain_survives_missing_backend_handle_and_ordinary_relea
             context.install_generated_submission_v1(&hold, 900).unwrap();
         }
         let before = states(&context, &plan);
-        assert!(context.release_submission_readers_v1(id).is_err());
+        assert!(context.release_submission_inputs_v1(id).is_err());
         assert_eq!(references(&context, id), original);
         assert_eq!(states(&context, &plan), before);
         assert_eq!(context.version_journal_read_records_v1(), Some(3));
@@ -208,6 +208,62 @@ fn generated_read_only_domain_survives_missing_backend_handle_and_ordinary_relea
         assert_eq!(context.is_terminal(), !installed);
         assert!(!context.cleanup().is_complete());
         core::mem::forget(context);
+    }
+}
+
+#[test]
+fn generated_reader_release_validates_before_selected_root_effect() {
+    use crate::context::versions::completion_faults::{
+        CompletionJournalFailureV1 as Failure, CompletionJournalPointV1 as Point,
+        CompletionJournalStageV1 as Stage,
+    };
+
+    for installed in [false, true] {
+        for fault in 0..4 {
+            let mut context = context_with_journal(3);
+            let (hold, plan, roster, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
+            context
+                .begin_generated_issue_v1(&hold, plan, &roster)
+                .unwrap();
+            let id = context.generated_issues[&hold.stream()].id;
+            if installed {
+                context.install_generated_submission_v1(&hold, 900).unwrap();
+            }
+            let domain = generated_writer_domain_v1(&plan);
+            let before = states(&context, &plan);
+            let versions = context.versions.as_mut().unwrap();
+            if fault < 3 {
+                versions.corrupt_submission_read_reference_for_test_v1(id, fault);
+            } else {
+                versions.set_submission_reader_domain_for_test_v1(
+                    id,
+                    SubmissionWriterDomainV1::Ordinary,
+                );
+            }
+            versions.inject_completion_fault_for_test_v1(
+                id,
+                Stage::Stable,
+                Point::BeforeEffect,
+                Failure::Error,
+            );
+            let retained = references(&context, id);
+            assert_eq!(
+                context.release_generated_submission_readers_v1(id, domain),
+                Err(RuntimeValidationErrorV1::InvalidBackendDescription),
+            );
+            assert!(
+                context
+                    .versions
+                    .as_ref()
+                    .unwrap()
+                    .completion_fault_pending_for_test_v1()
+            );
+            assert_eq!(references(&context, id), retained);
+            assert_eq!(states(&context, &plan), before);
+            assert_eq!(context.version_journal_read_records_v1(), Some(3));
+            assert!(context.is_terminal());
+            core::mem::forget(context);
+        }
     }
 }
 

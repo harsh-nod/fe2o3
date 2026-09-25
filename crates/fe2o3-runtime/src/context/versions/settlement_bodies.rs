@@ -16,7 +16,7 @@ macro_rules! completion_input_release_body {
     ($syntax:ident, $context:ident, $id:ident, $producer:ident,
      [$($stable_done:tt)*], [$($producer_done:tt)*]) => {
         $syntax!({
-            match $context.release_submission_readers_v1($id) {
+            match $context.release_prevalidated_submission_readers_v1($id) {
                 Ok(()) => (),
                 Err(error) => return Err(error),
             }
@@ -27,6 +27,30 @@ macro_rules! completion_input_release_body {
             let result = $context.release_validated_submission_producer_readers_v1($id);
             $($producer_done)*
             result
+        })
+    };
+}
+
+// Look up the roster, commit its journal effect, then retire its Context root/marker.
+// The adapter owns prevalidation, absence handling and the unwind boundary.
+macro_rules! completion_selected_reader_release_body {
+    ($syntax:ident, $roots:expr, $records:expr, $journal:expr,
+     $id:ident, $marker:ident, $release:ident, [$($after_effect:tt)*]) => {
+        $syntax!({
+            let root = ($roots).get(&$id).expect("validated reader root");
+            let consumer = root.marker.expect("validated reader marker").first.consumer;
+            match ($journal).$release(
+                consumer, &root.references, &ContextReadQuiescenceEvidenceV1 { consumer },
+            ) {
+                Ok(()) => (),
+                Err(error) => return Err(error),
+            }
+            $($after_effect)*
+            ($roots).remove(&$id);
+            if let Some(record) = ($records).get_mut(&$id) {
+                record.$marker = None;
+            }
+            Ok(())
         })
     };
 }

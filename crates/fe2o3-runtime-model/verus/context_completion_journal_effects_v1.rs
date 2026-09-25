@@ -117,7 +117,7 @@ spec fn completion_pair_wf_v1(pair: CompletionJournalPairV1) -> bool {
 }
 
 impl CompletionJournalPairV1 {
-    fn release_submission_readers_v1(&mut self, consumer: WriterKeyV1)
+    fn release_prevalidated_submission_readers_v1(&mut self, consumer: WriterKeyV1)
         -> (result: Result<(), ReadErrorV1>)
         requires completion_pair_wf_v1(*old(self)), consumer == old(self).inputs.consumer,
         ensures completion_pair_wf_v1(*final(self)), final(self).inputs == old(self).inputs,
