@@ -1,6 +1,34 @@
 use super::*;
 use crate::{Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchRequestV1};
 
+#[test]
+fn bounded_copies_reject_excess_capacity_before_retaining_rows() {
+    let values = [slice(0, 3, Some(0)), slice(1, 3, Some(1))];
+    let reserved = Vec::with_capacity(values.len());
+    let pointer = reserved.as_ptr();
+    let exact = copy_into_exact_storage(reserved, &values).unwrap();
+    assert_eq!(exact.as_ptr(), pointer);
+    assert_eq!(exact, values);
+    assert_eq!(exact.capacity(), values.len());
+    assert_eq!(bounded_copy(&values).unwrap(), values);
+    let empty = bounded_copy::<ConditionalDispatchReadV1>(&[]).unwrap();
+    assert!(empty.is_empty());
+    assert_eq!(empty.capacity(), 0);
+    for capacity in [values.len() - 1, values.len() + 1, MAX_SLICES] {
+        assert!(matches!(
+            copy_into_exact_storage(Vec::with_capacity(capacity), &values),
+            Err(ConditionalDispatchErrorV1::Allocation)
+        ));
+    }
+    assert!(matches!(
+        copy_into_exact_storage(Vec::<ConditionalDispatchReadV1>::with_capacity(1), &[]),
+        Err(ConditionalDispatchErrorV1::Allocation)
+    ));
+    assert!(matches!(
+        copy_into_exact_storage(values.to_vec(), &values),
+        Err(ConditionalDispatchErrorV1::Allocation)
+    ));
+}
 fn geometry(g: u32) -> AqlDispatchGeometryV1 {
     AqlDispatchGeometryV1::new([g, 1, 1], [g.min(64), 1, 1]).unwrap()
 }

@@ -41,6 +41,20 @@ No primary-tree edits, builds, test execution, SSH, pushes, or root actions.
 - No new work meter or ledger is created in production code. Scope cleanup uses
   the inherited budget's `with_prepaid_scope`, preserving work/peak/denial history.
 
+## Capacity follow-up
+
+Capacity follow-up: host temporary row vectors and KFD retained copies now
+require capacity to equal the prepaid/requested row count after
+`try_reserve_exact`, before filling or retaining rows. Excess capacity fails
+closed and is dropped; no larger logical-capacity owner escapes under a smaller
+quote. Host checks remain on the original prepaid scope. KFD's fixed checks are
+covered by the host constructor's existing structural-work precharge.
+
+Three additional, unrun tests cover exact and empty allocations, synthetic
+excess capacity, unchanged allocation pointers on copying, and original-account
+cleanup before any use of rejected host scratch. Select host `capacity_tests`
+and KFD `bounded_copies_reject_excess_capacity_before_retaining_rows`.
+
 ## Required primary ownership
 
 Keep `AuthenticatedWorkerV3ExecutableV1::prepare_generated_kfd_invocation` as

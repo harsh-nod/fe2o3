@@ -273,14 +273,17 @@ fn prepare_rows(
     geometry: AqlDispatchGeometryV1,
     budget: &mut Budget<'_>,
 ) -> Result<ConditionalDispatchPremisesV1> {
+    budget.charge_work(4)?;
     let mut slices = Vec::new();
-    let mut reads = Vec::new();
     slices
         .try_reserve_exact(contract.argument_count())
         .map_err(|_| binding("allocation"))?;
+    let mut slices = exact_row_storage(slices, contract.argument_count())?;
+    let mut reads = Vec::new();
     reads
         .try_reserve_exact(contract.read_count())
         .map_err(|_| binding("allocation"))?;
+    let mut reads = exact_row_storage(reads, contract.read_count())?;
     let plan = packed
         .source_plan
         .as_ref()
@@ -465,12 +468,22 @@ fn prepare_rows(
     )?)
 }
 
+fn exact_row_storage<T>(rows: Vec<T>, count: usize) -> Result<Vec<T>> {
+    // The enclosing scope prepaid count * size_of::<T>(); Vec may expose more
+    // than requested even after try_reserve_exact. Never use that unpaid storage.
+    if !rows.is_empty() || rows.capacity() != count {
+        return Err(Resource::Accounting.into());
+    }
+    Ok(rows)
+}
+
 fn domain(value: ConditionalAddressDomainV1) -> Domain {
     match value {
         ConditionalAddressDomainV1::GuardedOutput => Domain::GuardedOutput,
         ConditionalAddressDomainV1::GlobalLaunch => Domain::GlobalLaunch,
     }
 }
+
 fn word(bytes: &[u8], offset: usize) -> Result<u64> {
     let end = offset.checked_add(8).ok_or(Resource::Arithmetic)?;
     Ok(u64::from_le_bytes(
@@ -480,4 +493,58 @@ fn word(bytes: &[u8], offset: usize) -> Result<u64> {
             .try_into()
             .map_err(|_| binding("slice component width"))?,
     ))
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+    #[test]
+    fn exact_scratch_accepts_empty_reads_and_full_slice_roster_without_growth() {
+        let empty = exact_row_storage(Vec::<ConditionalDispatchReadV1>::new(), 0).unwrap();
+        assert_eq!(empty.capacity(), 0);
+        let rows = Vec::<ConditionalDispatchSliceV1>::with_capacity(MAX_CONDITIONAL_ARGUMENTS_V1);
+        let pointer = rows.as_ptr();
+        let rows = exact_row_storage(rows, MAX_CONDITIONAL_ARGUMENTS_V1).unwrap();
+        assert_eq!(rows.as_ptr(), pointer);
+        assert_eq!(rows.capacity(), MAX_CONDITIONAL_ARGUMENTS_V1);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn excess_scratch_capacity_refuses_before_row_use_and_restores_original_scope() {
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 4096);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(73).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        for requested in [0, 1, MAX_CONDITIONAL_READS_V1] {
+            let used = std::cell::Cell::new(false);
+            let result = budget.with_prepaid_scope(
+                73,
+                1,
+                1,
+                requested * size_of::<ConditionalDispatchReadV1>(),
+                |_| -> Result<()> {
+                    // Inject the allocator outcome without replacing a global
+                    // allocator or exposing a production allocation callback.
+                    let rows = Vec::<ConditionalDispatchReadV1>::with_capacity(requested + 1);
+                    let _rows = exact_row_storage(rows, requested)?;
+                    used.set(true);
+                    Ok(())
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(GeneratedConditionalPremiseErrorV1::Resource(
+                    Resource::Accounting
+                ))
+            ));
+            assert!(!used.get());
+            assert_eq!(budget.storage(), 73);
+            assert!(account == budget.work_ledger_identity_v1());
+        }
+        assert_eq!(budget.work(), 10);
+    }
 }

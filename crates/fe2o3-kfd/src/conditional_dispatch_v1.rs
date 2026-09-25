@@ -314,6 +314,15 @@ fn bounded_copy<T: Copy>(values: &[T]) -> Result<Vec<T>> {
     let mut out = Vec::new();
     out.try_reserve_exact(values.len())
         .map_err(|_| ConditionalDispatchErrorV1::Allocation)?;
+    copy_into_exact_storage(out, values)
+}
+
+fn copy_into_exact_storage<T: Copy>(mut out: Vec<T>, values: &[T]) -> Result<Vec<T>> {
+    // Host accounting covers requested rows, not an allocator's excess capacity.
+    // Reject before copying so no retained payload can exceed that quote.
+    if !out.is_empty() || out.capacity() != values.len() {
+        return Err(ConditionalDispatchErrorV1::Allocation);
+    }
     out.extend_from_slice(values);
     Ok(out)
 }
