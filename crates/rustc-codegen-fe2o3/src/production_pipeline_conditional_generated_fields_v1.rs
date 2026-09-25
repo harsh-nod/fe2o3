@@ -81,14 +81,14 @@ pub(super) fn replay_conditional_policy6_roots_v1(
     result
 }
 
-/// The F entry's actual I/J owners stay on the original target account. The
-/// lower checker performs N-to-I once, then J, inside this genuine source replay.
+/// The F entry's complete actual owners stay on the original target account.
+/// Lower checks N-to-I once and the whole source-through-F history in this replay.
 pub(super) fn replay_conditional_prefix_for_f_v1(
     ranked: ProductionRankedSemanticProgramV1,
     bindings: &AuthenticatedProductionBindings,
     bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
     checked: &fe2o3_kernel_opt::CheckedCanonicalKernelIrOwnerPolicy6V1,
-    tail: &fe2o3_kernel_opt::OwnedRedundantStoreContinuationV1,
+    chain: &super::checked_output_policy6_v1::conditional_prefix_v1::FinalChain,
     target: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1> {
     replay_with_check_v1(ranked, bindings, |request, source| {
@@ -96,7 +96,7 @@ pub(super) fn replay_conditional_prefix_for_f_v1(
             request,
             bound,
             checked,
-            tail,
+            chain,
             bindings.rustc_target.profile(),
             target,
             source,

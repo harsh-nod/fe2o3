@@ -2,18 +2,40 @@
 //! and genuine admitted proof execution; they never manufacture a receipt.
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use sha2::{Digest, Sha256};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+
+#[path = "production_pipeline_conditional_final_results_v1.rs"]
+mod results;
+#[path = "production_pipeline_conditional_final_results_v1_tests.rs"]
+mod results_tests;
 
 static OBSERVING: AtomicBool = AtomicBool::new(false);
 static AGREEMENTS: AtomicUsize = AtomicUsize::new(0);
 static INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static REPLAY_COMPLETED: AtomicUsize = AtomicUsize::new(0);
+static LATE_MODE: AtomicUsize = AtomicUsize::new(0);
+static FAULT_OBSERVED: AtomicBool = AtomicBool::new(false);
+static FINAL_IDENTITY: Mutex<Option<results::Identity>> = Mutex::new(None);
 static TARGET: AtomicUsize = AtomicUsize::new(0);
-const CHILD: &str = "production_pipeline::checked_output_policy6_v1::conditional_prefix_v1::tests::genuine_conditional_f_prefix_child";
 const ARGS: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_ARGS";
+const ARGS_SHA256: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_ARGS_SHA256";
 const PROFILE: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_TARGET";
 const MODE: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_MODE";
+const RESULT: &str = "FE2O3_CONDITIONAL_F_PREFIX_CHILD_RESULT";
 
-pub(super) fn agreement_checked(profile: Profile) {
+fn identity(output: &Owner) -> results::Identity {
+    let identity = output.canonical().identity();
+    results::Identity {
+        sha256: crate::encode_hex(identity.digest()),
+        canonical_length: identity.canonical_length(),
+    }
+}
+
+pub(super) fn agreement_checked(profile: Profile, output: &Owner) -> Result<(), Error> {
     if OBSERVING.load(Ordering::SeqCst) {
         let target = match profile {
             Profile::Gfx942 => 942,
@@ -21,12 +43,30 @@ pub(super) fn agreement_checked(profile: Profile) {
         };
         assert_eq!(target, TARGET.load(Ordering::SeqCst));
         AGREEMENTS.fetch_add(1, Ordering::SeqCst);
+        *FINAL_IDENTITY.lock().unwrap() = Some(identity(output));
+        if LATE_MODE.load(Ordering::SeqCst) == 1 {
+            FAULT_OBSERVED.store(true, Ordering::SeqCst);
+            return Err(Error::Resource(Resource::Accounting));
+        }
     }
+    Ok(())
+}
+
+pub(super) fn source_replayed() -> Result<(), ProductionPipelineError> {
+    if OBSERVING.load(Ordering::SeqCst) {
+        REPLAY_COMPLETED.fetch_add(1, Ordering::SeqCst);
+        if LATE_MODE.load(Ordering::SeqCst) == 2 {
+            FAULT_OBSERVED.store(true, Ordering::SeqCst);
+            return Err(resource(Resource::Accounting));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn installed(value: &ConditionalPrefixForFV1) {
     if OBSERVING.load(Ordering::SeqCst) {
         assert_eq!(AGREEMENTS.load(Ordering::SeqCst), 1);
+        assert_eq!(REPLAY_COMPLETED.load(Ordering::SeqCst), 1);
         assert!(value.preparation.ranked.has_conditional_roots_v1());
         assert!(
             !value
@@ -34,10 +74,9 @@ pub(super) fn installed(value: &ConditionalPrefixForFV1) {
                 .ranked
                 .grants_artifact_or_launch_authority()
         );
-        assert!(!value.tail.grants_authority());
         assert_eq!(
-            value.tail.input_identity(),
-            value.preparation.checked.owner().canonical().identity()
+            *FINAL_IDENTITY.lock().unwrap(),
+            Some(identity(value.chain.output()))
         );
         INSTALLED.fetch_add(1, Ordering::SeqCst);
     }
@@ -126,44 +165,10 @@ fn conditional_target_scope_refuses_replacing_original_account() {
     ));
 }
 
-/// Same captured Direct one-root source as the existing fixed policy6 tests.
-/// Parent and children perform no Cargo, runtime setup or native publication.
-#[test]
-#[ignore = "requires genuine FE2O3_CONDITIONAL_PREFIX_GFX942_ARGS and GFX950_ARGS captures plus admitted proof runtime"]
-fn genuine_direct_conditional_f_prefix_both_targets_and_fixed6_separation() {
-    for target in [942, 950] {
-        let variable = format!("FE2O3_CONDITIONAL_PREFIX_GFX{target}_ARGS");
-        let args = std::env::var_os(&variable).unwrap_or_else(|| panic!("missing {variable}"));
-        for mode in ["f", "fixed6", "work", "storage"] {
-            let result = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    CHILD,
-                    "--ignored",
-                    "--nocapture",
-                    "--test-threads=1",
-                ])
-                .env(ARGS, &args)
-                .env(PROFILE, target.to_string())
-                .env(MODE, mode)
-                .output()
-                .unwrap();
-            assert!(
-                result.status.success(),
-                "target {target}, mode {mode}:\n{}\n{}",
-                String::from_utf8_lossy(&result.stdout),
-                String::from_utf8_lossy(&result.stderr)
-            );
-            let stdout = String::from_utf8(result.stdout).unwrap();
-            assert!(stdout.contains(&format!("test {CHILD} ... ok")));
-            assert!(stdout.contains("1 passed; 0 failed; 0 ignored;"));
-        }
-    }
-}
-
 struct Callbacks {
     calls: usize,
     mode: String,
+    result: Option<results::Child>,
 }
 impl rustc_driver::Callbacks for Callbacks {
     fn after_analysis<'tcx>(
@@ -254,10 +259,7 @@ impl rustc_driver::Callbacks for Callbacks {
         assert_eq!(std::ptr::from_mut(&mut budget), address);
         assert!(budget.work_ledger_identity_v1() == account);
         assert_eq!(budget.storage(), 19);
-        let expected = usize::from(self.mode == "f");
-        assert_eq!(AGREEMENTS.load(Ordering::SeqCst), expected);
-        assert_eq!(INSTALLED.load(Ordering::SeqCst), expected);
-        if matches!(self.mode.as_str(), "f" | "fixed6") {
+        let (terminal, resource_kind) = if matches!(self.mode.as_str(), "f" | "fixed6") {
             assert!(
                 matches!(
                     error,
@@ -268,17 +270,60 @@ impl rustc_driver::Callbacks for Callbacks {
                 "{error}"
             );
             assert!(budget.work() > 0);
+            ("conditional-finalizer-required", None)
+        } else if self.mode.starts_with("late-") {
+            assert!(FAULT_OBSERVED.load(Ordering::SeqCst));
+            (
+                if self.mode == "late-agreement" {
+                    "injected-after-agreement"
+                } else {
+                    "injected-after-replay"
+                },
+                None,
+            )
         } else {
-            assert!(
-                !matches!(
-                    error,
-                    ProductionPipelineError::RankedVerification(
-                        RankedError::ConditionalFinalizerRequired { .. }
-                    )
-                ),
-                "{error}"
-            );
-        }
+            use super::super::CheckedOutputPolicy6StageErrorV1 as StageError;
+            use fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12 as CanonicalError;
+            let refused = match &error {
+                ProductionPipelineError::CheckedOutputPolicy6Stage(StageError::Resource(error))
+                | ProductionPipelineError::CheckedOutputPolicy6Stage(StageError::Canonical(
+                    CanonicalError::Resource(error),
+                )) => error,
+                _ => panic!("expected direct early resource refusal: {error}"),
+            };
+            let kind = match refused {
+                Resource::Work(_) => "work",
+                Resource::Storage(_) => "storage",
+                _ => panic!("unexpected resource failure: {refused}"),
+            };
+            assert_eq!(kind, self.mode);
+            ("resource-refusal", Some(kind.to_owned()))
+        };
+        let record = results::Child {
+            schema: results::CHILD_SCHEMA.into(),
+            target: expected.device_target().into(),
+            mode: self.mode.clone(),
+            callbacks: self.calls as u64,
+            agreements: AGREEMENTS.load(Ordering::SeqCst) as u64,
+            replay_completed: REPLAY_COMPLETED.load(Ordering::SeqCst) as u64,
+            installed: INSTALLED.load(Ordering::SeqCst) as u64,
+            actual_f_identity: FINAL_IDENTITY.lock().unwrap().clone(),
+            terminal: terminal.into(),
+            refusal: error.to_string(),
+            resource: resource_kind,
+            fault_observed: FAULT_OBSERVED.load(Ordering::SeqCst),
+            work: budget.work() as u64,
+            floor_before: 19,
+            floor_after: budget.storage() as u64,
+            account_preserved: budget.work_ledger_identity_v1() == account
+                && std::ptr::from_mut(&mut budget) == address,
+            source_to_final_output_checked: AGREEMENTS.load(Ordering::SeqCst) == 1,
+            qualification_credit: false,
+            grants_artifact_or_launch_authority: false,
+            native_output_emitted: false,
+        };
+        record.check(expected.device_target(), &self.mode).unwrap();
+        self.result = Some(record);
         rustc_driver::Compilation::Stop
     }
 }
@@ -286,14 +331,53 @@ impl rustc_driver::Callbacks for Callbacks {
 #[test]
 #[ignore = "child only: genuine captured source and admitted proof runtime"]
 fn genuine_conditional_f_prefix_child() {
-    let args: Vec<String> =
-        serde_json::from_slice(&std::fs::read(std::env::var_os(ARGS).unwrap()).unwrap()).unwrap();
+    use std::{
+        io::{Read, Write},
+        os::unix::fs::OpenOptionsExt,
+    };
+    let mut bytes = Vec::new();
+    std::fs::File::open(std::env::var_os(ARGS).unwrap())
+        .unwrap()
+        .take(1_048_577)
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert!(bytes.len() <= 1_048_576);
+    assert_eq!(
+        crate::encode_hex(&Sha256::digest(&bytes)),
+        std::env::var(ARGS_SHA256).unwrap()
+    );
+    let args: Vec<String> = serde_json::from_slice(&bytes).unwrap();
     let target: usize = std::env::var(PROFILE).unwrap().parse().unwrap();
     assert!(matches!(target, 942 | 950));
     TARGET.store(target, Ordering::SeqCst);
     let mode = std::env::var(MODE).unwrap();
-    assert!(matches!(mode.as_str(), "f" | "fixed6" | "work" | "storage"));
-    let mut callbacks = Callbacks { calls: 0, mode };
+    assert!(
+        results::MAIN_MODES.contains(&mode.as_str())
+            || results::LATE_MODES.contains(&mode.as_str())
+    );
+    LATE_MODE.store(
+        match mode.as_str() {
+            "late-agreement" => 1,
+            "late-replay" => 2,
+            _ => 0,
+        },
+        Ordering::SeqCst,
+    );
+    let mut callbacks = Callbacks {
+        calls: 0,
+        mode,
+        result: None,
+    };
     rustc_driver::run_compiler(&args, &mut callbacks);
     assert_eq!(callbacks.calls, 1);
+    let bytes = serde_json::to_vec(&callbacks.result.expect("genuine child completion")).unwrap();
+    assert!(bytes.len() <= 65_536);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(std::env::var_os(RESULT).unwrap())
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
 }

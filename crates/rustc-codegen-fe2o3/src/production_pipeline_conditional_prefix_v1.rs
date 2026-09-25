@@ -1,5 +1,5 @@
-//! Private conditional N-through-J custody at the production F entry only.
-//! No ordinary receipt, final F, native artifact or launch authority is created.
+//! Private conditional source-through-F custody at the production F entry only.
+//! No ordinary receipt, native artifact or launch authority is created.
 use super::{
     Budget, DirectPolicy6PreparationV1, Owner, ProductionPipelineError, Profile,
     RankedVerifiedProductionCompilation, Resource, resource,
@@ -8,13 +8,17 @@ use crate::production_pipeline::checked_output_policy7_v1::scoped;
 use crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1 as RankedError;
 use crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2 as JoinError;
 use fe2o3_kernel_opt::{
-    CheckedCanonicalKernelIrOwnerPolicy6V1 as Prefix, OwnedRedundantStoreContinuationV1 as Tail,
-    prepare_owned_redundant_store_continuation_v1,
+    CanonicalRefinedForwardingHistoryLimitsV1 as HistoryLimits,
+    CheckedCanonicalKernelIrOwnerPolicy6V1 as Prefix,
 };
 use fe2o3_lower_mir_kernel::{
-    ProductionConditionalCheckedTailErrorV1, ProductionHelperSourcePolicyV1,
+    ProductionConditionalCheckedFinalErrorV1, ProductionHelperSourcePolicyV1,
     ProductionSourceBoundConditionalAggregateRequestV1 as Request,
 };
+
+#[path = "production_pipeline_conditional_final_chain_v1.rs"]
+mod chain;
+pub(in crate::production_pipeline) use chain::FinalChain;
 use std::{
     fmt,
     mem::size_of,
@@ -25,13 +29,14 @@ use std::{
 /// account postchecks. Fields never escape separately or become ordinary V5.
 pub(in crate::production_pipeline) struct ConditionalPrefixForFV1 {
     preparation: DirectPolicy6PreparationV1,
-    tail: Tail,
+    chain: FinalChain,
     retained_floor: usize,
 }
 
 impl RankedVerifiedProductionCompilation {
     pub(in crate::production_pipeline) fn prepare_conditional_prefix_for_f_v1(
         self,
+        expected_limits: HistoryLimits,
         budget: &mut Budget<'_>,
     ) -> Result<ConditionalPrefixForFV1, ProductionPipelineError> {
         if !self.ranked.has_conditional_roots_v1()
@@ -43,29 +48,25 @@ impl RankedVerifiedProductionCompilation {
             ));
         }
         let floor = budget.storage();
-        let (preparation, tail, retained) = scoped(floor, budget, move |budget| {
+        let (preparation, chain, retained) = scoped(floor, budget, move |budget| {
             let DirectPolicy6PreparationV1 {
                 ranked,
                 bindings,
                 bound,
                 checked,
             } = self.prepare_direct_policy6_v1(budget)?;
-            // Preserve B and the single I prefix while the existing checked
-            // rewrite detaches its actual J. Its returned receipt is unreserved.
-            let tail = prepare_owned_redundant_store_continuation_v1(checked.owner(), budget)
-                .map_err(join_error)?;
-            budget
-                .reserve_storage(tail.retained_storage())
-                .map_err(resource)?;
             // Conservatively include the wrapper; source/bindings retain their
             // inherited bounded domains, not a claim of exact process heap use.
             budget
                 .reserve_storage(size_of::<ConditionalPrefixForFV1>())
                 .map_err(resource)?;
+            let chain = FinalChain::prepare(&bound, &checked, expected_limits, budget)?;
             let ranked = crate::production_pipeline::conditional_generated_fields_v1::replay_conditional_prefix_for_f_v1(
-                ranked, &bindings, &bound, &checked, &tail, budget,
+                ranked, &bindings, &bound, &checked, &chain, budget,
             )
             .map_err(ProductionPipelineError::RankedVerification)?;
+            #[cfg(test)]
+            tests::source_replayed()?;
             let retained = budget
                 .storage()
                 .checked_sub(floor)
@@ -77,7 +78,7 @@ impl RankedVerifiedProductionCompilation {
                     bound,
                     checked,
                 },
-                tail,
+                chain,
                 retained,
             ))
         })?;
@@ -86,7 +87,7 @@ impl RankedVerifiedProductionCompilation {
         budget.reserve_storage(retained).map_err(resource)?;
         let value = ConditionalPrefixForFV1 {
             preparation,
-            tail,
+            chain,
             retained_floor: budget.storage(),
         };
         #[cfg(test)]
@@ -105,7 +106,7 @@ impl ConditionalPrefixForFV1 {
         }
         let Self {
             preparation,
-            tail: _tail,
+            chain: _chain,
             ..
         } = self;
         let DirectPolicy6PreparationV1 {
@@ -135,7 +136,7 @@ fn join_error(error: impl fmt::Display) -> ProductionPipelineError {
 pub(in crate::production_pipeline) enum Error {
     Resource(Resource),
     Target(dialect_amdgcn::ProductionTargetCoordinateErrorV1),
-    Agreement(ProductionConditionalCheckedTailErrorV1),
+    Agreement(ProductionConditionalCheckedFinalErrorV1),
 }
 impl From<Resource> for Error {
     fn from(value: Resource) -> Self {
@@ -156,13 +157,14 @@ pub(in crate::production_pipeline) fn check(
     request: &Request<'_>,
     bound: &Owner,
     checked: &Prefix,
-    tail: &Tail,
+    chain: &FinalChain,
     profile: Profile,
     target: &mut Budget<'_>,
     source: &mut Budget<'_>,
 ) -> Result<(), Error> {
     let result = scoped_target(target, |target| {
         target.reserve_storage(size_of::<Error>() + 256)?;
+        chain.check_owned(target)?;
         let (coordinates, storage) =
             dialect_amdgcn::check_production_target_coordinate_preservation_v1(
                 request.source().executable(),
@@ -172,15 +174,22 @@ pub(in crate::production_pipeline) fn check(
             )
             .map_err(Error::Target)?;
         target.reserve_storage(storage.retained_storage())?;
-        // This lower method calls the existing N-to-I checker exactly once,
-        // followed by independent J relation/coverage/occurrence/premise checks.
+        // Lower includes N-to-I once, then the complete actual history and
+        // source-to-F occurrence/premise checks with independent caller limits.
         request
-            .check_policy6_redundant_store_output_v1(&coordinates, checked, tail, target, source)
+            .check_refined_forwarding_output_v1(
+                &coordinates,
+                checked,
+                chain.inputs(bound, checked),
+                chain.expected_limits(),
+                target,
+                source,
+            )
             .map_err(Error::Agreement)
     });
     #[cfg(test)]
     if result.is_ok() {
-        tests::agreement_checked(profile);
+        tests::agreement_checked(profile, chain.output())?;
     }
     result
 }

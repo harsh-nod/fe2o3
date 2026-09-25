@@ -954,3 +954,6 @@ fn actual_prepared_shared_body_vecadd_retains_formula_then_requires_conditional_
 
 #[path = "production_rustc_driver_conditional_vecadd_prepared_parsing_v1_tests.rs"]
 mod parsing_tests;
+
+#[path = "production_rustc_driver_conditional_vecadd_prepared_f_prefix_v1_tests.rs"]
+mod f_prefix;
