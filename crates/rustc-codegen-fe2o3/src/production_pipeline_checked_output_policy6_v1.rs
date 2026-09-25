@@ -258,7 +258,7 @@ impl RankedVerifiedProductionCompilation {
         self,
         budget: &mut Budget<'_>,
     ) -> Result<AdmittedPolicy6StageV1, ProductionPipelineError> {
-        let Self { ranked, bindings } = self.replay_conditional_for_target_v1()?;
+        let Self { ranked, bindings } = self;
         let profile = bindings.rustc_target.profile();
         let retained = ranked
             .materialized()
@@ -314,6 +314,17 @@ impl RankedVerifiedProductionCompilation {
         phase.complete();
         #[cfg(test)]
         let phase = timing::begin(timing::Route::Direct, timing::Phase::RankedSourceReplay);
+        // Conditional source/proof/contract replay consumes the original owned
+        // source phase only after the ONE target-phase prefix exists. It checks
+        // actual I, then the unchanged ordinary-roster gate still refuses it.
+        let ranked = if ranked.has_conditional_roots_v1() {
+            super::conditional_generated_fields_v1::replay_conditional_policy6_roots_v1(
+                ranked, &bindings, &bound, &checked, budget,
+            )
+            .map_err(ProductionPipelineError::RankedVerification)?
+        } else {
+            ranked
+        };
         let (receipt, ranked_verification) = ranked
             .into_verified_roster_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?

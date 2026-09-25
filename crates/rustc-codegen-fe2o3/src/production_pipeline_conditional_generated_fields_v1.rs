@@ -16,6 +16,9 @@ use fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1;
 mod retention;
 pub(crate) use retention::RetainedConditionalContractV1;
 
+#[path = "production_pipeline_conditional_checked_output_v1.rs"]
+mod checked_output;
+
 #[cfg(test)]
 pub(crate) use crate::compiler_descriptor::conditional_generated_fields_v1::observation;
 
@@ -47,9 +50,51 @@ pub(super) fn replay_conditional_roots_v1(
     ranked: ProductionRankedSemanticProgramV1,
     bindings: &AuthenticatedProductionBindings,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1> {
+    replay_with_check_v1(ranked, bindings, |_, _| Ok(()))
+}
+
+/// Direct policy6 only. These immutable owners and their reservations stay on
+/// the existing target phase while the callback borrows the original source
+/// phase. This does not yield ordinary evidence or continue to native F.
+pub(super) fn replay_conditional_policy6_roots_v1(
+    ranked: ProductionRankedSemanticProgramV1,
+    bindings: &AuthenticatedProductionBindings,
+    bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    checked: &fe2o3_kernel_opt::CheckedCanonicalKernelIrOwnerPolicy6V1,
+    target: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1> {
+    let result = replay_with_check_v1(ranked, bindings, |request, source| {
+        checked_output::check(
+            request,
+            bound,
+            checked,
+            bindings.rustc_target.profile(),
+            target,
+            source,
+        )
+        .map_err(|error| ProductionReferenceEffectJoinErrorV2::ProofExecution(error.to_string()))
+    });
+    #[cfg(test)]
+    if result.is_ok() {
+        checked_output::tests::replay_completed();
+    }
+    result
+}
+
+fn replay_with_check_v1(
+    ranked: ProductionRankedSemanticProgramV1,
+    bindings: &AuthenticatedProductionBindings,
+    mut check: impl FnMut(
+        &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(), ProductionReferenceEffectJoinErrorV2>,
+) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedVerificationErrorV1> {
     let ranked = ranked.replay_conditional_roots_v1(
         &bindings.reference_effect_bindings,
         |root, source, request, execution, budget| {
+            // The existing enclosing replay has reimported the genuine receipt;
+            // its source/graph/account postchecks still surround this callback.
+            check(request, budget)?;
             with_generated_fields_v1(
                 &ConditionalGeneratedFieldOwnerV1 {
                     source,
