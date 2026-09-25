@@ -189,7 +189,7 @@ pub fn revalidate_native_worker_finalizer_v1(
             .receipts()
             .abi()
             .canonical_preimage();
-        let raw_hsaco = DescriptorSchema::from_abi(abi)
+        let raw_hsaco = DescriptorSchema::from_native_abi(abi)
             .and_then(|schema| schema.derive_raw(exact_finalized_hsaco))
             .map_err(|e| failure("raw artifact reconstruction", e))?;
         let output = WorkerOutputConstraintsV1::new(replay.bootstrap_output_bound)

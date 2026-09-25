@@ -135,7 +135,11 @@ fn nominal_artifact(wire: &[u8]) -> Vec<u8> {
     )
 }
 
-fn with_nominal_descriptor_section(mut bytes: Vec<u8>) -> Vec<u8> {
+fn with_nominal_descriptor_section(bytes: Vec<u8>) -> Vec<u8> {
+    with_descriptor_section_version(bytes, 3)
+}
+
+pub(super) fn with_descriptor_section_version(mut bytes: Vec<u8>, version: u8) -> Vec<u8> {
     let u64_at =
         |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
     let sections = u64_at(40);
@@ -148,7 +152,8 @@ fn with_nominal_descriptor_section(mut bytes: Vec<u8>) -> Vec<u8> {
     ) as usize;
     let start = strings + name;
     assert_eq!(&bytes[start..start + 13], b".fe2o3.kd.v1\0");
-    bytes[start..start + 13].copy_from_slice(b".fe2o3.kd.v3\0");
+    assert!(version < 10);
+    bytes[start + 11] = b'0' + version;
     bytes
 }
 

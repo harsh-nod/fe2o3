@@ -61,7 +61,7 @@ first-build evidence, reuses its lineage/symbol checks, and binds the embedded V
 to the retained ABI receipt and export manifest. Worker protocol V3 and descriptor schema
 V3 are independent version numbers. The result retains the original transaction and
 final artifact, but grants no compiler, proof, publication, load, or launch authority.
-Worker publication recovery dispatches the strict V1 or nominal V3 schema. This
+Worker publication recovery dispatches the strict V1 or nominal V3/V4 schema. This
 structural continuation alone does not supply nominal source-proof or generated-host
 launch custody.
 
@@ -97,10 +97,36 @@ compiler stack layouts or whole-process accounting. The existing ELF/AMDHSA allo
 caller storage, callback state and returned artifact exclusions still apply. Work
 refusal returns no partial owner and never mutates caller bytes.
 
-This is issue #272's inert structural artifact stage, not milestone closure. Public
+`finalize_protected_worker_nominal_hsaco_v4` now continues the existing strict Worker
+V3 transaction with a distinct `PreparedFinalizedNominalWorkerHsacoV4`. It requires
+the complete retained ABI receipt to equal the embedded zero-digest V4 descriptor,
+including every mandatory contract byte. It reuses strict lineage, symbol closure,
+export-manifest and common launch-policy checks. The finalization identity retains
+every original transaction/evidence axis under a distinct structural V4 domain.
+
+`prepare_nominal_worker_compact_finalizer_replay_v4` uses the existing compact
+transcript. `prepare_nominal_worker_publication_v4`,
+`persist_prepared_nominal_worker_publication_v4` and
+`recover_nominal_worker_publication_v4` use the existing durable intent store and
+closed schema dispatch. Recovery reconstructs the raw artifact, original strict
+Worker exchanges, source evidence, final artifact and durable plan before returning
+the distinct V4 owner. V1/V3 typed recovery refuses V4, and V4 recovery refuses both
+older schemas. There is no separate artifact or transaction path.
+
+V4 is deliberately absent from the publication authority bridge. No V4 publish
+operation, published owner or load-envelope conversion is exposed. Existing host
+admission still requires V1 or nominal V3. Descriptor work/scratch declarations do
+not cover retained strict evidence, shared replay/identity serialization, inherited
+ELF allocations or whole-process memory.
+The separate native-worker adapter still refuses descriptor V4 at schema selection;
+its V1/V3 finalization and replay remain unchanged.
+
+This is issue #272's inert structural Worker continuation, not milestone closure. Public
 descriptor/source hashes do not authenticate compiler origin, conditional source proof,
-machine refinement, publication currentness or launch authority. No V4 Worker finalizer
-or host admission is enabled. Remaining integration must carry the exact retained
+machine refinement, publication currentness or launch authority. No conditional proof
+receipt is manufactured and no compiler, proof, load or launch authority is granted.
+Authenticated V4 Worker finalization/publication and host admission remain disabled.
+Remaining integration must carry the exact retained
 conditional proof/contract owner and original resource account through target lowering,
 applicable machine evidence, authenticated Worker finalization/publication and safe-host
 admission. Protected actual-source replay and target-matched hardware qualification
@@ -112,12 +138,28 @@ V3/V4 relabeling, duplicate/mixed/future sections, physical ABI disagreement, di
 tampering, and scratch/work refusal. Compile-fail doctests keep the V4 owner move-only
 and prevent typed V3 downgrade. These are structural tests, not proof or hardware credit.
 
-Serial guarded integration passed 176 library tests, 54 public API tests, 32 Worker
+Before this Worker continuation, serial guarded integration passed 176 library tests,
+54 public API tests, 32 Worker
 admission tests and 22 compile-fail doctests; two real-worker qualification tests
 remained ignored. The all-targets check also passed. The selections include existing
 V1/V3 and ordinary/native/nominal regressions after the shared refactor. See the
 [validation report](../../docs/evidence/conditional-v4-context-validation-20260925.md)
 for exact snapshots, limits and the separate failed protected actual-source run.
+
+The new `worker_v3_hsaco_admission::nominal_v4` fixture-worker selections cover exact
+contract/transaction retention, source and valid contract substitution, strict symbol/export
+rejection, callback refusal/panic, compact restart, typed durable recovery, foreign
+occurrences, and V1/V3/V4 receipt/artifact/recovery and relabeling matrices. Existing
+identity-axis tests also exercise the V4 domain; compile-fail doctests forbid cloning
+and V1/V3 owner conversions. These tests use the existing inert contract transport
+fixture and synthetic ELF, not authenticated conditional proof receipts.
+
+This continuation has not run Cargo, builds, tests or SSH in its sidecar worktree.
+The primary serial guard must run the finalizer library tests, `public_api`,
+`worker_v3_hsaco_admission` (including existing V1/V3 cases),
+`native_worker_finalization_tests` and doctests, followed
+by its all-targets check. Pinned `nightly-2026-04-03` formatting and diff inspection
+are the only local validation; they are not compilation or test results.
 
 ## Multi-input native link plans
 

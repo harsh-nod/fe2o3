@@ -36,8 +36,10 @@ const PROTECTED_FINALIZED_IDENTITY_DOMAIN_V3: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-CANONICAL-FINALIZATION/V1\0";
 const NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-NOMINAL-DESCRIPTOR-FINALIZATION/V3\0";
+const NOMINAL_FINALIZED_IDENTITY_DOMAIN_V4: &[u8] =
+    b"FE2O3/STRICT-V3-PROTECTED-WORKER-NOMINAL-DESCRIPTOR-FINALIZATION/V4\0";
 
-/// Stable Worker V3 finalization identity. Descriptor V1 and nominal V3 use
+/// Stable Worker V3 finalization identity. Descriptor V1 and nominal V3/V4 use
 /// distinct domains; this identity version is not a descriptor schema version.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FinalizedProtectedWorkerV3HsacoIdentityV1([u8; 32]);
@@ -671,6 +673,23 @@ pub(crate) fn calculate_nominal_worker_finalized_identity(
     )
 }
 
+pub(crate) fn calculate_nominal_worker_finalized_identity_v4(
+    raw: &InspectedProtectedWorkerV3HsacoV1,
+    finalized: &crate::FinalizedNominalHsacoV4,
+    output: ContentIdentityV1,
+    descriptor: ContentIdentityV1,
+) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
+    calculate_worker_finalized_identity(
+        raw,
+        finalized.as_bytes(),
+        finalized.digest(),
+        output,
+        finalized.descriptor_bytes(),
+        descriptor,
+        NOMINAL_FINALIZED_IDENTITY_DOMAIN_V4,
+    )
+}
+
 fn calculate_worker_finalized_identity(
     raw: &InspectedProtectedWorkerV3HsacoV1,
     finalized_bytes: &[u8],
@@ -921,6 +940,13 @@ mod v3_tests {
             first,
             calculate_finalized_identity_in_domain(&preimage, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3)
         );
+        let v4 =
+            calculate_finalized_identity_in_domain(&preimage, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V4);
+        assert_ne!(first, v4);
+        assert_ne!(
+            v4,
+            calculate_finalized_identity_in_domain(&preimage, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3)
+        );
     }
 
     #[test]
@@ -929,6 +955,8 @@ mod v3_tests {
         let expected = calculate_protected_finalized_identity_v3(&base);
         let nominal =
             calculate_finalized_identity_in_domain(&base, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V3);
+        let conditional =
+            calculate_finalized_identity_in_domain(&base, NOMINAL_FINALIZED_IDENTITY_DOMAIN_V4);
         macro_rules! assert_axis {
             ($field:ident, $value:expr) => {{
                 let mut changed = base.clone();
@@ -946,6 +974,15 @@ mod v3_tests {
                     ),
                     nominal,
                     "nominal finalization identity omitted {}",
+                    stringify!($field)
+                );
+                assert_ne!(
+                    calculate_finalized_identity_in_domain(
+                        &changed,
+                        NOMINAL_FINALIZED_IDENTITY_DOMAIN_V4
+                    ),
+                    conditional,
+                    "conditional finalization identity omitted {}",
                     stringify!($field)
                 );
             }};

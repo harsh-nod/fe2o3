@@ -116,24 +116,14 @@ pub fn finalize_protected_worker_nominal_hsaco_v3<E>(
         let inspected =
             inspect_unfinalized_nominal_hsaco_v3(source.output_bytes(), prepaid_scratch, charge)?;
         let table = inspected.descriptor_table();
-        let mut launch = None;
-        for index in 0..table.kernel_count() {
+        crate::nominal_worker_common::common_launch(table.kernel_count(), |index| {
             let kernel = table
                 .kernel(index, charge)
                 .map_err(NominalFinalizationErrorV3::Wire)?;
-            let actual = strict_kernel_launch_contract(kernel.launch())?;
-            if launch.is_some_and(|expected| expected != actual) {
-                return Err(
-                    WorkerV3HsacoInspectionError::StrictV3DescriptorLaunchContract(
-                        "heterogeneous per-kernel launch policy",
-                    )
-                    .into(),
-                );
-            }
-            launch = Some(actual);
-        }
-        launch
-            .ok_or(WorkerV3HsacoInspectionError::StrictV3DescriptorLaunchContract("kernel set"))?
+            Ok::<_, NominalWorkerFinalizationErrorV3<E>>(strict_kernel_launch_contract(
+                kernel.launch(),
+            )?)
+        })?
     };
     let raw = inspect_protected_worker_with_launch(source, launch)?;
     let handoff = raw.outer_handoff();
@@ -172,9 +162,9 @@ fn check_export_manifest<E>(
     manifest: &[u8],
     charge: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> Result<(), NominalWorkerFinalizationErrorV3<E>> {
-    charge(receipt.len().max(manifest.len()).saturating_add(1))
-        .map_err(NominalFinalizationErrorV3::Work)?;
-    if receipt != manifest {
+    if !crate::nominal_worker_common::export_manifest_matches(receipt, manifest, charge)
+        .map_err(NominalFinalizationErrorV3::Work)?
+    {
         return Err(NominalWorkerFinalizationErrorV3::ExportManifestMismatch);
     }
     Ok(())

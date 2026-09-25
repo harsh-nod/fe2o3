@@ -226,7 +226,7 @@ pub fn finalize_native_worker_hsaco_v1(
         )?;
         let abi = receipts.abi().canonical_preimage();
         let schema =
-            DescriptorSchema::from_abi(abi).map_err(|e| failure("descriptor schema", e))?;
+            DescriptorSchema::from_native_abi(abi).map_err(|e| failure("descriptor schema", e))?;
         let launch = derive_launch(schema, abi, source.output_bytes(), budget)?;
         let (code_object, _) =
             decode_link_options(source.plan().options()).map_err(|e| failure("link options", e))?;
@@ -241,6 +241,12 @@ pub fn finalize_native_worker_hsaco_v1(
         )
         .map_err(|e| failure("raw inspection", e))?;
         let (bytes, descriptor, digest) = match schema {
+            DescriptorSchema::NominalV4 => {
+                return Err(failure(
+                    "descriptor schema",
+                    "native V4 descriptor continuation is unavailable",
+                ));
+            }
             DescriptorSchema::V1 => {
                 let core = finalize_worker_hsaco_preimage_v1(
                     source.output_bytes(),
@@ -319,6 +325,12 @@ fn derive_launch(
         Ok(())
     };
     match schema {
+        DescriptorSchema::NominalV4 => {
+            return Err(failure(
+                "descriptor schema",
+                "native V4 descriptor continuation is unavailable",
+            ));
+        }
         DescriptorSchema::V1 => {
             let source = CompilerDescriptorSourceV1::decode(abi)
                 .map_err(|e| failure("descriptor source", e))?;

@@ -877,6 +877,19 @@ pub fn prepare_nominal_worker_compact_finalizer_replay_v3(
     )
 }
 
+/// Retains mandatory descriptor V4 contracts in the existing inert Worker replay wire.
+/// This does not enable publication authority or host admission.
+pub fn prepare_nominal_worker_compact_finalizer_replay_v4(
+    finalized: crate::PreparedFinalizedNominalWorkerHsacoV4,
+) -> Result<
+    PreparedProtectedWorkerV3CompactFinalizerReplayV2,
+    ProtectedWorkerV3CompactFinalizerReplayErrorV1,
+> {
+    prepare_versioned_compact_finalizer_replay(
+        crate::worker_v3_finalized_schema::FinalizedOwner::NominalV4(finalized),
+    )
+}
+
 pub(crate) fn prepare_versioned_compact_finalizer_replay(
     finalized: crate::worker_v3_finalized_schema::FinalizedOwner,
 ) -> Result<
