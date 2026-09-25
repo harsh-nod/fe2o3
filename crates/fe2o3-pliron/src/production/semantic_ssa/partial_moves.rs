@@ -1,5 +1,7 @@
 use super::*;
 
+include!("partial_move_discriminants_v1.rs");
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SemanticMovePathElementV1 {
     Field(u32),
@@ -446,9 +448,11 @@ fn validate_partial_move_rvalue_v1(
     match value {
         SemanticRvalueKindV1::Borrow { place, .. }
         | SemanticRvalueKindV1::AddressOf { place, .. }
-        | SemanticRvalueKindV1::Length(place)
-        | SemanticRvalueKindV1::Discriminant(place) => {
+        | SemanticRvalueKindV1::Length(place) => {
             validate_partial_move_place_read_v1(function, types, place, location, state, budget)
+        }
+        SemanticRvalueKindV1::Discriminant(place) => {
+            validate_partial_move_discriminant_read_v1(function, types, place, location, state, budget)
         }
         SemanticRvalueKindV1::Load(load) => validate_partial_move_place_read_v1(
             function,
