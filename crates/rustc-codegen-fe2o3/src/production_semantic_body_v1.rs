@@ -98,7 +98,6 @@ impl ProductionSemanticFunctionIdentitiesV1 {
         }
     }
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionSemanticFunctionExportV1 {
     None,
@@ -309,6 +308,8 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     ordered_sources: crate::production_ordered_source_occurrences_v31::OrderedSourceOccurrencesV31,
     program_sources: crate::production_ordered_composition_source_v1::OrderedProgramSourcesV1<'tcx>,
     bf16_inspection: crate::production_tiled_region_source_v1::Bf16MfmaImportCaptureV1<'tcx>,
+    bf16_tile_values:
+        crate::production_bf16_tile_values_source_v1::Bf16TileValuesImportCaptureV1<'tcx>,
     complete_body_annotation: Option<
         crate::production_complete_body_annotation_vnext::CompleteBodyCallAnnotationVNext<'tcx>,
     >,
@@ -409,6 +410,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             ordered_sources: Default::default(),
             program_sources: Default::default(),
             bf16_inspection: Default::default(),
+            bf16_tile_values: Default::default(),
             complete_body_annotation: None,
             physical_entry_annotations: None,
             physical_global_copy_annotations: None,
@@ -514,6 +516,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         };
         if self.totals.functions != 0
             || !matches!(self.bf16_inspection, Bf16MfmaImportCaptureV1::Disabled)
+            || !matches!(self.bf16_tile_values, crate::production_bf16_tile_values_source_v1::Bf16TileValuesImportCaptureV1::Disabled)
         {
             return Err(table("BF16 source custody cannot be replaced"));
         }
@@ -532,6 +535,43 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         ProductionSemanticBodyErrorV1,
     > {
         self.bf16_inspection.complete(semantic).map_err(table)
+    }
+
+    pub(crate) fn prepare_bf16_tile_values_source_v1(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        plan: &crate::rustc_semantic_plan_v1::ProductionSemanticPreflightPlanV1<'tcx>,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        use crate::production_bf16_tile_values_source_v1::{
+            Bf16TileValuesImportCaptureV1, PendingBf16TileValuesSourceSeedV1,
+        };
+        if self.totals.functions != 0
+            || !matches!(
+                self.bf16_tile_values,
+                Bf16TileValuesImportCaptureV1::Disabled
+            )
+            || !matches!(
+                self.bf16_inspection,
+                crate::production_tiled_region_source_v1::Bf16MfmaImportCaptureV1::Disabled
+            )
+        {
+            return Err(table("BF16 source custody cannot be replaced"));
+        }
+        let work = PendingBf16TileValuesSourceSeedV1::validation_work(plan).map_err(table)?;
+        self.charge(SemanticMirResourceV1::ValidationWork, work)?;
+        self.bf16_tile_values = Bf16TileValuesImportCaptureV1::Capturing(
+            PendingBf16TileValuesSourceSeedV1::capture_precharged(tcx, plan).map_err(table)?,
+        );
+        Ok(())
+    }
+    pub(crate) fn complete_bf16_tile_values_source_v1(
+        &mut self,
+        semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    ) -> Result<
+        crate::production_bf16_tile_values_source_v1::Bf16TileValuesImportCompletionV1<'tcx>,
+        ProductionSemanticBodyErrorV1,
+    > {
+        self.bf16_tile_values.complete(semantic).map_err(table)
     }
 
     pub(crate) fn prepare_physical_entry_annotations_v37(
@@ -2052,6 +2092,24 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 )?;
                 self.owner
                     .bf16_inspection
+                    .observe(
+                        self.instance,
+                        self.body,
+                        self.function,
+                        raw_block,
+                        self.blocks_by_raw[raw_block as usize].semantic_block,
+                        self.blocks_by_raw[raw_block as usize].identity,
+                        resolved,
+                        self.terminal_expansions_by_raw
+                            .get(raw_block as usize)
+                            .copied()
+                            .flatten()
+                            .map(|recipe| recipe.expansion),
+                        &call,
+                    )
+                    .map_err(table)?;
+                self.owner
+                    .bf16_tile_values
                     .observe(
                         self.instance,
                         self.body,
@@ -3742,6 +3800,7 @@ mod tests {
             ordered_sources: Default::default(),
             program_sources: Default::default(),
             bf16_inspection: Default::default(),
+            bf16_tile_values: Default::default(),
             complete_body_annotation: None,
             physical_entry_annotations: None,
             physical_global_copy_annotations: None,

@@ -916,6 +916,9 @@
     "impl": 1,
     "trait": 1
   },
+  "crates/fe2o3-runtime/src/conditional_authority_tests.rs": {
+    "impl": 1
+  },
   "crates/fe2o3-runtime/src/kfd_backend.rs": {
     "impl": 8,
     "trait": 2

@@ -24,6 +24,7 @@ mod kernel_ir_codegen;
 mod monomorphization_dead;
 #[cfg(test)]
 mod process_execution;
+mod production_bf16_tile_values_source_v1;
 mod production_canonical_phase_policy_v1;
 mod production_complete_body_annotation_vnext;
 mod production_complete_body_call_vnext;
@@ -244,7 +245,6 @@ impl BuildAttemptSelection {
         }
     }
 }
-
 struct RetainedProductionDeviceAdmission {
     target: production_target_v1::RetainedProductionTargetV1,
     compiler_execution: protected_compiler_execution::AdmittedProtectedCompilerExecutionV1,

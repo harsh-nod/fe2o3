@@ -21,6 +21,8 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 
+#[path = "production_pipeline/bf16_tile_values_v1.rs"]
+mod bf16_tile_values_v1;
 #[path = "production_pipeline_checked_output_artifacts_v1.rs"]
 mod checked_output_artifacts_v1;
 #[path = "production_pipeline_checked_output_policy4_v1.rs"]
@@ -95,6 +97,7 @@ pub(crate) enum ProductionPipelineError {
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     PreRankedMaterialization(fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1),
     TiledRegionInspection(Box<fe2o3_lower_mir_kernel::ProductionTiledRegionInspectionErrorV1>),
+    Bf16TileValuesInspection(Box<fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
@@ -219,6 +222,7 @@ impl fmt::Display for ProductionPipelineError {
                 write!(formatter, "production compilation pre-ranked materialization failed: {error}")
             }
             Self::TiledRegionInspection(error) => write!(formatter, "production pre-ranked source inspection failed: {error}"),
+            Self::Bf16TileValuesInspection(error) => write!(formatter, "production pre-ranked source inspection failed: {error}"),
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
             }
@@ -380,6 +384,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::TargetNeutralLowering(error) => Some(error),
             Self::PreRankedMaterialization(error) => Some(error),
             Self::TiledRegionInspection(error) => Some(error.as_ref()),
+            Self::Bf16TileValuesInspection(error) => Some(error.as_ref()),
             Self::SimulationKernelIrV7(error) => Some(error),
             Self::SimulationBundle(error) => Some(error),
             Self::SimulationDebugMap(error) => Some(error),

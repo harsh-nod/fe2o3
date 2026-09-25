@@ -24,6 +24,13 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
+#[path = "production_bf16_call_instance_v1.rs"]
+mod call_instance;
+pub use call_instance::{
+    Bf16CallInstanceErrorV1, Bf16CallInstanceProducerV1, Bf16CallInstanceRoleV1,
+    CheckedBf16CallInstanceV1, with_checked_bf16_call_instance_v1,
+};
+
 #[path = "production_tiled_region_declaration_v1.rs"]
 mod declaration;
 #[path = "production_tiled_region_emission_v1.rs"]

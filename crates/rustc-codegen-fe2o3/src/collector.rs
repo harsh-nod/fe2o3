@@ -56,10 +56,11 @@ pub(crate) use production_importer_v1::check_wave64_descriptor_mutations_v1;
 pub(crate) mod semantic_import_observation_v1_tests;
 
 pub(crate) use production_importer_v1::{
-    AuthenticatedBf16MfmaInspectionMirV1, AuthenticatedOrderedCompositionMirV1,
-    AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
-    ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1,
-    construct_production_semantic_mir_bf16_inspection_v1,
+    AuthenticatedBf16MfmaInspectionMirV1, AuthenticatedBf16TileValuesMirV1,
+    AuthenticatedOrderedCompositionMirV1, AuthenticatedRustcIdentityInventoryV3,
+    AuthenticatedRustcPreflightPlanV3, ConstructedProductionSemanticMirV1,
+    ProductionSemanticImportErrorV1, construct_production_semantic_mir_bf16_inspection_v1,
+    construct_production_semantic_mir_bf16_tile_values_v1,
     construct_production_semantic_mir_nominal_v35,
     construct_production_semantic_mir_ordered_composition_v1, construct_production_semantic_mir_v1,
 };
@@ -91,7 +92,6 @@ impl<T> TypedArgumentListV1<T> {
         self.arguments.len()
     }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TypedArgumentListError {
     Empty,

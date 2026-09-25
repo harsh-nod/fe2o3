@@ -141,8 +141,10 @@ mod scalar_ssa_emission_v1;
 #[path = "production_tiled_region_v1.rs"]
 mod tiled_region_v1;
 pub use tiled_region_v1::{
-    ProductionBf16MfmaEmissionViewV1, ProductionBf16MfmaResultUseV1, ProductionBf16MfmaRoleV1,
-    ProductionTiledRegionInspectionErrorV1, materialize_with_bf16_mfma_inspection_v1,
+    Bf16CallInstanceErrorV1, Bf16CallInstanceProducerV1, Bf16CallInstanceRoleV1,
+    CheckedBf16CallInstanceV1, ProductionBf16MfmaEmissionViewV1, ProductionBf16MfmaResultUseV1,
+    ProductionBf16MfmaRoleV1, ProductionTiledRegionInspectionErrorV1,
+    materialize_with_bf16_mfma_inspection_v1, with_checked_bf16_call_instance_v1,
 };
 #[path = "production_scoped_slot_relocation_v29.rs"]
 mod scoped_slot_relocation_v29;
