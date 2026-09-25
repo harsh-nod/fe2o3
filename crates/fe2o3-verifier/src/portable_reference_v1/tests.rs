@@ -237,14 +237,27 @@ fn cpu_replay_exact_and_one_short_use_original_work_and_storage() {
         budget.reserve_storage(31).unwrap();
         let result = binding.with_replayed_output_writes_v1(&mut budget, |_, _| ());
         assert_eq!(budget.storage(), 31);
-        let observed = (result, budget.work(), budget.peak_storage());
+        let observed = (
+            result,
+            budget.work(),
+            budget.peak_storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        );
         observed
     };
-    let (result, cost, peak) = run(usize::MAX, usize::MAX);
+    let (result, cost, peak, denied_work, denied_storage) = run(usize::MAX, usize::MAX);
     result.unwrap();
+    assert_eq!((denied_work, denied_storage), (None, None));
     run(cost, peak).0.unwrap();
-    assert!(run(cost - 1, peak).0.is_err());
-    assert!(run(cost, peak - 1).0.is_err());
+    let work_short = run(cost - 1, peak);
+    assert!(work_short.0.is_err());
+    assert!(work_short.3.is_some());
+    assert_eq!(work_short.4, None);
+    let storage_short = run(cost, peak - 1);
+    assert!(storage_short.0.is_err());
+    assert_eq!(storage_short.3, None);
+    assert_eq!(storage_short.4, Some(peak));
 }
 
 #[test]
@@ -275,17 +288,77 @@ fn cpu_replay_unwind_and_nested_error_release_only_owned_scratch() {
 fn cpu_replay_rejects_callback_account_substitution_and_floor_release() {
     let binding = fixture(false);
     for substitute in [false, true] {
+        for unwind in [false, true] {
+            let mut work = Work::new(usize::MAX);
+            let mut budget = Budget::new(&mut work, usize::MAX);
+            budget.reserve_storage(31).unwrap();
+            let account = budget.work_ledger_identity_v1();
+            let mut original_work = 0;
+            let mut callback_state = None;
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                binding.with_replayed_output_writes_v1(&mut budget, |_, budget| {
+                    original_work = budget.work();
+                    if substitute {
+                        // Fund the foreign floor so only identity can reject it.
+                        let protected = budget.storage();
+                        *budget =
+                            Budget::new(Box::leak(Box::new(Work::new(usize::MAX))), usize::MAX);
+                        budget.reserve_storage(protected).unwrap();
+                        budget.charge_work(13).unwrap();
+                        assert!(budget.work_ledger_identity_v1() != account);
+                    } else {
+                        budget.release_storage(1).unwrap();
+                        assert!(budget.work_ledger_identity_v1() == account);
+                    }
+                    callback_state = Some((budget.work(), budget.storage()));
+                    if unwind {
+                        panic!("corrupted account callback");
+                    }
+                })
+            }));
+            if unwind {
+                assert!(result.is_err());
+            } else {
+                assert!(result.unwrap().is_err());
+            }
+            assert_eq!(Some((budget.work(), budget.storage())), callback_state);
+            drop(budget);
+            assert_eq!(work.work(), original_work);
+        }
+    }
+}
+
+#[test]
+fn portable_replay_preserves_first_denials_on_success_error_and_unwind() {
+    for exit in 0..3 {
+        let mut binding = fixture(true);
+        if exit == 1 {
+            binding.effect_ir_sha256[0] ^= 1;
+        }
         let mut work = Work::new(usize::MAX);
         let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.charge_work(17).unwrap();
         budget.reserve_storage(31).unwrap();
-        let result = binding.with_replayed_output_writes_v1(&mut budget, |_, budget| {
-            if substitute {
-                *budget = Budget::new(Box::leak(Box::new(Work::new(usize::MAX))), usize::MAX);
-            } else {
-                budget.release_storage(1).unwrap();
-            }
-        });
-        assert!(result.is_err());
+        assert!(budget.charge_work(usize::MAX).is_err());
+        assert!(budget.reserve_storage(usize::MAX).is_err());
+        let denials = (budget.failed_work(), budget.failed_storage());
+        assert_eq!(denials, (Some(usize::MAX), Some(usize::MAX)));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            binding.with_replayed_output_writes_v1(&mut budget, |_, _| {
+                if exit == 2 {
+                    panic!("denial history callback");
+                }
+                assert_eq!(exit, 0);
+            })
+        }));
+        match exit {
+            0 => result.unwrap().unwrap(),
+            1 => assert!(result.unwrap().is_err()),
+            _ => assert!(result.is_err()),
+        }
+        assert_eq!(budget.storage(), 31);
+        assert!(budget.work() > 17);
+        assert_eq!((budget.failed_work(), budget.failed_storage()), denials);
     }
 }
 

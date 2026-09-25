@@ -280,6 +280,7 @@ fn portable_entry_and_live_binding_adapter_have_identical_results_and_costs() {
         portable_entry: bool,
         work_limit: usize,
         storage_limit: usize,
+        seed_denials: bool,
     ) -> (
         Result<
             (
@@ -292,11 +293,17 @@ fn portable_entry_and_live_binding_adapter_have_identical_results_and_costs() {
         usize,
         usize,
         usize,
+        Option<usize>,
+        Option<usize>,
     ) {
         let mut work = Work::new(work_limit);
         let mut budget = Budget::new(&mut work, storage_limit);
         budget.charge_work(17).unwrap();
         budget.reserve_storage(31).unwrap();
+        if seed_denials {
+            assert!(budget.charge_work(usize::MAX).is_err());
+            assert!(budget.reserve_storage(usize::MAX).is_err());
+        }
         let account = budget.work_ledger_identity_v1();
         let consume = |replay: &ReplayedCpuEffectsV1, budget: &mut Budget<'_>| {
             assert!(budget.work_ledger_identity_v1() == account);
@@ -329,6 +336,8 @@ fn portable_entry_and_live_binding_adapter_have_identical_results_and_costs() {
             budget.work(),
             budget.peak_storage(),
             budget.storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
         )
     }
 
@@ -346,16 +355,26 @@ fn portable_entry_and_live_binding_adapter_have_identical_results_and_costs() {
                 }
                 _ => unreachable!(),
             }
-            let live = observe(&binding, false, usize::MAX, usize::MAX);
-            assert_eq!(live, observe(&binding, true, usize::MAX, usize::MAX));
+            let live = observe(&binding, false, usize::MAX, usize::MAX, false);
+            assert_eq!(live, observe(&binding, true, usize::MAX, usize::MAX, false));
             assert_eq!(live.3, 31);
             assert_eq!(live.0.is_ok(), mutation == 0);
+            let seeded = observe(&binding, false, usize::MAX, usize::MAX, true);
+            assert_eq!(
+                seeded,
+                observe(&binding, true, usize::MAX, usize::MAX, true)
+            );
+            assert_eq!(
+                (&seeded.0, seeded.1, seeded.2, seeded.3),
+                (&live.0, live.1, live.2, live.3)
+            );
+            assert_eq!((seeded.4, seeded.5), (Some(usize::MAX), Some(usize::MAX)));
             if mutation == 0 {
                 let (work, storage) = (live.1, live.2);
                 for (work, storage) in [(work, storage), (work - 1, storage), (work, storage - 1)] {
                     assert_eq!(
-                        observe(&binding, false, work, storage),
-                        observe(&binding, true, work, storage),
+                        observe(&binding, false, work, storage, false),
+                        observe(&binding, true, work, storage, false),
                     );
                 }
             }
