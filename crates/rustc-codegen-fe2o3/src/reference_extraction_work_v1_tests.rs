@@ -411,3 +411,53 @@ fn debit_arithmetic_overflow_fails_without_resetting_prior_work() {
     );
     assert_eq!(work.validation_work_for_test(), 29);
 }
+
+#[test]
+fn shared_portable_meter_preserves_live_debits_and_authentication_gate() {
+    use fe2o3_verifier::portable_reference_v1::extraction::ReferenceWorkV1;
+
+    #[derive(Default)]
+    struct Recording(std::cell::RefCell<Vec<usize>>);
+    impl ReferenceWorkV1 for Recording {
+        fn charge(&self, amount: usize) -> Result<(), ReferenceBindingErrorV1> {
+            self.0.borrow_mut().push(amount);
+            Ok(())
+        }
+    }
+    fn derive(
+        ir: &ReferenceEffectIrV1,
+        meter: &impl ReferenceWorkV1,
+    ) -> Result<(Vec<ReferenceOutputWriteV1>, [u8; 32]), ReferenceBindingErrorV1> {
+        meter.ir_hash(ir)?;
+        Ok((
+            ir.observable_output_writes_v1(meter)?,
+            ir.canonical_sha256_v1(),
+        ))
+    }
+
+    let ir = acyclic_effect();
+    let portable = Recording::default();
+    let expected = derive(&ir, &portable).unwrap();
+    let mut live = SourceClosureWorkV1::default();
+    live.charge(23).unwrap();
+    let live_result = {
+        let meter = ReferenceExtractionWorkV1::borrowed(&mut live);
+        assert!(meter.is_shared());
+        derive(&ir, &meter).unwrap()
+    };
+    assert_eq!(expected, live_result);
+    let total: usize = portable.0.borrow().iter().sum();
+    assert_eq!(live.validation_work_for_test(), 23 + total as u64);
+
+    let mut events = Vec::new();
+    let mut charge = |amount| {
+        events.push(amount);
+        Ok(())
+    };
+    let canonical = ReferenceExtractionWorkV1::canonical(&mut charge);
+    assert!(!canonical.is_shared());
+    assert_eq!(derive(&ir, &canonical).unwrap(), expected);
+    drop(canonical);
+    assert_eq!(events, *portable.0.borrow());
+    assert!(!ReferenceExtractionWorkV1::Inspection.is_shared());
+}

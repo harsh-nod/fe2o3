@@ -18,6 +18,7 @@
 
 use std::ops::ControlFlow;
 
+use fe2o3_verifier::portable_reference_v1::extraction::ReferenceWorkV1;
 use rustc_abi::ExternAbi;
 use rustc_hir::intravisit::{self, Visitor as HirVisitor};
 use rustc_hir::{self as hir, Safety};
