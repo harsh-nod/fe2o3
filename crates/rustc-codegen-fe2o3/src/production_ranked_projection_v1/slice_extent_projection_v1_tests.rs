@@ -319,6 +319,47 @@ mod slice_extent_projection_tests_v1 {
     }
 
     #[test]
+    fn metadata_result_requires_the_exact_pointer_width_for_structural_and_nominal_types() {
+        let function = fixture(false);
+        for kind in [
+            SemanticRustTypeKindV1::Ordinary,
+            SemanticRustTypeKindV1::Usize,
+        ] {
+            for (bits, signed) in [(64, false), (32, false), (64, true)] {
+                let mut types = types();
+                types[USIZE.index() as usize] = SemanticTypeDeclV1::new(
+                    SemanticTypeIdentityV1::from_sha256(bytes(230)),
+                    SemanticLayoutIdentityV1::from_sha256(bytes(230)),
+                    SemanticTypeLayoutV1::new(Some(u64::from(bits / 8)), u64::from(bits / 8))
+                        .unwrap(),
+                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { bits, signed }),
+                )
+                .with_rust_type_kind(kind);
+                let mut scratch = scratch(&types, &function);
+                let mut next_argument = 3;
+                let actual = Context {
+                    scratch: &mut scratch,
+                    facts: &mut ComponentDynamicAssertionFactsV1,
+                }
+                .extent(
+                    &types,
+                    &function,
+                    SemanticLocalIdV1::from_index(6),
+                    &definitions(&function),
+                    &mut next_argument,
+                )
+                .unwrap();
+                let valid = bits == 64 && !signed;
+                assert_eq!(
+                    actual,
+                    valid.then_some(ProductionRankedValueV1::Argument(3))
+                );
+                assert_eq!(next_argument, if valid { 4 } else { 3 });
+            }
+        }
+    }
+
+    #[test]
     fn ordinary_bounds_share_copy_move_metadata_but_distinguish_slice_inputs() {
         let types = types();
         let function = fixture(false);

@@ -110,6 +110,7 @@ fn dynamic_local_array_and_slice_guards_share_authenticated_component_indices() 
         Some(&dominance),
         &mut operations,
         &mut 0,
+        None,
     )
     .unwrap();
     assert_eq!(checks.checks.len(), 2);
@@ -283,6 +284,7 @@ fn collect_fixed_guards(
         None,
         &mut vec![],
         &mut 0,
+        None,
     )
 }
 
@@ -303,6 +305,7 @@ fn dynamic_local_array_ranked_guard_retains_exact_literal_and_kind() {
         None,
         &mut operations,
         &mut next_value,
+        None,
     )
     .unwrap();
     let check = projected_bounds_check(

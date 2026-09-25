@@ -154,12 +154,14 @@ identity-axis tests also exercise the V4 domain; compile-fail doctests forbid cl
 and V1/V3 owner conversions. These tests use the existing inert contract transport
 fixture and synthetic ELF, not authenticated conditional proof receipts.
 
-This continuation has not run Cargo, builds, tests or SSH in its sidecar worktree.
-The primary serial guard must run the finalizer library tests, `public_api`,
-`worker_v3_hsaco_admission` (including existing V1/V3 cases),
-`native_worker_finalization_tests` and doctests, followed
-by its all-targets check. Pinned `nightly-2026-04-03` formatting and diff inspection
-are the only local validation; they are not compilation or test results.
+Primary serial guards passed 177 library tests, 54 public API tests, all 43
+selected Worker tests across the initial run and a corrected-fixture rerun,
+30 compile-fail doctests and the all-targets check. Fifteen native-worker tests
+and two real-worker qualification tests remained ignored. The corrected fixture
+asserts that structural evidence cannot authorize build completion or recovery
+after terminal failure; no authority gate was weakened. See the
+[current validation report](../../docs/evidence/conditional-slice-extents-worker-v4-20260925.md)
+for exact snapshots and the still-failing actual-source integration.
 
 ## Multi-input native link plans
 

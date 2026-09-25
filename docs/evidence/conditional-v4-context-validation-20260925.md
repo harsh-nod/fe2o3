@@ -4,6 +4,9 @@ Continuation of [contract retention and runtime transport](conditional-contract-
 for issue #272. Local integration passes; the separate protected actual-source
 replay fails. **No milestone closes and no kernel gains end-to-end qualification.**
 
+For the subsequent Worker continuation, slice-extent fix and later canonical
+coverage failure, see [the next checkpoint](conditional-slice-extents-worker-v4-20260925.md).
+
 ## Implemented
 
 The existing HSACO finalizer now has distinct V4 inspection, finalization and

@@ -729,6 +729,18 @@ fn actual_manifest_vecadd_source_requires_reference_annotation() {
 }
 
 #[test]
+#[ignore = "pinned nightly shared-body source/CPU oracle; no protected runtime or GPU"]
+fn actual_shared_body_vecadd_prepares_conditional_proof_on_both_targets() {
+    for target in ["gfx942", "gfx950"] {
+        run(
+            &[Case::Annotated],
+            target,
+            &[Stage::Oracle, Stage::Prepared],
+        );
+    }
+}
+
+#[test]
 #[ignore = "unvalidated integration: pinned nightly and admitted protected runtime; no GPU"]
 fn actual_shared_body_vecadd_consumes_formula_then_requires_conditional_finalizer() {
     for target in ["gfx942", "gfx950"] {

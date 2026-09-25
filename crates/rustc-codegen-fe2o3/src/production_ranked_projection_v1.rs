@@ -29,6 +29,7 @@ mod ranked_projection_source_v1;
 mod saturating_integer_expression_v2;
 mod scalar_borrow_projection_v1;
 mod scalar_singleton_projection_v1;
+mod slice_extent_projection_v1;
 mod slice_projection_v1;
 use slice_projection_v1::ProjectedViewsV1;
 
@@ -338,6 +339,7 @@ struct IntrinsicProjectionV1 {
     pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
     generated_terminator_effects: Vec<Option<Vec<ProjectedGeneratedExecutableEffectV1>>>,
     extent_argument_count: usize,
+    slice_extent_scratch: Option<slice_extent_projection_v1::Scratch>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -651,6 +653,13 @@ enum ProjectedBoundsExtentSourceV1 {
     Slice(SemanticLocalIdV1),
     CanonicalSlice,
     FixedArray(u64),
+}
+
+#[derive(Clone, Copy, Default)]
+struct BoundsLocalDefinitionV1<'a> {
+    count: u32,
+    length_source: Option<ProjectedBoundsExtentSourceV1>,
+    value: Option<&'a SemanticRvalueV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3509,38 +3518,51 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         )
     })?;
     projected_views.charge_private_array_work(extent_work)?;
-    let intrinsic = projected_views.with_assertion_facts_v1(|facts| {
-        project_intrinsic_contracts_with_multi_entry_v1(
-            semantic.callables(),
-            callable_effects,
-            semantic.types(),
-            function,
-            bounded_linear_launch_extent_v1(source_launch),
-            &constants,
-            &mut entry_operations,
-            &mut next_value,
-            &mut discarded_ir,
-            Some(&mut multi_entry_induction_v1::Context {
-                scope: induction_scope,
-                facts,
-            }),
-        )
+    let (intrinsic, bounds_checks) = projected_views.with_assertion_facts_v1(|facts| {
+        slice_extent_projection_v1::with_scope(function.locals().len(), facts, |scope| {
+            let mut intrinsic = project_intrinsic_contracts_with_multi_entry_v1(
+                semantic.callables(),
+                callable_effects,
+                semantic.types(),
+                function,
+                bounded_linear_launch_extent_v1(source_launch),
+                &constants,
+                &mut entry_operations,
+                &mut next_value,
+                &mut discarded_ir,
+                Some(&mut multi_entry_induction_v1::Context {
+                    scope: induction_scope,
+                    facts: scope.facts(),
+                }),
+            )?;
+            let mut scratch = intrinsic.slice_extent_scratch.take().ok_or(
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "slice extent scratch was not retained",
+                ),
+            )?;
+            scope.retain(&scratch)?;
+            let bounds = project_rust_bounds_checks_with_ordinary_v1(
+                semantic.types(),
+                function,
+                intrinsic.extent_argument_count,
+                &intrinsic.index_values,
+                &intrinsic.ordinary_index_values,
+                Some(
+                    &intrinsic
+                        .local_contracts
+                        .checked_references
+                        .enum_payload_dominance,
+                ),
+                &mut entry_operations,
+                &mut next_value,
+                Some(&mut slice_extent_projection_v1::Context {
+                    scratch: &mut scratch,
+                    facts: scope.facts(),
+                }),
+            )?;
+            Ok((intrinsic, bounds))
+        })
     })?;
-    let bounds_checks = project_rust_bounds_checks_with_ordinary_v1(
-        semantic.types(),
-        function,
-        intrinsic.extent_argument_count,
-        &intrinsic.index_values,
-        &intrinsic.ordinary_index_values,
-        Some(
-            &intrinsic
-                .local_contracts
-                .checked_references
-                .enum_payload_dominance,
-        ),
-        &mut entry_operations,
-        &mut next_value,
-    )?;
     let switch_predicates = switch_predicates(
         function,
         &intrinsic.option_predicates,
@@ -5167,6 +5189,7 @@ fn project_rust_bounds_checks(
         None,
         operations,
         next_value,
+        None,
     )
 }
 
@@ -5182,13 +5205,8 @@ fn project_rust_bounds_checks_with_ordinary_v1(
     enum_payload_dominance: Option<&SemanticEnumPayloadDominanceV1>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
+    mut slice_extents_source: Option<&mut slice_extent_projection_v1::Context<'_>>,
 ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
-    #[derive(Clone, Copy, Default)]
-    struct LocalDefinitionV1 {
-        count: u32,
-        length_source: Option<ProjectedBoundsExtentSourceV1>,
-    }
-
     #[derive(Clone, Copy)]
     struct BoundsGuardV1 {
         condition_local: SemanticLocalIdV1,
@@ -5199,7 +5217,8 @@ fn project_rust_bounds_checks_with_ordinary_v1(
     }
 
     let constants = constant_locals(function)?;
-    let mut definitions = vec![LocalDefinitionV1::default(); function.locals().len()];
+    let mut definitions = vec![BoundsLocalDefinitionV1::default(); function.locals().len()];
+    let mut argument_count = first_argument;
     let mut predecessors = vec![Vec::new(); function.blocks().len()];
     for (block_index, block) in function.blocks().iter().enumerate() {
         for statement in block.statements() {
@@ -5215,6 +5234,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                     "a Rust bounds-check definition outside the semantic local table",
                 ))?;
             definition.count = definition.count.saturating_add(1);
+            definition.value = Some(assignment.value());
             definition.length_source = match assignment.value().kind() {
                 SemanticRvalueKindV1::Length(place) => Some(
                     if place.projections().iter().any(|projection| {
@@ -5252,6 +5272,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 ))?;
             definition.count = definition.count.saturating_add(1);
             definition.length_source = None;
+            definition.value = None;
         }
         block
             .terminator()
@@ -5553,7 +5574,32 @@ fn project_rust_bounds_checks_with_ordinary_v1(
             }
         }
         let index = unknown_for(index_local)?;
-        let extent = if let Some(extent) = prior_extent {
+        let source_extent = match slice_extents_source.as_deref_mut() {
+            Some(source) => source.extent(
+                types,
+                function,
+                length_local,
+                &definitions,
+                &mut argument_count,
+            )?,
+            None => None,
+        };
+        if slice_extents_source.is_some() && prior_extent.is_some() && source_extent != prior_extent
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "slice extent changed its source argument relation",
+            ));
+        }
+        let extent = if let Some(extent) = prior_extent.or(source_extent) {
+            if local_values[length_local.index() as usize].is_some_and(|prior| prior != extent) {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "slice extent changed an existing ranked local identity",
+                ));
+            }
+            local_values[length_local.index() as usize] = Some(extent);
+            if let Some(slice_local) = slice_local {
+                slice_extents[slice_local.index() as usize] = Some(extent);
+            }
             extent
         } else {
             let extent = unknown_for(length_local)?;
@@ -5579,7 +5625,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
     }
     Ok(ProjectedBoundsChecksV1 {
         checks,
-        argument_count: first_argument,
+        argument_count,
     })
 }
 
@@ -9858,6 +9904,12 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
         direct_write_effects,
         pipeline_effects,
         generated_terminator_effects,
+        slice_extent_scratch: Some(slice_extent_projection_v1::Scratch {
+            origins: stable_argument_origins,
+            arguments: runtime_slice_extent_arguments,
+            definitions: scalar_inventory.counts,
+            escaped: scalar_inventory.address_escaped,
+        }),
     })
 }
 
@@ -25430,6 +25482,61 @@ mod tests {
     // genuine materialized owners and the production assertion query.
     struct ComponentDynamicAssertionFactsV1;
 
+    // Component-only semantics with a real resource account, not source authority.
+    mod budgeted_component_facts_v1 {
+        use super::*;
+        use fe2o3_kernel_ir::{
+            CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work,
+        };
+        use ranked_projection_source_v1::resource;
+        type Error = ProductionRankedProjectionErrorV1;
+        pub(super) struct Facts<'a, 'w>(&'a mut Budget<'w>);
+        impl ProjectedAssertionFactsV1 for Facts<'_, '_> {
+            fn charge_private_array_work(&mut self, amount: usize) -> Result<(), Error> {
+                self.0.charge_work(amount).map_err(resource)
+            }
+            fn scalar_private_storage_v1(&self) -> Result<usize, Error> {
+                Ok(self.0.storage())
+            }
+            fn reserve_scalar_private_storage_v1(&mut self, amount: usize) -> Result<(), Error> {
+                self.0.reserve_storage(amount).map_err(resource)
+            }
+            fn release_scalar_private_storage_v1(&mut self, amount: usize) -> Result<(), Error> {
+                self.0.release_storage(amount).map_err(resource)
+            }
+            fn private_array_initializer_count(
+                &mut self,
+                local: usize,
+                count: usize,
+            ) -> Result<Option<u64>, Error> {
+                ComponentDynamicAssertionFactsV1.private_array_initializer_count(local, count)
+            }
+            fn is_materialized_block(&mut self, block: usize) -> Result<bool, Error> {
+                ComponentDynamicAssertionFactsV1.is_materialized_block(block)
+            }
+            fn condition(
+                &mut self,
+                local: usize,
+                expected: bool,
+                block: SemanticBlockIdV1,
+            ) -> Result<canonical_assertion_facts_v1::ProjectedAssertionConditionV1, Error>
+            {
+                ComponentDynamicAssertionFactsV1.condition(local, expected, block)
+            }
+        }
+        pub(super) fn with_budgeted_component_facts_v1<T>(
+            run: impl FnOnce(&mut Facts<'_, '_>) -> T,
+        ) -> T {
+            let mut work = Work::new(1_000_000);
+            let mut budget = Budget::new(&mut work, 1_000_000);
+            let result = run(&mut Facts(&mut budget));
+            assert_eq!(budget.storage(), 0);
+            result
+        }
+    }
+    use budgeted_component_facts_v1::with_budgeted_component_facts_v1;
+
     impl ProjectedAssertionFactsV1 for ComponentDynamicAssertionFactsV1 {
         fn private_array_initializer_count(
             &mut self,
@@ -25550,6 +25657,7 @@ mod tests {
     include!("production_ranked_projection_v1/write_only_value_projection_v2_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
+    include!("production_ranked_projection_v1/slice_extent_projection_v1_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
     include!("production_ranked_projection_v1/projection_06_tests.rs");
     include!("production_ranked_projection_v1/projection_07_tests.rs");

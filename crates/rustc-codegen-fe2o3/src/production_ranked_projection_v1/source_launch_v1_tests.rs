@@ -333,15 +333,17 @@ fn source_launch_production_row_guard_rejects_substituted_grid_identity_and_root
             inputs[0].kernel_binding,
             launch,
         );
-        project_and_verify_ranked_root_v1(
-            semantic,
-            &effects,
-            selected,
-            &input,
-            row,
-            &references,
-            &mut ComponentDynamicAssertionFactsV1,
-        )
+        with_budgeted_component_facts_v1(|facts| {
+            project_and_verify_ranked_root_v1(
+                semantic,
+                &effects,
+                selected,
+                &input,
+                row,
+                &references,
+                facts,
+            )
+        })
     };
 
     let exact = project(&inputs[0].source_launch, roster.roots()[0]).unwrap();

@@ -76,15 +76,17 @@ fn source_launch_memory_free_unresolved_call_keeps_its_exact_error() {
     // Isolated negative consumer test: the genuine source owner is paired with
     // a component checker that cannot supply a local-call relation. This does
     // not manufacture an accepted projection or bypass the production query.
-    let result = project_and_verify_ranked_root_v1(
-        semantic,
-        &effects,
-        selection,
-        &ranked_root_input_1d(A_NAME, 247, 64),
-        owner.source_launch().roots()[0],
-        &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
-        &mut ComponentDynamicAssertionFactsV1,
-    );
+    let result = with_budgeted_component_facts_v1(|facts| {
+        project_and_verify_ranked_root_v1(
+            semantic,
+            &effects,
+            selection,
+            &ranked_root_input_1d(A_NAME, 247, 64),
+            owner.source_launch().roots()[0],
+            &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+            facts,
+        )
+    });
     assert!(matches!(
         result,
         Err(
