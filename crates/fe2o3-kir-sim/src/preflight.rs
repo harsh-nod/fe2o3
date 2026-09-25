@@ -1638,7 +1638,16 @@ fn function_callees(function: &Function) -> impl Iterator<Item = &FunctionId> {
         .flat_map(|block| &block.operations)
         .filter_map(|operation| match &operation.kind {
             OperationKind::Call { callee, arguments }
-                if crate::soft_float::operation_for_call_v1(callee, arguments).is_none() =>
+                if crate::soft_float::operation_for_call_v1(callee, arguments).is_none()
+                    // Match build_execution_indices: the exact built-in trap
+                    // terminates this frame; it never constructs a callee frame.
+                    // Zero arity also avoids constructing allocating Print
+                    // variants in this additional graph-collection predicate.
+                    && !(arguments.is_empty()
+                        && matches!(
+                            AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                            Some(AmdGpuDiagnosticOperation::Trap)
+                        )) =>
             {
                 Some(callee)
             }
@@ -2909,6 +2918,108 @@ mod tests {
         assert_eq!(
             validate_acyclic_call_depth(&recursive, &recursive.functions[0], limits).unwrap(),
             limits.max_call_depth
+        );
+    }
+
+    #[test]
+    fn exact_builtin_trap_does_not_add_a_reserved_call_frame() {
+        let trap_id = AmdGpuDiagnosticOperation::Trap.intrinsic_function_id();
+        let trap = trap_id.as_str();
+        let mut module = Module::new("builtin-trap-depth");
+        module
+            .functions
+            .push(call_depth_test_function("root", &[trap], true));
+        module.functions.push(Function::external_import(
+            trap,
+            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+        ));
+        assert_eq!(function_callees(&module.functions[0]).count(), 0);
+        let limits = SimulationLimitsV1 {
+            max_call_depth: 1,
+            ..SimulationLimitsV1::default()
+        };
+        assert_eq!(
+            validate_acyclic_call_depth(&module, &module.functions[0], limits).unwrap(),
+            1,
+        );
+    }
+
+    #[test]
+    fn trap_like_names_and_wrong_arity_are_not_builtin_call_depth_exemptions() {
+        let trap_id = AmdGpuDiagnosticOperation::Trap.intrinsic_function_id();
+        let trap = trap_id.as_str();
+        for name in [
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_trap_extra",
+            "__fe2o3_ir_amdgpu_diagnostics_gfx950_v1_trap",
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_debugtrap",
+            "ordinary_helper",
+        ] {
+            let function = call_depth_test_function("root", &[name], true);
+            assert_eq!(
+                function_callees(&function)
+                    .map(FunctionId::as_str)
+                    .collect::<Vec<_>>(),
+                vec![name]
+            );
+        }
+        for argument_count in [1, 2] {
+            let mut function = call_depth_test_function("root", &[trap], true);
+            let OperationKind::Call { arguments, .. } =
+                &mut function.body.as_mut().unwrap().blocks[0].operations[0].kind
+            else {
+                unreachable!();
+            };
+            arguments.extend((0..argument_count).map(ValueId));
+            // Raw malformed intrinsic controls are not canonical admission.
+            // They must stay in the ordinary graph, never receive an exemption.
+            assert_eq!(
+                function_callees(&function)
+                    .map(FunctionId::as_str)
+                    .collect::<Vec<_>>(),
+                vec![trap]
+            );
+        }
+    }
+
+    #[test]
+    fn trap_exclusion_preserves_helper_depth_and_recursive_reservation() {
+        let trap_id = AmdGpuDiagnosticOperation::Trap.intrinsic_function_id();
+        let trap = trap_id.as_str();
+        let mut module = Module::new("mixed-trap-helper-depth");
+        module
+            .functions
+            .push(call_depth_test_function("root", &[trap, "leaf"], true));
+        module
+            .functions
+            .push(call_depth_test_function("leaf", &[], false));
+        module.functions.push(Function::external_import(
+            trap,
+            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+        ));
+        let limits = SimulationLimitsV1 {
+            max_call_depth: 1,
+            ..SimulationLimitsV1::default()
+        };
+        assert!(matches!(
+            validate_acyclic_call_depth(&module, &module.functions[0], limits),
+            Err(SimulationPreflightErrorV1::ResourceLimit {
+                resource: "acyclic call depth",
+                actual: 2,
+                limit: 1,
+            }),
+        ));
+        let limits = SimulationLimitsV1 {
+            max_call_depth: 64,
+            ..limits
+        };
+        assert_eq!(
+            validate_acyclic_call_depth(&module, &module.functions[0], limits).unwrap(),
+            2,
+        );
+        module.functions[1] = call_depth_test_function("leaf", &["root", trap], false);
+        assert_eq!(
+            validate_acyclic_call_depth(&module, &module.functions[0], limits).unwrap(),
+            limits.max_call_depth,
         );
     }
 

@@ -1,0 +1,283 @@
+{
+  "schema": "fe2o3-one-stop-physical-v2-old-client-control-v1",
+  "parent_source_manifest": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase28/tools/gfx950-one-stop-controller-v1/source-manifest.json",
+    "bytes": 3454,
+    "sha256": "beab7f8902d9add01dea442481977308806afb8b50494c2063e52bf42f3fcbe4"
+  },
+  "joins": [
+    {
+      "path": "Cargo.lock",
+      "parent": {
+        "bytes": 6016,
+        "sha256": "0c4700c62c4847b0c8276a10f30ac41fe5261b2f13c7db94cebeeda1067d0473"
+      },
+      "historical_compatibility": {
+        "bytes": 6016,
+        "sha256": "0c4700c62c4847b0c8276a10f30ac41fe5261b2f13c7db94cebeeda1067d0473"
+      },
+      "identical": true
+    },
+    {
+      "path": "Cargo.toml",
+      "parent": {
+        "bytes": 480,
+        "sha256": "b0a4756dd8dc24caa7ef87ee5eaea0d94d6dccc2fa754b1fc54f08a1e34bdb2e"
+      },
+      "historical_compatibility": {
+        "bytes": 480,
+        "sha256": "b0a4756dd8dc24caa7ef87ee5eaea0d94d6dccc2fa754b1fc54f08a1e34bdb2e"
+      },
+      "identical": true
+    },
+    {
+      "path": "LICENSE-APACHE",
+      "parent": {
+        "bytes": 11357,
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      "historical_compatibility": {
+        "bytes": 11357,
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      "identical": true
+    },
+    {
+      "path": "LICENSE-MIT",
+      "parent": {
+        "bytes": 1075,
+        "sha256": "f4c8cca84fa0b11c519060f14330078b1851ad9c62da1d115e4a754fc9a7320f"
+      },
+      "historical_compatibility": {
+        "bytes": 1075,
+        "sha256": "f4c8cca84fa0b11c519060f14330078b1851ad9c62da1d115e4a754fc9a7320f"
+      },
+      "identical": true
+    },
+    {
+      "path": "async_stop_tests.rs",
+      "parent": {
+        "bytes": 6948,
+        "sha256": "e46fcf2bcda0ed66434c320ac3e0c7bb43eb9d657c0adcf01237153e90c63b70"
+      },
+      "historical_compatibility": {
+        "bytes": 6948,
+        "sha256": "e46fcf2bcda0ed66434c320ac3e0c7bb43eb9d657c0adcf01237153e90c63b70"
+      },
+      "identical": true
+    },
+    {
+      "path": "controller.rs",
+      "parent": {
+        "bytes": 24097,
+        "sha256": "2151a548cfe93e772485bace7b0b0b109ce191bcfebfcba194de99f71dd18fed"
+      },
+      "historical_compatibility": {
+        "bytes": 24097,
+        "sha256": "2151a548cfe93e772485bace7b0b0b109ce191bcfebfcba194de99f71dd18fed"
+      },
+      "identical": true
+    },
+    {
+      "path": "lib.rs",
+      "parent": {
+        "bytes": 4010,
+        "sha256": "3c9fa1cf2f2b9016007c523242b71271fae7cbd96e60524dba792c7d71cba75d"
+      },
+      "historical_compatibility": {
+        "bytes": 4010,
+        "sha256": "3c9fa1cf2f2b9016007c523242b71271fae7cbd96e60524dba792c7d71cba75d"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/clock.rs",
+      "parent": {
+        "bytes": 1634,
+        "sha256": "6f3432bb3e0bf3db2608bc3b581e96958483022542c4db62625514026f005e20"
+      },
+      "historical_compatibility": {
+        "bytes": 1634,
+        "sha256": "6f3432bb3e0bf3db2608bc3b581e96958483022542c4db62625514026f005e20"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/config.rs",
+      "parent": {
+        "bytes": 14559,
+        "sha256": "fed56a8f76f3bcb951168eea7272d7a03a2fd1747c1256c6a2b7f6c8d5b05d4b"
+      },
+      "historical_compatibility": {
+        "bytes": 14559,
+        "sha256": "fed56a8f76f3bcb951168eea7272d7a03a2fd1747c1256c6a2b7f6c8d5b05d4b"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/custody.rs",
+      "parent": {
+        "bytes": 11156,
+        "sha256": "ac799eebf32f10e5de30f518308a3c9078b7ff88f4a1c8b6e84061067cfe3cac"
+      },
+      "historical_compatibility": {
+        "bytes": 11156,
+        "sha256": "ac799eebf32f10e5de30f518308a3c9078b7ff88f4a1c8b6e84061067cfe3cac"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/main.rs",
+      "parent": {
+        "bytes": 2297,
+        "sha256": "5b109c1856a5a2690aaac423cfca8d829b621e50627df54b5a7b6d1a51e09b90"
+      },
+      "historical_compatibility": {
+        "bytes": 2297,
+        "sha256": "5b109c1856a5a2690aaac423cfca8d829b621e50627df54b5a7b6d1a51e09b90"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/parent.rs",
+      "parent": {
+        "bytes": 9764,
+        "sha256": "64fa2c40cab8b9532968314a7ec023e75b587c58dbc12f02c60685d6ecc4695d"
+      },
+      "historical_compatibility": {
+        "bytes": 9764,
+        "sha256": "64fa2c40cab8b9532968314a7ec023e75b587c58dbc12f02c60685d6ecc4695d"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/profile.rs",
+      "parent": {
+        "bytes": 4468,
+        "sha256": "d97a4f4fc1a1d35ebf61f6c5e3a722552d8da4f7aaeca1dbe1d728ee42e9607d"
+      },
+      "historical_compatibility": {
+        "bytes": 4468,
+        "sha256": "d97a4f4fc1a1d35ebf61f6c5e3a722552d8da4f7aaeca1dbe1d728ee42e9607d"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/publication.rs",
+      "parent": {
+        "bytes": 3144,
+        "sha256": "c72dc5f79aa41bf669cf9b3b1dafb6f555efdb2a23442c51391992daf16eea6d"
+      },
+      "historical_compatibility": {
+        "bytes": 3144,
+        "sha256": "c72dc5f79aa41bf669cf9b3b1dafb6f555efdb2a23442c51391992daf16eea6d"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/scope.rs",
+      "parent": {
+        "bytes": 8899,
+        "sha256": "8a41c2798c6b72f6fc207d37026da70c268485bb37aaecd3b4ba8329cb28df6d"
+      },
+      "historical_compatibility": {
+        "bytes": 8899,
+        "sha256": "8a41c2798c6b72f6fc207d37026da70c268485bb37aaecd3b4ba8329cb28df6d"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/streams.rs",
+      "parent": {
+        "bytes": 4195,
+        "sha256": "1615785fde5d4f231617d419ec551069d25be9c7f5062618c5f7bd1b46d3d6b7"
+      },
+      "historical_compatibility": {
+        "bytes": 4195,
+        "sha256": "1615785fde5d4f231617d419ec551069d25be9c7f5062618c5f7bd1b46d3d6b7"
+      },
+      "identical": true
+    },
+    {
+      "path": "native/wire.rs",
+      "parent": {
+        "bytes": 23339,
+        "sha256": "e141454451c5e1bc5ce08f0bd84453ed3289ad19cdddc8f18a1c29e6df2995ee"
+      },
+      "historical_compatibility": {
+        "bytes": 23339,
+        "sha256": "e141454451c5e1bc5ce08f0bd84453ed3289ad19cdddc8f18a1c29e6df2995ee"
+      },
+      "identical": true
+    },
+    {
+      "path": "rocgdb_mi_parser_v3.rs",
+      "parent": {
+        "bytes": 16424,
+        "sha256": "49393312d5d3bd45f05489118e758a0d81383b10d843f949007adb0821c29870"
+      },
+      "historical_compatibility": {
+        "bytes": 16424,
+        "sha256": "49393312d5d3bd45f05489118e758a0d81383b10d843f949007adb0821c29870"
+      },
+      "identical": true
+    },
+    {
+      "path": "syntax.rs",
+      "parent": {
+        "bytes": 4772,
+        "sha256": "b4eb675bc4c156e906822c6ee527ed04479f07428d84ff083824accdbabd7bcf"
+      },
+      "historical_compatibility": {
+        "bytes": 4772,
+        "sha256": "b4eb675bc4c156e906822c6ee527ed04479f07428d84ff083824accdbabd7bcf"
+      },
+      "identical": true
+    },
+    {
+      "path": "target_report.rs",
+      "parent": {
+        "bytes": 4590,
+        "sha256": "1b94ae57c1c15370bd47c9c195bad1caff736810ae833e756cae12d348f127a8"
+      },
+      "historical_compatibility": {
+        "bytes": 4590,
+        "sha256": "1b94ae57c1c15370bd47c9c195bad1caff736810ae833e756cae12d348f127a8"
+      },
+      "identical": true
+    },
+    {
+      "path": "tests.rs",
+      "parent": {
+        "bytes": 21001,
+        "sha256": "c26c4b00ea9f0cfee32101709d938ed6e20dec66dd8ae0b4aba2184aab213e49"
+      },
+      "historical_compatibility": {
+        "bytes": 22831,
+        "sha256": "fdb170a5baa48f4911560dad4513ca6d42fd1c83f8e7d2a3e9afc04b0f7ea9b9"
+      },
+      "identical": false
+    },
+    {
+      "path": "transitions.rs",
+      "parent": {
+        "bytes": 5188,
+        "sha256": "9f356200bb4ef60f7b7601c209c825fe09c2888e7d7469339a8ac3c99a11b69f"
+      },
+      "historical_compatibility": {
+        "bytes": 5188,
+        "sha256": "9f356200bb4ef60f7b7601c209c825fe09c2888e7d7469339a8ac3c99a11b69f"
+      },
+      "identical": true
+    }
+  ],
+  "patch": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/gfx950-physical-v2-tooling-package-r1/files/tools/gfx950-one-stop-controller-v1/physical-v2/tests/v1-compatibility.patch",
+    "bytes": 2050,
+    "sha256": "56b7ab4d739d6a9c20a8af94ee8a7e1e3d5475d77d99c1eb2683e845008ab208"
+  },
+  "test": "physical_v2_domain_is_not_accepted_as_v1_success",
+  "claimed_outcome": "eventual refusal only; not immediate unknown-notify rejection",
+  "execute_original_in_place": false,
+  "native_execution": false
+}

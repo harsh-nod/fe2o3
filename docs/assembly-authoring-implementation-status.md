@@ -5,6 +5,25 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Genuine-source BF16 CPU execution and physical debugger V2 packages — 2026-09-25
+
+The [BF16 source-CPU checkpoint](bf16-source-cpu-qualification-20260925.md)
+now executes the actual unchanged Rust-produced graph on the CPU: 18 positive
+cases, 16 request refusals, independent matrix/output checks and original-ledger
+cleanup. The merged regression passed 7,249 test executions with zero failures,
+including fresh inspection, normal-compilation and numerical source ladders.
+General BF16 semantics, edited-tile promotion and hardware execution remain open.
+
+The [physical-debugger V2 checkpoint](physical-debugger-v2-qualification-20260925.md)
+packages a disabled Rust controller and separate GPL producer. Relocated CPU,
+source-patch and V1 compatibility checks passed. A distinct corrected private
+debugger build and actual layout checks also passed, but that ELF was not run.
+The public packages cannot activate capture. Fresh final-build startup,
+same-client physical capture and target/family qualification remain required.
+
+Earlier dated sections below retain their historical qualification boundaries.
+Broad accepted exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Finite caller DATA, exact BF16 CPU execution and fresh debugger startup — 2026-09-24
 
 The [new checkpoint](caller-data-bf16-cpu-qualification-20260924.md) records three

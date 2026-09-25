@@ -59,9 +59,16 @@ module, with the same helper reexported; production logic did not change.
 
 The combined backend rerun passed on inventory B: 8048 files,
 `390bf518063d1d0b93c3aa18ca3aa5a693a24f13fa23cf250d0aa7cb8670f291`.
-B also includes this page and its incoming links. Both inventories were stable
-through their runs. These are not Git tree hashes. This page was updated after
-the rerun; compiler source was unchanged afterward.
+B also includes this page and its incoming links. Before publication, concurrent
+BF16 CPU and disabled-debugger work through
+`955d05b09bc0d94a615f4fd20b3071ef1ca559fc` was merged without conflicts. Inventory
+C has 8120 files,
+`214d7e8d88a19a6d56592b9d0b53a09679e3b206cc688b02d2a2b19a89d2bb2c`.
+The merged backend rerun also selected the six new BF16 CPU control tests.
+
+All inventories were stable through their runs. These are not Git tree hashes.
+This page was updated after the merged rerun; compiler source was unchanged
+afterward.
 
 The guards used nightly `2026-04-03`, locked offline dependencies, one Cargo job
 and test thread, hidden GPUs, disabled HIP, a 12 GiB virtual-memory limit and a
@@ -76,18 +83,21 @@ protected-proof or hardware credit.
 | `conditional-generated-regressions-r1` | A | Adjacent backend regressions: 76 passed, 11 ignored | `b65a48e814f77c098fe34c43e9335a316a7017ada242a02b4efb6198a0133519` |
 | `conditional-generated-production-check-r1` | A | Backend library checked without test-only features | `dbd1f4e688c20ab6c2b1823d03c65ac4920808633e16de3d1fc9180702d6ccfb` |
 | `conditional-generated-backend-r2` | B | Both backend selections repeated after the helper move: 99 passed, 11 ignored | `38ff53ed033f3c8fc72b7603ccdf40f6374a9c5d724904092bf497c13adb16d9` |
+| `conditional-generated-merged-r3` | C | Backend selections and BF16 CPU controls after merging current main: 105 passed, 13 ignored | `6bf00b2e5b562ecf469c63f2b553de193fc2a9fa0f97150527f99953b1219e2c` |
 
 The backend test commands used `fe2o3-pliron/internal-proof-staging`; the
 production library check did not. The regression selection covered conditional
 output binding, nominal V3 descriptors, retained phases, reference-effect joins,
 Vecadd preparation parsing and Cargo capture. The ignored tests require explicit
 actual-source preparation or their parent/runtime environment; none count as a
-pass. The 507 passing tests are not a full workspace rerun; the final row repeats
-99 of them. The production-library check predates the test-only helper move.
+pass. The original 507 passing tests are not a full workspace rerun. The final
+row repeats 99 of them and adds six CPU controls; it does not rerun the concurrent
+actual-source BF16 ladder. The production-library check predates the test-only
+helper move and concurrent merge.
 
 Guard SHA-256:
 `20f8ea8ce430f72e9f2925dc4d79b28739229f36dd6d0c46a45b430caffd3642`.
-Formatting, whitespace and the dependency-layer policy passed; the latter checks
+Formatting, source hygiene, whitespace and the dependency-layer policy passed; the latter checks
 140 members, eight layers and 509 internal dependency declarations. Compiler
 warnings remain. Independent static review found no additional backend bugs.
 

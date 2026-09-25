@@ -1,0 +1,22 @@
+[package]
+name = "fe2o3-private-one-stop-protocol"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+libc = "=0.2.189"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = { version = "=0.11.0", default-features = false }
+rustix = { version = "=1.1.4", features = ["event", "process"] }
+
+[[bin]]
+name = "fe2o3-private-one-stop-controller"
+path = "native/main.rs"

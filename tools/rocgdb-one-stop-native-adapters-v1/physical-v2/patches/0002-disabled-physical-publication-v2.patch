@@ -1,0 +1,383 @@
+--- a/gdb/amd-dbgapi-one-stop-native-owner-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-owner-v1.inc
+@@ -168,7 +168,8 @@
+ static_assert (sizeof (owned_checkpoint_breakpoint)<=1024,
+                "fixed breakpoint object is within the prepaid logical envelope");
+ void native_adapter::select_at_entry () {
+-  if (!selection_available ())
++  if (!selection_available () || !snapshot_capture_available ()
++      || !snapshot_publication_available ())
+     error (_("owned one-stop native activation unavailable: compile candidate only"));
+   require (!m_owner.selected (),failure::already_selected);
+   require (m_owner.reserve_selection (logical_storage (),limits::logical_bytes),failure::budget);
+--- a/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
+@@ -146,6 +146,8 @@
+ }
+ void native_adapter::mi_input (const char *text) {
+   if (!selected ()) return;
++  m_snapshot.revoke (snapshot_issue::resumed); // EVERY next input, before parsing.
++  m_output.forget (); // Serialized history is never a live value accessor.
+   require (text!=nullptr && current_ui==m_ui && top_level_interpreter ()==m_interpreter,
+            failure::command);
+   std::size_t size=0;
+@@ -179,17 +181,61 @@
+     auto *mi=as_mi_interp (m_interpreter);
+     require (mi!=nullptr && mi->raw_stdout!=nullptr,failure::output);
+     while (const auto *row=m_owner.next_diagnostic ()) {
+-      const auto count=std::snprintf (m_output.data (),m_output.size (),
+-        "=fe2o3-owned-one-stop-v1,s=\"%llu\",p=\"%u\",pid=\"%llu\",i=\"%llu\",a=\"%llu\",t=\"%llu\"\n",
+-        static_cast<unsigned long long> (row->sequence),static_cast<unsigned> (row->state),
+-        static_cast<unsigned long long> (m_owner.m_identity.pid),
+-        static_cast<unsigned long long> (m_owner.m_identity.inferior_number),
+-        static_cast<unsigned long long> (m_owner.m_identity.process),
+-        static_cast<unsigned long long> (m_owner.m_identity.host_thread));
+-      require (count>0 && static_cast<std::size_t> (count)<m_output.size (),failure::output);
+-      debit (counter::work,static_cast<std::uint64_t> (count));
+-      gdb_puts (m_output.data (),mi->raw_stdout); gdb_flush (mi->raw_stdout);
++      const bool physical=row->state==phase::current_gpu_stop;
++      // Prepay every added sink check BEFORE taking the formatter's exact floor.
++      debit (counter::work,publication_output::work_per_row);
++      auto *const observed_ui=m_ui;
++      auto *const observed_interpreter=m_interpreter;
++      auto *const raw=mi->raw_stdout;
++      FILE *const output=observed_ui->outstream;
++      const auto *const pager=dynamic_cast<const pager_file *> (raw);
++      const auto sink_current=[&] () {
++        return current_ui==observed_ui && m_ui==observed_ui
++          && top_level_interpreter ()==observed_interpreter
++          && m_interpreter==observed_interpreter
++          && mi==as_mi_interp (observed_interpreter) && mi->raw_stdout==raw
++          && observed_ui->outstream==output && mi->saved_raw_stdout==nullptr
++          && !mi->logfile_holder && !mi->stdout_holder
++          && mi->mi_uiout!=nullptr && mi->interp_ui_out ()==mi->mi_uiout
++          && mi->mi_uiout->is_mi_like_p () && pager!=nullptr
++          && pager->one_stop_borrowed_output_matches (output);
++      };
++      const auto before=m_owner.consumed ();
++      debit (counter::work,snapshot_publication::work_for (physical));
++      const auto id=physical ? current_identity () : m_owner.m_identity;
++      if (physical) {
++        require (m_stop_retired && m_gpu_thread!=nullptr
++                 && m_gpu_thread_ref.get ()==m_gpu_thread
++                 && inferior_thread ()==m_gpu_thread && m_gpu_thread->inf==m_inferior
++                 && m_gpu_thread->state==THREAD_STOPPED && !m_gpu_thread->executing ()
++                 && !m_gpu_thread->resumed () && m_path==path::none
++                 && m_callback_progress==callback_progress::none,failure::stop_changed);
++      }
++      require (m_output.render (m_owner,before,id,*row,m_snapshot,
++                                m_candidate_stop,m_owner.m_checkpoint),failure::output);
++      // No native call/read is introduced: actual retained owners and already
++      // confirmed native tuple fence both sides of the one bounded output.
++      if (physical)
++        require (same (current_identity (),id)
++                 && m_output.still_current (m_owner,id,m_snapshot,m_candidate_stop)
++                 && m_stop_retired && inferior_thread ()==m_gpu_thread
++                 && !m_gpu_thread->executing () && !m_gpu_thread->resumed (),failure::stop_changed);
++      // The pinned stdio methods ignore fputs/fflush return values. Check their
++      // same FILE sticky error before and after the ONE original submission.
++      // A clean flush is submission only, never proof the receiver consumed it.
++      require (publication_output::submit_once (output,sink_current,
++        [&] () { gdb_puts (m_output.data (),raw); },
++        [&] () { gdb_flush (raw); }),failure::output);
++      if (physical)
++        require (same (current_identity (),id)
++                 && m_output.still_current (m_owner,id,m_snapshot,m_candidate_stop)
++                 && m_stop_retired && inferior_thread ()==m_gpu_thread
++                 && !m_gpu_thread->executing () && !m_gpu_thread->resumed (),failure::stop_changed);
++      m_output.forget ();
+     }
+-  } catch (...) { m_owner.poison (failure::output); throw; }
++  } catch (...) {
++    m_output.forget (); m_snapshot.revoke (snapshot_issue::owner_changed);
++    m_owner.poison (failure::output); throw;
++  }
+ }
+ } // namespace amd_owned_one_stop_v1
+--- a/gdb/amd-dbgapi-one-stop-native-v1.h
++++ b/gdb/amd-dbgapi-one-stop-native-v1.h
+@@ -5,6 +5,9 @@
+ #define GDB_AMD_DBGAPI_ONE_STOP_NATIVE_V1_H
+ #include "amd-dbgapi-owned-one-stop-v1.h"
+ #include "amd-dbgapi-one-stop-snapshot-v1.h"
++#include "amd-dbgapi-one-stop-publication-v2.h"
++#include "amd-dbgapi-one-stop-output-v2.h"
++#include "pager.h"
+ #include "amd-dbgapi-one-stop-activation-v1.h"
+ #include "amd-dbgapi-one-stop-profile-v1.h"
+ #include "amd-dbgapi-one-stop-locator-v1.h"
+@@ -112,7 +115,7 @@
+   struct stat m_exec_identity {};
+   ui *m_ui = nullptr;
+   interp *m_interpreter = nullptr;
+-  std::array<char,128> m_output {};
++  snapshot_publication m_output; // Fixed1536-byte V2 encoder, same retained ledger.
+   inferior *m_inferior = nullptr;
+   inferior_ref m_inferior_ref;
+   amd_dbgapi_inferior_info *m_info = nullptr;
+@@ -149,11 +152,13 @@
+      4096 prepays fixed constants, parser/scalar stack scratch and fixed RAII
+      guards, with the sole128-byte library callback allocation separate.
+      The new snapshot adds its own1024-byte fixed scalar/temporary envelope;
+-     retained snapshot arrays are already included in sizeof(native_adapter). */
++     retained snapshot arrays are already included in sizeof(native_adapter).
++     Another256 bytes prepay simultaneous borrowed output pointers/closures,
++     without silently reusing any of those existing reservations. */
+   return sizeof (native_adapter) + constant_and_scratch + snapshot_scalar_scratch
+-    + limits::client_output_bytes;
++    + limits::client_output_bytes + publication_output::scratch_bytes;
+ }
+-static_assert (sizeof (native_adapter) + 4096 + 1024 + limits::client_output_bytes
++static_assert (sizeof (native_adapter) + 4096 + 1024 + limits::client_output_bytes + 256
+                <= limits::logical_bytes, "all new fixed retained data is prepaid");
+ static_assert (limits::file_requested_bytes == target_file_read_cap
+                && limits::file_rounds == target_file_round_cap,
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-output-v2.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Closed borrowed stdio submission check. No owner, unwrap, retry or delivery
++   certificate. Actual stream selection remains in the sole native adapter. */
++#ifndef GDB_AMD_DBGAPI_ONE_STOP_OUTPUT_V2_H
++#define GDB_AMD_DBGAPI_ONE_STOP_OUTPUT_V2_H
++#include <cstdio>
++#include <cstddef>
++namespace amd_owned_one_stop_v1 {
++#ifdef FE2O3_ONE_STOP_OUTPUT_PURE_TEST
++struct output_test;
++#endif
++class publication_output final {
++  friend class native_adapter;
++#ifdef FE2O3_ONE_STOP_OUTPUT_PURE_TEST
++  friend struct output_test;
++#endif
++  publication_output ()=delete;
++  static constexpr std::size_t scratch_bytes=256;
++  static constexpr std::size_t work_per_row=128;
++  template<typename Current,typename Put,typename Flush>
++  static bool submit_once (FILE *file,Current &&current,Put &&put,Flush &&flush) {
++    // Complete coexistence envelope: all three closures, caller UI/interpreter/
++    // raw/pager/FILE locals, callback reference arguments, and this FILE argument.
++    // Logical payload bound, not compiler stack-frame/RSS accounting.
++    static_assert (sizeof (Current)+sizeof (Put)+sizeof (Flush)
++      +12*sizeof (void *)+2*sizeof (FILE *)<=scratch_bytes,
++      "one-stop output guard scratch must be prepaid before selection");
++    if (file==nullptr || !current () || std::ferror (file)!=0) return false;
++    put ();
++    flush ();
++    // Do not dereference a stale FILE after a changed borrowed stream identity.
++    return current () && std::ferror (file)==0;
++  }
++};
++} // namespace amd_owned_one_stop_v1
++#endif
+--- /dev/null
++++ b/gdb/amd-dbgapi-one-stop-publication-v2.h
+@@ -0,0 +1,141 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++   Private same-owner physical publication. Bytes are never imported, copied out
++   as an owner, filled by an oracle or made readable by a serialized field. */
++#ifndef GDB_AMD_DBGAPI_ONE_STOP_PUBLICATION_V2_H
++#define GDB_AMD_DBGAPI_ONE_STOP_PUBLICATION_V2_H
++#include "amd-dbgapi-one-stop-snapshot-v1.h"
++#include "amd-dbgapi-one-stop-checkpoint-v1.h"
++namespace amd_owned_one_stop_v1 {
++#ifdef FE2O3_ONE_STOP_PUBLICATION_PURE_TEST
++struct publication_test;
++#endif
++inline constexpr bool snapshot_publication_available () noexcept { return false; }
++class snapshot_publication final {
++  friend class native_adapter;
++#ifdef FE2O3_ONE_STOP_PUBLICATION_PURE_TEST
++  friend struct publication_test;
++#endif
++  snapshot_publication () noexcept = default;
++  snapshot_publication (const snapshot_publication &)=delete;
++  snapshot_publication &operator= (const snapshot_publication &)=delete;
++  snapshot_publication (snapshot_publication &&)=delete;
++  snapshot_publication &operator= (snapshot_publication &&)=delete;
++  static constexpr std::size_t capacity=1536;
++  static constexpr std::uint64_t work_for (bool physical) noexcept {
++    return physical ? 3*capacity : 256;
++  }
++  bool append_char (char c) noexcept {
++    if (m_size>=capacity-1) return false;
++    m_bytes[m_size++]=c; m_bytes[m_size]=0; return true;
++  }
++  template<std::size_t N> bool literal (const char (&text)[N]) noexcept {
++    static_assert (N<=256,"only fixed bounded protocol literals");
++    if (N-1>capacity-1-m_size) return false;
++    for (std::size_t n=0;n<N-1;++n) m_bytes[m_size++]=text[n];
++    m_bytes[m_size]=0; return true;
++  }
++  template<std::size_t N> bool field (const char (&key)[N],std::uint64_t value) noexcept {
++    std::array<char,20> reverse {}; std::size_t count=0;
++    do { reverse[count++]=static_cast<char> ('0'+value%10); value/=10; } while (value);
++    if (!literal (",") || !literal (key) || !literal ("=\"")) return false;
++    while (count) if (!append_char (reverse[--count])) return false;
++    return literal ("\"");
++  }
++  template<std::size_t N> bool hex (const std::array<std::uint8_t,N> &bytes) noexcept {
++    static_assert (N==4 || N==272,"closed physical payload sizes");
++    if (N*2>capacity-1-m_size) return false;
++    constexpr char digits[]="0123456789abcdef";
++    for (const auto byte:bytes) {
++      m_bytes[m_size++]=digits[byte>>4]; m_bytes[m_size++]=digits[byte&15];
++    }
++    m_bytes[m_size]=0; return true;
++  }
++  static bool prepaid (const owner &o,const usage &before,bool physical) noexcept {
++    const auto now=o.consumed (); const auto cost=work_for (physical);
++    return o.selected () && !o.invalid () && before.work<=limits::work
++      && cost<=limits::work-before.work && now.work==before.work+cost
++      && now.logical_bytes==before.logical_bytes
++      && now.api==before.api && now.read_bytes==before.read_bytes
++      && now.read_calls==before.read_calls && now.rows==before.rows
++      && now.file_requested_bytes==before.file_requested_bytes
++      && now.file_observed_bytes==before.file_observed_bytes
++      && now.file_probe_bytes==before.file_probe_bytes && now.file_rounds==before.file_rounds
++      && now.proc_requested_bytes==before.proc_requested_bytes;
++  }
++  bool still_current (const owner &o,const identity &id,const physical_snapshot &s,
++                      const gpu_stop &stop) const noexcept {
++    const bool available=s.m_stage==physical_snapshot::stage::current
++      && s.m_issue==snapshot_issue::none;
++    const bool unavailable=s.m_stage==physical_snapshot::stage::unavailable_current
++      && (s.m_issue==snapshot_issue::register_unavailable
++          || s.m_issue==snapshot_issue::memory_unavailable || s.m_issue==snapshot_issue::short_memory);
++    return (available || unavailable) && s.live_ledger (o)
++      && o.state ()==phase::current_gpu_stop && same (id,s.m_identity) && same (stop,s.m_stop);
++  }
++  bool render (const owner &o,const usage &before,const identity &id,const diagnostic &row,
++               const physical_snapshot &s,const gpu_stop &stop,const checkpoint &checkpoint) noexcept {
++    const bool physical=row.state==phase::current_gpu_stop;
++    // No protected byte read or buffer mutation before these ownership/debit checks.
++    if (!prepaid (o,before,physical) || !complete (id) || row.why!=failure::none
++        || row.sequence==0 || row.sequence>limits::rows || row.sequence>before.rows
++        || row.state==phase::disabled || row.state>=phase::invalid) return false;
++    if (physical) {
++      if (m_physical_attempted) return false;
++      m_physical_attempted=true; // A refused/partial attempt is never retried.
++      if (!still_current (o,id,s,stop)) return false;
++      const checkpoint_view cp (checkpoint.bytes);
++      if (checkpoint.entry==0 || checkpoint.entry>UINT64_MAX-80
++          || stop.pc!=checkpoint.entry+80 || stop.completion_base!=checkpoint.signal_base
++          || stop.queue!=checkpoint.queue || checkpoint.code_object==0
++          || checkpoint.record_address==0 || cp.u64 (80)!=checkpoint.entry
++          || cp.u64 (128)!=checkpoint.signal_base || cp.u64 (160)!=s.m_address
++          || (s.m_address&4095)!=0 || cp.u64 (168)!=272 || cp.u64 (176)!=4096
++          || cp.u64 (184)!=s.m_address+8 || cp.u64 (192)!=256
++          || cp.u64 (56)>UINT64_MAX-6144 || cp.u64 (56)+6144!=checkpoint.entry
++          || cp.u64 (56)+1984!=cp.u64 (72) || cp.u64 (144)==0 || s.m_register_id==0)
++        return false;
++    }
++    m_size=0; m_bytes[0]=0;
++    if (!literal ("=fe2o3-owned-one-stop-v2") || !field ("s",row.sequence)
++        || !field ("p",static_cast<unsigned> (row.state)) || !field ("pid",id.pid)
++        || !field ("i",id.inferior_number) || !field ("a",id.process)
++        || !field ("t",id.host_thread) || !field ("start",id.pid_start)) return false;
++    if (physical) {
++      const checkpoint_view cp (checkpoint.bytes);
++      if (!field ("g",stop.thread) || !field ("w",stop.wave) || !field ("wg",stop.workgroup)
++          || !field ("d",stop.dispatch) || !field ("q",stop.queue) || !field ("ag",stop.agent)
++          || !field ("ar",stop.architecture) || !field ("pc",stop.pc)
++          || !field ("c",stop.completion_base) || !field ("cp",checkpoint.record_address)
++          || !field ("co",checkpoint.code_object) || !field ("entry",checkpoint.entry)
++          || !field ("desc",cp.u64 (72)) || !field ("kernarg",cp.u64 (144))
++          || !field ("out",s.m_address) || !field ("regid",s.m_register_id)
++          || !field ("dwarf",44) || !field ("rbytes",4) || !field ("mbytes",272)
++          || !literal (",status=\"")) return false;
++      switch (s.m_issue) {
++        case snapshot_issue::none: if (!literal ("available")) return false; break;
++        case snapshot_issue::register_unavailable:
++          if (!literal ("register-unavailable")) return false;
++          break;
++        case snapshot_issue::memory_unavailable:
++          if (!literal ("memory-unavailable")) return false;
++          break;
++        case snapshot_issue::short_memory: if (!literal ("short-memory")) return false; break;
++        default: return false;
++      }
++      if (!literal ("\",reg=\"")) return false;
++      if (s.m_issue==snapshot_issue::none && !hex (s.m_register)) return false;
++      if (!literal ("\",mem=\"")) return false;
++      if (s.m_issue==snapshot_issue::none && !hex (s.m_output)) return false;
++      if (!literal ("\"")) return false;
++    }
++    return literal ("\n");
++  }
++  const char *data () const noexcept { return m_bytes.data (); }
++  void forget () noexcept { m_size=0; m_bytes[0]=0; }
++  std::array<char,capacity> m_bytes {};
++  std::size_t m_size=0;
++  bool m_physical_attempted=false;
++};
++static_assert (sizeof (snapshot_publication)<=1560,"fixed complete output state");
++} // namespace amd_owned_one_stop_v1
++#endif
+--- a/gdb/amd-dbgapi-one-stop-snapshot-v1.h
++++ b/gdb/amd-dbgapi-one-stop-snapshot-v1.h
+@@ -26,6 +26,7 @@
+   physical_snapshot &operator= (physical_snapshot &&) = delete;
+ private:
+   friend class native_adapter;
++  friend class snapshot_publication;
+ #ifdef FE2O3_ONE_STOP_SNAPSHOT_PURE_TEST
+   friend struct snapshot_test;
+ #endif
+--- a/gdb/mi/mi-interp.h
++++ b/gdb/mi/mi-interp.h
+@@ -91,7 +91,7 @@
+   /* Save the original value of raw_stdout here when logging, and the
+      file which we need to delete, so we can restore correctly when
+      done.  */
+-  struct ui_file *saved_raw_stdout;
++  struct ui_file *saved_raw_stdout = nullptr;
+   ui_file_up logfile_holder;
+   ui_file_up stdout_holder;
+ 
+--- a/gdb/pager.h
++++ b/gdb/pager.h
+@@ -56,6 +56,17 @@
+ 
+   void wrap_here (int indent) override;
+ 
++  /* Closed non-owning inspection for the selected one-stop output only.
++     Do not unwrap arbitrary streams or flush pending wrap state here.  */
++  bool one_stop_borrowed_output_matches (FILE *expected) const noexcept
++  {
++    if (typeid (*this)!=typeid (pager_file) || m_paging
++        || !m_wrap_buffer.empty () || m_wrap_column!=0 || m_wrap_indent!=0)
++      return false;
++    const auto *stdio=dynamic_cast<const stdio_file *> (m_stream);
++    return stdio!=nullptr && stdio->one_stop_borrowed_stdio_matches (expected);
++  }
++
+   void puts_unfiltered (const char *str) override
+   {
+     flush_wrap_buffer ();
+--- a/gdb/ui-file.h
++++ b/gdb/ui-file.h
+@@ -20,6 +20,7 @@
+ #define GDB_UI_FILE_H
+ 
+ #include <string>
++#include <typeinfo>
+ #include "ui-style.h"
+ 
+ /* The abstract ui_file base class.  */
+@@ -273,6 +274,14 @@
+   int fd () const override
+   { return m_fd; }
+ 
++  /* Selected one-stop output may only BORROW this exact stdio object.
++     This predicate performs no I/O and exposes no FILE or descriptor.  */
++  bool one_stop_borrowed_stdio_matches (FILE *expected) const noexcept
++  {
++    return typeid (*this)==typeid (stdio_file) && expected!=nullptr
++      && m_file==expected && !m_close_p;
++  }
++
+ private:
+   /* Sets the internal stream to FILE, and saves the FILE's file
+      descriptor in M_FD.  */

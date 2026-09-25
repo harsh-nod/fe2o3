@@ -512,3 +512,7 @@ fn copied_empty_use_roster_is_all_unused_with_no_synthetic_rows() {
 
 #[path = "gfx942_tiled_region_normal_v1_tests.rs"]
 pub(super) mod normal;
+
+// Separate genuine-source numerical gate; historical inspection/normal modes are unchanged.
+#[path = "gfx942_tiled_region_cpu_v1_tests.rs"]
+mod cpu;

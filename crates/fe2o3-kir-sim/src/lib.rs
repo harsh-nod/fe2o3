@@ -2,7 +2,12 @@
 #![doc = include_str!("../README.md")]
 
 mod budgeted_v12;
+mod budgeted_v12_observation;
 pub use budgeted_v12::{SimulationViewAdmissionErrorV12, SimulationViewStorageV12};
+pub use budgeted_v12_observation::{
+    V12CpuObservationErrorV1, V12CpuObservationInputV1, V12CpuObservationOptionsV1,
+    V12CpuObservationProfileErrorV1,
+};
 mod matrix_bf16_exact_v1;
 pub use matrix_bf16_exact_v1::MatrixInputRoleV1;
 mod capability;
