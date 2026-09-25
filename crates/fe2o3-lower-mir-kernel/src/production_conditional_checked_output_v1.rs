@@ -210,9 +210,9 @@ fn scoped<T>(budget: &mut Budget<'_>, run: impl FnOnce(&mut Budget<'_>) -> Resul
     scoped_resource(budget, run)
 }
 
-fn scoped_resource<T, E: From<Resource>>(
-    budget: &mut Budget<'_>,
-    run: impl FnOnce(&mut Budget<'_>) -> std::result::Result<T, E>,
+fn scoped_resource<'w, T, E: From<Resource>>(
+    budget: &mut Budget<'w>,
+    run: impl FnOnce(&mut Budget<'w>) -> std::result::Result<T, E>,
 ) -> std::result::Result<T, E> {
     let floor = budget.storage();
     let account = budget.work_ledger_identity_v1();

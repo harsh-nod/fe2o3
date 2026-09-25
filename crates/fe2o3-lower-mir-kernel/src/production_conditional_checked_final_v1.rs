@@ -63,7 +63,10 @@ impl std::error::Error for Error {}
 const SCRATCH: usize =
     4 * size_of::<Facts<'static>>() + size_of::<Inputs<'static>>() + size_of::<Error>() + 1024;
 
-fn scoped<T>(budget: &mut Budget<'_>, run: impl FnOnce(&mut Budget<'_>) -> Result<T>) -> Result<T> {
+fn scoped<'w, T>(
+    budget: &mut Budget<'w>,
+    run: impl FnOnce(&mut Budget<'w>) -> Result<T>,
+) -> Result<T> {
     scoped_resource(budget, run)
 }
 
