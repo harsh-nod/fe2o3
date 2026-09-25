@@ -18,6 +18,10 @@ pub enum LifecycleStepV1 {
         capacity: usize, result: Result<(), ReadErrorV1> },
     AcquireProducer { consumer: WriterKeyV1, requests: Seq<ProducerReadV1>, original: Seq<Option<ProducerReadReferenceV1>>,
         output: Seq<Option<ProducerReadReferenceV1>>, result: Result<(), ReadErrorV1> },
+    AcquireMixed { consumer: WriterKeyV1, stable: Seq<AllocationReadV1>, pending: Seq<ProducerReadV1>,
+        stable_original: Seq<Option<ReadReferenceV1>>, stable_output: Seq<Option<ReadReferenceV1>>,
+        producer_original: Seq<Option<ProducerReadReferenceV1>>, producer_output: Seq<Option<ProducerReadReferenceV1>>,
+        result: Result<(), ReadErrorV1> },
     ReleaseProducer { consumer: WriterKeyV1, references: Seq<ProducerReadReferenceV1>, evidence: WriterKeyV1,
         capacity: usize, result: Result<(), ReadErrorV1> },
     SettleSuccess { writer: WriterReferenceV1, evidence: WriterReferenceV1, writer_storage: usize,
@@ -86,6 +90,13 @@ pub open spec fn lifecycle_step_relation_v1(before: ProducerReadContentsV1, afte
         LifecycleStepV1::AcquireProducer { consumer, requests, original, output, result } =>
             requests.len() <= usize::MAX && requests.len() <= u64::MAX && original.len() <= usize::MAX && output.len() <= usize::MAX
             && producer_acquire_execution_relation_v1(before, after, consumer, requests, original, output, result),
+        LifecycleStepV1::AcquireMixed { consumer, stable, pending, stable_original, stable_output,
+            producer_original, producer_output, result } =>
+            stable.len() <= usize::MAX && stable.len() <= u64::MAX && pending.len() <= usize::MAX && pending.len() <= u64::MAX
+            && stable_original.len() <= usize::MAX && stable_output.len() <= usize::MAX
+            && producer_original.len() <= usize::MAX && producer_output.len() <= usize::MAX
+            && mixed_acquire_relation_v1(before, after, consumer, stable, pending,
+                stable_original, stable_output, producer_original, producer_output, result),
         LifecycleStepV1::ReleaseProducer { consumer, references, evidence, capacity, result } => references.len() <= usize::MAX
             && producer_release_execution_relation_v1(before, after, consumer, references, evidence, capacity, result),
         LifecycleStepV1::SettleSuccess { writer, evidence, writer_storage, member_storage, result } =>
@@ -105,12 +116,14 @@ pub open spec fn lifecycle_writer_history_v1(history: Seq<WriterReferenceV1>, st
 }
 
 pub open spec fn lifecycle_stable_minted_v1(step: LifecycleStepV1) -> Seq<ReadReferenceV1> {
-    match step { LifecycleStepV1::AcquireStable { output, result, .. } =>
+    match step { LifecycleStepV1::AcquireStable { output, result, .. }
+        | LifecycleStepV1::AcquireMixed { stable_output: output, result, .. } =>
         if result.is_ok() { Seq::new(output.len(), |i: int| output[i].unwrap()) } else { Seq::empty() }, _ => Seq::empty() }
 }
 
 pub open spec fn lifecycle_producer_minted_v1(step: LifecycleStepV1) -> Seq<ProducerReadReferenceV1> {
-    match step { LifecycleStepV1::AcquireProducer { output, result, .. } =>
+    match step { LifecycleStepV1::AcquireProducer { output, result, .. }
+        | LifecycleStepV1::AcquireMixed { producer_output: output, result, .. } =>
         if result.is_ok() { Seq::new(output.len(), |i: int| output[i].unwrap()) } else { Seq::empty() }, _ => Seq::empty() }
 }
 

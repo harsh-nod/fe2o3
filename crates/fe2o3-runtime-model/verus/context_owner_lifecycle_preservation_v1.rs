@@ -2,6 +2,26 @@ use super::*;
 
 verus! {
 
+pub proof fn lifecycle_mixed_acquire_frame_v1(before: ProducerReadContentsV1, after: ProducerReadContentsV1,
+    consumer: WriterKeyV1, stable: Seq<AllocationReadV1>, pending: Seq<ProducerReadV1>,
+    stable_before: Seq<Option<ReadReferenceV1>>, stable_after: Seq<Option<ReadReferenceV1>>,
+    producer_before: Seq<Option<ProducerReadReferenceV1>>, producer_after: Seq<Option<ProducerReadReferenceV1>>,
+    result: Result<(), ReadErrorV1>)
+    requires mixed_acquire_relation_v1(before, after, consumer, stable, pending,
+        stable_before, stable_after, producer_before, producer_after, result),
+    ensures reader_journal_frame_v1(before.stable, after.stable),
+        after.stable.leases@.len() == before.stable.leases@.len(),
+        after.reservations@.len() == before.reservations@.len(),
+{
+    if result.is_ok() {
+        let middle = choose|middle: ProducerReadContentsV1|
+            mixed_stable_step_v1(before, middle, consumer, stable, stable_before, stable_after)
+            && mixed_pending_step_v1(middle, after, consumer, pending, producer_before, producer_after);
+        assert(reader_journal_frame_v1(before.stable, middle.stable));
+        assert(after.stable == middle.stable);
+    }
+}
+
 pub proof fn lifecycle_settlement_preserves_v1(before: ProducerReadContentsV1, after: ProducerReadContentsV1,
     writer: WriterReferenceV1, evidence: WriterReferenceV1, writer_storage: usize, member_storage: usize,
     success: bool, result: Result<(), ReadErrorV1>, storage: StorageCapacitiesV1, history: Seq<WriterReferenceV1>)
@@ -64,6 +84,14 @@ pub proof fn lifecycle_step_issued_v1(before: ProducerReadContentsV1, after: Pro
             producer_acquire_preserves_v1(before, after, consumer, requests, original, output, result);
             lifecycle_read_issuance_frame_v1(before, after, storage, history);
         },
+        LifecycleStepV1::AcquireMixed { consumer, stable, pending, stable_original, stable_output,
+            producer_original, producer_output, result } => {
+            mixed_acquire_preserves_v1(before, after, consumer, stable, pending,
+                stable_original, stable_output, producer_original, producer_output, result);
+            lifecycle_mixed_acquire_frame_v1(before, after, consumer, stable, pending,
+                stable_original, stable_output, producer_original, producer_output, result);
+            lifecycle_read_issuance_frame_v1(before, after, storage, history);
+        },
         LifecycleStepV1::ReleaseProducer { consumer, references, evidence, capacity, result } => {
             producer_release_preserves_v1(before, after, consumer, references, evidence, capacity, result);
             lifecycle_read_issuance_frame_v1(before, after, storage, history);
@@ -114,6 +142,11 @@ pub proof fn lifecycle_step_histories_v1(before: ProducerReadContentsV1, after: 
             lifecycle_producer_acquire_epoch_v1(before, after, consumer, requests, original, output, result);
             lifecycle_producer_acquire_history_v1(before, after, consumer, requests, original, output, result, history.producer);
         },
+        LifecycleStepV1::AcquireMixed { consumer, stable, pending, stable_original, stable_output,
+            producer_original, producer_output, result } => {
+            lifecycle_mixed_acquire_history_v1(before, after, consumer, stable, pending,
+                stable_original, stable_output, producer_original, producer_output, result, history);
+        },
         LifecycleStepV1::ReleaseProducer { consumer, references, evidence, capacity, result } => {
             lifecycle_producer_release_history_v1(before, after, consumer, references, evidence, capacity, result, history.producer);
         },
@@ -145,6 +178,11 @@ pub proof fn lifecycle_step_shape_v1(before: ProducerReadContentsV1, after: Prod
         LifecycleStepV1::Abort { .. } => {}, LifecycleStepV1::Begin { .. } => {},
         LifecycleStepV1::AcquireStable { .. } => {}, LifecycleStepV1::ReleaseStable { .. } => {},
         LifecycleStepV1::AcquireProducer { .. } => {}, LifecycleStepV1::ReleaseProducer { .. } => {},
+        LifecycleStepV1::AcquireMixed { consumer, stable, pending, stable_original, stable_output,
+            producer_original, producer_output, result } => {
+            lifecycle_mixed_acquire_frame_v1(before, after, consumer, stable, pending,
+                stable_original, stable_output, producer_original, producer_output, result);
+        },
         LifecycleStepV1::SettleSuccess { .. } => {}, LifecycleStepV1::SettleNoEffect { .. } => {},
         LifecycleStepV1::Unknown { .. } => {}, LifecycleStepV1::Dispose { .. } => {},
     }

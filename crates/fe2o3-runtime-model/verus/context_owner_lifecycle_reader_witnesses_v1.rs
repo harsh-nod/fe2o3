@@ -134,16 +134,14 @@ proof fn lifecycle_reader_reached_v1(trace: LifecycleReaderTraceV1,
 }
 
 #[verifier::spinoff_prover]
-proof fn lifecycle_reader_append_v1(trace: LifecycleReaderTraceV1,
+proof fn lifecycle_reader_append_event_v1(trace: LifecycleReaderTraceV1,
     before: ContextProducerReadJournalV1, after: ContextProducerReadJournalV1,
     model_before: logical::ProducerReadContentsV1, model_after: logical::ProducerReadContentsV1,
-    event: LifecyclePairedEventV1, phase: nat) -> (next: LifecycleReaderTraceV1)
+    event: LifecyclePairedEventV1) -> (next: LifecycleReaderTraceV1)
     requires lifecycle_reader_trace_v1(trace, before, model_before),
         lifecycle_event_relation_v1(before, after, model_before, model_after, event),
         lifecycle_event_input_shape_v1(event),
-        1 <= phase <= 13, event == lifecycle_reader_expected_event_v1(phase),
     ensures lifecycle_reader_trace_v1(next, after, model_after),
-        lifecycle_reader_extension_v1(trace, next, after, model_after, phase),
         next.events == trace.events.push(event), next.origin == trace.origin,
         next.actual == trace.actual.push(after), next.model == trace.model.push(model_after),
 {
@@ -160,6 +158,23 @@ proof fn lifecycle_reader_append_v1(trace: LifecycleReaderTraceV1,
         if i < trace.events.len() { assert(next.events[i] == trace.events[i]); }
     }
     next
+}
+
+#[verifier::spinoff_prover]
+proof fn lifecycle_reader_append_v1(trace: LifecycleReaderTraceV1,
+    before: ContextProducerReadJournalV1, after: ContextProducerReadJournalV1,
+    model_before: logical::ProducerReadContentsV1, model_after: logical::ProducerReadContentsV1,
+    event: LifecyclePairedEventV1, phase: nat) -> (next: LifecycleReaderTraceV1)
+    requires lifecycle_reader_trace_v1(trace, before, model_before),
+        lifecycle_event_relation_v1(before, after, model_before, model_after, event),
+        lifecycle_event_input_shape_v1(event),
+        1 <= phase <= 13, event == lifecycle_reader_expected_event_v1(phase),
+    ensures lifecycle_reader_trace_v1(next, after, model_after),
+        lifecycle_reader_extension_v1(trace, next, after, model_after, phase),
+        next.events == trace.events.push(event), next.origin == trace.origin,
+        next.actual == trace.actual.push(after), next.model == trace.model.push(model_after),
+{
+    lifecycle_reader_append_event_v1(trace, before, after, model_before, model_after, event)
 }
 
 // 0 empty, 1 enrolled, 2 reserved, 3 pending, 4 producer read, 5 settled, 6 writer reused,

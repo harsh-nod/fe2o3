@@ -24,6 +24,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest development (2026-09-24): [constructor-origin mixed input
+lifecycle](runtime-context-mixed-lifecycle-v1.md) integrates one acquisition event
+with both reader histories, rejection preservation, arena reuse, terminal
+producer status, exact release-trace continuity and Unknown retention. The
+whole-root development run verifies 1,271 obligations with zero errors; eight
+checker groups and the pinned 190-file Verus closure pass. This is not accepted
+source-bound campaign evidence: positive brackets, nine logical negatives,
+frozen regressions and final replay remain required. Production runtime sources
+are unchanged. A1/A2 and the accepted lane checkpoints remain unchanged. Next is
+the signed-source campaign, then production completion-reconciliation refinement
+and the remaining generated/native/resource gates.
+
 Latest mixed-input correspondence (2026-09-24): the
 [independent proof packet](evidence/dev-mixed-acquisition-proof-2026-09-24/README.md)
 passes all fifteen signed-source campaign stages. Both whole-root positives

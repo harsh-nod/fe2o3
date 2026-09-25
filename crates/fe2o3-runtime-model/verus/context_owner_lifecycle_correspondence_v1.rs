@@ -16,6 +16,10 @@ enum LifecycleActualStepV1 {
         capacity: usize, result: Result<(), ReadErrorV1> },
     AcquireProducer { consumer: WriterKeyV1, requests: Seq<ContextProducerReadV1>, original: Seq<Option<ContextProducerReadReferenceV1>>,
         output: Seq<Option<ContextProducerReadReferenceV1>>, result: Result<(), ReadErrorV1> },
+    AcquireMixed { consumer: WriterKeyV1, stable: Seq<ContextAllocationReadV1>, pending: Seq<ContextProducerReadV1>,
+        stable_original: Seq<Option<ContextReadLeaseReferenceV1>>, stable_output: Seq<Option<ContextReadLeaseReferenceV1>>,
+        producer_original: Seq<Option<ContextProducerReadReferenceV1>>, producer_output: Seq<Option<ContextProducerReadReferenceV1>>,
+        result: Result<(), ReadErrorV1> },
     ReleaseProducer { consumer: WriterKeyV1, references: Seq<ContextProducerReadReferenceV1>, evidence: WriterKeyV1,
         capacity: usize, result: Result<(), ReadErrorV1> },
     SettleSuccess { writer: WriterReferenceV1, evidence: WriterReferenceV1, writer_storage: usize,
@@ -47,6 +51,9 @@ spec fn lifecycle_actual_step_relation_v1(before: ContextProducerReadJournalV1, 
             producer_stable_release_relation_v1(before, after, consumer, references, evidence, capacity, result),
         LifecycleActualStepV1::AcquireProducer { consumer, requests, original, output, result } =>
             producer_acquire_execution_relation_v1(before, after, consumer, requests, original, output, result),
+        LifecycleActualStepV1::AcquireMixed { consumer, stable, pending, stable_original, stable_output,
+            producer_original, producer_output, result } => mixed_acquire_relation_v1(before, after, consumer,
+                stable, pending, stable_original, stable_output, producer_original, producer_output, result),
         LifecycleActualStepV1::ReleaseProducer { consumer, references, evidence, capacity, result } =>
             producer_release_execution_relation_v1(before, after, consumer, references, evidence, capacity, result),
         LifecycleActualStepV1::SettleSuccess { writer, evidence, writer_storage, member_storage, result } =>
@@ -82,6 +89,11 @@ spec fn lifecycle_step_inputs_v1(actual: LifecycleActualStepV1, model: logical::
         (LifecycleActualStepV1::AcquireProducer { consumer, requests, original, .. },
             logical::LifecycleStepV1::AcquireProducer { consumer: c, requests: r, original: o, .. }) =>
             writer_key_view(consumer) == c && producer_requests_view(requests) == r && producer_output_view(original) == o,
+        (LifecycleActualStepV1::AcquireMixed { consumer, stable, pending, stable_original, producer_original, .. },
+            logical::LifecycleStepV1::AcquireMixed { consumer: c, stable: s, pending: p,
+                stable_original: so, producer_original: po, .. }) =>
+            writer_key_view(consumer) == c && stable_requests_view(stable) == s && producer_requests_view(pending) == p
+                && stable_output_view(stable_original) == so && producer_output_view(producer_original) == po,
         (LifecycleActualStepV1::ReleaseProducer { consumer, references, evidence, capacity, .. },
             logical::LifecycleStepV1::ReleaseProducer { consumer: c, references: r, evidence: e, capacity: n, .. }) =>
             writer_key_view(consumer) == c && producer_references_view(references) == r && writer_key_view(evidence) == e && capacity == n,
@@ -100,6 +112,20 @@ spec fn lifecycle_step_inputs_v1(actual: LifecycleActualStepV1, model: logical::
     }
 }
 
+proof fn lifecycle_mixed_answers_projection_v1(actual: LifecycleActualStepV1, model: logical::LifecycleStepV1)
+    requires lifecycle_step_answers_v1(actual, model),
+        matches!(actual, LifecycleActualStepV1::AcquireMixed { .. }),
+        matches!(model, logical::LifecycleStepV1::AcquireMixed { .. }),
+    ensures match (actual, model) {
+        (LifecycleActualStepV1::AcquireMixed { result, stable_output, producer_output, .. },
+            logical::LifecycleStepV1::AcquireMixed { result: expected, stable_output: stable, producer_output: producer, .. }) =>
+            result == begin_result_from(expected) && stable_output_view(stable_output) == stable
+                && producer_output_view(producer_output) == producer,
+        _ => false,
+    },
+{
+}
+
 spec fn lifecycle_step_answers_v1(actual: LifecycleActualStepV1, model: logical::LifecycleStepV1) -> bool {
     match (actual, model) {
         (LifecycleActualStepV1::EnrollScalar { result, .. }, logical::LifecycleStepV1::EnrollScalar { result: m, .. }) => result == scalar_enrollment_result_from_v1(m),
@@ -111,6 +137,9 @@ spec fn lifecycle_step_answers_v1(actual: LifecycleActualStepV1, model: logical:
             result == begin_result_from(m) && stable_output_view(output) == o,
         (LifecycleActualStepV1::AcquireProducer { result, output, .. }, logical::LifecycleStepV1::AcquireProducer { result: m, output: o, .. }) =>
             result == begin_result_from(m) && producer_output_view(output) == o,
+        (LifecycleActualStepV1::AcquireMixed { result, stable_output, producer_output, .. },
+            logical::LifecycleStepV1::AcquireMixed { result: m, stable_output: so, producer_output: po, .. }) =>
+            result == begin_result_from(m) && stable_output_view(stable_output) == so && producer_output_view(producer_output) == po,
         (LifecycleActualStepV1::Retire { result, .. }, logical::LifecycleStepV1::Retire { result: m, .. })
         | (LifecycleActualStepV1::Begin { result, .. }, logical::LifecycleStepV1::Begin { result: m, .. })
         | (LifecycleActualStepV1::ReleaseStable { result, .. }, logical::LifecycleStepV1::ReleaseStable { result: m, .. })
@@ -175,6 +204,12 @@ proof fn lifecycle_mutation_correspondence_v1(before: ContextProducerReadJournal
             logical::producer_capacity_arithmetic_v1(model_before);
             producer_acquire_paired_transition(before, after, model_before, model_after, consumer,
                 requests, original, output, o, result, m);
+        },
+        (LifecycleActualStepV1::AcquireMixed { consumer, stable, pending, stable_original, stable_output,
+            producer_original, producer_output, result },
+            logical::LifecycleStepV1::AcquireMixed { stable_output: so, producer_output: po, result: m, .. }) => {
+            mixed_acquire_paired_transition_v1(before, after, model_before, model_after, consumer, stable, pending,
+                stable_original, stable_output, producer_original, producer_output, so, po, result, m);
         },
         (LifecycleActualStepV1::ReleaseProducer { consumer, references, evidence, capacity, result },
             logical::LifecycleStepV1::ReleaseProducer { result: m, .. }) => {

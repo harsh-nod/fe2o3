@@ -47,6 +47,9 @@ use owner_lifecycle_adapters::*;
 #[path = "context_owner_lifecycle_model_v1.rs"]
 mod owner_lifecycle_model;
 use owner_lifecycle_model::*;
+#[path = "context_mixed_acquire_model_v1.rs"]
+mod mixed_acquire_model;
+use mixed_acquire_model::*;
 #[path = "context_owner_lifecycle_history_v1.rs"]
 mod owner_lifecycle_history;
 use owner_lifecycle_history::*;
@@ -76,6 +79,8 @@ mod production {
     include!("context_producer_release_witnesses_v1.rs");
     include!("context_producer_stable_correspondence_v1.rs");
     include!("context_producer_stable_witnesses_v1.rs");
+    include!("context_mixed_acquire_execution_v1.rs");
+    include!("context_mixed_acquire_correspondence_v1.rs");
     include!("context_owner_unknown_correspondence_v1.rs");
     include!("context_owner_unknown_witnesses_v1.rs");
     include!("context_journal_enrollment_value_views_v1.rs");
@@ -104,4 +109,5 @@ mod production {
     include!("context_owner_lifecycle_domain_v1.rs");
     include!("context_owner_lifecycle_witnesses_v1.rs");
     include!("context_owner_lifecycle_reader_witnesses_v1.rs");
+    include!("context_owner_lifecycle_mixed_witnesses_v1.rs");
 }

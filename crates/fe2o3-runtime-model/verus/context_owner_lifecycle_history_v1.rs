@@ -146,6 +146,51 @@ pub proof fn lifecycle_producer_acquire_history_v1(before: ProducerReadContentsV
     } else { assert(history + Seq::<ProducerReadReferenceV1>::empty() =~= history); }
 }
 
+pub proof fn lifecycle_mixed_acquire_history_v1(before: ProducerReadContentsV1, after: ProducerReadContentsV1,
+    consumer: WriterKeyV1, stable: Seq<AllocationReadV1>, pending: Seq<ProducerReadV1>,
+    stable_before: Seq<Option<ReadReferenceV1>>, stable_after: Seq<Option<ReadReferenceV1>>,
+    producer_before: Seq<Option<ProducerReadReferenceV1>>, producer_after: Seq<Option<ProducerReadReferenceV1>>,
+    result: Result<(), ReadErrorV1>, history: LifecycleHistoryV1)
+    requires producer_invariant_v1(before),
+        lifecycle_stable_history_v1(before.stable, history.stable), lifecycle_producer_history_v1(before, history.producer),
+        stable.len() <= usize::MAX, stable.len() <= u64::MAX, pending.len() <= usize::MAX, pending.len() <= u64::MAX,
+        mixed_acquire_relation_v1(before, after, consumer, stable, pending,
+            stable_before, stable_after, producer_before, producer_after, result),
+    ensures lifecycle_stable_history_v1(after.stable, history.stable +
+            if result.is_ok() { Seq::new(stable_after.len(), |i: int| stable_after[i].unwrap()) } else { Seq::empty() }),
+        lifecycle_producer_history_v1(after, history.producer +
+            if result.is_ok() { Seq::new(producer_after.len(), |i: int| producer_after[i].unwrap()) } else { Seq::empty() }),
+        reader_epoch_step_v1(before.stable.next_incarnation, after.stable.next_incarnation,
+            if result.is_ok() { Seq::new(stable_after.len(), |i: int| stable_after[i].unwrap()) } else { Seq::empty() }),
+        lifecycle_producer_epoch_step_v1(before.next_incarnation, after.next_incarnation,
+            if result.is_ok() { Seq::new(producer_after.len(), |i: int| producer_after[i].unwrap()) } else { Seq::empty() }),
+{
+    assert(history.stable + Seq::<ReadReferenceV1>::empty() =~= history.stable);
+    assert(history.producer + Seq::<ProducerReadReferenceV1>::empty() =~= history.producer);
+    if result.is_ok() {
+        let middle = choose|middle: ProducerReadContentsV1|
+            mixed_stable_step_v1(before, middle, consumer, stable, stable_before, stable_after)
+            && mixed_pending_step_v1(middle, after, consumer, pending, producer_before, producer_after);
+        mixed_stable_preserves_v1(before, middle, consumer, stable, pending.len(), stable_before, stable_after);
+        assert(lifecycle_producer_history_v1(middle, history.producer));
+        if stable.len() > 0 {
+            lifecycle_stable_acquire_history_v1(before.stable, middle.stable, consumer, stable,
+                stable_before, stable_after, Ok(()), history.stable);
+            acquire_epoch_projection_v1(before.stable, middle.stable, consumer, stable, stable_before, stable_after, Ok(()));
+        } else {
+            assert(Seq::new(stable_after.len(), |i: int| stable_after[i].unwrap()) =~= Seq::<ReadReferenceV1>::empty());
+        }
+        if pending.len() > 0 {
+            lifecycle_producer_acquire_history_v1(middle, after, consumer, pending,
+                producer_before, producer_after, Ok(()), history.producer);
+            lifecycle_producer_acquire_epoch_v1(middle, after, consumer, pending, producer_before, producer_after, Ok(()));
+        } else {
+            assert(Seq::new(producer_after.len(), |i: int| producer_after[i].unwrap()) =~= Seq::<ProducerReadReferenceV1>::empty());
+        }
+        assert(after.stable == middle.stable);
+    }
+}
+
 pub proof fn lifecycle_stable_release_history_v1(before: ReadContentsV1, after: ReadContentsV1,
     consumer: WriterKeyV1, references: Seq<ReadReferenceV1>, evidence: WriterKeyV1, capacity: usize,
     result: Result<(), ReadErrorV1>, history: Seq<ReadReferenceV1>)

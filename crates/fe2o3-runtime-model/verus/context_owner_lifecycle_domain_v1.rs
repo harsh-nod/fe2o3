@@ -12,6 +12,9 @@ spec fn lifecycle_mutation_input_shape_v1(step: LifecycleActualStepV1) -> bool {
         LifecycleActualStepV1::ReleaseStable { references, .. } => references.len() <= usize::MAX,
         LifecycleActualStepV1::AcquireProducer { requests, original, .. } =>
             requests.len() <= usize::MAX && requests.len() <= u64::MAX && original.len() <= usize::MAX,
+        LifecycleActualStepV1::AcquireMixed { stable, pending, stable_original, producer_original, .. } =>
+            stable.len() <= usize::MAX && stable.len() <= u64::MAX && pending.len() <= usize::MAX && pending.len() <= u64::MAX
+                && stable_original.len() <= usize::MAX && producer_original.len() <= usize::MAX,
         LifecycleActualStepV1::ReleaseProducer { references, .. } => references.len() <= usize::MAX,
         LifecycleActualStepV1::Dispose { roster, .. } => roster.len() <= usize::MAX,
         _ => true,
@@ -28,11 +31,18 @@ spec fn lifecycle_mutation_domain_v1(owner: ContextProducerReadJournalV1, step: 
         LifecycleActualStepV1::ReleaseStable { .. } => stable_guard_storage_v1(owner.stable),
         LifecycleActualStepV1::AcquireProducer { consumer, requests, original, .. } =>
             producer_acquire_domain_v1(owner, consumer, requests.len() as usize, original),
+        LifecycleActualStepV1::AcquireMixed { .. } => mixed_acquire_storage_v1(owner),
         LifecycleActualStepV1::ReleaseProducer { consumer, references, evidence, capacity, .. } =>
             producer_release_domain_v1(owner, consumer, evidence, references.len() as usize, capacity),
         LifecycleActualStepV1::Dispose { roster, .. } => disposal_producer_safe_v1(owner, roster, 0),
         _ => true,
     }
+}
+
+proof fn lifecycle_mixed_domain_projection_v1(owner: ContextProducerReadJournalV1, step: LifecycleActualStepV1)
+    requires lifecycle_mutation_domain_v1(owner, step), matches!(step, LifecycleActualStepV1::AcquireMixed { .. }),
+    ensures mixed_acquire_storage_v1(owner),
+{
 }
 
 spec fn lifecycle_query_input_shape_v1(query: LifecycleQueryV1) -> bool {
@@ -113,6 +123,7 @@ proof fn lifecycle_mutation_domain_from_reached_v1(actual: ContextProducerReadJo
     match step {
         LifecycleActualStepV1::Retire { roster, .. } => owner_retirement_invariant_domain_v1(actual, model, roster),
         LifecycleActualStepV1::Dispose { roster, .. } => owner_disposal_invariant_domain_v1(actual, model, roster),
+        LifecycleActualStepV1::AcquireMixed { .. } => mixed_acquire_storage_from_model_v1(actual, model),
         _ => {},
     }
 }
