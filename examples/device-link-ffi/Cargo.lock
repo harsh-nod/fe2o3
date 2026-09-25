@@ -74,6 +74,7 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-build-authority",
  "fe2o3-compiler-ffi",
+ "fe2o3-kernel-ir",
  "fe2o3-rustc-invocation",
  "libc",
  "rustix",
@@ -85,6 +86,7 @@ name = "fe2o3-artifacts"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
+ "fe2o3-kernel-descriptor",
  "sha2",
 ]
 
@@ -102,6 +104,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-compiler-lineage",
  "fe2o3-kernel-descriptor",
+ "fe2o3-rustc-invocation",
  "reserved-fe2o3-symbols",
  "sha2",
 ]
@@ -133,6 +136,15 @@ name = "fe2o3-kernel-descriptor"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-kernel-ir"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "sha2",
 ]
 

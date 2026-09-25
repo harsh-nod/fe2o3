@@ -1257,6 +1257,7 @@ for production_step in \
   rocm-production-simulation-bundle-v4-recursive-refusals \
   rocm-production-simulation-bundle-v5-wave-debugger \
   rocm-production-simulation-bundle-v5-workgroup-cpu \
+  rocm-production-row-affine-source-sim \
   rocm-production-simulation-bundle-v6-nested-control-flow; do
   assert_step_count "${production_step}" 1 \
     "ROCm compile did not run ${production_step} exactly once"
@@ -1266,6 +1267,10 @@ for production_step in \
     exit 1
   fi
 done
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_neutral_workgroup_reduce_driver_v1 ordinary_row_affine_source_matches_oracle_and_replay -- --ignored --exact' \
+  "$(step_command rocm-production-row-affine-source-sim)" \
+  'ROCm compile omitted the exact row-affine source/SIM regression'
 assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 write_only_witness_mappings_retain_exact_ranked_predicates -- --ignored --exact' \
   "$(step_command rocm-production-write-only-witness-mappings)" \

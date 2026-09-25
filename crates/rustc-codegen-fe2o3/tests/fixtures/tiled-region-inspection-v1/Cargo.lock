@@ -417,6 +417,7 @@ name = "fe2o3-artifacts"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
+ "fe2o3-kernel-descriptor",
  "sha2 0.11.0",
 ]
 
@@ -425,14 +426,6 @@ name = "fe2o3-build-authority"
 version = "0.1.0"
 dependencies = [
  "sha2 0.11.0",
-]
-
-[[package]]
-name = "fe2o3-tiled-region-inspection-v1-fixture"
-version = "0.0.0"
-dependencies = [
- "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -831,6 +824,14 @@ dependencies = [
 [[package]]
 name = "fe2o3-target-spec"
 version = "0.1.0"
+
+[[package]]
+name = "fe2o3-tiled-region-inspection-v1-fixture"
+version = "0.0.0"
+dependencies = [
+ "fe2o3-device",
+ "fe2o3-host",
+]
 
 [[package]]
 name = "fe2o3-verifier"

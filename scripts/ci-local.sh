@@ -1447,6 +1447,12 @@ run_rocm_compile() {
         --test production_neutral_workgroup_reduce_driver_v1 \
         ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path -- \
         --ignored --exact
+  run_step rocm-production-row-affine-source-sim \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_neutral_workgroup_reduce_driver_v1 \
+        ordinary_row_affine_source_matches_oracle_and_replay -- \
+        --ignored --exact
   run_step rocm-production-simulation-bundle-v3-typed-layouts \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
