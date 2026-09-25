@@ -117,8 +117,8 @@ impl<'a, 'owner> CompilerConditionalOutputDescriptorBindingV1<'a, 'owner> {
 /// their scope restores the caller's storage floor. Existing source/SSA/typed-root
 /// retention exclusions remain unchanged.
 ///
-/// The sealed binding already used `with_checked_arguments_v1` and checked exact
-/// transparent Result forwarding. No argument map or wrapper parser is rebuilt.
+/// The sealed binding already checked source/KIR argument correspondence. This
+/// query independently replays the admitted ABI map and transparent-body selection.
 /// Tuple expansion, ignored/hidden inputs and context forwarding are unsupported;
 /// no argument is compacted or skipped to manufacture a generated field index.
 pub(crate) fn bind_conditional_output_descriptor_v1<'a, 'owner>(

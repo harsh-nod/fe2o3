@@ -61,8 +61,9 @@ first-build evidence, reuses its lineage/symbol checks, and binds the embedded V
 to the retained ABI receipt and export manifest. Worker protocol V3 and descriptor schema
 V3 are independent version numbers. The result retains the original transaction and
 final artifact, but grants no compiler, proof, publication, load, or launch authority.
-Publication recovery and generated host admission still consume V1; this continuation
-is not yet called by the normal production CLI or joined to nominal P4 source-proof custody.
+Worker publication recovery dispatches the strict V1 or nominal V3 schema. This
+structural continuation alone does not supply nominal source-proof or generated-host
+launch custody.
 
 The V3 callbacks meter descriptor traversal, copying, and hashing work, with an explicit
 descriptor scratch declaration. They do not meter the inherited ELF/AMDHSA parser's heap,
@@ -111,21 +112,12 @@ V3/V4 relabeling, duplicate/mixed/future sections, physical ABI disagreement, di
 tampering, and scratch/work refusal. Compile-fail doctests keep the V4 owner move-only
 and prevent typed V3 downgrade. These are structural tests, not proof or hardware credit.
 
-No Cargo build or test was run in the artifact worktree while primary guarded runs
-were active. Primary serial integration should run the pinned, guarded equivalents of:
-
-```text
-cargo test -p fe2o3-hsaco-finalize --test public_api
-cargo test -p fe2o3-hsaco-finalize --lib
-cargo test -p fe2o3-hsaco-finalize --test worker_v3_hsaco_admission
-cargo test -p fe2o3-hsaco-finalize --doc
-cargo check -p fe2o3-hsaco-finalize --all-targets
-```
-
-The full public API target includes existing V1/V3 regressions; the library and Worker
-admission selections cover the existing ordinary/native/nominal paths after the shared
-refactor. Keep the primary runner's offline/locked, single-job/thread and disabled-GPU
-constraints. Formatting and static review alone are not compilation or test evidence.
+Serial guarded integration passed 176 library tests, 54 public API tests, 32 Worker
+admission tests and 22 compile-fail doctests; two real-worker qualification tests
+remained ignored. The all-targets check also passed. The selections include existing
+V1/V3 and ordinary/native/nominal regressions after the shared refactor. See the
+[validation report](../../docs/evidence/conditional-v4-context-validation-20260925.md)
+for exact snapshots, limits and the separate failed protected actual-source run.
 
 ## Multi-input native link plans
 

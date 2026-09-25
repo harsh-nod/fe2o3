@@ -239,7 +239,7 @@ fn roundtrip_preserves_every_contract_and_both_cov6_physical_forms() {
 #[test]
 fn canonical_contract_substitution_still_requires_exact_source() {
     let (source, _) = wires(1, |_| {});
-    let (changed, _) = wires(1, |contract| contract.arguments[0].adjusted_argument ^= 1);
+    let (changed, _) = wires(1, |contract| contract.arguments[0].adjusted_argument = 8);
     assert_ne!(source, changed);
     let raw = fixture(&changed, 1, false, 48, |_| {}, 1, &[]);
     assert!(
@@ -616,7 +616,7 @@ fn finalized_digest_covers_valid_contract_substitution_and_all_artifact_bytes() 
             FinalizationError::ExpectedZeroDigest
         ))
     ));
-    let (changed, _) = wires(1, |contract| contract.arguments[0].adjusted_argument ^= 1);
+    let (changed, _) = wires(1, |contract| contract.arguments[0].adjusted_argument = 8);
     let start = contract_start(&source);
     let mut rebound = result.as_bytes().to_vec();
     let offset = raw.descriptor_offsets[0];
