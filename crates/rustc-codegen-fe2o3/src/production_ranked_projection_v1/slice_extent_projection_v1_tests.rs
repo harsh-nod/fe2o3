@@ -458,6 +458,163 @@ mod slice_extent_projection_tests_v1 {
     }
 
     #[test]
+    fn ordinary_bounds_reject_projected_length_after_caching_whole_slice_metadata() {
+        let types = types();
+        let original = fixture(false);
+        let mut blocks = original.blocks().to_vec();
+        let mut first = blocks[0].statements().to_vec();
+        first.remove(3);
+        blocks[0] = block(246, first, original.blocks()[0].terminator().kind().clone());
+
+        // Subtype preserves the slice type and is a valid additional MIR projection.
+        let projected_slice = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(4),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SLICE).unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Subtype, SLICE).unwrap(),
+            ],
+            SLICE,
+        )
+        .unwrap();
+        let mut second = blocks[1].statements().to_vec();
+        second.insert(
+            1,
+            typed_assignment(7, USIZE, SemanticRvalueKindV1::Length(projected_slice)),
+        );
+        blocks[1] = block(
+            247,
+            second,
+            original.blocks()[1].terminator().kind().clone(),
+        );
+        let function = rebuild(&original, original.locals().to_vec(), blocks);
+
+        let mut probe = scratch(&types, &function);
+        let definitions = definitions(&function);
+        let mut next_argument = 3;
+        let mut context = Context {
+            scratch: &mut probe,
+            facts: &mut ComponentDynamicAssertionFactsV1,
+        };
+        assert_eq!(
+            context
+                .extent(
+                    &types,
+                    &function,
+                    SemanticLocalIdV1::from_index(6),
+                    &definitions,
+                    &mut next_argument,
+                )
+                .unwrap(),
+            Some(ProductionRankedValueV1::Argument(3)),
+        );
+        assert_eq!(
+            context
+                .extent(
+                    &types,
+                    &function,
+                    SemanticLocalIdV1::from_index(7),
+                    &definitions,
+                    &mut next_argument,
+                )
+                .unwrap(),
+            None,
+        );
+        assert_eq!(next_argument, 4);
+
+        let mut scratch = scratch(&types, &function);
+        let mut operations = vec![];
+        let mut next_value = 0;
+        let result = project_rust_bounds_checks_with_ordinary_v1(
+            &types,
+            &function,
+            3,
+            &[],
+            &[],
+            None,
+            &mut operations,
+            &mut next_value,
+            Some(&mut Context {
+                scratch: &mut scratch,
+                facts: &mut ComponentDynamicAssertionFactsV1,
+            }),
+        );
+        assert!(matches!(
+            result,
+            Err(Error::Incomplete(
+                "slice extent changed its source argument relation"
+            ))
+        ));
+        assert_eq!(&scratch.arguments[..2], &[Some(3), None]);
+        assert!(matches!(
+            operations.as_slice(),
+            [ProductionRankedOperationV1::IndexUnknown { result }] if result.get() == 0
+        ));
+        assert_eq!(next_value, 1);
+    }
+
+    #[test]
+    fn ordinary_bounds_reject_length_local_rebound_from_unknown_index_to_argument() {
+        let types = types();
+        let original = fixture(false);
+        let mut blocks = original.blocks().to_vec();
+        let mut statements = blocks[0].statements().to_vec();
+        *statements.last_mut().unwrap() = typed_assignment(
+            9,
+            BOOL,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left: typed_operand(6, USIZE),
+                right: typed_operand(6, USIZE),
+            },
+        );
+        blocks[0] = block(
+            246,
+            statements,
+            SemanticTerminatorKindV1::Assert {
+                condition: typed_operand(9, BOOL),
+                expected: true,
+                message: SemanticAssertMessageV1::BoundsCheck {
+                    length: typed_operand(6, USIZE),
+                    index: typed_operand(6, USIZE),
+                },
+                target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                unwind: SemanticUnwindActionV1::Unreachable,
+            },
+        );
+        let function = rebuild(&original, original.locals().to_vec(), blocks);
+        let mut scratch = scratch(&types, &function);
+        let mut operations = vec![];
+        let mut next_value = 0;
+        let result = project_rust_bounds_checks_with_ordinary_v1(
+            &types,
+            &function,
+            3,
+            &[],
+            &[],
+            None,
+            &mut operations,
+            &mut next_value,
+            Some(&mut Context {
+                scratch: &mut scratch,
+                facts: &mut ComponentDynamicAssertionFactsV1,
+            }),
+        );
+        assert!(matches!(
+            result,
+            Err(Error::Incomplete(
+                "slice extent changed an existing ranked local identity"
+            ))
+        ));
+        // The refusal occurs after both identities exist, before emitting a guard for n < n.
+        assert!(matches!(
+            operations.as_slice(),
+            [ProductionRankedOperationV1::IndexUnknown { result }] if result.get() == 0
+        ));
+        assert_eq!(next_value, 1);
+        assert_eq!(&scratch.arguments[..2], &[Some(3), None]);
+    }
+
+    #[test]
     fn context_rejects_same_type_cast_even_with_a_stable_argument_origin() {
         let types = types();
         let function = fixture(true);
