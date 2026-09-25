@@ -1,0 +1,3 @@
+    Checking fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Checking generic-worker-v3-adapter-fixture v0.0.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.10s

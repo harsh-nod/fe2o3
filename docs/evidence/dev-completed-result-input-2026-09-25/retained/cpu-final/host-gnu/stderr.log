@@ -1,0 +1,3 @@
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.92s
+     Running unittests src/lib.rs (/dev/shm/fe2o3-charged-input-20260925-JDmRTDMm/debug/deps/fe2o3_host-fee15e70660320e5)

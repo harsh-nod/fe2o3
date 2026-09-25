@@ -1,0 +1,16 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-resource-accounting",
+    "--lib"
+  ],
+  "started_ns": 1790368595281869757,
+  "process_group": 1459267,
+  "group_absent": true,
+  "finished_ns": 1790368595544915067,
+  "status": 0
+}

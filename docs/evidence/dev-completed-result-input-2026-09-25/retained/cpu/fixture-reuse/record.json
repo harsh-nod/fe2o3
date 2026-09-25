@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cargo",
+    "check",
+    "--locked",
+    "--offline",
+    "--manifest-path",
+    "crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.toml",
+    "--target-dir",
+    "/dev/shm/fe2o3-charged-input-20260925-JDmRTDMm/fixture",
+    "--message-format=json",
+    "--bin",
+    "charged_result_reuse"
+  ],
+  "started_ns": 1790368296865528156,
+  "process_group": 1408759,
+  "group_absent": true,
+  "finished_ns": 1790368297264181085,
+  "status": 101
+}

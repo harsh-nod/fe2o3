@@ -1,0 +1,168 @@
+{
+  "final_phases": {
+    "accounting": {
+      "counts": [
+        [
+          23,
+          0,
+          0
+        ]
+      ],
+      "passed": true,
+      "status": 0
+    },
+    "clippy": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    },
+    "fixture-clone": {
+      "counts": [],
+      "passed": true,
+      "status": 101
+    },
+    "fixture-pass": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    },
+    "fixture-reuse": {
+      "counts": [],
+      "passed": true,
+      "status": 101
+    },
+    "fixture-storage": {
+      "counts": [],
+      "passed": true,
+      "status": 101
+    },
+    "format": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    },
+    "host-doctests": {
+      "counts": [
+        [
+          5,
+          0,
+          0
+        ],
+        [
+          21,
+          0,
+          0
+        ]
+      ],
+      "passed": true,
+      "status": 0
+    },
+    "host-gnu": {
+      "counts": [
+        [
+          175,
+          0,
+          0
+        ]
+      ],
+      "passed": true,
+      "status": 0
+    },
+    "host-musl": {
+      "counts": [
+        [
+          175,
+          0,
+          0
+        ]
+      ],
+      "passed": true,
+      "status": 0
+    },
+    "macros": {
+      "counts": [
+        [
+          59,
+          0,
+          0
+        ]
+      ],
+      "passed": true,
+      "status": 0
+    },
+    "runner-tests": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    },
+    "runtime": {
+      "counts": [
+        [
+          1413,
+          22,
+          0
+        ]
+      ],
+      "passed": true,
+      "status": 0
+    },
+    "rustc": {
+      "counts": [],
+      "passed": true,
+      "status": 0
+    }
+  },
+  "observed_at": "2026-09-25T20:39:23.249133+00:00",
+  "owned_paths": [
+    {
+      "allocated_bytes": 5001216,
+      "device": 2096,
+      "inode": 8870422,
+      "path": "/home/harsh/.codex-tmp/fe2o3-charged-input-20260925-ccjuTWIr",
+      "uid": 1000
+    },
+    {
+      "allocated_bytes": 6808010752,
+      "device": 63,
+      "inode": 327206,
+      "path": "/dev/shm/fe2o3-charged-input-20260925-JDmRTDMm",
+      "uid": 1000
+    }
+  ],
+  "rejected_run": "retained/cpu: inherited items_after_test_module, status 101",
+  "retained_bytes_equal": true,
+  "retained_files": 123,
+  "scope": "Host-data development evidence, not proof, native qualification or relocated replay",
+  "source_commit": "49aa95f33b989974d3eedd4ca43344f18021b468",
+  "source_continuity": true,
+  "source_inputs": 5953,
+  "terminal_groups": [
+    1350981,
+    1408833,
+    1408782,
+    1383621,
+    1408759,
+    1408808,
+    1341551,
+    1295070,
+    1304498,
+    1351214,
+    1295045,
+    1351871,
+    1295056,
+    1459267,
+    1471750,
+    1471575,
+    1471221,
+    1471554,
+    1471607,
+    1481163,
+    1458411,
+    1448220,
+    1448836,
+    1459336,
+    1448182,
+    1459424,
+    1448193
+  ]
+}

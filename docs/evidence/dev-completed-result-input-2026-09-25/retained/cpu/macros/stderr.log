@@ -1,0 +1,33 @@
+   Compiling typenum v1.20.1
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling libc v0.2.189
+   Compiling bitflags v2.13.1
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling unicode-ident v1.0.24
+   Compiling linux-raw-sys v0.12.1
+   Compiling equivalent v1.0.2
+   Compiling indexmap v2.14.1
+   Compiling hybrid-array v0.4.14
+   Compiling proc-macro2 v1.0.107
+   Compiling toml_edit v0.25.13+spec-1.1.0
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling rustix v1.1.4
+   Compiling quote v1.0.47
+   Compiling syn v2.0.119
+   Compiling digest v0.11.3
+   Compiling proc-macro-crate v3.5.0
+   Compiling sha2 v0.11.0
+   Compiling fe2o3-build-authority v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-build-authority)
+   Compiling fe2o3-kernel-descriptor v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-descriptor)
+   Compiling fe2o3-rustc-invocation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-rustc-invocation)
+   Compiling reserved-fe2o3-symbols v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/reserved-fe2o3-symbols)
+   Compiling fe2o3-compiler-lineage v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-lineage)
+   Compiling fe2o3-compiler-ffi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-ffi)
+   Compiling fe2o3-artifact-transaction v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifact-transaction)
+   Compiling fe2o3-artifacts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifacts)
+   Compiling fe2o3-macros v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-macros)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.17s
+     Running unittests src/lib.rs (/dev/shm/fe2o3-charged-input-20260925-JDmRTDMm/debug/deps/fe2o3_macros-664305863b153380)

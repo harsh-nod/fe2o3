@@ -1,0 +1,113 @@
+{
+  "accounting": {
+    "counts": [
+      [
+        23,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "clippy": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "fixture-clone": {
+    "counts": [],
+    "passed": true,
+    "status": 101
+  },
+  "fixture-pass": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "fixture-reuse": {
+    "counts": [],
+    "passed": true,
+    "status": 101
+  },
+  "fixture-storage": {
+    "counts": [],
+    "passed": true,
+    "status": 101
+  },
+  "format": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "host-doctests": {
+    "counts": [
+      [
+        5,
+        0,
+        0
+      ],
+      [
+        21,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "host-gnu": {
+    "counts": [
+      [
+        175,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "host-musl": {
+    "counts": [
+      [
+        175,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "macros": {
+    "counts": [
+      [
+        59,
+        0,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "runner-tests": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  },
+  "runtime": {
+    "counts": [
+      [
+        1413,
+        22,
+        0
+      ]
+    ],
+    "passed": true,
+    "status": 0
+  },
+  "rustc": {
+    "counts": [],
+    "passed": true,
+    "status": 0
+  }
+}

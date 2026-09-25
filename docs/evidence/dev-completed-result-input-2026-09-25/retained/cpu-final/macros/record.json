@@ -1,0 +1,16 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-macros",
+    "--lib"
+  ],
+  "started_ns": 1790368596135190796,
+  "process_group": 1459336,
+  "group_absent": true,
+  "finished_ns": 1790368596529833262,
+  "status": 0
+}

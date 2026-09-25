@@ -1,0 +1,28 @@
+{
+  "cleanup_command": [
+    "rm",
+    "-r",
+    "--",
+    "/home/harsh/.codex-tmp/fe2o3-charged-input-20260925-ccjuTWIr",
+    "/dev/shm/fe2o3-charged-input-20260925-JDmRTDMm"
+  ],
+  "cleanup_status": 0,
+  "observed_at": "2026-09-25T20:39:47.860189+00:00",
+  "paths": [
+    {
+      "lstat_absent": true,
+      "parent_listing_absent": true,
+      "path": "/home/harsh/.codex-tmp/fe2o3-charged-input-20260925-ccjuTWIr"
+    },
+    {
+      "lstat_absent": true,
+      "parent_listing_absent": true,
+      "path": "/dev/shm/fe2o3-charged-input-20260925-JDmRTDMm"
+    }
+  ],
+  "remote_resources_created": false,
+  "removed_path_accounted_allocated_bytes": 6813011968,
+  "retained_files": 123,
+  "retention_unchanged": true,
+  "terminal_groups_absent": true
+}

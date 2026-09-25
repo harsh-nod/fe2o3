@@ -1,0 +1,2 @@
+    Checking generic-worker-v3-adapter-fixture v0.0.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter)
+error: could not compile `generic-worker-v3-adapter-fixture` (bin "charged_result_storage_escape") due to 1 previous error

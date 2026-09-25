@@ -1,0 +1,14 @@
+
+running 9 tests
+test generated_runtime_arguments::charged_tests::result_input_tests::completed_input_legacy_packing_preserves_the_existing_uncharged_route ... ok
+test generated_runtime_arguments::charged_tests::result_input_tests::completed_input_empty_result_still_requires_a_successor_member ... ok
+test generated_runtime_arguments::charged_tests::result_input_tests::completed_input_payload_and_binding_mismatches_dispose_without_readiness ... ok
+test generated_runtime_arguments::charged_tests::result_input_tests::completed_input_rejects_output_custody_and_mapping_before_accounting ... ok
+test generated_runtime_arguments::charged_tests::result_input_tests::completed_input_shared_budget_reserves_overlap_before_encoding ... ok
+test generated_runtime_arguments::charged_tests::result_input_tests::completed_input_rejection_and_unwind_dispose_both_accounts ... ok
+test generated_runtime_arguments::charged_tests::result_input_tests::completed_input_overlap_exhaustion_rejects_before_binding ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_completed_input_reuses_host_data_through_read_only_preparation ... ok
+test generated_runtime_arguments::charged_tests::result_input_tests::completed_input_conversion_preserves_storage_type_bits_and_credit_across_move ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 166 filtered out; finished in 0.01s
+

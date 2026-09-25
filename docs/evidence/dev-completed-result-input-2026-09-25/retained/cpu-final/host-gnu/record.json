@@ -1,0 +1,18 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-host",
+    "--lib",
+    "--",
+    "--test-threads=2"
+  ],
+  "started_ns": 1790368510575578717,
+  "process_group": 1448220,
+  "group_absent": true,
+  "finished_ns": 1790368534610056127,
+  "status": 0
+}

@@ -1,0 +1,14 @@
+runner-tests: PASS
+rustc: PASS
+host-gnu: PASS
+host-musl: PASS
+host-doctests: PASS
+accounting: PASS
+macros: PASS
+runtime: PASS
+fixture-pass: PASS
+fixture-reuse: PASS
+fixture-clone: PASS
+fixture-storage: PASS
+clippy: PASS
+format: PASS

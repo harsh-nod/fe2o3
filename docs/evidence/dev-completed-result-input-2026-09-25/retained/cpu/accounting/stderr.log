@@ -1,0 +1,5 @@
+   Compiling spin v0.12.3
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.79s
+     Running unittests src/lib.rs (/dev/shm/fe2o3-charged-input-20260925-JDmRTDMm/debug/deps/fe2o3_resource_accounting-9e579c0e35dc6b12)

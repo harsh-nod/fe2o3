@@ -24,6 +24,25 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest host-data development (2026-09-25): the
+[completed-result input packet](evidence/dev-completed-result-input-2026-09-25/README.md)
+adds a consuming read-only input constructor that preserves the original typed
+allocation and credit until the next input has been admitted and encoded. It
+avoids one caller-side typed clone; encoding remains linear, and successor
+credit is reserved independently rather than transferred or refunded early.
+All fourteen phases pass from signed `49aa95f33`: GNU/musl each pass 175 host
+tests, including nine new ownership/accounting/preparation tests; GNU runtime
+passes 1,413 with 22 hardware-only ignores; 26 host doctests, accounting/macros,
+generated downstream compilation, three compile negatives, six runner checks,
+strict Clippy and formatting pass. Both source brackets match 5,953 inputs.
+The first run's inherited Clippy failure is retained; its correction only moves
+an unchanged test module. All 123 scratch artifacts are retained before
+exact-owned cleanup and independent absence, reclaiming 6,813,011,968 allocated
+bytes. This is completed host-data chaining, not device-resident forwarding,
+in-flight dependency transfer, protected Worker execution, formal adapter
+refinement or measured performance. A1/A2 and accepted lane checkpoints remain
+unchanged.
+
 Latest selected-reader development (2026-09-25): the
 [selected completion packet](evidence/dev-selected-reader-completion-2026-09-25/README.md)
 removes one redundant stable-roster validation and shares selected-root journal
