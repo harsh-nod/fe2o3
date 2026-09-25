@@ -43,6 +43,29 @@ impl ProjectedAssertionFactsV1 for Facts<'_, '_> {
     }
 }
 
+// Deliberately retain the trait-default missing storage/identity custody.
+struct NoCustodyFacts(usize);
+impl ProjectedAssertionFactsV1 for NoCustodyFacts {
+    fn charge_private_array_work(&mut self, amount: usize) -> Result<()> {
+        self.0 += amount;
+        Ok(())
+    }
+    fn private_array_initializer_count(&mut self, _: usize, _: usize) -> Result<Option<u64>> {
+        Ok(None)
+    }
+    fn is_materialized_block(&mut self, _: usize) -> Result<bool> {
+        Ok(true)
+    }
+    fn condition(
+        &mut self,
+        _: usize,
+        _: bool,
+        _: SemanticBlockIdV1,
+    ) -> Result<ProjectedAssertionConditionV1> {
+        Ok(ProjectedAssertionConditionV1::Dynamic)
+    }
+}
+
 fn fixture() -> SemanticFunctionDeclV1 {
     super::super::tests::multi_entry_source_fixture_v1()
 }
@@ -291,6 +314,96 @@ fn multi_entry_scope_is_lazy_for_historical_paths() {
         ),
         (0, 0, 0, None)
     );
+}
+
+#[test]
+fn multi_entry_scope_keeps_trait_default_custody_optional_without_induction() {
+    let mut facts = NoCustodyFacts(0);
+    let mut called = false;
+    let result = with_scope(&mut facts, |_, _| {
+        called = true;
+        Err(ProductionRankedProjectionErrorV1::Unsupported(DONE))
+    });
+    assert!(called);
+    assert!(matches!(
+        result,
+        Err(ProductionRankedProjectionErrorV1::Unsupported(_))
+    ));
+    assert_eq!(facts.0, 0);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_scope(&mut facts, |_, _| panic!("historical callback unwind"))
+    }));
+    assert!(panic.is_err());
+    assert_eq!(facts.0, 0);
+}
+
+#[test]
+fn multi_entry_scope_requires_entry_custody_on_use_and_cannot_retry_with_a_new_floor() {
+    let mut facts = NoCustodyFacts(0);
+    let result = with_scope(&mut facts, |scope, facts| {
+        let result = make(&fixture(), scope, facts);
+        assert!(matches!(
+            result,
+            Err(ProductionRankedProjectionErrorV1::Incomplete(_))
+        ));
+        assert_eq!(facts.0, 0);
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.reserve_storage(17).unwrap();
+        for _ in 0..2 {
+            let result = make(&fixture(), scope, &mut Facts(&mut budget));
+            assert!(matches!(
+                result,
+                Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    CanonicalAssertionErrorV1::Resource(Resource::Accounting)
+                ))
+            ));
+            assert_eq!((budget.storage(), budget.work()), (17, 0));
+        }
+        Err(ProductionRankedProjectionErrorV1::Unsupported(DONE))
+    });
+    assert!(matches!(
+        result,
+        Err(ProductionRankedProjectionErrorV1::Unsupported(_))
+    ));
+    assert_eq!(facts.0, 0);
+}
+
+#[test]
+fn multi_entry_scope_refuses_foreign_account_before_first_induction_use() {
+    let mut work = Work::new(usize::MAX);
+    let mut other_work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    let mut other = Budget::new(&mut other_work, usize::MAX);
+    budget.reserve_storage(17).unwrap();
+    other.reserve_storage(17).unwrap();
+    let account = budget.work_ledger_identity_v1();
+    for moved in [false, true] {
+        let result = with_scope(&mut Facts(&mut budget), |scope, facts| {
+            std::mem::swap(facts.0, &mut other);
+            // Same address/foreign ledger, then same ledger/foreign address.
+            let result = if moved {
+                make(&fixture(), scope, &mut Facts(&mut other))
+            } else {
+                make(&fixture(), scope, facts)
+            };
+            std::mem::swap(facts.0, &mut other);
+            assert!(matches!(
+                result,
+                Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    CanonicalAssertionErrorV1::Resource(Resource::Accounting)
+                ))
+            ));
+            assert_eq!((other.storage(), other.work()), (17, 0));
+            Err(ProductionRankedProjectionErrorV1::Unsupported(DONE))
+        });
+        assert!(matches!(
+            result,
+            Err(ProductionRankedProjectionErrorV1::Unsupported(_))
+        ));
+        assert_eq!((budget.storage(), budget.work()), (17, 0));
+        assert!(budget.work_ledger_identity_v1() == account);
+    }
 }
 
 fn extent_then_induction_replay(

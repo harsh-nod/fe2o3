@@ -59,9 +59,9 @@ fn bytes<T>(count: usize) -> Result<usize> {
 }
 
 pub(super) struct Scope {
-    ledger: Option<(usize, Ledger)>,
-    floor: usize,
+    entry: Result<(usize, Ledger, usize)>,
     retained: usize,
+    started: bool,
 }
 
 pub(super) struct Context<'s, 'f> {
@@ -71,17 +71,20 @@ pub(super) struct Context<'s, 'f> {
 
 impl Scope {
     fn check(&mut self, facts: &mut dyn ProjectedAssertionFactsV1) -> Result<()> {
+        let (expected_address, expected, floor) = match &mut self.entry {
+            Ok(entry) => *entry,
+            // Preserve the original failure once; a caught error cannot turn
+            // missing entry custody into a later, freshly sampled account.
+            Err(error) => return Err(std::mem::replace(error, resource(Resource::Accounting))),
+        };
         let (address, ledger) = facts.helper_value_ledger_v1()?;
         let storage = facts.scalar_private_storage_v1()?;
-        if storage < sum(self.floor, self.retained)? {
+        if address != expected_address || ledger != expected || storage < sum(floor, self.retained)?
+        {
             return Err(resource(Resource::Accounting));
         }
-        if let Some((expected_address, expected)) = self.ledger {
-            if address != expected_address || ledger != expected {
-                return Err(resource(Resource::Accounting));
-            }
-        } else {
-            self.ledger = Some((address, ledger));
+        if !self.started {
+            self.started = true;
             let header = std::mem::size_of::<Scope>();
             facts.reserve_scalar_private_storage_v1(header)?;
             self.retained = header;
@@ -138,16 +141,20 @@ pub(super) fn with_scope<F: ProjectedAssertionFactsV1>(
     facts: &mut F,
     action: impl FnOnce(&mut Scope, &mut F) -> Result<ProductionRankedRootProgramV1>,
 ) -> Result<ProductionRankedRootProgramV1> {
-    // Bind the outer lifetime before slice-extent scratch is reserved. The
-    // first induction query can occur inside that shorter-lived scope.
+    // Snapshot before shorter-lived extent scratch exists, but require custody
+    // only on an induction query. Historical no-induction adapters may lack it.
     let mut scope = Scope {
-        ledger: None,
-        floor: facts.scalar_private_storage_v1()?,
+        entry: facts.scalar_private_storage_v1().and_then(|floor| {
+            facts
+                .helper_value_ledger_v1()
+                .map(|(address, ledger)| (address, ledger, floor))
+        }),
         retained: 0,
+        started: false,
     };
     let result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(&mut scope, facts)));
-    if scope.ledger.is_some() {
+    if scope.started {
         scope.check(facts)?;
         let retained = scope.retained;
         scope.release(facts, retained)?;
