@@ -209,7 +209,6 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
         }
     }
 }
-
 impl std::error::Error for ProductionSemanticImportErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -356,12 +355,14 @@ enum SourceImportPolicyV1 {
     Singleton,
     Composition,
     Bf16Inspection,
+    Bf16TileValues,
 }
 // Exact private completion modes: no inferred or fallback source custody.
 enum SourceImportCompletionV1<'tcx> {
     Singleton,
     Composition(crate::production_ordered_composition_source_v1::AuthenticatedOrderedCompositionSourceSeedV1<'tcx>),
     Bf16Inspection(crate::production_tiled_region_source_v1::AuthenticatedBf16MfmaSourceSeedV1<'tcx>),
+    Bf16TileValues(crate::production_bf16_tile_values_source_v1::AuthenticatedBf16TileValuesSourceSeedV1<'tcx>),
 }
 pub(crate) struct AuthenticatedBf16MfmaInspectionMirV1<'tcx> {
     constructed: ConstructedProductionSemanticMirV1,
@@ -398,6 +399,47 @@ pub(crate) fn construct_production_semantic_mir_bf16_inspection_v1<'tcx>(
         }
         _ => Err(body_owner_table_mismatch_v1(
             "BF16 inspection import returned foreign source custody",
+        )),
+    }
+}
+
+// Dedicated move-only source custody, not a permissiveness flag or P0 fallback.
+pub(crate) struct AuthenticatedBf16TileValuesMirV1<'tcx> {
+    constructed: ConstructedProductionSemanticMirV1,
+    source_seed:
+        crate::production_bf16_tile_values_source_v1::AuthenticatedBf16TileValuesSourceSeedV1<'tcx>,
+}
+impl<'tcx> AuthenticatedBf16TileValuesMirV1<'tcx> {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        ConstructedProductionSemanticMirV1,
+        crate::production_bf16_tile_values_source_v1::AuthenticatedBf16TileValuesSourceSeedV1<'tcx>,
+    ) {
+        (self.constructed, self.source_seed)
+    }
+}
+pub(crate) fn construct_production_semantic_mir_bf16_tile_values_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+) -> Result<AuthenticatedBf16TileValuesMirV1<'tcx>, ProductionSemanticImportErrorV1> {
+    let (constructed, completion) = construct_production_semantic_mir_with_policy_v1(
+        tcx,
+        closure,
+        debug_source_capture,
+        false,
+        SourceImportPolicyV1::Bf16TileValues,
+    )?;
+    match completion {
+        SourceImportCompletionV1::Bf16TileValues(source_seed) => {
+            Ok(AuthenticatedBf16TileValuesMirV1 {
+                constructed,
+                source_seed,
+            })
+        }
+        _ => Err(body_owner_table_mismatch_v1(
+            "BF16 tile-values import returned foreign source custody",
         )),
     }
 }
@@ -548,28 +590,54 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
             ));
         }
     };
-    let (semantic_mir, context_entries, ordered_completion, bf16_completion) =
-        construct_complete_request_v1(
-            tcx,
-            canonical_target_layout_v1(target.rustc_layout()),
-            &mut plan,
-            semantic_types.into_records(),
-            semantic_function_abis,
-            semantic_terminal_abis,
-            ordered_policy,
-        )?;
+    let (
+        semantic_mir,
+        context_entries,
+        ordered_completion,
+        bf16_completion,
+        tile_values_completion,
+    ) = construct_complete_request_v1(
+        tcx,
+        canonical_target_layout_v1(target.rustc_layout()),
+        &mut plan,
+        semantic_types.into_records(),
+        semantic_function_abis,
+        semantic_terminal_abis,
+        ordered_policy,
+    )?;
+    use crate::production_bf16_tile_values_source_v1::Bf16TileValuesImportCompletionV1 as TileValues;
     use crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1 as Ordered;
     use crate::production_tiled_region_source_v1::Bf16MfmaImportCompletionV1 as Bf16;
-    let completion = match (ordered_policy, ordered_completion, bf16_completion) {
-        (SourceImportPolicyV1::Singleton, Ordered::Singleton, Bf16::Disabled) => {
-            SourceImportCompletionV1::Singleton
-        }
-        (SourceImportPolicyV1::Composition, Ordered::Composition(seed), Bf16::Disabled) => {
-            SourceImportCompletionV1::Composition(seed)
-        }
-        (SourceImportPolicyV1::Bf16Inspection, Ordered::Singleton, Bf16::Inspected(seed)) => {
-            SourceImportCompletionV1::Bf16Inspection(seed)
-        }
+    let completion = match (
+        ordered_policy,
+        ordered_completion,
+        bf16_completion,
+        tile_values_completion,
+    ) {
+        (
+            SourceImportPolicyV1::Singleton,
+            Ordered::Singleton,
+            Bf16::Disabled,
+            TileValues::Disabled,
+        ) => SourceImportCompletionV1::Singleton,
+        (
+            SourceImportPolicyV1::Composition,
+            Ordered::Composition(seed),
+            Bf16::Disabled,
+            TileValues::Disabled,
+        ) => SourceImportCompletionV1::Composition(seed),
+        (
+            SourceImportPolicyV1::Bf16Inspection,
+            Ordered::Singleton,
+            Bf16::Inspected(seed),
+            TileValues::Disabled,
+        ) => SourceImportCompletionV1::Bf16Inspection(seed),
+        (
+            SourceImportPolicyV1::Bf16TileValues,
+            Ordered::Singleton,
+            Bf16::Disabled,
+            TileValues::Inspected(seed),
+        ) => SourceImportCompletionV1::Bf16TileValues(seed),
         _ => {
             return Err(body_owner_table_mismatch_v1(
                 "source import completion modes differ",
@@ -642,6 +710,7 @@ fn construct_complete_request_v1<'tcx>(
         super::RetainedContextEntriesV29,
         crate::production_ordered_composition_source_v1::OrderedSourceImportCompletionV1<'tcx>,
         crate::production_tiled_region_source_v1::Bf16MfmaImportCompletionV1<'tcx>,
+        crate::production_bf16_tile_values_source_v1::Bf16TileValuesImportCompletionV1<'tcx>,
     ),
     ProductionSemanticImportErrorV1,
 > {
@@ -716,7 +785,9 @@ fn construct_complete_request_v1<'tcx>(
     .with_inline_sources_v30(inline_sources)
     .with_ordered_sources_v31(ordered_sources);
     match ordered_policy {
-        SourceImportPolicyV1::Singleton | SourceImportPolicyV1::Bf16Inspection => {
+        SourceImportPolicyV1::Singleton
+        | SourceImportPolicyV1::Bf16Inspection
+        | SourceImportPolicyV1::Bf16TileValues => {
             let sources = if contains_ordered_program {
                 crate::production_ordered_program_source_occurrences_v32::OrderedProgramSourceOccurrencesV32::from_plan(tcx, plan)
                     .map_err(body_owner_table_mismatch_v1)?
@@ -741,6 +812,11 @@ fn construct_complete_request_v1<'tcx>(
     if matches!(ordered_policy, SourceImportPolicyV1::Bf16Inspection) {
         body_owner
             .prepare_bf16_inspection_source_v1(tcx, plan)
+            .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    }
+    if matches!(ordered_policy, SourceImportPolicyV1::Bf16TileValues) {
+        body_owner
+            .prepare_bf16_tile_values_source_v1(tcx, plan)
             .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     }
     if contains_physical_entry {
@@ -1013,6 +1089,9 @@ fn construct_complete_request_v1<'tcx>(
     let bf16_completion = body_owner
         .complete_bf16_inspection_source_v1(&semantic)
         .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    let tile_values_completion = body_owner
+        .complete_bf16_tile_values_source_v1(&semantic)
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     let ordered_completion = body_owner
         .complete_ordered_source_import_v1(&semantic)
         .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
@@ -1024,6 +1103,7 @@ fn construct_complete_request_v1<'tcx>(
         context_entries,
         ordered_completion,
         bf16_completion,
+        tile_values_completion,
     ))
 }
 

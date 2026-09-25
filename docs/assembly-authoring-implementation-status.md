@@ -5,6 +5,17 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Genuine BF16 helper source transport — 2026-09-25
+
+The [helper-source checkpoint](bf16-helper-source-qualification-20260925.md)
+adds actual rustc/HIR/MIR/FnABI and SSA transport checks for one nominal
+BF16 matrix helper, with bounded source scans and original-ledger cleanup.
+Five fresh source sessions passed after the finite-header correction.
+Both supported return layouts reach the unchanged ordinary helper refusal;
+helper emission, normal continuation and numerical execution remain open.
+The earlier root-only BF16 inspection, normal and CPU ladders passed again.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Genuine-source BF16 CPU execution and physical debugger V2 packages — 2026-09-25
 
 The [BF16 source-CPU checkpoint](bf16-source-cpu-qualification-20260925.md)

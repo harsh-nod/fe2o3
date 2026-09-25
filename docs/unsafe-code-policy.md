@@ -380,6 +380,38 @@ This reconciliation changes only this one inventory entry and review records.
 Run the source-inventory gate, engineering host tests and compile-fail doctests;
 CPU evidence does not qualify native GPU execution or protected authority.
 
+### Conditional Invocation Binding Comparison Fixture
+
+Peer commit 5e1f9c3441066f13f5d501a95349a8a99fe886be adds one test-only unsafe
+implementation in conditional_authority_tests.rs. The private
+BindingComparisonFixture is compiled only as a child of authorized_execution
+under cfg(test). Its constructors and all uses remain in three comparison
+tests; none supplies it to an execution entrypoint or constructs a checked
+device, prepared dispatch, telemetry token, or native request.
+
+An unsafe impl is necessary to exercise the actual generic
+validate_authority_bindings_v1 helper without duplicating its behavior or
+weakening its unsafe trait bound. The fixture returns inert identity values
+and updates a local Cell counter; it performs no raw memory, OS, FFI or device
+operation. Tests check that family/payload mismatch precedes currentness,
+that matching values still require currentness, and that contract/device
+mismatches still refuse. This retains the existing private preflight-test
+pattern, not a new execution-authority constructor.
+
+These fixture values do not authenticate a Worker V3 publication or satisfy
+the trait contract for native execution. Safety depends on reviewed private
+test-only confinement and the complete call-site census, not the hashes,
+fixture name, a test-configuration exemption, or the inventory itself.
+Any future escape or execution-entry use requires a new safety review even
+if its count remains one. Real authority still requires the unchanged
+verifier, invocation, device and retained-currentness obligations.
+
+Only this file receives impl: 1 in the inventory. No unsafe syntax, production
+implementation, tokenizer, gate or other allowance changes. After integration,
+run the conditional-authority and existing identity-comparison tests, runtime
+compile-fail doctests, and the full source-inventory gate. This reconciliation
+grants no runtime, native, GPU or protected authority.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

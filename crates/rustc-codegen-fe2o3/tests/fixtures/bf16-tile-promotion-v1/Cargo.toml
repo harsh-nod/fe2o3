@@ -1,0 +1,18 @@
+[package]
+name = "fe2o3-bf16-tile-promotion-v1-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[features]
+identity = []
+swap01 = []
+wrong-launch = []
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
+fe2o3-host = { path = "../../../../fe2o3-host" }
+
+[workspace]

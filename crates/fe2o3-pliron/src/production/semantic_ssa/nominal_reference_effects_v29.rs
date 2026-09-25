@@ -22,6 +22,9 @@ pub(super) struct NominalReferenceEffectsV29 {
 
 type Error = ProductionSemanticSsaErrorV1;
 
+#[path = "nominal_matrix_reference_v1.rs"]
+mod matrix_reference;
+
 impl NominalReferenceEffectsV29 {
     pub(super) fn derive(
         semantic: &AdmittedInertSemanticMirV1,
@@ -35,7 +38,7 @@ impl NominalReferenceEffectsV29 {
             parameter_count: 0,
             scratch_peak: 0,
         };
-        for function in semantic.functions() {
+        for (function_index, function) in semantic.functions().iter().enumerate() {
             meter.work(1)?;
             let count = function.abi().source_input_types().len();
             meter.storage(product(count, 16)?)?;
@@ -60,16 +63,30 @@ impl NominalReferenceEffectsV29 {
                     let SemanticTypeShapeV1::Pointer(pointer) = declaration.shape() else {
                         continue;
                     };
-                    if pointer.kind() != SemanticPointerKindV1::Reference
-                        || !semantic
-                            .types()
-                            .get(pointer.pointee().index() as usize)
-                            .is_some_and(|pointee| {
-                                matches!(
-                                    pointee.rust_type_kind(),
-                                    SemanticRustTypeKindV1::Execution(_)
-                                )
-                            })
+                    if pointer.kind() != SemanticPointerKindV1::Reference {
+                        continue;
+                    }
+                    let execution = semantic
+                        .types()
+                        .get(pointer.pointee().index() as usize)
+                        .is_some_and(|pointee| {
+                            matches!(
+                                pointee.rust_type_kind(),
+                                SemanticRustTypeKindV1::Execution(_)
+                            )
+                        });
+                    if !execution
+                        && !matrix_reference::nominates(
+                            semantic,
+                            SemanticFunctionIdV1::from_index(
+                                u32::try_from(function_index)
+                                    .map_err(|_| Error::ResourceOverflow)?,
+                            ),
+                            ordinal,
+                            local_index as u32,
+                            reference_type,
+                            &mut meter,
+                        )?
                     {
                         continue;
                     }

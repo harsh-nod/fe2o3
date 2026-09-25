@@ -1064,4 +1064,6 @@ mod gfx942_physical_lds_exchange_production_v22_tests;
 mod gfx942_ordered_composition_qualification_v1_tests;
 
 #[cfg(all(test, target_os = "linux"))]
+mod gfx942_bf16_tile_values_qualification_v1_tests;
+#[cfg(all(test, target_os = "linux"))]
 mod gfx942_tiled_region_qualification_v1_tests;
