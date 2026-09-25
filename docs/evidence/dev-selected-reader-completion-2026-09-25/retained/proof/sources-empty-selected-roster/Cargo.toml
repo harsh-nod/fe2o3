@@ -1,0 +1,184 @@
+[workspace]
+members = [
+    "crates/*",
+    "crates/fe2o3-core/tests/renamed-dependency",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/external-spoof",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/half-math-compiler",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/local-marker",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/lookalike-helper",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/lookalike-thread",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/lookalike-type",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/memory-v1-compiler",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/production-semantic-conformance-device",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/renamed-genuine",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof",
+    "examples/add_inplace",
+    "examples/axpy_inplace",
+    "examples/copy",
+    "examples/downsample",
+    "examples/fill",
+    "examples/gather_odd",
+    "examples/negate",
+    "examples/normalize",
+    "examples/pipeline",
+    "examples/previous",
+    "examples/raw_add_index",
+    "examples/raw_const_minus",
+    "examples/raw_parenthesized_sub",
+    "examples/raw_disjoint_inplace_shift",
+    "examples/raw_disjoint_shift",
+    "examples/raw_gather",
+    "examples/raw_neighbors",
+    "examples/raw_output_shift",
+    "examples/scalar_gemm_v1",
+    "examples/saxpy",
+    "examples/scale",
+    "examples/shift",
+    "examples/stencil",
+    "examples/vecadd",
+    "examples/vecadd_f64",
+    "examples/verus_vecadd",
+]
+default-members = [
+    "crates/cargo-fe2o3",
+    "crates/fe2o3-device",
+    "crates/fe2o3-host",
+    "crates/fe2o3-kir-sim-cli",
+    "examples/fill",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/harsh-nod/fe2o3"
+rust-version = "1.94"
+
+[workspace.metadata.fe2o3-release]
+canonical-repository = "https://github.com/harsh-nod/fe2o3"
+mirror-repository = "https://github.com/powderluv/fe2o3"
+protected-parity-design-repository = "https://github.com/powderluv/fe2o3"
+distribution = "source-developer-preview"
+crates-io-publish = false
+
+[workspace.dependencies]
+dialect-amdgcn = { path = "crates/dialect-amdgcn" }
+dialect-autotune = { path = "crates/dialect-autotune" }
+dialect-dispatch = { path = "crates/dialect-dispatch" }
+dialect-gpu = { path = "crates/dialect-gpu" }
+dialect-kernel = { path = "crates/dialect-kernel" }
+dialect-mir = { path = "crates/dialect-mir" }
+dialect-proof = { path = "crates/dialect-proof" }
+dialect-schedule = { path = "crates/dialect-schedule" }
+dialect-tile = { path = "crates/dialect-tile" }
+fe2o3-amdgcn-model = { path = "crates/fe2o3-amdgcn-model" }
+fe2o3-amdhsa-loader = { path = "crates/fe2o3-amdhsa-loader" }
+fe2o3-aql = { path = "crates/fe2o3-aql" }
+fe2o3-amd-target = { path = "crates/fe2o3-amd-target" }
+fe2o3-artifact-transaction = { path = "crates/fe2o3-artifact-transaction" }
+fe2o3-broker-authority-service = { path = "crates/fe2o3-broker-authority-service" }
+fe2o3-build-authority = { path = "crates/fe2o3-build-authority" }
+fe2o3-completion = { path = "crates/fe2o3-completion" }
+fe2o3-compiler-api = { path = "crates/fe2o3-compiler-api" }
+fe2o3-compiler-closure-capability = { path = "crates/fe2o3-compiler-closure-capability" }
+fe2o3-compiler-execution-client = { path = "crates/fe2o3-compiler-execution-client" }
+fe2o3-compiler-execution-coordinator = { path = "crates/fe2o3-compiler-execution-coordinator" }
+fe2o3-compiler-execution-deployment = { path = "crates/fe2o3-compiler-execution-deployment" }
+fe2o3-compiler-execution-issuer = { path = "crates/fe2o3-compiler-execution-issuer" }
+fe2o3-compiler-execution-lifecycle = { path = "crates/fe2o3-compiler-execution-lifecycle" }
+fe2o3-compiler-execution-protocol = { path = "crates/fe2o3-compiler-execution-protocol" }
+fe2o3-compiler-execution-supervisor = { path = "crates/fe2o3-compiler-execution-supervisor" }
+fe2o3-compiler-ffi = { path = "crates/fe2o3-compiler-ffi" }
+fe2o3-compiler-lineage = { path = "crates/fe2o3-compiler-lineage" }
+fe2o3-artifacts = { path = "crates/fe2o3-artifacts" }
+fe2o3-contracts = { path = "crates/fe2o3-contracts" }
+fe2o3-core = { path = "crates/fe2o3-core" }
+fe2o3-device = { path = "crates/fe2o3-device", version = "=0.1.0" }
+fe2o3-debug-protocol = { path = "crates/fe2o3-debug-protocol" }
+fe2o3-differential = { path = "crates/fe2o3-differential" }
+fe2o3-drm-uapi = { path = "crates/fe2o3-drm-uapi" }
+fe2o3-external-anchor-coordinator = { path = "crates/fe2o3-external-anchor-coordinator" }
+fe2o3-external-anchor-protocol = { path = "crates/fe2o3-external-anchor-protocol" }
+fe2o3-external-anchor-provisioner = { path = "crates/fe2o3-external-anchor-provisioner" }
+fe2o3-external-anchor-service = { path = "crates/fe2o3-external-anchor-service" }
+fe2o3-functional-proof = { path = "crates/fe2o3-functional-proof" }
+fe2o3-hip-sys = { path = "crates/fe2o3-hip-sys" }
+fe2o3-hsaco = { path = "crates/fe2o3-hsaco" }
+fe2o3-hsaco-finalize = { path = "crates/fe2o3-hsaco-finalize" }
+fe2o3-hsa-runtime = { path = "crates/fe2o3-hsa-runtime" }
+fe2o3-host = { path = "crates/fe2o3-host" }
+fe2o3-host-api = { path = "crates/fe2o3-host-api" }
+fe2o3-kfd = { path = "crates/fe2o3-kfd" }
+fe2o3-kfd-uapi = { path = "crates/fe2o3-kfd-uapi" }
+fe2o3-kernel-descriptor = { path = "crates/fe2o3-kernel-descriptor" }
+fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis", default-features = false }
+fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
+fe2o3-kernel-opt = { path = "crates/fe2o3-kernel-opt" }
+fe2o3-kir-sim = { path = "crates/fe2o3-kir-sim" }
+fe2o3-kir-debugger = { path = "crates/fe2o3-kir-debugger" }
+fe2o3-kir-sim-cli = { path = "crates/fe2o3-kir-sim-cli" }
+fe2o3-kir-sim-trace = { path = "crates/fe2o3-kir-sim-trace" }
+fe2o3-llvm-handoff = { path = "crates/fe2o3-llvm-handoff" }
+fe2o3-llvm-text = { path = "crates/fe2o3-llvm-text" }
+fe2o3-loop-device = { path = "crates/fe2o3-loop-device" }
+fe2o3-lower-mir-kernel = { path = "crates/fe2o3-lower-mir-kernel" }
+fe2o3-macros = { path = "crates/fe2o3-macros" }
+fe2o3-mir-model = { path = "crates/fe2o3-mir-model" }
+fe2o3-pliron = { path = "crates/fe2o3-pliron" }
+fe2o3-pliron-owner-core = { path = "crates/fe2o3-pliron-owner-core" }
+fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }
+fe2o3-profiler-protocol = { path = "crates/fe2o3-profiler-protocol" }
+fe2o3-protected-static-executable = { path = "crates/fe2o3-protected-static-executable" }
+fe2o3-protected-service-profile = { path = "crates/fe2o3-protected-service-profile" }
+fe2o3-protected-service-spawn = { path = "crates/fe2o3-protected-service-spawn" }
+fe2o3-semantic-import = { path = "crates/fe2o3-semantic-import" }
+fe2o3-semantic-query = { path = "crates/fe2o3-semantic-query" }
+fe2o3-semantic-trace = { path = "crates/fe2o3-semantic-trace" }
+fe2o3-proof-contracts = { path = "crates/fe2o3-proof-contracts" }
+fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
+fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
+fe2o3-runtime-model = { path = "crates/fe2o3-runtime-model" }
+fe2o3-resource-accounting = { path = "crates/fe2o3-resource-accounting" }
+fe2o3-runtime-protocol = { path = "crates/fe2o3-runtime-protocol" }
+fe2o3-runtime = { path = "crates/fe2o3-runtime" }
+fe2o3-virtual-runtime = { path = "crates/fe2o3-virtual-runtime" }
+fe2o3-virtual-runtime-cli = { path = "crates/fe2o3-virtual-runtime-cli" }
+fe2o3-service-host = { path = "crates/fe2o3-service-host" }
+fe2o3-service-model = { path = "crates/fe2o3-service-model" }
+fe2o3-sim-differential = { path = "crates/fe2o3-sim-differential" }
+fe2o3-sim-physical-differential = { path = "crates/fe2o3-sim-physical-differential" }
+fe2o3-sim-runtime = { path = "crates/fe2o3-sim-runtime" }
+fe2o3-static-preexec-manifest = { path = "crates/fe2o3-static-preexec-manifest" }
+fe2o3-source-isa-observation = { path = "crates/fe2o3-source-isa-observation" }
+fe2o3-target-spec = { path = "crates/fe2o3-target-spec" }
+fe2o3-verifier = { path = "crates/fe2o3-verifier" }
+fe2o3-worker-v3-verification-client = { path = "crates/fe2o3-worker-v3-verification-client" }
+fe2o3-worker-v3-verification-protocol = { path = "crates/fe2o3-worker-v3-verification-protocol" }
+fe2o3-worker-v3-verification-service = { path = "crates/fe2o3-worker-v3-verification-service" }
+reserved-fe2o3-symbols = { path = "crates/reserved-fe2o3-symbols" }
+rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }
+libc = "0.2.189"
+rustix = { version = "1.1.4", features = ["fs", "net"] }
+serde = { version = "1", features = ["derive"] }
+signal-hook = { version = "=0.4.4", default-features = false }
+
+proc-macro2 = "1"
+proc-macro-crate = "3"
+pliron = { git = "https://github.com/harsh-nod/pliron.git", rev = "5bdf861bf03e7f20242b25717fb653336d02e487" }
+pliron-llvm = { git = "https://github.com/harsh-nod/pliron.git", rev = "5bdf861bf03e7f20242b25717fb653336d02e487", default-features = false, features = ["std"] }
+quote = "1"
+rustc_apfloat = "=0.2.3"
+sha2 = { version = "0.11.0", default-features = false }
+spin = { version = "0.12.3", default-features = false, features = ["once"] }
+syn = { version = "2", features = ["full"] }
+
+[profile.dev.package.fe2o3-verifier]
+strip = "debuginfo"
+
+[profile.test.package.cargo-fe2o3]
+strip = "debuginfo"
+
+[profile.test.package.fe2o3-debug-cli]
+strip = "debuginfo"

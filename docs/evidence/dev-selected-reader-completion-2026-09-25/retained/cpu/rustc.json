@@ -1,0 +1,28 @@
+{
+  "cleanup_required": false,
+  "command": [
+    "rustc",
+    "-Vv"
+  ],
+  "counts": [],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "elapsed_seconds": 0.500540839995665,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/dev/shm/fe2o3-selected-reader-20260925-Lc6tgKjg",
+    "RUSTDOCFLAGS": null,
+    "RUSTFLAGS": null,
+    "RUSTUP_TOOLCHAIN": null
+  },
+  "interruption": null,
+  "passed": true,
+  "pgid": 789430,
+  "process_group_absent": true,
+  "returncode": 0,
+  "roster_ok": true,
+  "source_commit": "aef1c70d9fdf4001a0070f4a6384551988ea93c3",
+  "sources_unchanged": true,
+  "started": "2026-09-25T19:04:34.448926+00:00",
+  "timed_out": false
+}

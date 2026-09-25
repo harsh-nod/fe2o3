@@ -1,0 +1,22 @@
+{
+  "cleanup_command": "rm -r -- exact owned paths",
+  "observed_at": "2026-09-25T19:29:41.073589+00:00",
+  "paths": [
+    {
+      "lstat_absent": true,
+      "parent_listing_absent": true,
+      "path": "/home/harsh/.codex-tmp/fe2o3-selected-reader-20260925-s8xXSC0O"
+    },
+    {
+      "lstat_absent": true,
+      "parent_listing_absent": true,
+      "path": "/dev/shm/fe2o3-selected-reader-20260925-Lc6tgKjg"
+    }
+  ],
+  "prior_force_command_rejected_before_execution": true,
+  "remote_resources_created": false,
+  "removed_path_accounted_allocated_bytes": 2016534528,
+  "retained_files": 4518,
+  "retention_unchanged": true,
+  "terminal_groups_absent": true
+}

@@ -1,0 +1,17 @@
+note: verifying module production::completion
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_mixed_prefix_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_writer_only_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_prefix_witness_v1
+
+error: function body check: Resource limit (rlimit) exceeded; consider rerunning with --profile for more details
+ --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:6:1
+  |
+6 | / fn selected_reader_prefix_witness_v1(stable_present: bool, producer_present: bool,
+7 | |     record_present: bool, bad_stable: bool, bad_producer: bool) -> (result: bool)
+  | |________________________________________________________________________________^
+
+error: aborting due to 1 previous error
+

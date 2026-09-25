@@ -1,0 +1,16 @@
+warning: Verus does not (yet) support autoderive Clone impl when the clone is not a copy; continuing, but without adding a specification for the derived Clone impl
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_readers_v1.rs:36:10
+   |
+36 | #[derive(Clone, Copy)]
+   |          ^^^^^
+   |
+   = help: to suppress this warning, use `#[verifier::allow(autoderive_clone_without_spec)]` on the surrounding function, datatype, or module or `#![verifier::allow(autoderive_clone_without_spec)]` in the module or crate
+
+note: verifying module production::completion
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_mixed_prefix_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_writer_only_witness_v1
+
+warning: 1 warning emitted
+

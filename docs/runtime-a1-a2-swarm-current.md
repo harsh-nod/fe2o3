@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest selected-reader development (2026-09-25): the
+[selected completion packet](evidence/dev-selected-reader-completion-2026-09-25/README.md)
+removes one redundant stable-roster validation and shares selected-root journal
+effects, retirement and marker clearing between production and proof. All eleven
+CPU phases pass from signed `aef1c70d9`: GNU/musl each pass 1,413 runtime tests
+with 22 hardware-only ignores; all 46 doctests, strict Clippy and formatting pass.
+Both whole-root proof brackets verify 1,303 obligations with no errors or
+diagnostics, all seven logical mutations reject, and source/tool brackets match.
+All 4,518 scratch artifacts, including rejected development attempts and the
+manual musl timing failures, are retained before exact-owned cleanup and
+independent absence, removing 2,016,534,528 allocated bytes. This is bounded
+development evidence, not a relocated replay audit or full Context refinement:
+HashMap/prevalidation binding, allocator-capacity correspondence, quarantine,
+later completion effects, generated execution, native/resource gates and matched
+performance remain open. A1/A2 and accepted lane checkpoints are unchanged.
+
 Latest Context CPU validation (2026-09-25): the
 [completion failure-prefix packet](evidence/dev-context-completion-faults-2026-09-25/README.md)
 adds five tests covering 40 scenarios at the real Context adapters: errors before

@@ -1,0 +1,35 @@
+error: This verus_builtin header should go at the beginning of the function body (this is probably a Verus bug, unless you are manually writing calls to Verus builtin headers, which is unusual)
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:12:5
+   |
+12 |     hide(lifecycle_reader_trace_v1);
+   |     ^^^^
+...
+77 |     selected_reader_witness_body!(verus_exec_expr, stable_present, producer_present, record_present, false, false)
+   |     -------------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = note: this error originates in the macro `selected_reader_witness_body` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: This verus_builtin header should go at the beginning of the function body (this is probably a Verus bug, unless you are manually writing calls to Verus builtin headers, which is unusual)
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:12:5
+   |
+12 |     hide(lifecycle_reader_trace_v1);
+   |     ^^^^
+...
+85 |     selected_reader_witness_body!(verus_exec_expr, true, producer_present, record_present, true, bad_producer)
+   |     ---------------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = note: this error originates in the macro `selected_reader_witness_body` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: This verus_builtin header should go at the beginning of the function body (this is probably a Verus bug, unless you are manually writing calls to Verus builtin headers, which is unusual)
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:12:5
+   |
+12 |     hide(lifecycle_reader_trace_v1);
+   |     ^^^^
+...
+93 |     selected_reader_witness_body!(verus_exec_expr, stable_present, true, record_present, false, true)
+   |     ------------------------------------------------------------------------------------------------- in this macro invocation
+   |
+   = note: this error originates in the macro `selected_reader_witness_body` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: aborting due to 3 previous errors
+

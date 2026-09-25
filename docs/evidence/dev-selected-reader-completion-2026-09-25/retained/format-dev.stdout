@@ -1,0 +1,50 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/context/versions/producer_readers.rs:751:
+                 completion_faults::CompletionJournalPointV1::BeforeEffect,
+             )?;
+             completion_selected_reader_release_body!(completion_journal_rust_syntax,
+-                versions.producer_readers, self.submissions, versions.journal,
+-                id, journal_producer_read, release_producer_reads, [
+-                    #[cfg(test)]
+-                    versions.completion_boundary_for_test_v1(
+-                        id,
+-                        completion_faults::CompletionJournalStageV1::Producer,
+-                        completion_faults::CompletionJournalPointV1::AfterEffect,
+-                    )?;
+-                ])
++            versions.producer_readers, self.submissions, versions.journal,
++            id, journal_producer_read, release_producer_reads, [
++                #[cfg(test)]
++                versions.completion_boundary_for_test_v1(
++                    id,
++                    completion_faults::CompletionJournalStageV1::Producer,
++                    completion_faults::CompletionJournalPointV1::AfterEffect,
++                )?;
++            ])
+         }));
+         match result {
+             Ok(result) => self.journal_result_v1(result),
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/context/versions/readers.rs:414:
+             completion_faults::CompletionJournalPointV1::BeforeEffect,
+         )?;
+         completion_selected_reader_release_body!(completion_journal_rust_syntax,
+-            versions.submission_readers, self.submissions, versions.journal,
+-            id, journal_read, release_reads, [
+-                #[cfg(test)]
+-                versions.completion_boundary_for_test_v1(
+-                    id,
+-                    completion_faults::CompletionJournalStageV1::Stable,
+-                    completion_faults::CompletionJournalPointV1::AfterEffect,
+-                )?;
+-            ])
++        versions.submission_readers, self.submissions, versions.journal,
++        id, journal_read, release_reads, [
++            #[cfg(test)]
++            versions.completion_boundary_for_test_v1(
++                id,
++                completion_faults::CompletionJournalStageV1::Stable,
++                completion_faults::CompletionJournalPointV1::AfterEffect,
++            )?;
++        ])
+     }
+ }
+ 

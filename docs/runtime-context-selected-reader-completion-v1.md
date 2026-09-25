@@ -19,8 +19,9 @@ Both reader classes use `completion_selected_reader_release_body!` to:
 
 There is no new persistent token, allocation, roster copy, fallback, or runtime
 map. Record lookup remains `get_mut`, including initial rejection before record
-publication. Panic catching, payload retention, quarantine, stable-before-producer
-ordering, and late writer validation remain in their existing ownership layers.
+publication. Panic catching, existing panic-payload handling, quarantine,
+stable-before-producer ordering, and late writer validation remain in their
+existing ownership layers.
 
 The optimization removes one linear stable-roster validation, not the journal's
 own checks. Overall complexity remains linear in the input roster size. No
@@ -38,8 +39,9 @@ The release contracts establish exact journal correspondence, root removal and
 marker clearing on success, root/marker preservation on journal error, unchanged
 opposite-reader ownership, and writer-marker preservation. Composition retains
 the stable-success prefix when producer release fails. Missing roots and missing
-submission records remain separate cases. Constructor-origin witnesses exercise
-all optional-root/record combinations and corrupt stable/producer references;
+submission records remain separate cases. Witnesses built from constructor-origin
+journal state exercise all optional-root/record combinations and corrupt
+stable/producer references;
 the corrupt-reference cases test the adapter contract, not reachability through
 the complete Context prevalidator.
 

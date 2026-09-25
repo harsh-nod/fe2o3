@@ -1,0 +1,40 @@
+note: verifying module production::completion
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_mixed_prefix_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_writer_only_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_prefix_check_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_prefix_witness_v1
+
+error: precondition not satisfied
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:46:5
+   |
+46 | /     selected_reader_prefix_check_v1(state, Ghost(trace@.actual[14]), stable_present,
+47 | |         producer_present, record_present, bad_stable, bad_producer)
+   | |___________________________________________________________________^
+...
+77 |       requires selected_reader_case_v1(state, stable_present, producer_present, record_present, bad_stable, bad_producer),
+   |                ---------------------------------------------------------------------------------------------------------- failed precondition
+
+note: recommendation not met
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:46:50
+   |
+46 |     selected_reader_prefix_check_v1(state, Ghost(trace@.actual[14]), stable_present,
+   |                                                  ^^^^^^^^^^^^^^^^^
+   |
+  --> vstd/seq.rs:972:12
+   |
+   = note: recommendation not met
+
+error: function body check: Resource limit (rlimit) exceeded; consider rerunning with --profile for more details
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:74:1
+   |
+74 | / fn selected_reader_prefix_check_v1(mut state: SelectedReadersV1, Ghost(ready): Ghost<ContextProducerReadJournalV1>,
+75 | |     stable_present: bool, producer_present: bool, record_present: bool, bad_stable: bool, bad_producer: bool)
+76 | |     -> (result: bool)
+   | |____________________^
+
+error: aborting due to 2 previous errors
+

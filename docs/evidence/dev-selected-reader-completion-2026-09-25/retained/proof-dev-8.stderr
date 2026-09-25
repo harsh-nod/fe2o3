@@ -1,0 +1,28 @@
+note: verifying module production::completion
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_mixed_prefix_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_writer_only_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_producer_error_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_stable_error_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_success_witness_v1
+
+error: function body check: Resource limit (rlimit) exceeded; consider rerunning with --profile for more details
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:92:1
+   |
+92 | / fn selected_reader_producer_error_witness_v1(stable_present: bool, record_present: bool)
+93 | |     -> (result: bool)
+   | |____________________^
+
+error: function body check: Resource limit (rlimit) exceeded; consider rerunning with --profile for more details
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:70:1
+   |
+70 | / fn selected_reader_success_witness_v1(stable_present: bool, producer_present: bool, record_present: bool)
+71 | |     -> (result: bool)
+   | |____________________^
+
+error: aborting due to 2 previous errors
+

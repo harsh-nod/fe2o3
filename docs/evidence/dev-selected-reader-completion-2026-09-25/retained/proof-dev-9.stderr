@@ -1,0 +1,12 @@
+note: verifying module production::completion
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_mixed_prefix_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_writer_only_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_producer_error_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_stable_error_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_success_witness_v1
+

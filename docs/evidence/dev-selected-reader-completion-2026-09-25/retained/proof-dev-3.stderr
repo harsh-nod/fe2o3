@@ -1,0 +1,34 @@
+warning: Verus does not (yet) support autoderive Clone impl when the clone is not a copy; continuing, but without adding a specification for the derived Clone impl
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_readers_v1.rs:36:10
+   |
+36 | #[derive(Clone, Copy)]
+   |          ^^^^^
+   |
+   = help: to suppress this warning, use `#[verifier::allow(autoderive_clone_without_spec)]` on the surrounding function, datatype, or module or `#![verifier::allow(autoderive_clone_without_spec)]` in the module or crate
+
+note: verifying module production::completion
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_mixed_prefix_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::completion_writer_only_witness_v1
+
+note: verifying module production::completion, function context_completion_journal_paired_v1::production::completion::selected_reader_prefix_witness_v1
+
+error: assertion failed
+  --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:48:12
+   |
+48 |       assert(completed == if stable_present && bad_stable || producer_present && bad_producer {
+   |  ____________^
+49 | |         Err(ReadErrorV1::InvalidReference)
+50 | |     } else { Ok(()) });
+   | |_____________________^ assertion failed
+
+error: function body check: Resource limit (rlimit) exceeded; consider rerunning with --profile for more details
+ --> crates/fe2o3-runtime-model/verus/context_completion_selected_reader_witnesses_v1.rs:6:1
+  |
+6 | / fn selected_reader_prefix_witness_v1(stable_present: bool, producer_present: bool,
+7 | |     record_present: bool, bad_stable: bool, bad_producer: bool) -> (result: bool)
+  | |________________________________________________________________________________^
+
+error: aborting due to 2 previous errors; 1 warning emitted
+

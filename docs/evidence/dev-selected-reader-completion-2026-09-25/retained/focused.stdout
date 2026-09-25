@@ -1,0 +1,31 @@
+
+running 26 tests
+test context::tests::producer_launch_tests::producer_launch_acquire_error_retains_both_unmarked_original_input_roots ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_late_writer_identity_error_preserves_released_inputs ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_prevalidation_rejects_before_the_first_effect_boundary ... ok
+test context::tests::producer_launch_tests::producer_launch_combined_capacity_and_late_request_rejection_are_pre_issue ... ok
+test context::tests::producer_launch_tests::producer_launch_discarded_observer_keeps_inputs_until_consumer_stream_quiesces ... ok
+test context::tests::producer_launch_tests::producer_launch_admission_requires_live_exact_nonaliased_profile_producers ... ok
+test context::tests::producer_launch_tests::producer_launch_coverage_uses_every_original_alias_and_writable_interval_union ... ok
+test context::tests::producer_launch_tests::producer_launch_discarded_producer_result_preserves_quiescence_without_success ... ok
+test context::tests::producer_launch_tests::producer_launch_finalization_panic_retains_all_leases_without_publishing_markers ... ok
+test context::tests::producer_launch_tests::producer_launch_invalid_handles_retain_new_roots_and_every_mixed_input ... ok
+test context::tests::producer_launch_tests::producer_launch_mixed_inputs_preserve_native_ranges_and_whole_allocation_custody ... ok
+test context::tests::producer_launch_tests::producer_launch_initial_failures_preserve_diagnostics_and_uncertain_mixed_roots ... ok
+test context::tests::producer_launch_tests::producer_launch_cancellation_keeps_or_releases_the_complete_mixed_roster ... ok
+test context::tests::producer_launch_tests::producer_launch_mixed_release_prevalidates_both_complete_rosters ... ok
+test context::tests::producer_launch_tests::producer_launch_mixed_acquisition_handles_each_empty_side_and_no_inputs ... ok
+test context::tests::producer_launch_tests::producer_launch_resolved_reservation_survives_writer_slot_reuse ... ok
+test context::tests::producer_launch_tests::producer_launch_public_event_release_and_fanout_keep_exact_producer_custody ... ok
+test context::tests::producer_launch_tests::producer_launch_writerless_consumer_does_not_need_a_free_writer_slot ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_before_effect_panics_preserve_exact_committed_prefix ... ok
+test context::tests::producer_launch_tests::producer_launch_non_success_observations_release_only_quiescent_mixed_inputs ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_boundary_errors_preserve_exact_committed_prefix ... ok
+test context::tests::producer_launch_tests::producer_launch_retained_consumer_success_cannot_override_producer_results ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_after_effect_panics_preserve_commit_without_retiring_roots ... ok
+test context::tests::producer_launch_tests::producer_launch_root_flag_dependency_and_late_marker_loss_seal_before_observation ... ok
+test context::tests::producer_launch_tests::producer_launch_all_completion_ingresses_share_bounded_producer_first_reconciliation ... ok
+test context::tests::producer_launch_tests::producer_launch_completion_preserves_optional_roots_and_writer_outcomes ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 1408 filtered out; finished in 0.05s
+

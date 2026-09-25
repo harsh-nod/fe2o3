@@ -1,0 +1,11 @@
+runner-tests: PASS
+proof-runner-tests: PASS
+rustc: PASS
+focused: PASS
+generated: PASS
+gnu: PASS
+musl: PASS
+doctests: PASS
+default: PASS
+clippy: PASS
+format: PASS

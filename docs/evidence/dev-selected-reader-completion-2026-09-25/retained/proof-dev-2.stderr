@@ -1,0 +1,27 @@
+error[E0425]: cannot find value `result` in this scope
+   --> crates/fe2o3-runtime-model/verus/context_completion_selected_readers_v1.rs:295:68
+    |
+295 |             proof { selected_inputs_join_v1(before, middle, *self, result); }
+    |                                                                    ^^^^^^ not found in this scope
+    |
+help: an identifier with the same name is defined here, but is not accessible due to macro hygiene
+   --> crates/fe2o3-runtime-model/verus/../../fe2o3-runtime/src/context/versions/settlement_bodies.rs:27:17
+    |
+ 27 |               let result = $context.release_validated_submission_producer_readers_v1($id);
+    |                   ^^^^^^
+    |
+   ::: crates/fe2o3-runtime-model/verus/context_completion_selected_readers_v1.rs:289:9
+    |
+289 | /         completion_input_release_body!(verus_exec_expr, self, id, producer, [
+290 | |             let ghost middle = *self;
+291 | |             proof {
+292 | |                 if !producer { selected_inputs_join_v1(before, middle, *self, Ok(())); }
+...   |
+295 | |             proof { selected_inputs_join_v1(before, middle, *self, result); }
+296 | |         ])
+    | |__________- in this macro invocation
+    = note: this error originates in the macro `completion_input_release_body` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0425`.

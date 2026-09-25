@@ -1,0 +1,73 @@
+{
+  "cpu_phases": [
+    "runner-tests",
+    "format",
+    "gnu",
+    "clippy",
+    "proof-runner-tests",
+    "musl",
+    "rustc",
+    "default",
+    "generated",
+    "focused",
+    "doctests"
+  ],
+  "observed_at": "2026-09-25T19:29:15.071266+00:00",
+  "owned_paths": [
+    {
+      "allocated_bytes": 80838656,
+      "device": 2096,
+      "inode": 8862460,
+      "path": "/home/harsh/.codex-tmp/fe2o3-selected-reader-20260925-s8xXSC0O",
+      "uid": 1000
+    },
+    {
+      "allocated_bytes": 1935695872,
+      "device": 63,
+      "inode": 285613,
+      "path": "/dev/shm/fe2o3-selected-reader-20260925-Lc6tgKjg",
+      "uid": 1000
+    }
+  ],
+  "proof_stages": [
+    "closure-after",
+    "closure-before",
+    "continue-journal-error",
+    "empty-selected-roster",
+    "omit-marker-clear",
+    "omit-root-remove",
+    "positive-after",
+    "positive-before",
+    "producer-before-stable",
+    "skip-stable-release",
+    "wrong-selected-id"
+  ],
+  "retained_bytes_equal": true,
+  "retained_files": 4518,
+  "scope": "Development packet retention and exact-owned cleanup, not qualification or relocated replay",
+  "terminal_groups": [
+    777454,
+    778501,
+    788700,
+    789316,
+    789404,
+    789430,
+    789445,
+    790501,
+    791373,
+    802981,
+    805697,
+    815142,
+    815820,
+    837476,
+    902238,
+    911616,
+    911990,
+    924133,
+    934953,
+    935270,
+    944439,
+    944698,
+    1048718
+  ]
+}
