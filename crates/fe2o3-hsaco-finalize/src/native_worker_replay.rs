@@ -14,11 +14,11 @@ use fe2o3_verifier::RecoveredCompilerNativeSemanticHandoffV4;
 
 use crate::{
     InertNativeFirstBuildWorkerEvidenceV1, MAX_LINK_INPUTS, MAX_WORKER_OUTPUT_BYTES,
-    MAX_WORKER_TOTAL_INPUT_BYTES, NativeFirstBuildWorkerErrorV1,
-    NativeWorkerCompactFinalizerReplayV1, NativeWorkerDiagnosticV1,
+    MAX_WORKER_TOTAL_INPUT_BYTES, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4,
+    NativeFirstBuildWorkerErrorV1, NativeWorkerCompactFinalizerReplayV1, NativeWorkerDiagnosticV1,
     NativeWorkerFinalizationErrorV1, PreparedFinalizedNativeWorkerHsacoV1,
-    ProtectedCompilerNativeHandoffBindingErrorV1, WorkerInputV1, WorkerOutputConstraintsV1,
-    finalize_native_worker_hsaco_v1,
+    PreparedFinalizedNativeWorkerHsacoV4, ProtectedCompilerNativeHandoffBindingErrorV1,
+    WorkerInputV1, WorkerOutputConstraintsV1, derive_unfinalized_nominal_hsaco_v4,
     first_build_worker_native::{
         NativeWorkerReplaySource, recover_prepaid_native_worker_evidence_v1,
     },
@@ -26,6 +26,10 @@ use crate::{
         ProtectedCompilerNativeHandoffBindingV1, native_handoff_storage_floor,
     },
     first_build_worker_v3::enforce_worker_working_set_budget,
+    native_worker_finalization::{
+        NativeDescriptorMode, NativeFinalizedOwner, conditional_failure,
+        finalize_native_worker_core,
+    },
     native_worker_replay_resources::{
         NativeWorkerReplayResourceQuote, NativeWorkerReplayResponseInputs,
     },
@@ -137,6 +141,63 @@ pub fn revalidate_native_worker_finalizer_v1(
     PreparedFinalizedNativeWorkerHsacoV1,
     NativeWorkerReplayStorageV1,
 )> {
+    revalidate_native_worker_finalizer(
+        producer,
+        attempt,
+        source,
+        transcript,
+        provider_payloads,
+        exact_finalized_hsaco,
+        NativeDescriptorMode::Legacy,
+        budget,
+    )
+    .and_then(|(owner, storage)| Ok((owner.into_legacy()?, storage)))
+}
+
+/// Independent structural V4 replay using the original native source/F owner,
+/// producer/attempt transaction, compact transcript and resource ledger. The
+/// result retains `RecoveredTranscript` custody, never fresh consumption. Every
+/// mandatory contract and exact source/binding/finalization/artifact byte join
+/// is replayed; neither this owner nor the common transcript permits V1/V3
+/// publication, load or launch. Upstream native V4 descriptor recovery remains
+/// a prerequisite, not an alternate unchecked input path.
+#[allow(clippy::too_many_arguments)]
+pub fn revalidate_native_worker_finalizer_v4(
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    source: RecoveredCompilerNativeSemanticHandoffV4,
+    transcript: &NativeWorkerCompactFinalizerReplayV1,
+    provider_payloads: Vec<Vec<u8>>,
+    exact_finalized_hsaco: &[u8],
+    budget: &mut Budget<'_>,
+) -> Result<(
+    PreparedFinalizedNativeWorkerHsacoV4,
+    NativeWorkerReplayStorageV1,
+)> {
+    revalidate_native_worker_finalizer(
+        producer,
+        attempt,
+        source,
+        transcript,
+        provider_payloads,
+        exact_finalized_hsaco,
+        NativeDescriptorMode::V4,
+        budget,
+    )
+    .and_then(|(owner, storage)| Ok((owner.into_v4()?, storage)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn revalidate_native_worker_finalizer(
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    source: RecoveredCompilerNativeSemanticHandoffV4,
+    transcript: &NativeWorkerCompactFinalizerReplayV1,
+    provider_payloads: Vec<Vec<u8>>,
+    exact_finalized_hsaco: &[u8],
+    mode: NativeDescriptorMode,
+    budget: &mut Budget<'_>,
+) -> Result<(NativeFinalizedOwner, NativeWorkerReplayStorageV1)> {
     let source_floor = native_handoff_storage_floor(&source)?;
     let floor = source_floor
         .checked_add(transcript.storage().retained_storage())
@@ -189,9 +250,7 @@ pub fn revalidate_native_worker_finalizer_v1(
             .receipts()
             .abi()
             .canonical_preimage();
-        let raw_hsaco = DescriptorSchema::from_native_abi(abi)
-            .and_then(|schema| schema.derive_raw(exact_finalized_hsaco))
-            .map_err(|e| failure("raw artifact reconstruction", e))?;
+        let raw_hsaco = reconstruct_raw(mode, abi, exact_finalized_hsaco, budget)?;
         let output = WorkerOutputConstraintsV1::new(replay.bootstrap_output_bound)
             .map_err(|e| failure("output bound", e))?;
         let quote = NativeWorkerReplayResourceQuote::new(
@@ -245,12 +304,12 @@ pub fn revalidate_native_worker_finalizer_v1(
         if worker_source.identity().as_bytes() != transcript.source_evidence_identity() {
             return Err(NativeWorkerReplayErrorV1::Mismatch("source evidence"));
         }
-        let (finalized, final_storage) = finalize_native_worker_hsaco_v1(worker_source, budget)?;
+        let (finalized, final_storage) = finalize_native_worker_core(worker_source, mode, budget)?;
         budget.reserve_storage(final_storage.retained_storage())?;
-        if finalized.identity().as_bytes() != transcript.expected_finalization_identity() {
+        if finalized.view().identity() != transcript.expected_finalization_identity() {
             return Err(NativeWorkerReplayErrorV1::Mismatch("finalization identity"));
         }
-        if finalized.exact_finalized_bytes() != exact_finalized_hsaco {
+        if finalized.view().exact_finalized_bytes() != exact_finalized_hsaco {
             return Err(NativeWorkerReplayErrorV1::Mismatch(
                 "finalized artifact bytes",
             ));
@@ -263,6 +322,36 @@ pub fn revalidate_native_worker_finalizer_v1(
         );
         Ok((finalized, storage))
     })
+}
+
+pub(crate) fn reconstruct_raw(
+    mode: NativeDescriptorMode,
+    abi: &[u8],
+    finalized: &[u8],
+    budget: &mut Budget<'_>,
+) -> Result<Vec<u8>> {
+    let schema = mode
+        .from_abi(abi)
+        .map_err(|e| failure("raw artifact reconstruction", e))?;
+    match schema {
+        DescriptorSchema::V1 | DescriptorSchema::NominalV3 => schema
+            .derive_raw(finalized)
+            .map_err(|e| failure("raw artifact reconstruction", e)),
+        DescriptorSchema::NominalV4 => budget.with_prepaid_scope(
+            budget.storage(),
+            0,
+            0,
+            NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4,
+            |budget| {
+                derive_unfinalized_nominal_hsaco_v4(
+                    finalized,
+                    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4,
+                    &mut |work| budget.charge_work(work),
+                )
+                .map_err(|e| conditional_failure("raw artifact reconstruction", e).into())
+            },
+        ),
+    }
 }
 
 fn prepare_providers(

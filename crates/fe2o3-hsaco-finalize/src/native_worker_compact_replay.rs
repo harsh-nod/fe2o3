@@ -28,7 +28,10 @@ use crate::{
     first_build_worker_v3::{
         OwnedWorkerV3RequestReplayPartsV1, extract_worker_v3_request_replay_parts_v1,
     },
-    native_worker_finalization::PreparedFinalizedNativeWorkerHsacoV1,
+    native_worker_finalization::{
+        NativeFinalizedRef, PreparedFinalizedNativeWorkerHsacoV1,
+        PreparedFinalizedNativeWorkerHsacoV4,
+    },
     worker_v3_compact_finalizer_replay::{
         CompactReplayReaderV1, DecodedCompactReplayTailV1,
         MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1,
@@ -388,6 +391,38 @@ pub fn prepare_native_worker_compact_finalizer_replay_v1(
     NativeWorkerCompactFinalizerReplayV1,
     NativeWorkerCompactReplayStorageV1,
 )> {
+    prepare_native_worker_compact_finalizer_replay(NativeFinalizedRef::Legacy(finalized), budget)
+}
+
+/// The same inert compact wire with a V4-domain finalization identity and exact
+/// native source/occurrence coordinates. Wire decode is not schema admission;
+/// V4 revalidation still requires the distinct V4 entrypoint and source owner.
+/// Reservations and artifact extraction follow the V1 constructor unchanged.
+///
+/// ```compile_fail
+/// use fe2o3_hsaco_finalize::{PreparedFinalizedNativeWorkerHsacoV4, prepare_native_worker_compact_finalizer_replay_v1};
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
+/// fn downgrade(value: &PreparedFinalizedNativeWorkerHsacoV4, budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>) {
+///     prepare_native_worker_compact_finalizer_replay_v1(value, budget);
+/// }
+/// ```
+pub fn prepare_native_worker_compact_finalizer_replay_v4(
+    finalized: &PreparedFinalizedNativeWorkerHsacoV4,
+    budget: &mut Budget<'_>,
+) -> Result<(
+    NativeWorkerCompactFinalizerReplayV1,
+    NativeWorkerCompactReplayStorageV1,
+)> {
+    prepare_native_worker_compact_finalizer_replay(NativeFinalizedRef::V4(finalized), budget)
+}
+
+fn prepare_native_worker_compact_finalizer_replay(
+    finalized: NativeFinalizedRef<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(
+    NativeWorkerCompactFinalizerReplayV1,
+    NativeWorkerCompactReplayStorageV1,
+)> {
     budget.with_prepaid_scope(
         finalized.required_retained_storage(),
         8,
@@ -395,7 +430,11 @@ pub fn prepare_native_worker_compact_finalizer_replay_v1(
         FRAME,
         |budget| {
             let source = finalized.source_evidence();
-            let request = extract_native_worker_external_providers_v1(finalized)?;
+            let request = extract_worker_v3_request_replay_parts_v1(
+                source.bootstrap_request_bytes(),
+                source.exact_replay_request_bytes(),
+            )
+            .map_err(artifact_error)?;
             let bootstrap = source
                 .bootstrap_response()
                 .replay_metadata()
@@ -431,7 +470,7 @@ pub fn prepare_native_worker_compact_finalizer_replay_v1(
                     .map_err(|_| Resource::Allocation)?;
                 bytes.extend_from_slice(MAGIC);
                 bytes.extend_from_slice(&VERSION.to_le_bytes());
-                bytes.extend_from_slice(finalized.identity().as_bytes());
+                bytes.extend_from_slice(finalized.identity());
                 bytes.extend_from_slice(source.identity().as_bytes());
                 bytes.extend_from_slice(source.binding().identity().as_bytes());
                 bytes.extend_from_slice(receipt.handoff_identity().sha256());

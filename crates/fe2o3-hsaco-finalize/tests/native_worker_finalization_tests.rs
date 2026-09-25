@@ -26,6 +26,8 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrWorkBudgetV1 as Work,
 };
 
+#[path = "fixtures/native_worker_descriptor_v4_tests.rs"]
+mod descriptor_v4_tests;
 #[path = "fixtures/native_worker_publication_roundtrip_tests.rs"]
 mod publication_roundtrip_tests;
 #[path = "native_first_build_worker.rs"]

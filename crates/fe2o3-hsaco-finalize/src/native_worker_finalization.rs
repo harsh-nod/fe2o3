@@ -3,7 +3,10 @@
 use std::{fmt, mem::size_of};
 
 use fe2o3_compiler_ffi::CompilerDescriptorSourceV1;
-use fe2o3_kernel_descriptor::{CanonicalCodeObjectDigest, DescriptorWireErrorV3};
+use fe2o3_kernel_descriptor::{
+    CanonicalCodeObjectDigest, ConditionalInvocationWireErrorV1, DescriptorWireErrorV3,
+    DescriptorWireErrorV4,
+};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
@@ -12,9 +15,11 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ContentIdentityV1, InertNativeFirstBuildWorkerEvidenceV1,
-    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3, NativeFirstBuildWorkerErrorV1, NativeWorkerDiagnosticV1,
-    NominalFinalizationErrorV3, WorkerV3HsacoPolicyV1, finalize_unfinalized_nominal_hsaco_v3,
-    inspect_unfinalized_nominal_hsaco_v3,
+    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4,
+    NativeFirstBuildWorkerErrorV1, NativeWorkerDiagnosticV1, NominalFinalizationErrorV3,
+    NominalFinalizationErrorV4, WorkerV3HsacoPolicyV1, finalize_unfinalized_nominal_hsaco_v3,
+    finalize_unfinalized_nominal_hsaco_v4, inspect_unfinalized_nominal_hsaco_v3,
+    inspect_unfinalized_nominal_hsaco_v4,
     request_construction::decode_link_options,
     worker_v3_finalized_schema::DescriptorSchema,
     worker_v3_hsaco_admission::{
@@ -25,11 +30,39 @@ use crate::{
 };
 
 const DOMAIN: &[u8] = b"FE2O3/NATIVE-WORKER-CANONICAL-FINALIZATION/V1\0";
+const DOMAIN_V4: &[u8] = b"FE2O3/NATIVE-WORKER-CANONICAL-FINALIZATION/V4\0";
 const ENTRY_WORK: usize = 4096;
-const ENTRY_STORAGE: usize = 2 * size_of::<PreparedFinalizedNativeWorkerHsacoV1>()
+const ENTRY_STORAGE: usize = 2 * size_of::<NativeFinalizedOwner>()
     + size_of::<NativeWorkerFinalizationErrorV1>()
     + size_of::<Sha256>()
     + 1024;
+
+/// Closed entrypoint selection, not an artifact-selected authority upgrade.
+#[derive(Clone, Copy)]
+pub(crate) enum NativeDescriptorMode {
+    Legacy,
+    V4,
+}
+impl NativeDescriptorMode {
+    pub(crate) fn from_abi(
+        self,
+        abi: &[u8],
+    ) -> std::result::Result<DescriptorSchema, crate::WorkerV3HsacoPublicationErrorV1> {
+        match self {
+            Self::Legacy => DescriptorSchema::from_native_abi(abi),
+            Self::V4 => match DescriptorSchema::from_abi(abi)? {
+                DescriptorSchema::NominalV4 => Ok(DescriptorSchema::NominalV4),
+                _ => Err(crate::WorkerV3HsacoPublicationErrorV1::DescriptorSchemaMismatch),
+            },
+        }
+    }
+    fn identity_domain(self) -> &'static [u8] {
+        match self {
+            Self::Legacy => DOMAIN,
+            Self::V4 => DOMAIN_V4,
+        }
+    }
+}
 
 /// Additional unreserved native owner/header charge; artifact parsing and payload
 /// storage retain the existing, separately bounded finalizer resource domain.
@@ -41,82 +74,14 @@ impl NativeWorkerFinalizationStorageV1 {
     }
 }
 
-/// Domain-separated binding of retained native source/Worker evidence, independent
-/// raw inspection and the exact finalized descriptor/artifact.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NativeWorkerFinalizationIdentityV1([u8; 32]);
-impl NativeWorkerFinalizationIdentityV1 {
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-/// Structural finalization retaining the complete native source/F owner and its
-/// fresh-consumption or independently recovered transcript custody distinction.
-/// This supplies no protected origin, currentness, proof, publication or launch
-/// authority. No V3 outer owner is manufactured from the native carrier.
-///
-/// ```compile_fail
-/// use fe2o3_hsaco_finalize::PreparedFinalizedNativeWorkerHsacoV1 as Finalized;
-/// fn duplicate(value: Finalized) { let _ = value.clone(); }
-/// ```
-/// ```compile_fail
-/// use fe2o3_hsaco_finalize::PreparedFinalizedNativeWorkerHsacoV1 as Finalized;
-/// fn forge() -> Finalized { Finalized::default() }
-/// ```
-pub struct PreparedFinalizedNativeWorkerHsacoV1 {
-    source: InertNativeFirstBuildWorkerEvidenceV1,
-    inspection: SharedWorkerV3HsacoInspectionV1,
-    bytes: Vec<u8>,
-    descriptor: Vec<u8>,
-    digest: CanonicalCodeObjectDigest,
-    identity: NativeWorkerFinalizationIdentityV1,
-    output_identity: ContentIdentityV1,
-    descriptor_identity: ContentIdentityV1,
-    retained_storage: usize,
-}
-impl PreparedFinalizedNativeWorkerHsacoV1 {
-    pub fn source_evidence(&self) -> &InertNativeFirstBuildWorkerEvidenceV1 {
-        &self.source
-    }
-    pub fn exact_finalized_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-    pub fn descriptor_bytes(&self) -> &[u8] {
-        &self.descriptor
-    }
-    pub const fn canonical_digest(&self) -> CanonicalCodeObjectDigest {
-        self.digest
-    }
-    pub const fn identity(&self) -> NativeWorkerFinalizationIdentityV1 {
-        self.identity
-    }
-    pub const fn output_identity(&self) -> ContentIdentityV1 {
-        self.output_identity
-    }
-    pub const fn descriptor_identity(&self) -> ContentIdentityV1 {
-        self.descriptor_identity
-    }
-    pub fn raw_policy(&self) -> &WorkerV3HsacoPolicyV1 {
-        &self.inspection.policy
-    }
-    /// Complete native ledger floor, excluding the separately bounded artifact domain.
-    pub const fn required_retained_storage(&self) -> usize {
-        self.retained_storage
-    }
-    pub const fn authenticates_compiler_origin(&self) -> bool {
-        false
-    }
-    pub const fn grants_publication_authority(&self) -> bool {
-        false
-    }
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
-    }
-}
+#[path = "native_worker_finalization_owner.rs"]
+mod owner;
+use owner::NativeFinalizedCore;
+pub(crate) use owner::{NativeFinalizedOwner, NativeFinalizedRef};
+pub use owner::{
+    NativeWorkerFinalizationIdentityV1, NativeWorkerFinalizationIdentityV4,
+    PreparedFinalizedNativeWorkerHsacoV1, PreparedFinalizedNativeWorkerHsacoV4,
+};
 
 #[derive(Debug)]
 pub enum NativeWorkerFinalizationErrorV1 {
@@ -172,6 +137,22 @@ fn nominal_failure(
     }
 }
 
+pub(crate) fn conditional_failure(
+    phase: &'static str,
+    error: NominalFinalizationErrorV4<Resource>,
+) -> NativeWorkerFinalizationErrorV1 {
+    match error {
+        NominalFinalizationErrorV4::Work(resource)
+        | NominalFinalizationErrorV4::Wire(DescriptorWireErrorV4::Nominal(
+            DescriptorWireErrorV3::Work(resource),
+        ))
+        | NominalFinalizationErrorV4::Wire(DescriptorWireErrorV4::Contract(
+            ConditionalInvocationWireErrorV1::Work(resource),
+        )) => NativeWorkerFinalizationErrorV1::Resource(resource),
+        other => failure(phase, other),
+    }
+}
+
 fn check_export_manifest(receipt: &[u8], manifest: &[u8], budget: &mut Budget<'_>) -> Result<()> {
     budget.charge_work(
         receipt
@@ -209,6 +190,33 @@ pub fn finalize_native_worker_hsaco_v1(
     PreparedFinalizedNativeWorkerHsacoV1,
     NativeWorkerFinalizationStorageV1,
 )> {
+    finalize_native_worker_core(source, NativeDescriptorMode::Legacy, budget)
+        .and_then(|(owner, storage)| Ok((owner.into_legacy()?, storage)))
+}
+
+/// Structural descriptor V4 continuation of the same native Worker transaction.
+/// Requires an exact V4 ABI receipt, including every mandatory contract. The
+/// existing native source/F revalidation, lineage, export and physical checks
+/// are unchanged; no V1/V3 retry or conditional proof receipt is available.
+/// Resource accounting and unreserved returned storage follow the V1 API.
+/// Upstream native source recovery must support V4 before this can succeed end
+/// to end; this entrypoint neither manufactures nor weakens that source owner.
+pub fn finalize_native_worker_hsaco_v4(
+    source: InertNativeFirstBuildWorkerEvidenceV1,
+    budget: &mut Budget<'_>,
+) -> Result<(
+    PreparedFinalizedNativeWorkerHsacoV4,
+    NativeWorkerFinalizationStorageV1,
+)> {
+    finalize_native_worker_core(source, NativeDescriptorMode::V4, budget)
+        .and_then(|(owner, storage)| Ok((owner.into_v4()?, storage)))
+}
+
+pub(crate) fn finalize_native_worker_core(
+    source: InertNativeFirstBuildWorkerEvidenceV1,
+    mode: NativeDescriptorMode,
+    budget: &mut Budget<'_>,
+) -> Result<(NativeFinalizedOwner, NativeWorkerFinalizationStorageV1)> {
     let floor = source.required_retained_storage();
     budget.with_prepaid_scope(floor, 8, ENTRY_WORK, ENTRY_STORAGE, |budget| {
         source.revalidate_for_artifact(budget)?;
@@ -225,8 +233,9 @@ pub fn finalize_native_worker_hsaco_v1(
             budget,
         )?;
         let abi = receipts.abi().canonical_preimage();
-        let schema =
-            DescriptorSchema::from_native_abi(abi).map_err(|e| failure("descriptor schema", e))?;
+        let schema = mode
+            .from_abi(abi)
+            .map_err(|e| failure("descriptor schema", e))?;
         let launch = derive_launch(schema, abi, source.output_bytes(), budget)?;
         let (code_object, _) =
             decode_link_options(source.plan().options()).map_err(|e| failure("link options", e))?;
@@ -240,51 +249,20 @@ pub fn finalize_native_worker_hsaco_v1(
             launch,
         )
         .map_err(|e| failure("raw inspection", e))?;
-        let (bytes, descriptor, digest) = match schema {
-            DescriptorSchema::NominalV4 => {
-                return Err(failure(
-                    "descriptor schema",
-                    "native V4 descriptor continuation is unavailable",
-                ));
-            }
-            DescriptorSchema::V1 => {
-                let core = finalize_worker_hsaco_preimage_v1(
-                    source.output_bytes(),
-                    source.output_identity(),
-                    &inspection.policy,
-                    abi,
-                )
-                .map_err(|e| failure("canonical finalization", e))?;
-                let digest = core.finalized.inspection().digest();
-                (core.finalized.into_bytes(), core.descriptor_bytes, digest)
-            }
-            DescriptorSchema::NominalV3 => budget.with_prepaid_scope(
-                floor,
-                0,
-                0,
-                NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3,
-                |budget| {
-                    let value = finalize_unfinalized_nominal_hsaco_v3(
-                        source.output_bytes(),
-                        abi,
-                        NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3,
-                        &mut |work| budget.charge_work(work),
-                    )
-                    .map_err(|e| nominal_failure("nominal finalization", e))?;
-                    let descriptor = value.descriptor_bytes().to_vec();
-                    let digest = value.digest();
-                    Ok::<_, NativeWorkerFinalizationErrorV1>((
-                        value.into_bytes(),
-                        descriptor,
-                        digest,
-                    ))
-                },
-            )?,
-        };
+        let (bytes, descriptor, digest) = finalize_artifact(
+            schema,
+            source.output_bytes(),
+            source.output_identity(),
+            &inspection.policy,
+            abi,
+            budget,
+        )?;
         let output_identity = ContentIdentityV1::calculate(&bytes);
         let descriptor_identity = ContentIdentityV1::calculate(&descriptor);
         let identity = finalization_identity(
-            &source,
+            mode,
+            source.identity().as_bytes(),
+            source.binding().identity().as_bytes(),
             &inspection,
             output_identity,
             descriptor_identity,
@@ -293,21 +271,82 @@ pub fn finalize_native_worker_hsaco_v1(
         let storage =
             NativeWorkerFinalizationStorageV1(size_of::<PreparedFinalizedNativeWorkerHsacoV1>());
         let retained_storage = floor.checked_add(storage.0).ok_or(Resource::Arithmetic)?;
-        Ok((
-            PreparedFinalizedNativeWorkerHsacoV1 {
-                source,
-                inspection,
-                bytes,
-                descriptor,
-                digest,
-                identity,
-                output_identity,
-                descriptor_identity,
-                retained_storage,
-            },
-            storage,
-        ))
+        let core = NativeFinalizedCore {
+            source,
+            inspection,
+            bytes,
+            descriptor,
+            digest,
+            identity,
+            output_identity,
+            descriptor_identity,
+            retained_storage,
+        };
+        let owner = match mode {
+            NativeDescriptorMode::Legacy => {
+                NativeFinalizedOwner::Legacy(PreparedFinalizedNativeWorkerHsacoV1 { core })
+            }
+            NativeDescriptorMode::V4 => {
+                NativeFinalizedOwner::V4(PreparedFinalizedNativeWorkerHsacoV4 { core })
+            }
+        };
+        Ok((owner, storage))
     })
+}
+
+fn finalize_artifact(
+    schema: DescriptorSchema,
+    raw: &[u8],
+    raw_identity: ContentIdentityV1,
+    policy: &WorkerV3HsacoPolicyV1,
+    abi: &[u8],
+    budget: &mut Budget<'_>,
+) -> Result<(Vec<u8>, Vec<u8>, CanonicalCodeObjectDigest)> {
+    let floor = budget.storage();
+    match schema {
+        DescriptorSchema::V1 => {
+            let core = finalize_worker_hsaco_preimage_v1(raw, raw_identity, policy, abi)
+                .map_err(|e| failure("canonical finalization", e))?;
+            let digest = core.finalized.inspection().digest();
+            Ok((core.finalized.into_bytes(), core.descriptor_bytes, digest))
+        }
+        DescriptorSchema::NominalV3 => budget.with_prepaid_scope(
+            floor,
+            0,
+            0,
+            NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3,
+            |budget| {
+                let value = finalize_unfinalized_nominal_hsaco_v3(
+                    raw,
+                    abi,
+                    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3,
+                    &mut |work| budget.charge_work(work),
+                )
+                .map_err(|e| nominal_failure("nominal finalization", e))?;
+                let descriptor = value.descriptor_bytes().to_vec();
+                let digest = value.digest();
+                Ok((value.into_bytes(), descriptor, digest))
+            },
+        ),
+        DescriptorSchema::NominalV4 => budget.with_prepaid_scope(
+            floor,
+            0,
+            0,
+            NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4,
+            |budget| {
+                let value = finalize_unfinalized_nominal_hsaco_v4(
+                    raw,
+                    abi,
+                    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4,
+                    &mut |work| budget.charge_work(work),
+                )
+                .map_err(|e| conditional_failure("conditional finalization", e))?;
+                let descriptor = value.descriptor_bytes().to_vec();
+                let digest = value.digest();
+                Ok((value.into_bytes(), descriptor, digest))
+            },
+        ),
+    }
 }
 
 fn derive_launch(
@@ -326,10 +365,37 @@ fn derive_launch(
     };
     match schema {
         DescriptorSchema::NominalV4 => {
-            return Err(failure(
-                "descriptor schema",
-                "native V4 descriptor continuation is unavailable",
-            ));
+            let floor = budget.storage();
+            budget.with_prepaid_scope(
+                floor,
+                0,
+                0,
+                NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4,
+                |budget| {
+                    let inspected = inspect_unfinalized_nominal_hsaco_v4(
+                        raw,
+                        NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4,
+                        &mut |work| budget.charge_work(work),
+                    )
+                    .map_err(|e| conditional_failure("conditional descriptor", e))?;
+                    let table = inspected.descriptor_table();
+                    for index in 0..table.kernel_count() {
+                        let kernel = table
+                            .kernel(index, &mut |work| budget.charge_work(work))
+                            .map_err(|e| {
+                                conditional_failure(
+                                    "conditional kernel",
+                                    NominalFinalizationErrorV4::Wire(e),
+                                )
+                            })?;
+                        join(
+                            strict_kernel_launch_contract(kernel.launch())
+                                .map_err(|e| failure("launch", e))?,
+                        )?;
+                    }
+                    Ok::<_, NativeWorkerFinalizationErrorV1>(())
+                },
+            )?;
         }
         DescriptorSchema::V1 => {
             let source = CompilerDescriptorSourceV1::decode(abi)
@@ -379,19 +445,21 @@ fn derive_launch(
 }
 
 fn finalization_identity(
-    source: &InertNativeFirstBuildWorkerEvidenceV1,
+    mode: NativeDescriptorMode,
+    source: &[u8; 32],
+    binding: &[u8; 32],
     inspection: &SharedWorkerV3HsacoInspectionV1,
     output: ContentIdentityV1,
     descriptor: ContentIdentityV1,
     digest: CanonicalCodeObjectDigest,
-) -> NativeWorkerFinalizationIdentityV1 {
+) -> [u8; 32] {
     // The privately constructed source identity binds the complete native outer,
     // original occurrence, actual F and exact candidate/replay transcripts. This
     // fixed preimage composes those identities with independently checked output.
     let mut hash = Sha256::new();
-    hash.update(DOMAIN);
-    hash.update(source.identity().as_bytes());
-    hash.update(source.binding().identity().as_bytes());
+    hash.update(mode.identity_domain());
+    hash.update(source);
+    hash.update(binding);
     hash.update(inspection.policy.identity().as_bytes());
     hash.update(inspection.descriptor_identity);
     hash.update(inspection.abi_identity);
@@ -401,8 +469,12 @@ fn finalization_identity(
         hash.update(content.byte_len().to_le_bytes());
     }
     hash.update(digest.as_bytes());
-    NativeWorkerFinalizationIdentityV1(hash.finalize().into())
+    hash.finalize().into()
 }
+
+#[cfg(test)]
+#[path = "native_worker_finalization_v4_tests.rs"]
+mod conditional_tests;
 
 #[cfg(test)]
 mod tests {

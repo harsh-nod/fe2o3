@@ -347,6 +347,47 @@ artifact byte must agree. `NativeWorkerEvidenceCustodyV1` distinguishes this
 recovered transcript from a freshly consumed publication; replay creates no
 consumption token or fresh process evidence.
 
+`finalize_native_worker_hsaco_v4`,
+`prepare_native_worker_compact_finalizer_replay_v4` and
+`revalidate_native_worker_finalizer_v4` add a **structural descriptor V4
+prerequisite, not end-to-end native V4 support or #272 closure**. They retain
+the same complete native source/F owner, exact occurrence and strict Worker
+lineage. The complete zero-digest ABI receipt, including every mandatory
+conditional contract, must equal the embedded V4 descriptor. Only the digest
+is patched. Independent replay rederives the producer transaction, reconstructs
+the original exchanges and checks every source/binding/finalization identity
+and finalized byte. Fresh consumption and reconstructed custody stay distinct.
+
+The V4 owner and finalization identity are distinct from legacy native owners.
+Shared internal storage is private to finalization; closed owner dispatch checks
+the variant before extraction, and compact encoding borrows only a read-only
+view. The existing native V1 entrypoints still accept descriptor V1/V3 only;
+V4 does not fall back through them. Compact wire decoding alone admits no
+schema. No V4 publication adapter, host/load bridge, conditional proof receipt
+or compiler/proof/load/launch authority is added.
+
+**Remaining upstream blocker:** native semantic recovery currently decodes
+`CompilerDescriptorSourceV1` in `compiler_refined_forwarding_output_v1` and
+requires the outer ABI receipt to equal those V1 descriptor bytes in
+`compiler_native_semantic_handoff_joins_v4`. Consequently a recovered native
+source/F owner carrying descriptor V4 cannot yet be obtained through public
+APIs. These joins are unchanged. Tests must not patch or fabricate such an owner
+to claim end-to-end success; verifier/compiler continuation needs separate work.
+
+V4 descriptor traversal, contract parsing and replay raw reconstruction charge
+scratch/work on the original native ledger. Native owner storage is returned
+unreserved, while ELF/AMDHSA parsing, artifact payloads and their hashes retain
+the existing bounded artifact domain; this is not aggregate work or RSS metering.
+The `native_worker_finalization::conditional_tests` components cover exact
+contract retention, raw reconstruction, source/contract/schema substitutions,
+V3 regression, identity domains and exact/one-short resource limits. Opt-in
+`native_worker_finalization_tests::descriptor_v4_tests` use the existing measured
+fixture Worker and real recovered native owners to check V1-only refusals,
+original-budget exhaustion and unchanged legacy independent replay/custody.
+Compile-fail docs cover owner fabrication, downgrade, private core access and
+legacy publication/compact entrypoints. These selections require the primary
+serial guard; no Cargo/build/test execution was performed for this sidecar edit.
+
 `prepare_native_worker_hsaco_publication_v1` retains the finalized owner while
 deriving a native-domain plan. Persistence and recovery reuse the existing opaque
 journal and its unchanged attachment limits, then require the native replay above.

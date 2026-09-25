@@ -133,11 +133,13 @@ pub use native_worker_compact_replay::{
     NativeWorkerCompactReplayErrorV1, NativeWorkerCompactReplayResourcesV1,
     NativeWorkerCompactReplayStorageV1, NativeWorkerReplayCoordinatesV1,
     prepare_native_worker_compact_finalizer_replay_v1,
+    prepare_native_worker_compact_finalizer_replay_v4,
 };
 pub use native_worker_finalization::{
     NativeWorkerFinalizationErrorV1, NativeWorkerFinalizationIdentityV1,
-    NativeWorkerFinalizationStorageV1, PreparedFinalizedNativeWorkerHsacoV1,
-    finalize_native_worker_hsaco_v1,
+    NativeWorkerFinalizationIdentityV4, NativeWorkerFinalizationStorageV1,
+    PreparedFinalizedNativeWorkerHsacoV1, PreparedFinalizedNativeWorkerHsacoV4,
+    finalize_native_worker_hsaco_v1, finalize_native_worker_hsaco_v4,
 };
 pub use native_worker_publication::{
     NativeWorkerHsacoPublicationErrorV1, NativeWorkerHsacoPublicationStorageV1,
@@ -148,6 +150,7 @@ pub use native_worker_publication::{
 };
 pub use native_worker_replay::{
     NativeWorkerReplayErrorV1, NativeWorkerReplayStorageV1, revalidate_native_worker_finalizer_v1,
+    revalidate_native_worker_finalizer_v4,
 };
 pub use nominal_descriptor_finalization_v3::{
     FinalizedNominalHsacoV3, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3, NominalDescriptorInspectionV3,
