@@ -87,3 +87,7 @@ This paragraph was added afterward and is not part of that snapshot.
 Conditional source-to-final-graph custody, exact native semantic recovery and
 the full tutorial matrix remain required. A physical descriptor match alone
 cannot replace those checks.
+
+The subsequent [policy6 source-agreement record](conditional-policy6-source-join-20260925.md)
+covers the integrated checks and reproducible audit-dependency fix without
+changing this failed run's outcome.
