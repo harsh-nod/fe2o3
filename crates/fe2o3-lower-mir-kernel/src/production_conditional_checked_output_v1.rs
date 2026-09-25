@@ -51,6 +51,10 @@ impl std::error::Error for Error {}
 
 const SCRATCH: usize = 4 * size_of::<Facts<'static>>() + size_of::<Error>() + 1024;
 
+#[path = "production_conditional_checked_tail_v1.rs"]
+mod tail;
+pub use tail::ProductionConditionalCheckedTailErrorV1;
+
 impl ProductionSourceBoundConditionalAggregateRequestV1<'_> {
     /// Checks the actual sealed B/C/S/O/I against this live source request.
     /// The coordinate receipt must borrow this exact N. The backend separately
@@ -199,6 +203,13 @@ fn facts<'a>(
 }
 
 fn scoped<T>(budget: &mut Budget<'_>, run: impl FnOnce(&mut Budget<'_>) -> Result<T>) -> Result<T> {
+    scoped_resource(budget, run)
+}
+
+fn scoped_resource<T, E: From<Resource>>(
+    budget: &mut Budget<'_>,
+    run: impl FnOnce(&mut Budget<'_>) -> std::result::Result<T, E>,
+) -> std::result::Result<T, E> {
     let floor = budget.storage();
     let account = budget.work_ledger_identity_v1();
     let address = std::ptr::from_mut(budget);
@@ -282,8 +293,33 @@ mod occurrences {
                 .checked_add(prefix.owner().canonical().canonical_bytes().len())
                 .ok_or(Resource::Arithmetic)?,
         )?;
-        if !std::ptr::eq(after.module(), prefix.owner().module())
-            || before.read_count() != after.read_count()
+        if !std::ptr::eq(after.module(), prefix.owner().module()) {
+            return Err(Error::Mismatch("source/output coverage subjects"));
+        }
+        coverage_subjects(before, after, original, final_reads)?;
+        same_occurrence(
+            before,
+            before.store_location(),
+            after,
+            after.store_location(),
+            prefix,
+            budget,
+        )?;
+        for (a, b) in original.iter().zip(final_reads) {
+            read_premises(*a, *b, budget)?;
+            same_occurrence(before, a.location(), after, b.location(), prefix, budget)?;
+        }
+        Ok(())
+    }
+
+    // Callers prepay structural comparisons against the two actual graph sizes.
+    pub(super) fn coverage_subjects(
+        before: &Facts<'_>,
+        after: &Facts<'_>,
+        original: &[Read],
+        final_reads: &[Read],
+    ) -> Result<()> {
+        if before.read_count() != after.read_count()
             || original.len() != before.read_count()
             || final_reads.len() != after.read_count()
             || before.output_parameter_index() != after.output_parameter_index()
@@ -294,25 +330,18 @@ mod occurrences {
         {
             return Err(Error::Mismatch("source/output coverage subjects"));
         }
-        same_occurrence(
-            before,
-            before.store_location(),
-            after,
-            after.store_location(),
-            prefix,
-            budget,
-        )?;
-        for (a, b) in original.iter().zip(final_reads) {
-            budget.charge_work(64)?;
-            if a.parameter() != b.parameter()
-                || a.access_domain() != b.access_domain()
-                || a.address_domain() != b.address_domain()
-                || a.element_bytes() != b.element_bytes()
-                || a.alignment() != b.alignment()
-            {
-                return Err(Error::Mismatch("ordered read/source/domain agreement"));
-            }
-            same_occurrence(before, a.location(), after, b.location(), prefix, budget)?;
+        Ok(())
+    }
+
+    pub(super) fn read_premises(a: Read, b: Read, budget: &mut Budget<'_>) -> Result<()> {
+        budget.charge_work(64)?;
+        if a.parameter() != b.parameter()
+            || a.access_domain() != b.access_domain()
+            || a.address_domain() != b.address_domain()
+            || a.element_bytes() != b.element_bytes()
+            || a.alignment() != b.alignment()
+        {
+            return Err(Error::Mismatch("ordered read/source/domain agreement"));
         }
         Ok(())
     }
@@ -407,7 +436,7 @@ mod occurrences {
         Ok(reads)
     }
 
-    fn coordinate(
+    pub(super) fn coordinate(
         facts: &Facts<'_>,
         location: Location,
         budget: &mut Budget<'_>,
@@ -432,7 +461,7 @@ mod occurrences {
         Err(Error::Mismatch("canonical block coordinate"))
     }
 
-    fn operation(module: &Module, coordinate: Coordinate) -> Result<&Operation> {
+    pub(super) fn operation(module: &Module, coordinate: Coordinate) -> Result<&Operation> {
         let Coordinate::Operation {
             function,
             block,
