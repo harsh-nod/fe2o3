@@ -27,6 +27,7 @@ NAMES = {
         "completion_context_late_writer_identity_error_preserves_released_inputs",
     )
 }
+CANCEL_SIGNAL = None
 
 
 def git(*args):
@@ -48,7 +49,8 @@ def snapshot():
 
 
 def interrupted(signum, _frame):
-    raise InterruptedError(f"signal {signum}")
+    global CANCEL_SIGNAL
+    CANCEL_SIGNAL = signum
 
 
 def group_exists(pgid):
@@ -79,6 +81,7 @@ def main():
     environment = dict(os.environ, CARGO_TARGET_DIR=str(args.target.resolve()), CARGO_BUILD_JOBS="4", CARGO_INCREMENTAL="0")
     base = ["cargo", "test", "--locked", "--offline", "-p", "fe2o3-runtime", "--all-features"]
     phases = [
+        ("runner-tests", [sys.executable, "-I", "-B", str(Path(__file__).with_name("test_run.py"))], None),
         ("rustc", ["rustc", "-Vv"], None),
         ("focused", [*base, "--lib", FOCUSED], [(5, 0, 1429)]),
         ("gnu", [*base, "--lib"], [(1412, 22, 0)]),
@@ -89,6 +92,8 @@ def main():
         ("format", ["cargo", "fmt", "--all", "--check"], None),
     ]
     for name, command, expected in phases:
+        if CANCEL_SIGNAL is not None:
+            raise RuntimeError(f"interrupted by signal {CANCEL_SIGNAL}")
         started = datetime.datetime.now(datetime.timezone.utc).isoformat()
         start = time.monotonic()
         timed_out = False
@@ -99,26 +104,34 @@ def main():
             process = None
             try:
                 process = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=out, stderr=err, start_new_session=True)
-                code = process.wait(timeout=1200)
-            except subprocess.TimeoutExpired:
-                timed_out = True
+                while True:
+                    if CANCEL_SIGNAL is not None:
+                        interruption = f"signal {CANCEL_SIGNAL}"
+                        break
+                    remaining = 1200 - (time.monotonic() - start)
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    try:
+                        code = process.wait(timeout=min(1, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
             except BaseException as error:
                 interruption = repr(error)
             finally:
                 if process is not None:
                     cleanup_required = group_exists(process.pid)
                     if cleanup_required:
-                        # Defer further signals until this owned group is reaped.
-                        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+                        # Managed signals only set a flag; none can unwind cleanup.
                         try:
-                            try:
-                                os.killpg(process.pid, signal.SIGKILL)
-                            except ProcessLookupError:
-                                pass
-                            process.wait()
-                        finally:
-                            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.wait()
                     code = process.returncode
+        if CANCEL_SIGNAL is not None:
+            interruption = f"signal {CANCEL_SIGNAL}"
         group_absent = process is not None and not group_exists(process.pid)
         stdout = (args.output / f"{name}.stdout").read_text()
         counts = re.findall(r"^test result: ok\. (\d+) passed; 0 failed; (\d+) ignored; 0 measured; (\d+) filtered out;", stdout, re.M)
