@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 mod cfg;
+pub mod codec;
 mod data;
 mod hash;
 mod ir;
