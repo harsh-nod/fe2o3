@@ -19,13 +19,20 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
 };
 
+/// Refusal while joining a live conditional source request to policy6 output.
 #[derive(Debug)]
 pub enum ProductionConditionalCheckedOutputErrorV1 {
+    /// An original phase account could not pay for the check or its scratch.
     Resource(Resource),
+    /// The sealed optimization prefix did not replay against the bound input.
     Prefix(CanonicalPolicy6OptimizationErrorV1),
+    /// Conditional coverage could not be derived from the actual graph.
     Coverage(ConditionalTotalViewErrorV1),
+    /// Source arguments or output correspondence did not match the request.
     Source(ProductionConditionalContinuationErrorV1),
+    /// The borrowed ranked graph no longer matched its original owner.
     Graph(ProductionConditionalAggregateErrorV1),
+    /// A required identity, occurrence or runtime premise differed.
     Mismatch(&'static str),
 }
 type Error = ProductionConditionalCheckedOutputErrorV1;

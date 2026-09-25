@@ -520,8 +520,13 @@ impl Callbacks for VecaddCallbacks {
                                 "execution": identities[2].as_bytes(), "receipt": identities[3].as_bytes(),
                                 "proof_retained_after_callback": false,
                             });
-                            let (result, observation) =
-                                generated::observe(|| dispatch::Stage::lower(ranked));
+                            assert_eq!(
+                                ranked.checked_output_source_policy_v1(),
+                                fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::RawEmpty
+                            );
+                            let (result, observation) = generated::observe(|| {
+                                ranked.lower_fixed_checked_output_policy6_v1()
+                            });
                             let Err(Pipeline::RankedVerification(
                                 error @ Verification::ConditionalFinalizerRequired { .. },
                             )) = result
@@ -538,7 +543,12 @@ impl Callbacks for VecaddCallbacks {
                                 expected_kernel_binding,
                                 output_allocation_origin,
                             ));
-                            serde_json::json!({"boundary": error.to_string(), "conditional_formula": report})
+                            serde_json::json!({
+                                "boundary": error.to_string(),
+                                "conditional_formula": report,
+                                "checked_output_policy": 6,
+                                "source_to_optimized_output_checked": true,
+                            })
                         }
                         (
                             Case::InputGuard,
