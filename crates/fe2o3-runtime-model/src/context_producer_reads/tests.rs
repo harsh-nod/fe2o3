@@ -9,6 +9,7 @@ mod construction_shared;
 mod disposal_shared;
 mod enrollment_shared;
 mod inspection_shared;
+mod mixed_acquire;
 mod query_shared;
 mod release_shared;
 mod retirement_shared;

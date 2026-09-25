@@ -1,0 +1,16 @@
+   Compiling spin v0.12.3
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [optimized] target(s) in 1m 18s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-mixed-inputs-20260924-Ta5gI69r/target/debug/deps/fe2o3_runtime_model-fc4d0204ce0cd4c1)
+
+running 7 tests
+test context_producer_reads::tests::mixed_acquire::mixed_acquire_checks_combined_headroom_before_either_commit ... ok
+test context_producer_reads::tests::mixed_acquire::mixed_acquire_canonical_rosters_and_cross_kind_aliases_reject_atomically ... ok
+test context_producer_reads::tests::mixed_acquire::mixed_acquire_empty_sides_skip_only_the_unused_arena ... ok
+test context_producer_reads::tests::mixed_acquire::mixed_acquire_exact_rosters_share_one_budget_without_storage_growth ... ok
+test context_producer_reads::tests::mixed_acquire::mixed_acquire_independent_incarnation_exhaustion_is_atomic ... ok
+test context_producer_reads::tests::mixed_acquire::mixed_acquire_late_rejection_on_either_side_preserves_every_owner_and_output ... ok
+test context_producer_reads::tests::mixed_acquire::mixed_acquire_validates_consumer_empty_output_shapes_and_occupied_outputs ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1039 filtered out; finished in 0.00s
+

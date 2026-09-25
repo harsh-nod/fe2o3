@@ -46,7 +46,65 @@ pub(super) struct PreparedProducerReadsV1 {
 }
 
 #[cfg(test)]
+pub(super) enum MixedInputFaultV1 {
+    RejectPending,
+    FinalizationPanic(Box<dyn core::any::Any + Send>),
+}
+
+#[cfg(test)]
 impl ContextVersionsV1 {
+    pub(in crate::context) fn reject_mixed_input_for_test_v1(&mut self) {
+        self.mixed_input_fault = Some(MixedInputFaultV1::RejectPending);
+    }
+
+    pub(in crate::context) fn panic_mixed_finalization_for_test_v1(
+        &mut self,
+        payload: Box<dyn core::any::Any + Send>,
+    ) {
+        self.mixed_input_fault = Some(MixedInputFaultV1::FinalizationPanic(payload));
+    }
+
+    pub(in crate::context) fn mixed_input_roots_for_test_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> [(usize, usize, bool); 2] {
+        let reads = self
+            .submission_readers
+            .get(&id)
+            .map_or((0, 0, false), |root| {
+                (
+                    root.sources.len(),
+                    root.references.len(),
+                    root.marker.is_some(),
+                )
+            });
+        let producers = self
+            .producer_readers
+            .get(&id)
+            .map_or((0, 0, false), |root| {
+                (
+                    root.inputs.len(),
+                    root.references.len(),
+                    root.marker.is_some(),
+                )
+            });
+        [reads, producers]
+    }
+
+    pub(super) fn assert_mixed_markers_for_test_v1(&self, id: RuntimeSubmissionIdV1) {
+        for (requests, references, marked) in self.mixed_input_roots_for_test_v1(id) {
+            assert_eq!(
+                requests, references,
+                "complete input references before backend entry"
+            );
+            assert_eq!(
+                marked,
+                requests != 0,
+                "complete input markers before backend entry"
+            );
+        }
+    }
+
     pub(in crate::context) fn remove_producer_read_root_for_test_v1(
         &mut self,
         id: RuntimeSubmissionIdV1,
@@ -320,6 +378,142 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             let producers =
                 context.prepare_producer_batch_v1(pending, ProducerReadDomainV1::Launch)?;
             Ok((reads, producers))
+        })
+    }
+
+    pub(super) fn begin_launch_inputs_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+        reads: Option<PreparedSubmissionReadersV1>,
+        producers: Option<PreparedProducerReadsV1>,
+    ) -> Result<
+        (
+            Option<SubmissionReaderMarkerV1>,
+            Option<SubmissionProducerReaderMarkerV1>,
+        ),
+        RuntimeValidationErrorV1,
+    > {
+        self.guard_journal_unwind_v1(|context| {
+            let result = (|| {
+                let launch = context.producer_launches.contains_key(&id);
+                let versions = context
+                    .versions
+                    .as_mut()
+                    .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
+                if !launch
+                    || versions.submission_readers.contains_key(&id)
+                    || versions.producer_readers.contains_key(&id)
+                    || producers.as_ref().is_some_and(|prepared| {
+                        prepared.root.domain != ProducerReadDomainV1::Launch
+                    })
+                    || versions
+                        .submission_writers
+                        .get(&id)
+                        .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
+                {
+                    return Err(ContextVersionJournalErrorV1::InvalidState);
+                }
+                assert!(
+                    reads.is_none()
+                        || versions.submission_readers.len()
+                            < versions.submission_readers.capacity(),
+                    "preallocated reader root"
+                );
+                assert!(
+                    producers.is_none()
+                        || versions.producer_readers.len() < versions.producer_readers.capacity(),
+                    "preallocated producer root"
+                );
+                // Retain both original rosters before the atomic journal operation.
+                let mut read_output = if let Some(mut prepared) = reads {
+                    prepared.root.domain = SubmissionWriterDomainV1::Ordinary;
+                    versions.submission_readers.insert(id, prepared.root);
+                    prepared.output
+                } else {
+                    Vec::new()
+                };
+                let mut producer_output = if let Some(prepared) = producers {
+                    versions.producer_readers.insert(id, prepared.root);
+                    prepared.output
+                } else {
+                    Vec::new()
+                };
+                let mut read_root = versions.submission_readers.get_mut(&id);
+                let mut producer_root = versions.producer_readers.get_mut(&id);
+                #[cfg(test)]
+                let fault = versions.mixed_input_fault.take();
+                #[cfg(test)]
+                if matches!(fault.as_ref(), Some(MixedInputFaultV1::RejectPending)) {
+                    producer_root
+                        .as_mut()
+                        .expect("fault fixture producer")
+                        .requests
+                        .last_mut()
+                        .expect("fault fixture pending input")
+                        .read
+                        .byte_len = 0;
+                }
+                let consumer = ContextWriterKeyV1 {
+                    context_generation: id.context_generation,
+                    local: id.local,
+                    kind: ContextWriterKindV1::Submission,
+                };
+                versions.journal.acquire_mixed_reads(
+                    consumer,
+                    read_root
+                        .as_ref()
+                        .map_or(&[], |root| root.requests.as_slice()),
+                    &mut read_output,
+                    producer_root
+                        .as_ref()
+                        .map_or(&[], |root| root.requests.as_slice()),
+                    &mut producer_output,
+                )?;
+                #[cfg(test)]
+                if let Some(MixedInputFaultV1::FinalizationPanic(payload)) = fault {
+                    std::panic::resume_unwind(payload);
+                }
+                if let Some(root) = read_root.as_mut() {
+                    assert!(
+                        root.references.capacity() >= read_output.len(),
+                        "preallocated references"
+                    );
+                    for reference in read_output {
+                        root.references
+                            .push(reference.expect("complete read roster"));
+                    }
+                }
+                if let Some(root) = producer_root.as_mut() {
+                    assert!(
+                        root.references.capacity() >= producer_output.len(),
+                        "preallocated producer references"
+                    );
+                    for reference in producer_output {
+                        root.references
+                            .push(reference.expect("complete producer reservations"));
+                    }
+                }
+                let read_marker = read_root.as_ref().map(|root| SubmissionReaderMarkerV1 {
+                    first: root.references[0],
+                    count: root.references.len(),
+                });
+                let producer_marker =
+                    producer_root
+                        .as_ref()
+                        .map(|root| SubmissionProducerReaderMarkerV1 {
+                            first: root.references[0],
+                            count: root.references.len(),
+                        });
+                // Publish neither marker until both complete reference arrays are retained.
+                if let Some(root) = read_root {
+                    root.marker = read_marker;
+                }
+                if let Some(root) = producer_root {
+                    root.marker = producer_marker;
+                }
+                Ok((read_marker, producer_marker))
+            })();
+            context.journal_result_v1(result)
         })
     }
 

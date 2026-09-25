@@ -568,6 +568,42 @@ fn producer_launch_combined_capacity_and_late_request_rejection_are_pre_issue() 
 }
 
 #[test]
+fn producer_launch_mixed_acquisition_handles_each_empty_side_and_no_inputs() {
+    for stable_input in [false, true] {
+        for pending_input in [false, true] {
+            let mut f = Fixture::new(4);
+            let (mut producers, events) = f.producers();
+            let mut regions = Vec::new();
+            if stable_input {
+                regions.push(region(f.allocations[2], RuntimeAccessV1::Read, 3));
+            }
+            if pending_input {
+                regions.push(region(f.allocations[0], RuntimeAccessV1::Read, 12));
+            }
+            let mut consumer = f.launch(2, regions, &events).unwrap();
+            let record = &f.context.submissions[&consumer.id];
+            assert_eq!(record.journal_read.is_some(), stable_input);
+            assert_eq!(record.journal_producer_read.is_some(), pending_input);
+            assert!(record.journal_writer.is_none());
+            assert_eq!(
+                f.context.version_journal_read_records_v1(),
+                Some(usize::from(stable_input) + usize::from(pending_input))
+            );
+            for event in events {
+                f.context.release_event(event).unwrap();
+            }
+            f.complete(&mut consumer);
+            assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
+            for producer in &mut producers {
+                f.complete(producer);
+            }
+            assert!(!f.context.terminal);
+            assert!(f.context.cleanup().is_complete());
+        }
+    }
+}
+
+#[test]
 fn producer_launch_mixed_release_prevalidates_both_complete_rosters() {
     for corruption in 0..4 {
         let mut f = Fixture::new(4);
@@ -624,6 +660,91 @@ fn producer_launch_mixed_release_prevalidates_both_complete_rosters() {
         for producer in &producers {
             assert_eq!(f.context.submissions[&producer.id].dependency_retains, 1);
         }
+    }
+}
+
+#[test]
+fn producer_launch_acquire_error_retains_both_unmarked_original_input_roots() {
+    let mut f = Fixture::new(4);
+    let (producers, events) = f.producers();
+    let before = f.context.backend.submit_count;
+    f.context
+        .versions
+        .as_mut()
+        .unwrap()
+        .reject_mixed_input_for_test_v1();
+    validation(
+        f.launch(2, f.mixed(true), &events),
+        RuntimeValidationErrorV1::InvalidBackendDescription,
+    );
+    let id = *f.context.producer_launches.keys().max().unwrap();
+    assert!(f.context.terminal);
+    assert_eq!(f.context.backend.submit_count, before);
+    assert_eq!(
+        f.context
+            .versions
+            .as_ref()
+            .unwrap()
+            .mixed_input_roots_for_test_v1(id),
+        [(1, 0, false), (2, 0, false)]
+    );
+    assert_eq!(
+        f.context
+            .versions
+            .as_mut()
+            .unwrap()
+            .read_leases_for_test_v1()
+            .retained_read_count(),
+        0
+    );
+    assert_eq!(f.context.version_journal_writer_records_v1(), Some(3));
+    assert!(!f.context.submissions.contains_key(&id));
+    for producer in &producers {
+        assert_eq!(f.context.submissions[&producer.id].dependency_retains, 1);
+    }
+}
+
+#[test]
+fn producer_launch_finalization_panic_retains_all_leases_without_publishing_markers() {
+    let mut f = Fixture::new(4);
+    let (producers, events) = f.producers();
+    let before = f.context.backend.submit_count;
+    let payload = Arc::new(91u64);
+    f.context
+        .versions
+        .as_mut()
+        .unwrap()
+        .panic_mixed_finalization_for_test_v1(Box::new(Arc::clone(&payload)));
+    let result = catch_unwind(AssertUnwindSafe(|| f.launch(2, f.mixed(true), &events)));
+    let Err(panic) = result else {
+        panic!("expected original finalization panic");
+    };
+    let observed = panic.downcast::<Arc<u64>>().unwrap();
+    assert!(Arc::ptr_eq(&payload, &observed));
+    let id = *f.context.producer_launches.keys().max().unwrap();
+    assert!(f.context.terminal);
+    assert_eq!(f.context.backend.submit_count, before);
+    assert_eq!(
+        f.context
+            .versions
+            .as_ref()
+            .unwrap()
+            .mixed_input_roots_for_test_v1(id),
+        [(1, 0, false), (2, 0, false)]
+    );
+    assert_eq!(
+        f.context
+            .versions
+            .as_mut()
+            .unwrap()
+            .read_leases_for_test_v1()
+            .retained_read_count(),
+        3
+    );
+    assert_eq!(f.context.version_journal_writer_records_v1(), Some(3));
+    assert!(!f.context.submissions.contains_key(&id));
+    for producer in &producers {
+        assert_eq!(f.context.submissions[&producer.id].dependency_retains, 1);
     }
 }
 

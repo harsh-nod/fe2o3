@@ -36,7 +36,7 @@ fn stable_acquire_item_exec_v1(
 
 #[inline]
 #[allow(clippy::question_mark)]
-pub(super) fn stable_acquire_preflight_exec_v1(
+pub(crate) fn stable_acquire_preflight_exec_v1(
     contents: &ContextReadLeasedJournalV1,
     consumer: ContextWriterKeyV1,
     requests: &[ContextAllocationReadV1],
@@ -55,7 +55,7 @@ pub(super) fn stable_acquire_preflight_exec_v1(
 }
 
 #[inline]
-pub(super) fn stable_acquire_commit_exec_v1(
+pub(crate) fn stable_acquire_commit_exec_v1(
     contents: &mut ContextReadLeasedJournalV1,
     consumer: ContextWriterKeyV1,
     requests: &[ContextAllocationReadV1],

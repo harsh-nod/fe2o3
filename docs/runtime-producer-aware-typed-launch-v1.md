@@ -56,6 +56,37 @@ conclusively quiescent failure releases inputs but retains Unknown output
 state. Terminal failure, panic, malformed handles and ownership contradictions
 retain uncertain resources and seal the Context.
 
+### Atomic Mixed Acquisition
+
+`ContextProducerReadJournalV1::acquire_mixed_reads` performs both complete
+preflights before committing either reader class. It validates the Submission
+consumer, both output shapes and checked combined headroom even when one side
+is empty. An empty side does not consume or validate its unused arena's next
+incarnation. A returned error leaves the complete journal and both output
+arrays unchanged; success commits the exact stable and producer rosters using
+the existing allocation-free helpers. This adds no post-preflight rescan.
+
+The Context adapter installs both original input roots before calling that
+operation. It fills both preallocated reference vectors before publishing
+either marker and enters the backend only after both are complete. Writerless
+and empty-input consumers remain supported. A panic after acquisition retains
+the roots and journal leases and seals the Context; it does not roll back the
+transaction. Output-writer Begin, dependency retention and these two input
+classes are not one formally proved all-or-nothing transaction.
+
+The shared-body Verus candidate specifies error preservation, the two exact
+commit relations and combined-budget preservation under storage-domain
+preconditions. Its root includes inherited paired proofs but does not yet add
+independent logical mixed-acquisition correspondence, constructor-origin mixed
+traces, Context-map authentication, panic recovery or completion reconciliation.
+These remain distinct obligations, even if the candidate's solver run passes.
+
+The [mixed-acquisition CPU packet](evidence/dev-mixed-input-acquisition-cpu-2026-09-24/README.md)
+passes full GNU/musl runtime and model suites and 73 doctests. Its whole-root
+Verus development run reports 1,244 verified obligations and zero errors; the
+formal scope and authentication limits above still apply. The earlier two-case
+MI300X producer packet qualifies previous signed source, not this change.
+
 ## Completion
 
 Typed launches and directed peer copies use the same bounded reconciliation

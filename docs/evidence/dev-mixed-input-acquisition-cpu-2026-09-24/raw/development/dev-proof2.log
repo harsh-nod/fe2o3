@@ -1,0 +1,40 @@
+note: verifying module production (selected functions)
+
+note: verifying module production, function context_mixed_acquire_paired_v1::production::lifecycle_mixed_trace_witness_v1 (selected functions)
+
+note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function
+   --> crates/fe2o3-runtime-model/verus/context_mixed_acquire_execution_v1.rs:110:5
+    |
+110 | /     fn acquire_mixed_reads(&mut self, consumer: WriterKeyV1,
+111 | |         stable_requests: &[ContextAllocationReadV1], stable_output: &mut [Option<ContextReadLeaseReferenceV1>],
+112 | |         producer_requests: &[ContextProducerReadV1], producer_output: &mut [Option<ContextProducerReadReferenceV1>],
+113 | |     ) -> (result: Result<(), ReadErrorV1>)
+    | |_________________________________________^
+
+error: precondition not satisfied
+   --> crates/fe2o3-runtime-model/verus/context_mixed_acquire_execution_v1.rs:131:25
+    |
+131 |                         stable_acquire_preflight_implies_commit_ready_v1(self.stable, consumer, stable_requests@, stable_output@);
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-runtime-model/verus/context_stable_acquire_decisions_v1.rs:337:37
+    |
+337 |         requests.len() <= u64::MAX, stable_acquire_decision_v1(before, consumer, requests, output) == Ok(()),
+    |                                     ------------------------------------------------------------------------ failed precondition
+
+error: precondition not satisfied
+   --> crates/fe2o3-runtime-model/verus/context_mixed_acquire_execution_v1.rs:134:25
+    |
+134 |                         producer_acquire_preflight_implies_commit_ready_v1(*self, consumer, producer_requests@, producer_output@);
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-runtime-model/verus/context_producer_acquire_decisions_v1.rs:372:9
+    |
+372 |         producer_acquire_decision_v1(before, consumer, requests, output) == Ok(()),
+    |         -------------------------------------------------------------------------- failed precondition
+
+note: verifying module production, function context_mixed_acquire_paired_v1::production::lifecycle_reader_mixed_reuse_witness_v1 (selected functions)
+
+verification results:: 5 verified, 1 errors (partial verification with `--verify-*`)
+error: aborting due to 2 previous errors
+

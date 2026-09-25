@@ -24,6 +24,26 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest mixed-input qualification (2026-09-24): the
+[atomic acquisition CPU packet](evidence/dev-mixed-input-acquisition-cpu-2026-09-24/README.md)
+passes all fifteen stages. GNU/musl each pass 1,403 runtime and 1,028 model tests,
+with 22 hardware-only runtime and eighteen existing model ignores; all 73
+doctests, formatting, strict Clippy and 3,965 unchanged source inputs pass.
+The journal preflights both complete input classes before either commit; Context
+retains both roots before acquisition and publishes neither marker until both
+reference vectors are complete. Error and panic tests establish retained
+custody without backend entry, not panic rollback. The shared-body whole-root
+Verus development run passes 1,244 obligations with zero errors, but independent
+logical mixed correspondence, authenticated mutations, constructor-origin mixed
+traces and Context/reconciliation proofs remain open. The interrupted proof and
+first cleanup refusal remain retained. Corrected replay and 21 negative-test
+groups pass; exact-owned cleanup removes 829,005,824 path-accounted allocated
+bytes. Process diagnostics report inaccessible fields rather than asserting
+global absence. No fresh native or performance qualification is added. A1/A2,
+Native R125, Admission R118B C1/C2/C3 and Resources R116/V3 remain unchanged.
+Next are independent mixed-acquisition correspondence and source-bound native
+requalification, followed by the remaining reconciliation/generated/resource gates.
+
 Latest native producer qualification (2026-09-24): the
 [two-case MI300X packet](evidence/dev-native-producer-mi300x-2026-09-24/README.md)
 passes queued and already-published producer chains on GPU 1 from signed

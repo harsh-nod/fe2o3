@@ -1,0 +1,13 @@
+test_alias_rejected_by_controller_entry (__main__.ReplayTests.test_alias_rejected_by_controller_entry) ... ok
+test_baseline_pin_checked_before_parse (__main__.ReplayTests.test_baseline_pin_checked_before_parse) ... ok
+test_command_controls (__main__.ReplayTests.test_command_controls) ... ok
+test_current_source_positive (__main__.ReplayTests.test_current_source_positive) ... ok
+test_missing_extra_and_aliased_artifacts (__main__.ReplayTests.test_missing_extra_and_aliased_artifacts) ... ok
+test_model_roster_keeps_existing_ignores_and_all_new_tests (__main__.ReplayTests.test_model_roster_keeps_existing_ignores_and_all_new_tests) ... ok
+test_runtime_roster_cannot_be_omitted_duplicated_or_substituted (__main__.ReplayTests.test_runtime_roster_cannot_be_omitted_duplicated_or_substituted) ... ok
+test_source_scope_is_exact (__main__.ReplayTests.test_source_scope_is_exact) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 12.574s
+
+OK

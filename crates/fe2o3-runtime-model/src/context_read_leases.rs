@@ -32,6 +32,8 @@ macro_rules! reader_rust_expr {
 #[macro_use]
 mod acquire;
 
+pub(crate) use acquire::{stable_acquire_commit_exec_v1, stable_acquire_preflight_exec_v1};
+
 #[macro_use]
 mod release;
 

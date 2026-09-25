@@ -638,9 +638,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         let journal_writer =
             self.begin_submission_writer_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)?;
-        let journal_read =
-            self.begin_submission_readers_v1(id, reads, SubmissionWriterDomainV1::Ordinary)?;
-        let journal_producer_read = self.begin_producer_read_v1(id, producer)?;
+        let (journal_read, journal_producer_read) = if producer_launch {
+            self.begin_launch_inputs_v1(id, reads, producer)?
+        } else {
+            let reads =
+                self.begin_submission_readers_v1(id, reads, SubmissionWriterDomainV1::Ordinary)?;
+            let producer = self.begin_producer_read_v1(id, producer)?;
+            (reads, producer)
+        };
+        #[cfg(test)]
+        if producer_launch {
+            self.versions
+                .as_ref()
+                .expect("launch journal")
+                .assert_mixed_markers_for_test_v1(id);
+        }
         let result = self.invoke_journal_backend_v1(submit);
         let backend_submission = match result {
             Ok(handle) => handle,

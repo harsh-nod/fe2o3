@@ -1,0 +1,29 @@
+{
+  "absent": true,
+  "allocated_bytes": 829005824,
+  "audit_commands": 4,
+  "cpu_commands": 15,
+  "development_files": {
+    "dev-model.log": "e9a8a0a012ec61837deb0df436d937ff065c31b262288820def1556de865f91b",
+    "dev-proof-whole1.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dev-proof-whole1.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dev-proof-whole2.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dev-proof-whole2.stdout": "95d2e49488ab12031f3fdb8599134e13af5144f6a6824e2ac335484f9fb55090",
+    "dev-proof1.log": "33d07f984505cfcf16b7af847c9f849dc8db5e37d16afe6d59fdd04fa86f0bfc",
+    "dev-proof2.log": "895a2f8bbd3d05fd107c9398760becf9d5d73e74bf737c1162436af30c7c88ba",
+    "dev-proof3.log": "be5c40def2c441489f8f0a6c5b2487b532e04922006067ccc3a299c98570efe9",
+    "dev-runtime.log": "e5ecb215c637cfe2b01d2147cc0e4d522abe33f7b6bf413f515d185ce5ebdc41",
+    "dev-runtime2.log": "bcd11c314b92e17cc7cdb93596a828f3c370735bded6ec18e3da146af2d2ce94"
+  },
+  "development_groups": [
+    471835,
+    494169,
+    112704,
+    112711
+  ],
+  "excluded_from_retention": [
+    "target"
+  ],
+  "path": "/home/harsh/.codex-tmp/fe2o3-mixed-inputs-20260924-Ta5gI69r",
+  "source_inventory_sha256": "a1a678e1be81d6cb8f08639dc7f9800ea20b12091a1ff4dc5ee3a38e43d2ea03"
+}

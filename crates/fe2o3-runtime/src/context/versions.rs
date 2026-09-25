@@ -69,6 +69,8 @@ pub(super) struct ContextVersionsV1 {
     submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
     submission_readers: HashMap<RuntimeSubmissionIdV1, readers::RetainedSubmissionReadersV1>,
     producer_readers: HashMap<RuntimeSubmissionIdV1, producer_readers::RetainedProducerReadV1>,
+    #[cfg(test)]
+    mixed_input_fault: Option<producer_readers::MixedInputFaultV1>,
 }
 
 // Dropping this move-only ticket never removes its Context-owned record.
@@ -145,6 +147,8 @@ impl ContextVersionsV1 {
             submission_writers,
             submission_readers,
             producer_readers,
+            #[cfg(test)]
+            mixed_input_fault: None,
         })
     }
 

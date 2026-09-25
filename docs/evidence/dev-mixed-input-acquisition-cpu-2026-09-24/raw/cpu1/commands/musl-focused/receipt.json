@@ -1,0 +1,42 @@
+{
+  "command": [
+    "cargo",
+    "--offline",
+    "--locked",
+    "test",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "--target",
+    "x86_64-unknown-linux-musl",
+    "producer_launch",
+    "--",
+    "--test-threads=4"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_PROFILE_TEST_OPT_LEVEL": "1",
+    "CARGO_TARGET_DIR": "/home/harsh/.codex-tmp/fe2o3-mixed-inputs-20260924-Ta5gI69r/target",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790310161376068163,
+  "group_absent": true,
+  "pid": 224922,
+  "started_ns": 1790309486347961917,
+  "stderr_sha256": "d17650e8e62132e879b5f2b4b501744457a962af6ca32f10dc2bbf386f1fc912",
+  "stdin_sha256": null,
+  "stdout_sha256": "0388c76b60654f8783dda71bcb6202a0cf5fbceb2b8b0173e03ef18fde45749f",
+  "timeout_seconds": 1800
+}

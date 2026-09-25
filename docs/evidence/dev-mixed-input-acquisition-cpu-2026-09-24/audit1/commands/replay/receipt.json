@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-input-acquisition-cpu-2026-09-24/qualify.py",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-mixed-input-acquisition-cpu-2026-09-24/raw/cpu1",
+    "--verify"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "environment": {
+    "HOME": "/home/harsh",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790310393072979276,
+  "group_absent": true,
+  "pid": 387737,
+  "started_ns": 1790310392293327194,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "6c174c6af2fa42bb70a4f0c270550e3374e7f4ad90ed46ba855290774b0df1a4",
+  "timeout_seconds": 900
+}

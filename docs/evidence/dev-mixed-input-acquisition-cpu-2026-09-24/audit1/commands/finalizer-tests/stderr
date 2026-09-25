@@ -1,0 +1,11 @@
+test_command_controls_reject_substitution_and_unbounded_receipts (__main__.CleanupGateTests.test_command_controls_reject_substitution_and_unbounded_receipts) ... ok
+test_cwd_and_command_arguments_reject_owned_users (__main__.CleanupGateTests.test_cwd_and_command_arguments_reject_owned_users) ... ok
+test_live_command_group_prevents_cleanup (__main__.CleanupGateTests.test_live_command_group_prevents_cleanup) ... ok
+test_live_descriptor_and_mapping_cannot_hide_behind_unrelated_argv (__main__.CleanupGateTests.test_live_descriptor_and_mapping_cannot_hide_behind_unrelated_argv) ... ok
+test_one_absence_command_rejects_files_directories_and_dangling_aliases (__main__.CleanupGateTests.test_one_absence_command_rejects_files_directories_and_dangling_aliases) ... ok
+test_sibling_prefix_and_vanished_process_do_not_hide_incomplete_live_inspection (__main__.CleanupGateTests.test_sibling_prefix_and_vanished_process_do_not_hide_incomplete_live_inspection) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.722s
+
+OK

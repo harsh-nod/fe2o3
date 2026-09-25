@@ -19,15 +19,15 @@ pub(in crate::context) struct SubmissionReaderMarkerV1 {
 }
 
 pub(in crate::context) struct PreparedSubmissionReadersV1 {
-    root: RetainedSubmissionReadersV1,
-    output: Vec<Option<ContextReadLeaseReferenceV1>>,
+    pub(super) root: RetainedSubmissionReadersV1,
+    pub(super) output: Vec<Option<ContextReadLeaseReferenceV1>>,
 }
 
 pub(super) struct RetainedSubmissionReadersV1 {
-    domain: SubmissionWriterDomainV1,
+    pub(super) domain: SubmissionWriterDomainV1,
     pub(super) sources: Vec<ContextReadSourceV1>,
-    requests: Vec<ContextAllocationReadV1>,
-    references: Vec<ContextReadLeaseReferenceV1>,
+    pub(super) requests: Vec<ContextAllocationReadV1>,
+    pub(super) references: Vec<ContextReadLeaseReferenceV1>,
     pub(super) marker: Option<SubmissionReaderMarkerV1>,
 }
 

@@ -29,6 +29,8 @@ macro_rules! reader_rust_expr {
 #[macro_use]
 mod acquire;
 
+include!("context_producer_reads/mixed_acquire_bodies.rs");
+
 #[macro_use]
 mod release;
 
@@ -234,6 +236,41 @@ impl ContextProducerReadJournalV1 {
             acquire::producer_acquire_preflight_exec_v1,
             acquire::producer_acquire_commit_exec_v1,
             _value,
+            [],
+            [],
+            []
+        )
+    }
+
+    /// Atomically acquire both canonical input rosters for one submission.
+    /// Either side may be empty; errors leave the journal and both outputs unchanged.
+    /// Authentication of producer dependencies remains the caller's responsibility.
+    #[allow(clippy::question_mark)]
+    pub fn acquire_mixed_reads(
+        &mut self,
+        consumer: ContextWriterKeyV1,
+        stable_requests: &[ContextAllocationReadV1],
+        stable_output: &mut [Option<ContextReadLeaseReferenceV1>],
+        producer_requests: &[ContextProducerReadV1],
+        producer_output: &mut [Option<ContextProducerReadReferenceV1>],
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        mixed_acquire_execution_body!(
+            reader_rust_expr,
+            self,
+            self.context_generation(),
+            consumer,
+            stable_requests,
+            stable_output,
+            producer_requests,
+            producer_output,
+            stable_acquire_preflight_exec_v1,
+            stable_acquire_commit_exec_v1,
+            acquire::producer_acquire_preflight_exec_v1,
+            acquire::producer_acquire_commit_exec_v1,
+            _value,
+            [],
+            [],
+            [],
             [],
             [],
             []
