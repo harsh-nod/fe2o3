@@ -4,7 +4,7 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, CheckedBinaryOperator,
     ComparePredicate, Constant, Function, InertCanonicalKirTransitionGraphIdentityV1 as Identity,
     InertCanonicalKirTransitionReceiptV1 as Wire, MemoryAccess, Module, Operation,
-    OperationKind as Kind, ScalarType, Signature, Terminator, Type, ValueDef, ValueId,
+    OperationKind as Kind, ScalarType, Signature, Terminator, Type, UnaryOp, ValueDef, ValueId,
 };
 use fe2o3_kernel_opt::*;
 use fe2o3_pliron::{
@@ -151,10 +151,26 @@ pub(super) fn with_complete<T>(
     changed: bool,
     action: impl FnOnce(&Complete, &mut Budget<'_>) -> T,
 ) -> T {
+    with_module(profile, module(changed), action)
+}
+
+pub(super) fn with_helper_motion<T>(
+    profile: Profile,
+    action: impl FnOnce(&Complete, &mut Budget<'_>) -> T,
+) -> T {
+    let mut module = module(false);
+    module.functions.push(helper_motion());
+    with_module(profile, module, action)
+}
+
+fn with_module<T>(
+    profile: Profile,
+    module: Module,
+    action: impl FnOnce(&Complete, &mut Budget<'_>) -> T,
+) -> T {
     let mut work = Work::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(FLOOR).unwrap();
-    let module = module(changed);
     let n = base::graph(&module, &mut budget);
     drop(module);
     let binding = dialect_amdgcn::bind_production_target_v1(n.module(), profile).unwrap();
@@ -459,5 +475,98 @@ fn private_cell() -> Function {
             ],
             Terminator::Return { values: vec![] },
         )],
+    )
+}
+
+// Only this uncalled helper has a loop. Its conditional entry edge requires H,
+// and the live total integer Not can move to H's new preheader. This exercises
+// module history, not conditional-loop admission or a genuine source/proof join.
+fn helper_motion() -> Function {
+    let ty = Type::Scalar(ScalarType::U32);
+    Function::internal_helper(
+        "helper_motion",
+        Signature::new(
+            vec![
+                ty.clone(),
+                ty.clone(),
+                Type::pointer(ty.clone(), AddressSpace::Global, AccessMode::ReadWrite),
+                Type::BOOL,
+            ],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+        vec![
+            block(
+                10,
+                vec![],
+                vec![
+                    Operation::effect_free(
+                        ValueDef::new(ValueId(10), ty.clone()),
+                        Kind::Constant(Constant::U32(0)),
+                    ),
+                    Operation::effect_free(
+                        ValueDef::new(ValueId(11), ty.clone()),
+                        Kind::Constant(Constant::U32(1)),
+                    ),
+                ],
+                Terminator::ConditionalBranch {
+                    condition: ValueId(3),
+                    then_target: BlockId(20),
+                    then_arguments: vec![ValueId(10)],
+                    else_target: BlockId(60),
+                    else_arguments: vec![],
+                },
+            ),
+            block(
+                20,
+                vec![ValueDef::new(ValueId(20), ty.clone())],
+                vec![Operation::effect_free(
+                    ValueDef::new(ValueId(21), Type::BOOL),
+                    Kind::Compare {
+                        predicate: ComparePredicate::LessThan,
+                        lhs: ValueId(20),
+                        rhs: ValueId(0),
+                    },
+                )],
+                Terminator::ConditionalBranch {
+                    condition: ValueId(21),
+                    then_target: BlockId(30),
+                    then_arguments: vec![],
+                    else_target: BlockId(60),
+                    else_arguments: vec![],
+                },
+            ),
+            block(
+                30,
+                vec![],
+                vec![
+                    Operation::effect_free(
+                        ValueDef::new(ValueId(30), ty.clone()),
+                        Kind::Unary {
+                            op: UnaryOp::Not,
+                            operand: ValueId(1),
+                        },
+                    ),
+                    Operation::new(
+                        vec![],
+                        Kind::Store {
+                            pointer: ValueId(2),
+                            value: ValueId(30),
+                            access: MemoryAccess::new(AddressSpace::Global, 4),
+                        },
+                    ),
+                    Operation::effect_free(
+                        ValueDef::new(ValueId(35), ty),
+                        Kind::Binary {
+                            op: BinaryOp::Add,
+                            lhs: ValueId(20),
+                            rhs: ValueId(11),
+                        },
+                    ),
+                ],
+                jump(20, &[35]),
+            ),
+            block(60, vec![], vec![], Terminator::Return { values: vec![] }),
+        ],
     )
 }

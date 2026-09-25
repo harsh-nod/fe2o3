@@ -161,6 +161,95 @@ fn conditional_final_both_targets_replay_real_value_sharing_and_r_f_rewrites() {
 }
 
 #[test]
+fn conditional_final_actual_helper_preheader_and_hoist_preserve_entry_memory_mapping() {
+    use fe2o3_kernel_ir::{OperationKind, UnaryOp};
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        fixture::with_helper_motion(profile, |p, target| {
+            with_source(p, |premises, source| {
+                inspect(p, p.inputs(), p.inputs().limits, premises, target, source).unwrap();
+                let [preheader] = p.h.preheaders() else {
+                    panic!("one actual helper preheader");
+                };
+                assert_eq!(preheader.header.function.0, 1);
+                let helper_before = p.p.output().module().functions[1].body.as_ref().unwrap();
+                let helper_after = p.h.output().module().functions[1].body.as_ref().unwrap();
+                assert_eq!(helper_after.blocks.len(), helper_before.blocks.len() + 1);
+                assert_eq!(
+                    preheader.preheader.block as usize,
+                    helper_before.blocks.len()
+                );
+                assert!(
+                    helper_after.blocks[preheader.preheader.block as usize]
+                        .operations
+                        .is_empty()
+                );
+                let mut hoists = p.l.origins().iter().filter(|row| row.hoist.is_some());
+                let hoist = hoists.next().expect("one actual invariant scalar hoist");
+                assert!(hoists.next().is_none());
+                assert_eq!(hoist.hoist.unwrap().header, preheader.header);
+                assert_eq!(hoist.input.block.function.0, 1);
+                assert_eq!(hoist.output.block, preheader.preheader);
+                assert_ne!(hoist.input.block, hoist.output.block);
+                let original = &helper_after.blocks[hoist.input.block.block as usize].operations
+                    [hoist.input.operation as usize];
+                let moved = &p.l.output().module().functions[1]
+                    .body
+                    .as_ref()
+                    .unwrap()
+                    .blocks[hoist.output.block.block as usize]
+                    .operations[hoist.output.operation as usize];
+                assert!(matches!(
+                    original.kind,
+                    OperationKind::Unary {
+                        op: UnaryOp::Not,
+                        ..
+                    }
+                ));
+                assert_eq!(original, moved);
+                assert_ne!(
+                    p.p.output().canonical().canonical_bytes(),
+                    p.h.output().canonical().canonical_bytes()
+                );
+                assert_ne!(
+                    p.h.output().canonical().canonical_bytes(),
+                    p.l.output().canonical().canonical_bytes()
+                );
+                // H/L changes belong only to the helper, not to conditional coverage.
+                for graph in [p.p.output(), p.h.output(), p.l.output(), p.f.output()] {
+                    target
+                        .charge_work(
+                            p.checked.owner().canonical().canonical_bytes().len()
+                                + graph.canonical().canonical_bytes().len(),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        p.checked.owner().module().functions[0],
+                        graph.module().functions[0]
+                    );
+                }
+                scoped(source, |source| {
+                    scoped(target, |target| {
+                        let before = facts(p.checked.owner(), &KernelId::new("entry"), target)?;
+                        let after = facts(p.f.output(), &KernelId::new("entry"), target)?;
+                        assert_eq!(
+                            coordinate(&before, before.store_location(), source)?,
+                            coordinate(&after, after.store_location(), source)?
+                        );
+                        let original = occurrences::reads(&before, source)?;
+                        let output = occurrences::reads(&after, source)?;
+                        assert_eq!(original, output);
+                        occurrences::premises(&after, &output, premises, source)?;
+                        Ok(())
+                    })
+                })
+                .unwrap();
+                assert!(!p.h.grants_authority() && !p.l.grants_authority());
+            })
+        });
+    }
+}
+
+#[test]
 fn conditional_final_rejects_equal_byte_foreign_prefix_owners_and_wrong_limits() {
     with_complete(Profile::Gfx942, true, |p, target| {
         with_source(p, |premises, source| {
