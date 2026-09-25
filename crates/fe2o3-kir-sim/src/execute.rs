@@ -67,6 +67,43 @@ mod matrix_bf16_exact_v1;
 pub(crate) fn matrix_bf16_exact_resident_bytes() -> Option<usize> {
     matrix_bf16_exact_v1::resident_bytes()
 }
+
+// Pure size guard for the separate V12 metered observation facade. The existing
+// calculators may allocate one capacity probe at a time; this does not execute,
+// construct an Engine, change a limit or grant observation authority.
+pub(crate) fn v12_observation_probe_cells_fit() -> bool {
+    [
+        size_of::<Engine<'static, NoopSimulationEventSinkV1>>(),
+        size_of::<RaceTracker>(),
+        size_of::<SimulationSupplementalV1>(),
+        size_of::<Allocation>(),
+        size_of::<AccessFrontier>(),
+        size_of::<RuntimeValue>(),
+        size_of::<RuntimeFrame<'static>>(),
+        size_of::<InvocationMachine<'static>>(),
+        size_of::<WorkgroupParticipantV1>(),
+        size_of::<FrameAllocation>(),
+        size_of::<WorkgroupAllocation>(),
+        size_of::<(ValueId, RuntimeValue)>(),
+        size_of::<(ValueId, Type)>(),
+        size_of::<(FunctionId, usize)>(),
+        size_of::<(BlockId, usize)>(),
+        size_of::<(u64, usize)>(),
+        size_of::<(u64, Allocation)>(),
+        size_of::<((u64, usize), AccessFrontier)>(),
+        size_of::<(BufferBackingIdV1, u64)>(),
+        size_of::<Operation>(),
+        size_of::<SimulationArgumentV1>(),
+        size_of::<SharedBufferV1>(),
+        size_of::<SimulationExecutionV1>(),
+        size_of::<SimulationPlanV1>(),
+        size_of::<SimulationExecutionErrorV1>(),
+        size_of::<SimulationErrorV1>(),
+    ]
+    .into_iter()
+    .all(|bytes| bytes <= 4096)
+        && size_of::<RuntimeValue>() <= 160
+}
 #[path = "execute_complete_body_v19.rs"]
 mod complete_body_v19;
 #[path = "execute_debug_physical_symbolic_v1.rs"]

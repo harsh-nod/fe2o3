@@ -1,0 +1,85 @@
+{
+  "schema": "fe2o3-one-stop-physical-v2-producer-history-v1",
+  "scope": "Historical private source CPU; no relocated/fullbuild/startup/native qualification transferred",
+  "producer_layers": [
+    {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/gfx950-one-stop-physical-snapshot-v1-r1/MANIFEST.json",
+      "bytes": 7710,
+      "sha256": "67e75bd950b161ef5e9d1f4fbb1f2a4dc61fa050ea888e2ccbf8ea0782624c1d"
+    },
+    {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/gfx950-one-stop-physical-publication-v2-r1/MANIFEST.json",
+      "bytes": 4602,
+      "sha256": "f8a114ac90eae948ab4ec0ec666821d7cc461b25f4228b98068212a26204e116"
+    },
+    {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/gfx950-one-stop-physical-publication-v2-r2/MANIFEST.json",
+      "bytes": 5542,
+      "sha256": "98b1d418b489578bfe36678fd153e5763b00d79c433e56a595f4fd0c8815179d"
+    },
+    {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/gfx950-one-stop-physical-publication-mi-init-v2-r3/MANIFEST.json",
+      "bytes": 1462,
+      "sha256": "597ba3db842d2daef56487df7ff8e275c5e29de2b8cfcddbccdb6b058e91e045"
+    }
+  ],
+  "r2_cpu": {
+    "receipt": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r16-compiler-one-stop-output-v2-cpu-r2/receipt.json",
+      "bytes": 118659,
+      "sha256": "14fbc32152082e350b4211b81ee727f2c8a65311f9327eab773dfe6e7eea682b"
+    },
+    "stdout": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r16-compiler-one-stop-output-v2-cpu-r2/command.stdout",
+      "bytes": 3292,
+      "sha256": "044adc8f1883b8303909dfd5788cbf42f4e279a4cf347c7c3cf7698e266f7428"
+    },
+    "stderr": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r16-compiler-one-stop-output-v2-cpu-r2/command.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cpp_groups": {
+      "actual_stdio": 12,
+      "resources": 4,
+      "formatter": 16
+    },
+    "node_groups": {
+      "sink_placement": 8,
+      "inherited_placement": 7
+    }
+  },
+  "r3_initializer_cpu": {
+    "receipt": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r16-compiler-one-stop-output-v2-cpu-r3/receipt.json",
+      "bytes": 133590,
+      "sha256": "bc45ca192927470448496971d5dfda5bdcebce46c4628937f30236fc2f96026a"
+    },
+    "stdout": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r16-compiler-one-stop-output-v2-cpu-r3/command.stdout",
+      "bytes": 4454,
+      "sha256": "70e98cecda28def4b748123c5c961e90a50810348f45d5accfcc382d170a1f9b"
+    },
+    "stderr": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r16-compiler-one-stop-output-v2-cpu-r3/command.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "additional_source_groups": 5,
+    "qualified_combined_private_source_not_relocated_package": true
+  },
+  "relocated_package_qualification": null,
+  "exact_false_projection_fullbuild": null,
+  "startup": null,
+  "native_attempt": null,
+  "built_debugger_executed": false,
+  "target_executed": false,
+  "activation_available": false,
+  "capture_available": false,
+  "publication_available": false,
+  "notes": [
+    "R2 CPU pass does not establish actual MI member initialization; required R3 fixes that separately.",
+    "Private prepared/configured or previous built sources may differ in selection; no ELF pin is accepted here.",
+    "Actual physical bytes and successful target/family behavior remain unqualified."
+  ]
+}

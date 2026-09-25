@@ -121,3 +121,9 @@ Root qualified this relocated package on 2026-09-24: 72 Rust CPU tests,
 20 Node package checks, strict Clippy and build passed. The compiled runtime
 profile remains None and no target/debugger was invoked. The exact gate and
 remaining boundaries are in the [qualification record](../../docs/source-transport-tiled-debugger-qualification-20260924.md).
+
+## Separate disabled physical-V2 successor
+
+The additive [physical-V2 package](physical-v2/README.md) has its own source
+contract and protocol. This V1 package and its historical qualification remain
+unchanged. No activation, runtime binding or hardware acceptance is transferred.

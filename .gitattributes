@@ -4,3 +4,6 @@ tools/rocgdb-runtime-observation-v1/patches/0001-native-observation.patch -white
 tools/rocgdb-runtime-observation-v1/patches/0002-mi-safe-points.patch -whitespace
 tools/rocgdb-runtime-observation-v1/patches/0003-lifecycle-causes.patch -whitespace
 tools/rocgdb-stopped-wave-observation-v1/patches/0001-stopped-wave-observation.patch -whitespace
+tools/rocgdb-one-stop-native-adapters-v1/physical-v2/patches/0001-disabled-physical-snapshot.patch -whitespace
+tools/rocgdb-one-stop-native-adapters-v1/physical-v2/patches/0002-disabled-physical-publication-v2.patch -whitespace
+tools/gfx950-one-stop-controller-v1/physical-v2/tests/v1-compatibility.patch -whitespace

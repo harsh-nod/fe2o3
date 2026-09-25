@@ -1,0 +1,40 @@
+{
+  "schema": "fe2o3-one-stop-physical-v2-consumer-cpu-history-v1",
+  "scope": "Exact private staging, not relocated package qualification",
+  "staging_manifest": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/one-stop-physical-consumer-cpu-root-r2/MANIFEST.json",
+    "bytes": 30517,
+    "sha256": "a961ac02e36b9145027150d3ee90ec103313208e834aa5d171bdf6f565baf1f7"
+  },
+  "receipt": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r15-compiler-one-stop-physical-consumer-cpu-r3/receipt.json",
+    "bytes": 190254,
+    "sha256": "9b7183bd3a522667461310734213ca0ac283760aa1d9167db51101d430c63a20"
+  },
+  "stdout": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r15-compiler-one-stop-physical-consumer-cpu-r3/command.stdout",
+    "bytes": 7193,
+    "sha256": "496d599a4e5324eba1120c3b1539e18eee8a475805f3f53d3543ee7bfb8798db"
+  },
+  "stderr": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r15-compiler-one-stop-physical-consumer-cpu-r3/command.stderr",
+    "bytes": 3214,
+    "sha256": "86d9e26f15f63f1bd804e9db24aefa4ddecba1c9df57a43af4486f2560652060"
+  },
+  "tests": {
+    "v2_library": 58,
+    "v2_native_binary_cpu": 30,
+    "separate_v1_compatibility": 1,
+    "total": 89
+  },
+  "strict_clippy_passed": true,
+  "static_binary_build_passed": true,
+  "native_executed": false,
+  "runtime_profile": "unbound",
+  "package_helpers_qualified": false,
+  "notes": [
+    "All24 package Rust/Cargo/license bytes match qualified staging V2 exactly.",
+    "One compatibility control runs the distinct old V1 implementation; not a 89th V2 package test.",
+    "No parser acceptance is a source owner, current-stop authority or family cleanup proof."
+  ]
+}

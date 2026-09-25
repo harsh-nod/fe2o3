@@ -84,3 +84,9 @@ reinterpreted as a public read exception.
 Root qualified this relocated disabled package on 2026-09-24: source verifiers,
 47 Node controls and a strict inert C++ fixture passed. The activation gate
 remains false; no target/debugger was invoked. See the [qualification record](../../docs/source-transport-tiled-debugger-qualification-20260924.md) for exact receipts and remaining boundaries.
+
+## Separate disabled physical-V2 successor
+
+The additive [physical-V2 package](physical-v2/README.md) has its own source
+contract and protocol. This V1 package and its historical qualification remain
+unchanged. No activation, runtime binding or hardware acceptance is transferred.
