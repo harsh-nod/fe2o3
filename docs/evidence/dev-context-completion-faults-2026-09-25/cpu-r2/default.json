@@ -1,0 +1,33 @@
+{
+  "cleanup_required": false,
+  "command": [
+    "cargo",
+    "check",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--no-default-features"
+  ],
+  "counts": [],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "elapsed_seconds": 0.6117960790070356,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/dev/shm/fe2o3-context-completion-20260925-nl7Hus2O",
+    "RUSTDOCFLAGS": null,
+    "RUSTFLAGS": null,
+    "RUSTUP_TOOLCHAIN": null
+  },
+  "interruption": null,
+  "passed": true,
+  "pgid": 351083,
+  "process_group_absent": true,
+  "returncode": 0,
+  "roster_ok": true,
+  "source_commit": "ab26e8e091c2bc6d72a6e46082d5fba13eb7e502",
+  "sources_unchanged": true,
+  "started": "2026-09-25T18:20:30.391792+00:00",
+  "timed_out": false
+}

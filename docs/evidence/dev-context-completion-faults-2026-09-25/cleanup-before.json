@@ -1,0 +1,40 @@
+{
+  "terminal_groups": [
+    258346,
+    258358,
+    258378,
+    269766,
+    301297,
+    301837,
+    302767,
+    322738,
+    336818,
+    336877,
+    336889,
+    336928,
+    339512,
+    350769,
+    351083,
+    351095,
+    351128
+  ],
+  "owned_paths": [
+    {
+      "path": "/dev/shm/fe2o3-context-completion-20260925-nl7Hus2O",
+      "uid": 1000,
+      "device": 63,
+      "inode": 227737,
+      "allocated_bytes": 1935200256
+    },
+    {
+      "path": "/home/harsh/.codex-tmp/fe2o3-context-completion-20260925-wtjCS2gF",
+      "uid": 1000,
+      "device": 2096,
+      "inode": 8849561,
+      "allocated_bytes": 4096
+    }
+  ],
+  "source_inputs": 5947,
+  "passed_phases": 17,
+  "receipts_retained": true
+}

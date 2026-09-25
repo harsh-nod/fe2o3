@@ -1,0 +1,30 @@
+{
+  "cleanup_required": false,
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-context-completion-faults-2026-09-25/test_run.py"
+  ],
+  "counts": [],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "elapsed_seconds": 3.030330943998706,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/dev/shm/fe2o3-context-completion-20260925-nl7Hus2O",
+    "RUSTDOCFLAGS": null,
+    "RUSTFLAGS": null,
+    "RUSTUP_TOOLCHAIN": null
+  },
+  "interruption": null,
+  "passed": true,
+  "pgid": 336818,
+  "process_group_absent": true,
+  "returncode": 0,
+  "roster_ok": true,
+  "source_commit": "ab26e8e091c2bc6d72a6e46082d5fba13eb7e502",
+  "sources_unchanged": true,
+  "started": "2026-09-25T18:19:23.253317+00:00",
+  "timed_out": false
+}

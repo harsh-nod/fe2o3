@@ -1,0 +1,10 @@
+
+running 5 tests
+test context::tests::producer_launch_tests::completion_faults::completion_context_late_writer_identity_error_preserves_released_inputs ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_prevalidation_rejects_before_the_first_effect_boundary ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_boundary_errors_preserve_exact_committed_prefix ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_before_effect_panics_preserve_exact_committed_prefix ... ok
+test context::tests::producer_launch_tests::completion_faults::completion_context_after_effect_panics_preserve_commit_without_retiring_roots ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1429 filtered out; finished in 0.02s
+

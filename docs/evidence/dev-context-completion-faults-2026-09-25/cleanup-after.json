@@ -1,0 +1,14 @@
+{
+  "paths": [
+    {
+      "path": "/dev/shm/fe2o3-context-completion-20260925-nl7Hus2O",
+      "absent": true
+    },
+    {
+      "path": "/home/harsh/.codex-tmp/fe2o3-context-completion-20260925-wtjCS2gF",
+      "absent": true
+    }
+  ],
+  "terminal_groups_absent": true,
+  "reclaimed_allocated_bytes": 1935204352
+}

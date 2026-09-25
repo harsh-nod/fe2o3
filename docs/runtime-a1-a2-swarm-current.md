@@ -24,6 +24,23 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest Context CPU validation (2026-09-25): the
+[completion failure-prefix packet](evidence/dev-context-completion-faults-2026-09-25/README.md)
+adds five tests covering 40 scenarios at the real Context adapters: errors before
+journal effects, panics before/after committed effects, early roster validation
+and late writer identity rejection. Exact map/marker retention, journal counts
+and lineage, dependency/callback retention, original backend diagnostics and
+allocation-credit quarantine pass. Hooks are test-only; production behavior and
+shared proof bodies are unchanged. The final nine-phase run from signed
+`ab26e8e0` passes GNU/musl each with 1,412 runtime tests and 22 hardware-only
+ignores, all 46 doctests, default-feature checks, strict Clippy, formatting and
+four receipt-runner tests. Both retained runs bracket the same 5,947 source
+inputs. Exact-owned cleanup reclaims 1,935,204,352 allocated bytes with independent
+absence checks. This closes the missing bounded post-prevalidation Context fault
+test coverage, not map/journal executable correspondence, producer-first proofs,
+native/generated/resource gates or performance. A1/A2 and accepted checkpoints
+remain unchanged.
+
 Latest completion qualification (2026-09-25): the
 [shared journal-effect packet](evidence/dev-completion-journal-effects-2026-09-25/README.md)
 passes all 38 stages from signed `957c5ce64`. Both extended whole-root brackets

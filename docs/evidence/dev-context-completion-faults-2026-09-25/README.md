@@ -55,6 +55,31 @@ proofs, generated execution, high-depth native graphs, aggregate residency,
 physical overlap and matched performance remain open. A1/A2, Native R125,
 Admission R118B C1/C2/C3 and Resources R116/V3 acceptance are unchanged.
 
+## Results
+
+All nine `cpu-r2/` phases pass from signed
+`ab26e8e091c2bc6d72a6e46082d5fba13eb7e502`. The earlier eight-phase `cpu/` run
+also passes and remains retained; its runtime sources are identical.
+
+| Check | Result |
+| --- | --- |
+| Focused Context tests | Five tests, 40 scenarios pass |
+| GNU runtime | 1,412 passed, 22 hardware-only ignored |
+| musl runtime | 1,412 passed, 22 hardware-only ignored |
+| Runtime doctests | 46 passed (separate 4/42 summaries) |
+| Default-feature check | Pass |
+| Strict all-target/all-feature Clippy | Pass |
+| Workspace formatting | Pass |
+| Receipt-runner tests | Four passed |
+| Workspace source brackets | 5,947 inputs unchanged throughout both runs |
+
+`cleanup-before.json` checks all 17 recorded command groups absent before
+cleanup; `cleanup-after.json` independently checks both owned paths absent.
+The disposable build cache and unused empty scratch directory were removed,
+reclaiming 1,935,204,352 path-accounted allocated bytes. No MI300X resources
+were used. `SHA256SUMS` seals this directory's retained files, except itself;
+it is an integrity manifest, not a new proof-registration or hardware gate.
+
 ## Development Corrections
 
 Manual development checks first passed the 36-scenario matrix. Adding the
