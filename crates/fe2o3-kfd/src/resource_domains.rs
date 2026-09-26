@@ -318,6 +318,14 @@ pub use native::{
     Gfx942NativeBackingSessionBudgetV1,
 };
 
+mod composed;
+pub use composed::{
+    Gfx942AllocationRequestBudgetV1, Gfx942ComposedBackingAdmissionV1,
+    Gfx942ComposedBackingDeviceBudgetV1, Gfx942ComposedBackingRootV1,
+    Gfx942ComposedBackingSessionBudgetV1, Gfx942RequestAccountV1, Gfx942RequestReservationV1,
+    Gfx942RequestReservationsV1, Gfx942RetainedRequestV1,
+};
+
 #[cfg(test)]
 pub(crate) use native::tests as native_tests;
 

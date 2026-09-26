@@ -27,9 +27,12 @@ mod device;
 mod resource_domains;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use resource_domains::{
-    Gfx942HostBackingAdmissionV1, Gfx942HostBackingRootV1, Gfx942NativeBackingAdmissionV1,
-    Gfx942NativeBackingDeviceBudgetV1, Gfx942NativeBackingRootV1,
-    Gfx942NativeBackingSessionBudgetV1,
+    Gfx942AllocationRequestBudgetV1, Gfx942ComposedBackingAdmissionV1,
+    Gfx942ComposedBackingDeviceBudgetV1, Gfx942ComposedBackingRootV1,
+    Gfx942ComposedBackingSessionBudgetV1, Gfx942HostBackingAdmissionV1, Gfx942HostBackingRootV1,
+    Gfx942NativeBackingAdmissionV1, Gfx942NativeBackingDeviceBudgetV1, Gfx942NativeBackingRootV1,
+    Gfx942NativeBackingSessionBudgetV1, Gfx942RequestAccountV1, Gfx942RequestReservationV1,
+    Gfx942RequestReservationsV1, Gfx942RetainedRequestV1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

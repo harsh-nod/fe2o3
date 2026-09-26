@@ -1,0 +1,11 @@
+2026-09-26T13:00:41Z
+rustc 1.96.0-nightly (55e86c996 2026-04-02)
+binary: rustc
+commit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9
+commit-date: 2026-04-02
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.2
+cargo 1.96.0-nightly (888f67534 2026-03-30)
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdd       1007G  954G  2.0G 100% /home/harsh

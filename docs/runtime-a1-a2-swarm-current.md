@@ -24,6 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest composed-request development (2026-09-26): a separate typed accounting
+root now mints sibling request/N1/N2 leaves under one canonical device/session,
+with explicit combined-record limits. Request reservations and retained credits
+preserve the typed registry through cold lifetime, while clean cancellation and
+release remain reclaimable. The owning batch iterator reuses generic token
+storage. The [development packet](evidence/dev-composed-request-2026-09-26/README.md)
+records 13 focused passes and two deliberately rejected lifetime mutations.
+Broad libraries report 1,034 model, 70 accounting, 1,334 KFD and 1,482 runtime
+passes with the same four socket failures. All 69 selected construction tests,
+107 doctests and static checks pass; coverage overlaps and this is not full CPU
+qualification. This is accounting minting/custody, not an enabled composed
+Context/native profile. Mandatory request-witness transport, all native consumer
+paths and their formal/native qualification remain next. MI300X resolution still
+fails; no new performance result or accepted milestone is claimed.
+
 Latest retained-charge development (2026-09-26): the accounting query now checks
 exact account/leaf identity, a live retained owner, complete charge and valid
 domain ancestry without changing ledger state. All twelve existing Context

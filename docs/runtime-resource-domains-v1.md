@@ -141,7 +141,11 @@ generated, submission and disposal paths, not universal backend interception.
 Focused CPU tests exercise the new query and guarded Context uses; the existing
 shared planner/arena proofs do not yet prove its mutex/record association or
 Context composition.
-Mandatory native request witnesses and the third session class remain open.
+The [typed composed minting foundation](evidence/dev-composed-request-2026-09-26/README.md)
+now constructs that third request class alongside N1/N2 and preserves the typed
+registry through request-token lifetime. This accounting API has no mandatory
+Context installation or native consumer yet. Request witnesses, complete native
+composition and their adapter proofs remain open.
 
 The [development evidence](evidence/dev-resource-domains-2026-09-26/README.md)
 separates core tests, actual Context/MockBackend paths and broader regressions.

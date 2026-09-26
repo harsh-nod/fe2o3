@@ -110,10 +110,19 @@ matched HIP/HSA performance remain open. Accepted milestones are unchanged.
 ## Next Logical Composition
 
 The [exact retained-credit query](evidence/dev-retained-charge-2026-09-26/README.md)
-is an implemented prerequisite, not installation of a logical/native profile.
-The next explicit profile must use one session with sibling request, N1 and N2
-leaves. Context must adopt the already-minted request leaf; creating another
-child would exceed the four-level hierarchy.
+and [typed composed minting](evidence/dev-composed-request-2026-09-26/README.md)
+are implemented prerequisites, not installation of a logical/native profile.
+The latter adds a separate root and budgets with one session and sibling request,
+N1 and N2 leaves. Typed request reservations and retained credits preserve the
+canonical registry even before any native allocation exists. Clean cancellation
+or release remains reclaimable; quarantine preserves registry custody and debit.
+The owning batch iterator reuses the generic token array. Native-only extraction
+and raw-account/token extraction are unavailable.
+
+Context must adopt this existing typed request account; creating another child
+would exceed the four-level hierarchy. The minting API currently has no composed
+native constructor or mandatory Context/backend witness transport. Its CPU tests
+do not qualify native lifetime, actual shutdown or formal adapter composition.
 
 New composed device/session budgets must directly describe requested, host and
 device byte ceilings plus an explicit combined-record ceiling. Do not reinterpret
@@ -121,8 +130,8 @@ existing native-only `max_allocations` as including logical requests. Registry
 metadata consumes a generic record but no AllocationRecords units; native cached
 and bootstrap backing remains charged independently of logical requests.
 
-All three leaves must be minted inside canonical device admission before its
-registry entry is published. The composed binding must retain the exact typed
+All three leaves are minted inside canonical device admission before its
+registry entry is published. The composed binding retains the exact typed
 root/registry, session and request leaf, including cold request quarantine before
 any native backing exists. A generic accounting-root anchor alone does not retain
 that typed registry. Unused admission must remain cleanly reclaimable.
@@ -134,4 +143,6 @@ rosters both need coverage, followed by every startup order and ordered XGMI
 endpoint admission. Internal queue/bootstrap backing must not invent logical
 request charges. Capacity failures before effects remain distinct from binding,
 generation or accounting-invariant failures; ambiguity must not refund custody.
-These interfaces and native qualification are not implemented by the query alone.
+Generic ledger quarantine retains ancestor pressure without globally poisoning
+spare-capacity siblings; native session sealing must be enforced by its consumer.
+The mandatory witness interfaces and native qualification remain unimplemented.

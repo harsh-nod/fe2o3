@@ -1,0 +1,42 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 54.45s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-request-target-20260926-TadohCpb/debug/deps/fe2o3_kfd-0b12f6a7b1bdedc6)
+
+running 3 tests
+test resource_domains::composed::tests::composed_request_native_sibling_quarantine_preserves_typed_registry ... FAILED
+test resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry ... FAILED
+test resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained ... FAILED
+
+failures:
+
+---- resource_domains::composed::tests::composed_request_native_sibling_quarantine_preserves_typed_registry stdout ----
+
+thread 'resource_domains::composed::tests::composed_request_native_sibling_quarantine_preserves_typed_registry' (66) panicked at crates/fe2o3-kfd/src/resource_domains/composed/tests.rs:549:30:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry stdout ----
+
+thread 'resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry' (65) panicked at crates/fe2o3-kfd/src/resource_domains/composed/tests.rs:401:35:
+called `Option::unwrap()` on a `None` value
+
+---- resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained stdout ----
+
+thread 'resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained' (67) panicked at crates/fe2o3-kfd/src/resource_domains/composed/tests.rs:427:17:
+reserved fixture unwind
+
+thread 'resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained' (67) panicked at crates/fe2o3-kfd/src/resource_domains/composed/tests.rs:424:21:
+retained fixture unwind
+
+thread 'resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained' (67) panicked at crates/fe2o3-kfd/src/resource_domains/composed/tests.rs:432:34:
+called `Option::unwrap()` on a `None` value
+
+
+failures:
+    resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry
+    resource_domains::composed::tests::composed_request_native_sibling_quarantine_preserves_typed_registry
+    resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 1628 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

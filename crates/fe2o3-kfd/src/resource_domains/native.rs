@@ -262,10 +262,10 @@ impl Gfx942NativeBackingAdmissionV1 {
 }
 
 pub(crate) struct DeviceBackingAdmissionV1 {
-    generation: DeviceKeyV1,
-    budget: Gfx942DeviceBackingBudgetV1,
-    account: ResourceCreditAccountV1,
-    binding: BackingRootBindingV1,
+    pub(super) generation: DeviceKeyV1,
+    pub(super) budget: Gfx942DeviceBackingBudgetV1,
+    pub(super) account: ResourceCreditAccountV1,
+    pub(super) binding: BackingRootBindingV1,
 }
 
 impl DeviceBackingAdmissionV1 {

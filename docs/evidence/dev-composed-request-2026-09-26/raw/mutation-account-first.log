@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 50.90s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-request-target-20260926-TadohCpb/debug/deps/fe2o3_kfd-0b12f6a7b1bdedc6)
+
+running 1 test
+test resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly ... FAILED
+
+failures:
+
+---- resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly stdout ----
+
+thread 'resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly' (65) panicked at crates/fe2o3-kfd/src/resource_domains/composed/tests.rs:377:5:
+assertion failed: observe().is_none()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1630 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

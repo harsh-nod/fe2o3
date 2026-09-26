@@ -1,0 +1,69 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.229
+   Compiling rustix v1.1.4
+   Compiling zmij v1.0.23
+   Compiling autocfg v1.5.1
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-core v0.3.34
+   Compiling slab v0.4.12
+   Compiling futures-task v0.3.34
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+   Compiling tokio v1.47.1
+   Compiling futures-util v0.3.34
+   Compiling num-traits v0.2.19
+   Compiling syn v3.0.4
+   Compiling rmp v0.8.15
+   Compiling rmpv v1.3.1
+   Compiling futures-executor v0.3.34
+   Compiling serde_derive v1.0.229
+   Compiling fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 37s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-request-target-20260926-TadohCpb/debug/deps/fe2o3_kfd-60551c78c3ce1a5d)
+
+running 13 tests
+test resource_domains::composed::tests::composed_request_budget_bounds_and_exact_bootstrap ... ok
+test resource_domains::composed::tests::composed_request_batch_is_atomic_and_pending_members_keep_registry ... ok
+test resource_domains::composed::tests::composed_request_canonical_parent_and_all_device_limits_are_immutable ... ok
+test resource_domains::composed::tests::composed_request_class_device_root_and_generic_record_ceilings_apply ... ok
+test resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly ... ok
+test resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry ... ok
+test resource_domains::composed::tests::composed_request_cross_session_root_and_generation_substitutions_reject ... ok
+test resource_domains::composed::tests::composed_request_native_sibling_quarantine_preserves_typed_registry ... ok
+test resource_domains::composed::tests::composed_request_partial_batch_drop_and_native_bundle_drop_order ... ok
+test resource_domains::composed::tests::composed_request_quarantine_retains_ancestor_pressure_without_global_poison ... ok
+test resource_domains::composed::tests::composed_request_partial_mint_never_publishes_or_leaks_domains ... ok
+test resource_domains::composed::tests::composed_request_three_classes_contend_for_one_combined_record_limit ... ok
+test resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 1618 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-request-target-20260926-TadohCpb/debug/deps/fe2o3_resource_accounting-6ec1f52d27a69258)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-request-target-20260926-TadohCpb/debug/deps/fe2o3_runtime-f40ec65f6abc2ea1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1513 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-request-target-20260926-TadohCpb/debug/deps/fe2o3_runtime_model-ecfbec6a415a8132)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1053 filtered out; finished in 0.00s
+

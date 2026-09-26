@@ -1,0 +1,21 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 51.77s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-request-target-20260926-TadohCpb/debug/deps/fe2o3_kfd-0b12f6a7b1bdedc6)
+
+running 13 tests
+test resource_domains::composed::tests::composed_request_budget_bounds_and_exact_bootstrap ... ok
+test resource_domains::composed::tests::composed_request_batch_is_atomic_and_pending_members_keep_registry ... ok
+test resource_domains::composed::tests::composed_request_canonical_parent_and_all_device_limits_are_immutable ... ok
+test resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly ... ok
+test resource_domains::composed::tests::composed_request_class_device_root_and_generic_record_ceilings_apply ... ok
+test resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry ... ok
+test resource_domains::composed::tests::composed_request_cross_session_root_and_generation_substitutions_reject ... ok
+test resource_domains::composed::tests::composed_request_native_sibling_quarantine_preserves_typed_registry ... ok
+test resource_domains::composed::tests::composed_request_partial_batch_drop_and_native_bundle_drop_order ... ok
+test resource_domains::composed::tests::composed_request_partial_mint_never_publishes_or_leaks_domains ... ok
+test resource_domains::composed::tests::composed_request_quarantine_retains_ancestor_pressure_without_global_poison ... ok
+test resource_domains::composed::tests::composed_request_three_classes_contend_for_one_combined_record_limit ... ok
+test resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 1618 filtered out; finished in 0.01s
+

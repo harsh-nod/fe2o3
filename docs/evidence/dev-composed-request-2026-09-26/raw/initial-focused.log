@@ -1,0 +1,70 @@
+   Compiling typenum v1.20.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.1
+   Compiling spin v0.12.3
+   Compiling rustix v1.1.4
+   Compiling bitflags v2.13.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+   Compiling arrayvec v0.7.8
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+   Compiling hybrid-array v0.4.14
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 1m 51s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-composed-request-target-20260926-TadohCpb/debug/deps/fe2o3_kfd-0b12f6a7b1bdedc6)
+
+running 12 tests
+test resource_domains::composed::tests::composed_request_batch_is_atomic_and_pending_members_keep_registry ... ok
+test resource_domains::composed::tests::composed_request_budget_bounds_and_exact_bootstrap ... FAILED
+test resource_domains::composed::tests::composed_request_canonical_parent_and_all_device_limits_are_immutable ... ok
+test resource_domains::composed::tests::composed_request_class_device_root_and_generic_record_ceilings_apply ... FAILED
+test resource_domains::composed::tests::composed_request_cold_reservation_keeps_registry_then_cancels_cleanly ... ok
+test resource_domains::composed::tests::composed_request_cold_retained_credit_releases_or_preserves_registry ... ok
+test resource_domains::composed::tests::composed_request_cross_session_root_and_generation_substitutions_reject ... ok
+test resource_domains::composed::tests::composed_request_partial_batch_drop_and_native_bundle_drop_order ... ok
+test resource_domains::composed::tests::composed_request_partial_mint_never_publishes_or_leaks_domains ... ok
+test resource_domains::composed::tests::composed_request_quarantine_is_inclusive_and_blocks_sibling_reservation ... FAILED
+test resource_domains::composed::tests::composed_request_three_classes_contend_for_one_combined_record_limit ... ok
+test resource_domains::composed::tests::composed_request_unwind_cancels_reserved_but_quarantines_retained ... ok
+
+failures:
+
+---- resource_domains::composed::tests::composed_request_budget_bounds_and_exact_bootstrap stdout ----
+
+thread 'resource_domains::composed::tests::composed_request_budget_bounds_and_exact_bootstrap' (402) panicked at crates/fe2o3-kfd/src/resource_domains/composed/tests.rs:43:65:
+called `Result::unwrap()` on an `Err` value: InvalidRecordCapacity
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- resource_domains::composed::tests::composed_request_class_device_root_and_generic_record_ceilings_apply stdout ----
+
+thread 'resource_domains::composed::tests::composed_request_class_device_root_and_generic_record_ceilings_apply' (404) panicked at crates/fe2o3-kfd/src/resource_domains/composed/tests.rs:43:65:
+called `Result::unwrap()` on an `Err` value: InvalidRecordCapacity
+
+---- resource_domains::composed::tests::composed_request_quarantine_is_inclusive_and_blocks_sibling_reservation stdout ----
+
+thread 'resource_domains::composed::tests::composed_request_quarantine_is_inclusive_and_blocks_sibling_reservation' (410) panicked at crates/fe2o3-kfd/src/resource_domains/composed/tests.rs:356:5:
+assertion failed: matches!(a.host.account.reserve(class_charge(1, 4)),
+    Err(ResourceCreditErrorV1::Invariant))
+
+
+failures:
+    resource_domains::composed::tests::composed_request_budget_bounds_and_exact_bootstrap
+    resource_domains::composed::tests::composed_request_class_device_root_and_generic_record_ceilings_apply
+    resource_domains::composed::tests::composed_request_quarantine_is_inclusive_and_blocks_sibling_reservation
+
+test result: FAILED. 9 passed; 3 failed; 0 ignored; 0 measured; 1618 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`
