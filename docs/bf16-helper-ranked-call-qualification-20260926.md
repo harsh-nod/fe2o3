@@ -61,6 +61,19 @@ control now charges a one-unit prefix before attempting usize::MAX. Production
 accounting was not weakened. The failed receipt is retained and the corrected
 control passed both focused and broad checks.
 
+## Subsequent main integration
+
+Concurrent main changes were preserved in merge
+`a72036d3e931151a4e76cbc5ba393d6fde7f10f3`.
+A separate post-merge library regression of the AMDGCN model, lowerer and backend
+passed 4,421 test executions, zero failures and 192 ignored executions, followed
+by a clean whitespace check. It did not rerun the fresh source-session ladders.
+The 8,336-file / 119,220,939-byte source census was
+`c8b1723dec1a2a981c56eba803aa6f931969673f51b67c6eb1b928931b7f6be0`.
+Receipt: 24,315 bytes,
+`f47b3bd198f86c7614eeec873dc42444168be83edff4da84579d8a5a5f2a8626`;
+elapsed 140,013 ms, with unchanged source/input/tool pins and complete drains.
+
 ## Fresh source observations
 
 The R5 helper parent report (281,023 bytes,
