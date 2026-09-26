@@ -86,7 +86,7 @@ include!("compiler_execution_issuer_native_service_body.rs");
 
 #[cfg(test)]
 fn verify_test_current(
-    attestation: &fe2o3_compiler_execution_protocol::CompilerExecutionCurrentRecordAttestationV3,
+    attestation: fe2o3_compiler_execution_protocol::CompilerExecutionCurrentRecordAttestationV3,
     policy: &Policy,
     carriage: &Carriage,
     challenge: [u8; 32],

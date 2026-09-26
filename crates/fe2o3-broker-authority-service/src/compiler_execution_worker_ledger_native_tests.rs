@@ -135,7 +135,7 @@ fn native_worker_publication_replay_second_sequence_and_currentness() {
             &mut b,
         )
         .unwrap();
-        assert!(verify_test_current(&attestation, &p, &carriage, [81; 32], &mut b).is_ok());
+        assert!(verify_test_current(attestation, &p, &carriage, [81; 32], &mut b).is_ok());
         assert_eq!(ledger.record.sequence, u64::from(seed) + 1);
     }
     drop(ledger);
