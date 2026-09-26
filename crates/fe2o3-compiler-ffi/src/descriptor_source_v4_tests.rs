@@ -232,3 +232,132 @@ fn construction_table_and_revalidation_propagate_every_work_denial() {
         );
     }
 }
+
+#[test]
+fn shared_validation_preserves_v4_error_precedence_and_unwind_debits() {
+    let mut source = own(fixture::wire("gfx942:xnack-", 1, 0));
+    let prepaid = storage(&source.canonical_bytes);
+    let original_identity = source.identity;
+    let mut trace = Vec::new();
+    source
+        .revalidate(prepaid, &mut |w| {
+            trace.push(w);
+            Ok::<_, usize>(())
+        })
+        .unwrap();
+    let zero_check = trace.len() - 3;
+    assert_eq!(trace[zero_check], 32);
+    assert_eq!(
+        trace[zero_check + 1],
+        COMPILER_DESCRIPTOR_SOURCE_DOMAIN_V4.len() + 8 + source.canonical_bytes.len() + 128
+    );
+    assert_eq!(
+        trace[zero_check + 2],
+        size_of::<CompilerDescriptorSourceIdentityV4>() + 1
+    );
+
+    // Competing faults must retain the original storage/work/wire/zero/hash/
+    // identity ordering, not just fail somewhere in the shared implementation.
+    source.identity.sha256[0] ^= 1;
+    source.canonical_bytes[CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V4] = 1;
+    source.canonical_bytes[8..10].copy_from_slice(&5u16.to_le_bytes());
+    let mut seen = Vec::new();
+    assert!(matches!(source.revalidate(prepaid - 1, &mut |w| {
+        seen.push(w);
+        Ok::<_, usize>(())
+    }), Err(CompilerDescriptorSourceErrorV4::Storage { required, prepaid: actual })
+        if required == prepaid && actual == prepaid - 1));
+    assert!(seen.is_empty());
+    assert!(matches!(
+        source.table(table_storage(&source) - 1, &mut |w| {
+            seen.push(w);
+            Ok::<_, usize>(())
+        }),
+        Err(CompilerDescriptorSourceErrorV4::Storage { .. })
+    ));
+    assert!(seen.is_empty());
+    assert!(matches!(
+        source.revalidate(prepaid, &mut |w| {
+            seen.push(w);
+            Err(71usize)
+        }),
+        Err(CompilerDescriptorSourceErrorV4::Work(71))
+    ));
+    assert_eq!(seen, [1]);
+    seen.clear();
+    assert!(matches!(
+        source.revalidate(prepaid, &mut |w| {
+            seen.push(w);
+            Ok::<_, usize>(())
+        }),
+        Err(CompilerDescriptorSourceErrorV4::Wire(
+            DescriptorWireErrorV4::Nominal(DescriptorWireErrorV3::Decode(
+                DecodeError::UnknownVersion(5)
+            ))
+        ))
+    ));
+    assert_eq!(seen, [1, 1, 25, 7]);
+
+    source.canonical_bytes[8..10].copy_from_slice(&4u16.to_le_bytes());
+    seen.clear();
+    assert!(matches!(
+        source.revalidate(prepaid, &mut |w| {
+            seen.push(w);
+            if seen.len() == zero_check + 1 {
+                Err(72usize)
+            } else {
+                Ok(())
+            }
+        }),
+        Err(CompilerDescriptorSourceErrorV4::Work(72))
+    ));
+    assert_eq!(seen, trace[..=zero_check]);
+    seen.clear();
+    assert!(matches!(
+        source.revalidate(prepaid, &mut |w| {
+            seen.push(w);
+            Ok::<_, usize>(())
+        }),
+        Err(CompilerDescriptorSourceErrorV4::FinalizedDigest)
+    ));
+    assert_eq!(seen, trace[..=zero_check]);
+
+    source.canonical_bytes[CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V4] = 0;
+    for deny in [zero_check + 1, zero_check + 2] {
+        seen.clear();
+        assert!(matches!(source.revalidate(prepaid, &mut |w| {
+            seen.push(w);
+            if seen.len() == deny + 1 { Err(deny) } else { Ok(()) }
+        }), Err(CompilerDescriptorSourceErrorV4::Work(index)) if index == deny));
+        assert_eq!(seen, trace[..=deny]);
+    }
+    seen.clear();
+    assert!(matches!(
+        source.revalidate(prepaid, &mut |w| {
+            seen.push(w);
+            Ok::<_, usize>(())
+        }),
+        Err(CompilerDescriptorSourceErrorV4::IdentityMismatch)
+    ));
+    assert_eq!(seen, trace);
+
+    source.identity = original_identity;
+    let pointer = source.canonical_bytes().as_ptr();
+    for stop in [0, zero_check, trace.len() - 1] {
+        seen.clear();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = source.revalidate(prepaid, &mut |w| {
+                seen.push(w);
+                if seen.len() == stop + 1 {
+                    panic!("V4 original callback unwind");
+                }
+                Ok::<_, usize>(())
+            });
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(seen, trace[..=stop]);
+        assert_eq!(source.identity(), original_identity);
+        assert_eq!(source.canonical_bytes().as_ptr(), pointer);
+        source.revalidate(prepaid, &mut free).unwrap();
+    }
+}
