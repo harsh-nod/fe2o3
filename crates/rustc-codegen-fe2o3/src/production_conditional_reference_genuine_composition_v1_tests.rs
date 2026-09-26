@@ -291,6 +291,7 @@ fn rejection(
     root: u32,
     budget: &mut Budget<'_>,
     name: &str,
+    expected: &'static str,
     rows: &mut Vec<Json>,
 ) {
     let floor = budget.storage();
@@ -306,11 +307,10 @@ fn rejection(
     assert_eq!(budget.storage(), floor);
     assert!(
         matches!(
-            error,
-            portable::ConditionalReferenceErrorV1::UnsupportedReference(_)
-                | portable::ConditionalReferenceErrorV1::UnsupportedGpuIndex(_)
+            &error,
+            portable::ConditionalReferenceErrorV1::UnsupportedReference(actual) if *actual == expected
         ),
-        "not a semantic refusal: {error}"
+        "{name}: expected {expected}, got {error}"
     );
     rows.push(json!({"case": name, "checked": true, "refusal": error.to_string(), "work": budget.work() - before}));
 }
@@ -328,6 +328,7 @@ fn identities(
         u32::MAX,
         budget,
         "wrong-root",
+        "conditional CPU semantic root",
         rows,
     );
     for case in 0..10 {
@@ -354,6 +355,11 @@ fn identities(
             root,
             budget,
             &format!("identity-{case}"),
+            if matches!(case, 0 | 2..=6) {
+                "conditional CPU kernel identity"
+            } else {
+                "conditional CPU reference subject substitution"
+            },
             rows,
         );
     }
@@ -478,6 +484,16 @@ fn coherent_inputs(
             .observable_output_writes_v1(&FixtureMeter(RefCell::new(&mut *budget)))
             .unwrap();
         assert_eq!(writes.len(), 1);
+        if case == "output-occurrence" {
+            assert_ne!(writes[0].statement, write.statement);
+            assert_eq!(writes[0].rhs, write.rhs);
+        } else {
+            assert_eq!(writes[0].statement, write.statement);
+            assert_ne!(
+                writes[0].rhs, write.rhs,
+                "read mutation must reach the output"
+            );
+        }
         ir.observable_output_effects = writes.clone().into_boxed_slice();
         let digest = ir.canonical_sha256_v1();
         assert_ne!(digest, binding.effect_ir_sha256);
@@ -495,7 +511,19 @@ fn coherent_inputs(
             assert_eq!(actual.writes, writes)
         })
         .unwrap();
-        rejection(request, input(), root, budget, case, rows);
+        rejection(
+            request,
+            input(),
+            root,
+            budget,
+            case,
+            if case == "output-occurrence" {
+                "conditional CPU output occurrence"
+            } else {
+                "conditional CPU MIR value expression substitution"
+            },
+            rows,
+        );
     }
 }
 
@@ -598,6 +626,17 @@ fn origins(
                 budget,
             )
             .unwrap_err();
+            let expected = if adjusted {
+                "conditional CPU read expression origin substitution"
+            } else {
+                "conditional CPU read recipe origin substitution"
+            };
+            assert!(
+                matches!(&error,
+                    portable::ConditionalReferenceErrorV1::UnsupportedReference(actual) if *actual == expected
+                ),
+                "expected {expected}, got {error}"
+            );
             rows.push(json!({"case": format!("origin-{}-{source}", if adjusted {"adjusted"} else {"source"}),
                 "checked": true, "refusal": error.to_string(), "component_only": true,
                 "actual_source": source, "actual_adjusted": row.adjusted_argument()}));
@@ -646,10 +685,20 @@ fn component_resources(request: &Request<'_>, binding: &Binding, root: u32, rows
             if case == "exact" {
                 assert_eq!(b.work(), plain + 256);
                 assert_eq!(b.peak_storage(), peak);
+                assert_eq!((b.failed_work(), b.failed_storage()), (None, None));
             } else if case == "storage-short" {
-                assert!(b.failed_storage().is_some());
+                assert_eq!(b.failed_storage(), Some(peak));
+                assert_eq!(b.failed_work(), None);
             } else {
-                assert!(b.failed_work().is_some());
+                let rejected = if case == "subject-work-short" {
+                    assert_eq!(b.work(), plain);
+                    plain + 256
+                } else {
+                    assert!(b.work() < plain);
+                    plain
+                };
+                assert_eq!(b.failed_work(), Some(rejected));
+                assert_eq!(b.failed_storage(), None);
             }
             rows.push(json!({"case": format!("component-{route}-{case}"), "checked": true,
                 "component_only": true, "callback_entered": entered, "work": b.work(),
