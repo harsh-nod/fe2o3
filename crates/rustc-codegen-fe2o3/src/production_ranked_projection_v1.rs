@@ -52,6 +52,7 @@ mod bf16_nominal_ranked_proxy_v1;
 mod bf16_nominal_final_candidate_v1;
 mod canonical_assertion_facts_v1;
 mod capability_state_access_v1;
+mod root_checked_references_v1;
 mod tensor_capability_read_v1;
 #[cfg(test)]
 pub(crate) use canonical_assertion_facts_v1::{
@@ -22948,22 +22949,7 @@ fn checked_reference_origin(
     block_index: usize,
     references: &CheckedReferencesV1,
 ) -> Result<Option<CheckedReferenceSourceV1>, ProductionRankedProjectionErrorV1> {
-    let Some(origin) = checked_reference_origin_for_place(place, &references.origins) else {
-        return Ok(None);
-    };
-    if !origin.availability.is_none_or(|availability| {
-        capability_availability_allows(
-            &references.option_dominance,
-            &references.enum_payload_dominance,
-            availability,
-            SemanticBlockIdV1::from_index(block_index as u32),
-        )
-    }) {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "a checked reference is dereferenced outside its authenticated payload region",
-        ));
-    }
-    Ok(Some(origin.source))
+    root_checked_references_v1::origin_for_owned_v1(place, block_index, references)
 }
 
 fn transparent_operand_place(operand: &SemanticOperandV1) -> Option<&SemanticPlaceV1> {
@@ -25373,6 +25359,7 @@ mod tests {
 
     include!("production_ranked_projection_v1/canonical_assertion_graph_v1_tests.rs");
     include!("production_ranked_projection_v1/root_recipe_core_v1_tests.rs");
+    include!("production_ranked_projection_v1/root_checked_references_v1_tests.rs");
 
     mod implicit_capability_capture_v1_tests {
         include!("production_ranked_projection_v1/implicit_capability_capture_v1_tests.rs");

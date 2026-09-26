@@ -15,6 +15,21 @@ mod bf16_nominal_capability_consumer_v1;
 #[allow(unused_imports)]
 pub(super) use bf16_nominal_capability_consumer_v1::with_nominal_capability_consumer_v1;
 
+// Private reservation-only seam; no owning recipe or strict origin producer yet.
+#[allow(dead_code)]
+#[path = "bf16_nominal_recipe_resources_v1.rs"]
+mod bf16_nominal_recipe_resources_v1;
+#[allow(unused_imports)]
+pub(super) use bf16_nominal_recipe_resources_v1::with_nominal_recipe_resources_v1;
+
+#[cfg(test)]
+#[path = "bf16_nominal_recipe_resources_genuine_v1_tests.rs"]
+mod bf16_nominal_recipe_resources_genuine_v1_tests;
+#[cfg(test)]
+pub(super) use bf16_nominal_recipe_resources_genuine_v1_tests::{
+    nominal_recipe_resources_controls_for_test_v1, observe_nominal_recipe_resources_for_test_v1,
+};
+
 use super::bf16_nominal_call_routing_v1::NominalCallVisitorV1;
 #[cfg(test)]
 use super::ranked_projection_source_v1::with_projection_source_budget_v1;

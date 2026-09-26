@@ -5,6 +5,22 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Original-ledger recipe context and debugger failure evidence — 2026-09-26
+
+The [recipe-context checkpoint](bf16-recipe-resource-context-qualification-20260926.md)
+qualifies the concrete source/facts resource context and borrowed ordinary
+checked-reference continuation: 331 model tests, 2,572 backend tests, build,
+five fresh real-source sessions, 36+2 normal sessions and 40 lossless-comparison
+controls. All 38 normal observation bodies and 52 artifacts match the prior
+ordinary checkpoint. Authenticated nominal origin construction and the complete
+root recipe remain open; normal helper admission is still refused.
+
+The separately coordinated [debugger attempt](gfx950-publication-diagnostic-native-observation-20260926.md)
+failed publication but preserved the underlying `Incomplete` result and native
+relation refusal `(15)`. Exact owned-family cleanup and independent absence
+checks passed; capture and dispatch remain unknown. No automatic retry or public
+capture activation occurred. Accepted broad exits remain **6/18**.
+
 ## Complete retained Final effects — 2026-09-26
 
 The [retained-effects checkpoint](bf16-helper-retained-effects-qualification-20260926.md)

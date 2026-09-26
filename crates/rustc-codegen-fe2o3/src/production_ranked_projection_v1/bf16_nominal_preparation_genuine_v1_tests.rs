@@ -70,6 +70,9 @@ pub(super) fn observe_prepared_dense(
             source.source_call(),
             budget,
         )?;
+    super::canonical_assertion_facts_v1::observe_nominal_recipe_resources_for_test_v1(
+        owner, source, inventory, budget,
+    )?;
     // Actual measured counts, not a positive-assertion coverage assumption.
     assert!(assertions.blocks > 0);
     assert!(assertions.true_decisions <= assertions.assertions);
@@ -365,6 +368,13 @@ pub(super) fn inspect_dense_final_controls(
         source.root(),
         source.call_block(),
         source.source_call(),
+        budget,
+    )?;
+    super::canonical_assertion_facts_v1::nominal_recipe_resources_controls_for_test_v1(
+        owner,
+        source,
+        inventory,
+        inventory_storage,
         budget,
     )
 }
