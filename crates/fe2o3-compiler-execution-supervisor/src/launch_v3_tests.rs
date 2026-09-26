@@ -3,6 +3,7 @@ use crate::AdmittedIssuerProgramV3 as Program;
 use crate::authority_v2_test_process::*;
 use crate::handoff_v3::tests::fixture;
 use crate::launch_v2::test_support::*;
+use crate::native_consuming_test_process::Family;
 use fe2o3_broker_authority_service::{
     CURRENT_PROCESS_START_TIME_WORK_V2, LiveClientPidfdIdentityV2 as Client,
     ProtectedExternalAnchorServiceAdmissionV2 as Anchor,
@@ -27,6 +28,13 @@ use std::{os::fd::AsFd, time::Instant};
 const WORK_LIMIT: usize = 100_000_000_000;
 const STORAGE_LIMIT: usize = 10_000_000;
 const EXTRA: usize = 19;
+const FAMILY: Family = Family::V3;
+
+include!("launch_native_witness_tests.rs");
+
+#[path = "native_consuming_v3_tests.rs"]
+mod consuming;
+pub(crate) use consuming::exercise as exercise_consuming;
 
 include!("launch_native_io_tests.rs");
 include!("launch_native_limits_tests.rs");

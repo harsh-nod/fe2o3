@@ -3,8 +3,10 @@ use crate::program_v3::tests::{
     SEED, STORAGE_LIMIT, WORK_LIMIT, new_program, policy, revalidation_work,
 };
 use crate::{authority_v2_test_process as process_fixture, tests::Fixture};
+use fe2o3_compiler_closure_capability::CompilerExecutionPolicyCapabilityV3 as Cap;
 use fe2o3_compiler_execution_protocol::sealed_static_issuer_runtime_measurement_v1;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+use fe2o3_protected_static_executable::ProtectedStaticExecutableV2 as Image;
 use std::{
     os::fd::{AsFd, OwnedFd},
     time::{Duration, Instant},
@@ -17,6 +19,21 @@ const ANCHOR_UID: u32 = 65_534;
 const SUPERVISOR_UID: u32 = 65_533;
 const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
 const CHILD: &str = "authority_v3::tests::supervisor_process_helper";
+
+pub(crate) fn measured_policy(
+    issuer: fe2o3_compiler_execution_protocol::CompilerExecutionIssuerMeasurementV1,
+    generation: u64,
+    budget: &mut Budget<'_>,
+) -> Policy {
+    policy(
+        issuer,
+        sealed_static_issuer_runtime_measurement_v1(),
+        generation,
+        budget,
+    )
+}
+
+include!("authority_native_consuming_tests.rs");
 
 fn credentials() -> Credentials {
     Credentials::new(

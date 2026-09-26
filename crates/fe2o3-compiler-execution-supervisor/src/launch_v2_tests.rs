@@ -2,6 +2,7 @@ use super::test_support::*;
 use super::*;
 use crate::AdmittedIssuerProgramV2 as Program;
 use crate::authority_v2_test_process::{IO_TIMEOUT, frame, receive_packet, send_packet};
+use crate::native_consuming_test_process::Family;
 use fe2o3_broker_authority_service::{
     CURRENT_PROCESS_START_TIME_WORK_V2, LiveClientPidfdIdentityV2 as Client,
     ProtectedExternalAnchorServiceAdmissionV2 as Anchor,
@@ -30,15 +31,14 @@ use std::{
 const WORK_LIMIT: usize = 100_000_000_000;
 const STORAGE_LIMIT: usize = 10_000_000;
 const EXTRA: usize = 19;
+const FAMILY: Family = Family::V2;
 
-#[path = "native_consuming_tests.rs"]
+#[path = "native_consuming_v2_tests.rs"]
 mod consuming;
 pub(crate) use consuming::exercise as exercise_consuming;
 
-struct HandoffWitness {
-    control: Witness,
-    service: Witness,
-}
+include!("launch_native_witness_tests.rs");
+
 impl HandoffWitness {
     fn expected_after_prepare(&self, client_pid: u32) -> BTreeMap<i32, FdIdentity> {
         let mut expected = fd_inventory();
@@ -70,48 +70,6 @@ impl HandoffWitness {
         assert!(expected.remove(&consumed[0]).is_some());
         expected
     }
-
-    fn assert_released(&self) {
-        self.control.assert_released();
-        self.service.assert_released();
-    }
-}
-
-fn accept(
-    supervisor: &Supervisor,
-    submitter: &OwnedFd,
-    budget: &mut Budget<'_>,
-) -> (Accepted, HandoffWitness, u32, usize) {
-    send_packet(submitter, &frame(b"HOF2", 0), &[]).unwrap();
-    let (payload, [control]) = receive_packet::<1>(submitter, Instant::now() + IO_TIMEOUT).unwrap();
-    assert_eq!(&payload[..4], b"HOF2");
-    let pid = u32::from_le_bytes(payload[4..].try_into().unwrap());
-    let pidfds = pidfd_references(pid);
-    let witness = Witness::new(&control, 1);
-    budget.reserve_storage(Accepted::CONTROL_STORAGE).unwrap();
-    let (accepted, delta) = supervisor
-        .accept_handoff(control, IO_TIMEOUT, budget)
-        .unwrap();
-    budget.reserve_storage(delta.additional_storage()).unwrap();
-    assert_eq!(accepted.manifest().client().pid(), pid);
-    assert_ne!(
-        accepted.submitter().uid(),
-        rustix::process::geteuid().as_raw()
-    );
-    let (service, client, retained) = accepted.clone_launch_peers(budget).unwrap();
-    budget.reserve_storage(retained).unwrap();
-    let service_witness = Witness::new(&service, 2);
-    drop((service, client));
-    budget.release_storage(retained).unwrap();
-    (
-        accepted,
-        HandoffWitness {
-            control: witness,
-            service: service_witness,
-        },
-        pid,
-        pidfds,
-    )
 }
 
 fn expected_work(fixture: &crate::tests::Fixture) -> (usize, usize) {
@@ -140,32 +98,6 @@ fn expected_work(fixture: &crate::tests::Fixture) -> (usize, usize) {
 
 fn prepared_witnesses(owner: &Prepared) -> Vec<Witness> {
     prepared_witnesses_with_readiness(owner, true)
-}
-
-fn prepared_witnesses_with_readiness(owner: &Prepared, pin_readiness_writer: bool) -> Vec<Witness> {
-    let mut witnesses = vec![
-        Witness::new(&owner.launcher, 1),
-        Witness::new(&owner.issuer, 1),
-        Witness::new(&owner.static_manifest_file, 1),
-    ];
-    for (index, source) in owner.sources.iter().enumerate() {
-        // Pidfds use target identities, not Linux's shared anonymous-inode key.
-        if matches!(
-            index,
-            CLIENT_PIDFD_SOURCE_INDEX | EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX
-        ) || (index == READINESS_SOURCE_INDEX && !pin_readiness_writer)
-        {
-            continue;
-        }
-        let owned = match index {
-            STDOUT_SOURCE_INDEX | STDERR_SOURCE_INDEX | READINESS_SOURCE_INDEX => 2,
-            // Accepted custody and the capability each retain their original FD.
-            SERVICE_PEER_SOURCE_INDEX | LAUNCH_MANIFEST_SOURCE_INDEX => 2,
-            _ => 1,
-        };
-        witnesses.push(Witness::new(source, owned));
-    }
-    witnesses
 }
 
 fn inspect_prepared(owner: &Prepared, client_pid: u32, anchor_pid: u32) {
@@ -254,7 +186,7 @@ fn preparation_boundaries(
 ) {
     let mut peak = 0;
     for case in LIMITS {
-        let (accepted, control, pid, pidfds) = accept(supervisor, submitter, outer);
+        let (accepted, control, pid, pidfds) = accept_with_witness(supervisor, submitter, outer);
         let consumed = accepted.retained_storage();
         let floor = supervisor.retained_storage() + consumed;
         let (work_limit, storage_limit, prepaid) = case.inputs(floor, exact_work, peak);
@@ -331,7 +263,7 @@ pub(crate) fn exercise(peer: &OwnedFd, pidfd: &OwnedFd, submitter: &OwnedFd) {
     assert_eq!(budget.storage(), EXTRA + supervisor_storage);
     let anchor_pid = supervisor.external_anchor_process().pid();
     send_packet(submitter, &frame(b"ANC2", anchor_pid), &[]).unwrap();
-    let (accepted, control, pid, pidfds) = accept(&supervisor, submitter, &mut budget);
+    let (accepted, control, pid, pidfds) = accept_with_witness(&supervisor, submitter, &mut budget);
     let anchor_pidfds = pidfd_references(anchor_pid);
     let expected_manifest = *accepted.manifest().canonical_bytes();
     let consumed = accepted.retained_storage();
@@ -381,7 +313,7 @@ pub(crate) fn exercise(peer: &OwnedFd, pidfd: &OwnedFd, submitter: &OwnedFd) {
     assert!(budget.work_ledger_identity_v1() == ledger);
 
     preparation_boundaries(&supervisor, submitter, &mut budget, expected_prepare_work);
-    let (accepted, control, pid, pidfds) = accept(&supervisor, submitter, &mut budget);
+    let (accepted, control, pid, pidfds) = accept_with_witness(&supervisor, submitter, &mut budget);
     let consumed = accepted.retained_storage();
     let mut denied_work = Work::new(WORK_LIMIT);
     let mut denied = Budget::new(&mut denied_work, STORAGE_LIMIT);
