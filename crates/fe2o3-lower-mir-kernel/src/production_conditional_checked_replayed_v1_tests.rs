@@ -208,6 +208,92 @@ fn conditional_replayed_missing_reordered_repeated_reads_and_premises_refuse() {
     });
 }
 
+#[test]
+fn conditional_replayed_same_parameter_reads_require_exact_ordered_occurrences() {
+    use crate::ProductionConditionalCheckedOutputErrorV1 as OutputError;
+
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        fixture::with_same_parameter_reads(profile, |p, budget| {
+            with_replayed(p, budget, |h, c, premises, budget| {
+                inspect_replayed(p, h, c, premises, budget).unwrap();
+                parity(p, h, budget).unwrap();
+                assert_eq!(premises.len(), 10);
+                assert_eq!(premises[4..7], premises[7..10]);
+                let floor = budget.storage();
+                let account = budget.work_ledger_identity_v1();
+                let denials = (budget.failed_work(), budget.failed_storage());
+                for alter_original in [false, true] {
+                    for mutation in 0..3 {
+                        scoped(budget, |budget| {
+                            budget.reserve_storage(SCRATCH)?;
+                            let prefix = h.prefix().policy7_relation().policy6_relation();
+                            let kernel = KernelId::new("entry");
+                            let before = facts(&p.n, &kernel, budget)?;
+                            let after = facts(prefix.continuation().output(), &kernel, budget)?;
+                            let mut original = occurrences::reads(&before, budget)?;
+                            let mut output = occurrences::reads(&after, budget)?;
+                            assert_eq!(original.len(), 2);
+                            assert_eq!(output.len(), 2);
+                            assert_ne!(original[0].location(), original[1].location());
+                            assert_ne!(output[0].location(), output[1].location());
+                            assert_eq!(original[0].parameter(), 1);
+                            for read in original.iter().chain(&output) {
+                                occurrences::read_premises(original[0], *read, budget)?;
+                            }
+                            occurrences::coverage(
+                                &before, &after, prefix, &original, &output, budget,
+                            )?;
+                            let altered = if alter_original {
+                                &mut original
+                            } else {
+                                &mut output
+                            };
+                            match mutation {
+                                0 => altered.swap(0, 1),
+                                1 => {
+                                    altered.pop();
+                                }
+                                2 => altered[1] = altered[0],
+                                _ => unreachable!(),
+                            }
+                            // Swaps and duplicates retain identical premise triples;
+                            // only occurrence provenance can distinguish these rows.
+                            if mutation != 1 {
+                                occurrences::coverage_subjects(
+                                    &before, &after, &original, &output,
+                                )?;
+                                occurrences::premises(&before, &original, premises, budget)?;
+                                occurrences::premises(&after, &output, premises, budget)?;
+                            }
+                            let paid = budget.work();
+                            let result = occurrences::coverage(
+                                &before, &after, prefix, &original, &output, budget,
+                            );
+                            if mutation == 1 {
+                                assert!(matches!(
+                                    result,
+                                    Err(OutputError::Mismatch("source/output coverage subjects"))
+                                ));
+                            } else {
+                                assert!(matches!(
+                                    result,
+                                    Err(OutputError::Mismatch("final memory occurrence"))
+                                ));
+                            }
+                            assert!(budget.work() > paid);
+                            Ok(())
+                        })
+                        .unwrap();
+                        assert_eq!(budget.storage(), floor);
+                        assert!(budget.work_ledger_identity_v1() == account);
+                        assert_eq!((budget.failed_work(), budget.failed_storage()), denials);
+                    }
+                }
+            })
+        });
+    }
+}
+
 fn measured_cost() -> (usize, usize) {
     with_complete(Profile::Gfx942, true, |p, budget| {
         with_replayed(p, budget, |h, c, premises, budget| {

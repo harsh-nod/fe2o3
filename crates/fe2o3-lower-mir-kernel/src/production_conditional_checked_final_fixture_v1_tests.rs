@@ -154,6 +154,17 @@ pub(super) fn with_complete<T>(
     with_module(profile, module(changed), action)
 }
 
+pub(super) fn with_same_parameter_reads<T>(
+    profile: Profile,
+    action: impl FnOnce(&Complete, &mut Budget<'_>) -> T,
+) -> T {
+    with_module(
+        profile,
+        base::module_with_input_arguments(false, [1, 1]),
+        action,
+    )
+}
+
 pub(super) fn with_helper_motion<T>(
     profile: Profile,
     action: impl FnOnce(&Complete, &mut Budget<'_>) -> T,
