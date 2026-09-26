@@ -540,14 +540,39 @@ impl rustc_driver::Callbacks for Callbacks {
         };
         OBSERVING.store(false, Ordering::SeqCst);
         let visit = *BRIDGE.lock().unwrap();
+        let resources = (
+            budget.work(),
+            budget.storage(),
+            budget.peak_storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        );
         if self.mode == "f" {
-            assert!(matches!(visit, BridgeVisit::Installed(_)));
+            assert!(
+                matches!(visit, BridgeVisit::Installed(_)),
+                "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+            );
         } else {
-            assert_eq!(visit, BridgeVisit::Uncalled);
+            assert_eq!(
+                visit,
+                BridgeVisit::Uncalled,
+                "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+            );
         }
-        assert_eq!(std::ptr::from_mut(&mut budget), address);
-        assert!(budget.work_ledger_identity_v1() == account);
-        assert_eq!(budget.storage(), 19);
+        assert_eq!(
+            std::ptr::from_mut(&mut budget),
+            address,
+            "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+        );
+        assert!(
+            budget.work_ledger_identity_v1() == account,
+            "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+        );
+        assert_eq!(
+            budget.storage(),
+            19,
+            "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
+        );
         let (terminal, resource_kind) = if matches!(self.mode.as_str(), "f" | "fixed6") {
             assert!(
                 matches!(
@@ -556,7 +581,7 @@ impl rustc_driver::Callbacks for Callbacks {
                         RankedError::ConditionalFinalizerRequired { .. }
                     )
                 ),
-                "{error}"
+                "cause={error:?}; bridge={visit:?}; resources(work, storage, peak, failed_work, failed_storage)={resources:?}"
             );
             assert!(budget.work() > 0);
             ("conditional-finalizer-required", None)
