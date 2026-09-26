@@ -1,7 +1,16 @@
 //! Admission refusals need no socket fixture and run before transport I/O.
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
-use std::{fs::File, os::fd::AsRawFd};
+use rustix::pipe::{PipeFlags, pipe_with};
+
+pub(super) fn peer() -> (OwnedFd, OwnedFd) {
+    pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap()
+}
+
+pub(super) fn closed(reader: OwnedFd) {
+    // EOF tracks the owned writer, not a descriptor number another test can reuse.
+    assert_eq!(rustix::io::read(reader, &mut [0]).unwrap(), 0);
+}
 
 #[test]
 fn admission_resource_denials_close_input_and_keep_original_account() {
@@ -9,8 +18,7 @@ fn admission_resource_denials_close_input_and_keep_original_account() {
         (7, TestClient::PEER_STORAGE),
         (64 * 1024, TestClient::PEER_STORAGE - 1),
     ] {
-        let peer: OwnedFd = File::open("/dev/null").unwrap().into();
-        let fd = peer.as_raw_fd();
+        let (reader, peer) = peer();
         let mut work = Work::new(limit);
         let mut budget = Budget::new(&mut work, 64 * 1024);
         budget.reserve_storage(prepaid).unwrap();
@@ -30,12 +38,7 @@ fn admission_resource_denials_close_input_and_keep_original_account() {
         drop(result);
         assert_eq!(budget.storage(), prepaid);
         assert!(budget.work_ledger_identity_v1() == ledger);
-        // SAFETY: F_GETFD has no pointer arguments and does not modify the descriptor.
-        assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::EBADF)
-        );
+        closed(reader);
     }
 }
 
@@ -46,7 +49,7 @@ fn invalid_timeout_is_terminal_and_does_not_refund_work() {
     budget.reserve_storage(TestClient::PEER_STORAGE).unwrap();
     let ledger = budget.work_ledger_identity_v1();
     for timeout in [Duration::ZERO, Duration::from_secs(301)] {
-        let peer: OwnedFd = File::open("/dev/null").unwrap().into();
+        let (reader, peer) = peer();
         let used = budget.work();
         assert!(matches!(
             TestClient::admit(peer, timeout, &mut budget),
@@ -55,5 +58,6 @@ fn invalid_timeout_is_terminal_and_does_not_refund_work() {
         assert_eq!(budget.storage(), TestClient::PEER_STORAGE);
         assert_eq!(budget.work(), used + 64 * 1024);
         assert!(budget.work_ledger_identity_v1() == ledger);
+        closed(reader);
     }
 }

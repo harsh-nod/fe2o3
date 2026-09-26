@@ -134,6 +134,30 @@ macro_rules! native_client_transcripts {
             Issued,
             Published,
         }
+
+        #[test]
+        fn native_cancel_after_preparation_keeps_expired_deadline() {
+            let (peer, server) = pair();
+            let mut work = Work::new(WORK);
+            let mut budget = Budget::new(&mut work, STORAGE);
+            budget.reserve_storage(FIXTURE_STORAGE).unwrap();
+            let policy = policy(&mut budget);
+            let floor = budget.storage();
+            let original = budget.work_ledger_identity_v1();
+            budget.reserve_storage(Client::PEER_STORAGE).unwrap();
+            let client = Client::admit(peer, Duration::from_millis(1), &mut budget).unwrap();
+            let (client, ()) = client.prepare::<_, Error>(|b| {
+                b.charge_work(19)?;
+                thread::sleep(Duration::from_millis(5));
+                Ok(())
+            }).unwrap();
+            assert!(matches!(client.cancel(&policy), Err(Error::Transport(
+                fe2o3_compiler_execution_client::CompilerExecutionClientErrorV1::Timeout
+            ))));
+            assert_closed(&server);
+            assert!(budget.work_ledger_identity_v1() == original);
+            assert_eq!(budget.storage(), floor);
+        }
         fn spawn_lifecycle(peer: OwnedFd, stage: Stage) -> thread::JoinHandle<usize> {
             thread::spawn(move || {
                 let mut work = Work::new(WORK);
