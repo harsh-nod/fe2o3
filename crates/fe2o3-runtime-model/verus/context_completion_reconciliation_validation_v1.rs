@@ -56,6 +56,15 @@ pub open spec fn pending_roots_valid(table: CompletionTableV1, id: RuntimeSubmis
     &&& if kind == 1 { node.peer_roots.is_ok() } else { node.producer_roots.is_ok() }
 }
 
+pub open spec fn pending_roots_result(table: CompletionTableV1, id: RuntimeSubmissionIdV1,
+    kind: u8) -> Result<(), JournalObservationErrorV1> {
+    let node = table.node(id);
+    if node.root_kind != kind || node.record.status != RuntimeCompletionStatusV1::Pending
+        || node.record.quiescent {
+        Err(JournalObservationErrorV1 { code: 0 })
+    } else if kind == 1 { node.peer_roots } else { node.producer_roots }
+}
+
 pub struct CompletionProjectionV1 {
     pub submissions: CompletionTableV1,
     pub quarantined: bool,
@@ -83,7 +92,8 @@ impl CompletionTableV1 {
     pub fn validate_custody(&self, id: RuntimeSubmissionIdV1)
         -> (result: Result<(), RuntimeValidationErrorV1>)
         requires self.wf(), self.contains(id),
-        ensures result.is_ok() ==> custody_valid(*self, id),
+        ensures result == if custody_valid(*self, id) { Ok(()) }
+            else { Err(RuntimeValidationErrorV1::InvalidBackendDescription) },
     {
         let invalid = RuntimeValidationErrorV1::InvalidBackendDescription;
         let index = self.find(id).unwrap();
@@ -107,6 +117,7 @@ impl CompletionTableV1 {
         let mut j = 0usize;
         while j < node.dependencies.len()
             invariant self.wf(), self.contains(id), index == self.slot(id),
+                invalid == RuntimeValidationErrorV1::InvalidBackendDescription,
                 node == &self.nodes@[index as int],
                 0 <= j <= node.dependencies@.len(),
                 node.root_kind > 0 && node.root_kind <= 2,
@@ -119,25 +130,39 @@ impl CompletionTableV1 {
                 state.terminal != Some(BackendPollV1::Pending),
                 state.terminal.is_none() ==> state.cursor == 0,
                 node.dependencies_held != node.record.quiescent,
+                node.dependencies_held,
                 forall|k: int| 0 <= k < j ==> dependency_valid(*self, id, k),
             decreases node.dependencies.len() - j,
         {
             let dependency = node.dependencies[j];
             if dependency.submission.context_generation != id.context_generation
                 || dependency.submission.local >= id.local {
+                assert(!dependency_valid(*self, id, j as int));
                 return Err(invalid);
             }
             let slot = match self.find(dependency.submission) {
-                Some(slot) => slot, None => return Err(invalid),
+                Some(slot) => slot,
+                None => {
+                    assert(!dependency_valid(*self, id, j as int));
+                    return Err(invalid);
+                },
             };
             let producer = &self.nodes[slot];
             if producer.record.backend_submission != dependency.backend_submission
                 || producer.root_kind != node.root_kind {
+                assert(!dependency_valid(*self, id, j as int));
                 return Err(invalid);
             }
-            let parent = match producer.state { Some(state) => state, None => return Err(invalid) };
+            let parent = match producer.state {
+                Some(state) => state,
+                None => {
+                    assert(!dependency_valid(*self, id, j as int));
+                    return Err(invalid);
+                },
+            };
             if parent.depth == 0 || parent.depth >= state.depth
                 || j < state.cursor && producer.record.status != RuntimeCompletionStatusV1::Succeeded {
+                assert(!dependency_valid(*self, id, j as int));
                 return Err(invalid);
             }
             assert(dependency_valid(*self, id, j as int));
@@ -175,10 +200,12 @@ impl CompletionProjectionV1 {
         -> (result: Result<(), RuntimeValidationErrorV1>)
         requires old(self).submissions.wf(), old(self).submissions.contains(id),
         ensures final(self).submissions == old(self).submissions,
-            old(self).quarantined ==> final(self).quarantined,
+            final(self).quarantined == (old(self).quarantined || result.is_err()),
             final(self).ordinary_checked == old(self).ordinary_checked,
             final(self).unsafe_settlement_attempt == old(self).unsafe_settlement_attempt,
             final(self).rejection == match result { Ok(()) => old(self).rejection, Err(error) => Some(error) },
+            result == if custody_valid(old(self).submissions, id) { Ok(()) }
+                else { Err(RuntimeValidationErrorV1::InvalidBackendDescription) },
             result.is_ok() ==> custody_valid(final(self).submissions, id)
                 && final(self).custody_checked == Some(id),
     {
@@ -196,7 +223,8 @@ impl CompletionProjectionV1 {
     pub fn validate_pending_roots(&mut self, id: RuntimeSubmissionIdV1, kind: u8)
         -> (result: Result<(), JournalObservationErrorV1>)
         requires old(self).submissions.wf(), old(self).submissions.contains(id), kind == 1 || kind == 2,
-        ensures final(self).submissions == old(self).submissions,
+        ensures result == pending_roots_result(old(self).submissions, id, kind),
+            final(self).submissions == old(self).submissions,
             final(self).rejection == old(self).rejection,
             final(self).quarantined == old(self).quarantined,
             final(self).ordinary_checked == old(self).ordinary_checked,
@@ -227,7 +255,8 @@ impl CompletionProjectionV1 {
     pub fn validate_pending_peer_copy_roots_v1(&mut self, id: RuntimeSubmissionIdV1)
         -> (result: Result<(), JournalObservationErrorV1>)
         requires old(self).submissions.wf(), old(self).submissions.contains(id),
-        ensures final(self).submissions == old(self).submissions,
+        ensures result == pending_roots_result(old(self).submissions, id, 1),
+            final(self).submissions == old(self).submissions,
             final(self).rejection == old(self).rejection,
             final(self).quarantined == old(self).quarantined,
             final(self).ordinary_checked == old(self).ordinary_checked,
@@ -241,7 +270,8 @@ impl CompletionProjectionV1 {
     pub fn validate_pending_producer_launch_roots_v1(&mut self, id: RuntimeSubmissionIdV1)
         -> (result: Result<(), JournalObservationErrorV1>)
         requires old(self).submissions.wf(), old(self).submissions.contains(id),
-        ensures final(self).submissions == old(self).submissions,
+        ensures result == pending_roots_result(old(self).submissions, id, 2),
+            final(self).submissions == old(self).submissions,
             final(self).rejection == old(self).rejection,
             final(self).quarantined == old(self).quarantined,
             final(self).ordinary_checked == old(self).ordinary_checked,

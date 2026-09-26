@@ -28,7 +28,7 @@ theorem for the transformations.
 
 ## Current Safety Statements
 
-The standalone development root verifies 49 obligations at the pinned default
+The standalone development root verifies 53 obligations at the pinned default
 solver limits. Its planner has no graph-validity or settlement-readiness
 precondition. It establishes:
 
@@ -50,6 +50,13 @@ precondition. It establishes:
 - Returned errors equal an adapter-recorded rejection, except an initially
   missing requested ID. This is error-value provenance, not a proof identifying
   the rejecting call site.
+- A valid requested directed leaf with physical Success, no dependencies and
+  successful root validation returns exact Success for absent/Success input or
+  exact Quiescence for Unknown input in two iterations. An injected settlement
+  error returns its exact code in one iteration, retaining Pending custody and
+  setting quarantine. The theorem also frames every unrelated node, directed
+  state and the synthetic settlement marker. It is conditional on leaf shape,
+  without strengthening the general planner's graph precondition.
 
 Opaque predicates, isolated proof queries and explicit quantifier triggers
 control solver expansion. They do not change assertions or increase limits.
@@ -57,10 +64,17 @@ No new assume, admit or external-body shortcut is used.
 
 ## Remaining Correspondence
 
-Concrete constructor-origin success, quiescence and fallible-settlement outcome
-witnesses, exact successful-validator contracts, authenticated logical mutations,
-and retained relocated replay remain required before final proof qualification.
-The current safety contract does not itself prove every valid leaf completes.
+Executable singleton constructors witness the leaf outcomes for both directed
+profiles, all three permitted input classifications and every u8 settlement
+failure code. Custody and root validators have exact result contracts; settlement
+has exact custody/quiescence/quarantine frames. These are finite-projection
+constructor witnesses, not constructor-origin real-Context theorems. In
+particular, real empty-dependency leaf input queries yield None; this model's
+Some(Success)/Some(Unknown) leaves are not established real constructor cases.
+
+The successor development runner checks signed-source positives, four logical
+mutants and an exact relocated source replay. These checks do not substitute for
+the broader authenticated mutation/admission campaign or production refinement.
 
 The adapters deliberately omit actual HashMap allocation, full event/device/
 allocation custody metadata, journal ownership, callbacks, dependency-release

@@ -1,5 +1,12 @@
 verus! {
 
+pub open spec fn settlement_commits(table: CompletionTableV1, id: RuntimeSubmissionIdV1,
+    status: RuntimeCompletionStatusV1) -> bool {
+    &&& table.node(id).record.status == RuntimeCompletionStatusV1::Pending
+    &&& status != RuntimeCompletionStatusV1::Pending
+    &&& table.node(id).settlement_failure == 0
+}
+
 pub open spec fn node_fixed(before: CompletionNodeV1, after: CompletionNodeV1) -> bool {
     &&& before.id == after.id
     &&& before.record.backend_submission == after.record.backend_submission
@@ -301,7 +308,11 @@ impl CompletionProjectionV1 {
                 || !settlement_ready(old(self).submissions, id, status)),
             final(self).ordinary_checked.is_none(), final(self).custody_checked.is_none(),
             final(self).peer_checked.is_none(), final(self).producer_checked.is_none(),
-            old(self).quarantined ==> final(self).quarantined,
+            final(self).quarantined == (old(self).quarantined || result.is_err()),
+            final(self).submissions.node(id).dependencies_held ==
+                (old(self).submissions.node(id).dependencies_held && !settlement_commits(old(self).submissions, id, status)),
+            final(self).submissions.node(id).record.quiescent ==
+                (old(self).submissions.node(id).record.quiescent || settlement_commits(old(self).submissions, id, status)),
             settlement_ready(old(self).submissions, id, status)
                 ==> progressed(old(self).submissions, final(self).submissions),
     {

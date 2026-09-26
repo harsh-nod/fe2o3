@@ -95,6 +95,8 @@ impl CompletionProjectionV1 {
         -> (result: Result<CompletionStepV1, RuntimeValidationErrorV1>)
         requires old(self).submissions.wf(), *old(steps) == 0,
         ensures final(self).submissions.wf(),
+            eligible_leaf(old(self).submissions, requested)
+                ==> leaf_outcome(*old(self), *final(self), requested, result, *final(steps)),
             0 < *final(steps) <= 2 * MAX_RUNTIME_DEPENDENCIES_V1 + 1,
             result.is_ok() ==> final(self).rejection.is_none(),
             progressed(old(self).submissions, final(self).submissions),
@@ -132,6 +134,11 @@ impl CompletionProjectionV1 {
                 invariant
                     initial == old(self).submissions,
                     initial.wf(),
+                    eligible_leaf(initial, requested) ==> id == requested && length == 0 && *steps <= 1
+                        && self.quarantined == old(self).quarantined
+                        && if *steps == 0 { self.submissions.nodes@ == initial.nodes@ }
+                        else { initial.node(requested).settlement_failure == 0
+                            && leaf_effect(initial, self.submissions, requested) },
                     self.submissions.wf(), progressed(initial, self.submissions),
                     !self.unsafe_settlement_attempt,
                     self.rejection.is_none(),
@@ -158,6 +165,9 @@ impl CompletionProjectionV1 {
                 let ghost before_id = id;
                 proof {
                     if *steps == 1 { path_empty(self.submissions, path@, requested); }
+                    if eligible_leaf(initial, requested) {
+                        leaf_iteration_shape(initial, self.submissions, requested, *steps - 1);
+                    }
                 }
             ],
             [proof {
@@ -178,13 +188,23 @@ impl CompletionProjectionV1 {
                 fixed_lookup(before_step, self.submissions);
                 path_preserved(before_step, self.submissions, path@, length as int, id, requested);
                 progress_transitive(initial, before_step, self.submissions);
+                if eligible_leaf(initial, requested) {
+                    leaf_settlement_effect(initial, self.submissions, requested);
+                }
             }],
             [proof {
+                assert(!eligible_leaf(initial, requested));
                 checked_pending_shape(*self, id);
                 assert(dependency_valid(self.submissions, id, state.cursor as int));
                 checked_selected_edge(*self, id);
             }],
-            [proof { exhausted_success_gate(*self, id); }]
+            [proof {
+                if eligible_leaf(initial, requested) {
+                    assert(*steps == 1);
+                    assert(before_step.nodes@ == initial.nodes@);
+                }
+                exhausted_success_gate(*self, id);
+            }]
         )
     }
 }
