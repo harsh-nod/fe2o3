@@ -49,10 +49,12 @@ formal-refinement, native-correctness or performance result.
 ## Pending Composition Work
 
 1. Add an explicit directed-copy contract to the multi-device router, which
-   currently exposes only ordinary cooperative copies. Then admit directed peer
-   parents with their existing success-gated state, preserving one graph-wide
-   depth bound. Ordinary pending peers need an explicit compatible completion
-   contract before admission, not a relaxed flag check.
+   currently exposes only ordinary cooperative copies. First replace its blocking
+   DeviceLocal host-transfer leaves with resumable child SDMA operations as
+   described below. Then admit directed peer parents with their existing
+   success-gated state, preserving one graph-wide depth bound. Ordinary pending
+   peers need an explicit compatible completion contract before admission, not
+   a relaxed flag check.
 2. Check each original Read binding against the exact peer destination interval
    and captured allocation record. Whole-allocation journal leases are not proof
    that a smaller producer wrote every consumer input.
@@ -70,3 +72,27 @@ formal-refinement, native-correctness or performance result.
 5. Extend and requalify the mixed-kind finite projection, terminal-leaf model and
    production adapters. Then qualify actual copy/compute execution, native XGMI
    composition and matched HIP/HSA workloads separately.
+
+## Nonblocking Transport Prerequisite
+
+The existing cooperative Read/Write phases call public child host-transfer APIs.
+Those can execute synchronous directional SDMA with a 30-second wait. A wrapper
+around that state machine would violate the directed SPI's no-wait contract,
+even with bounded dependency selection and 64-KiB range requests.
+
+The child asynchronous copy ledger already owns submission, observation,
+retirement and failure custody. Reuse those real submissions with retained,
+accounted private host staging and child streams. Outer D2H/H2D phases must
+retain the exact child operation through completion and cancellation; dropping
+a public event must not release either owner. Publication and observation must
+remain separate bounded actions, without calling the blocking child flush path.
+
+Two dirty states have different authority. `sdma_shadow_dirty` means persistent
+DMA backing is authoritative and its CPU shadow may be stale. It no longer
+blocks initial async H2D/D2H publication when dependencies have already succeeded.
+The existing H2D compute-ready promotion still rejects dirty source shadows.
+`native_dirty` means separately materialized compute data must be reconciled;
+it still prevents immediate publication. That reconciliation needs bounded
+recycled-data reads and asynchronous uploads retaining exact extent/generation
+authority until success. This preparation and router integration remain open;
+no broad directed router support or latency improvement is established here.

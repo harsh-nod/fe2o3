@@ -12463,7 +12463,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
             .get(&destination.allocation)
             .expect("admitted destination remains indexed")
             .kind;
-        let Some(copy_kind) = direct_sdma_copy_kind_v1(source_kind, destination_kind) else {
+        let Some(_) = direct_sdma_copy_kind_v1(source_kind, destination_kind) else {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
                 "direct KFD copy supports H2D, D2H, or same-device D2D",
@@ -12693,15 +12693,15 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
                 .get(submission)
                 .is_some_and(|record| record.status == BackendPollV1::Succeeded)
         });
+        // DMA uses retained backing, not its possibly stale host shadow. Only
+        // separately materialized compute data requires prepublication reconciliation.
         let preparation_is_ready =
             [source.allocation, destination.allocation]
                 .into_iter()
                 .all(|allocation| {
-                    self.allocations.get(&allocation).is_some_and(|record| {
-                        record.native_dirty.is_empty()
-                            && (copy_kind == DirectSdmaCopyKindV1::SameDevice
-                                || !record.sdma_shadow_dirty)
-                    })
+                    self.allocations
+                        .get(&allocation)
+                        .is_some_and(|record| record.native_dirty.is_empty())
                 });
         if all_ready && preparation_is_ready {
             self.publish_sdma_copy_v1(active)?;
@@ -13438,6 +13438,7 @@ mod tests {
     mod sdma_host_write_tests;
     mod sdma_pending_allocation_tests;
     mod sdma_promotion_tests;
+    mod sdma_readiness_tests;
     mod sdma_recycle_tests;
     mod sdma_synchronous_tests;
 
