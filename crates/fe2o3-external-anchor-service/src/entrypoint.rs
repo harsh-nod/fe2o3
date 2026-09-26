@@ -289,7 +289,7 @@ fn require_descriptor_only_invocation_v1() -> Result<(), ExternalAnchorEntrypoin
     Ok(())
 }
 
-fn take_inherited_at(
+pub(crate) fn take_inherited_at(
     source: RawFd,
     target: RawFd,
     label: &'static str,
@@ -317,7 +317,7 @@ fn take_inherited_at(
     Ok(retained)
 }
 
-fn require_inherited(
+pub(crate) fn require_inherited(
     descriptor: RawFd,
     label: &'static str,
 ) -> Result<(), ExternalAnchorEntrypointErrorV1> {
@@ -353,7 +353,7 @@ fn require_unused(
     Ok(())
 }
 
-fn close_inherited(descriptor: RawFd) -> Result<(), ExternalAnchorEntrypointErrorV1> {
+pub(crate) fn close_inherited(descriptor: RawFd) -> Result<(), ExternalAnchorEntrypointErrorV1> {
     // SAFETY: each caller closes one inherited fixed descriptor exactly once after private
     // close-on-exec custody has been retained.
     if unsafe { libc::close(descriptor) } != 0 {

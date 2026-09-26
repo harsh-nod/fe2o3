@@ -35,3 +35,15 @@ name = "fe2o3-external-anchor-service"
 path = "src/main.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fe2o3-external-anchor-service-v2"
+path = "src/main_native_v2.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-external-anchor-service-v3"
+path = "src/main_native_v3.rs"
+test = false
+bench = false

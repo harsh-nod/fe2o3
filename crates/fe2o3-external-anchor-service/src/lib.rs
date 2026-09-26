@@ -33,6 +33,8 @@ mod durable_core;
 mod entrypoint;
 mod native;
 mod native_adapter;
+#[allow(unsafe_code)]
+mod native_entrypoint;
 mod native_peer;
 mod native_v2;
 mod native_v3;
@@ -45,6 +47,14 @@ mod service;
 pub(crate) use durable_core::DurableAnchorCoreV1;
 
 pub use native::{NativeExternalAnchorErrorV2, NativeExternalAnchorStorageV2};
+pub use native_entrypoint::{
+    NATIVE_EXTERNAL_ANCHOR_PROCESS_STORAGE_LIMIT_V2, NATIVE_EXTERNAL_ANCHOR_PROCESS_WORK_LIMIT_V2,
+    NATIVE_EXTERNAL_ANCHOR_STARTUP_FRAME_STORAGE_V2,
+    NATIVE_EXTERNAL_ANCHOR_STARTUP_INPUT_STORAGE_V2,
+    NATIVE_EXTERNAL_ANCHOR_STARTUP_INPUT_STORAGE_V3, NATIVE_EXTERNAL_ANCHOR_STARTUP_WORK_V2,
+    NativeExternalAnchorEntrypointErrorV2, run_inherited_external_anchor_service_v2,
+    run_inherited_external_anchor_service_v3,
+};
 pub use native_peer::{
     NATIVE_EXTERNAL_ANCHOR_PEER_FRAME_STORAGE_V2, NATIVE_EXTERNAL_ANCHOR_PEER_REPORT_STORAGE_V2,
     NATIVE_EXTERNAL_ANCHOR_PEER_STORAGE_V2, NATIVE_EXTERNAL_ANCHOR_PEER_WORK_V2,

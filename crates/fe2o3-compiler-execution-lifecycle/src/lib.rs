@@ -568,7 +568,8 @@ mod tests {
         )
         .unwrap();
         lease.revalidate().unwrap();
-        println!("{HOLDER_READY}");
+        // The test harness may print its case prefix without a trailing newline.
+        println!("\n{HOLDER_READY}");
         std::io::stdout().flush().unwrap();
         let mut command = [0_u8; 1];
         std::io::stdin().read_exact(&mut command).unwrap();

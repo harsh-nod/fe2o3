@@ -19,7 +19,7 @@ use std::{
 
 const ENTRY_WORK: usize = 8;
 type Result<T> = std::result::Result<T, LifecycleLeaseErrorV2>;
-type Storage = LifecycleLeaseStorageV2;
+use self::LifecycleLeaseStorageV2 as Storage;
 
 /// Additional unreserved logical storage returned with a native lifecycle owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
