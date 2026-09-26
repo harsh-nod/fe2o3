@@ -9,6 +9,12 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #![deny(missing_docs, unsafe_code)]
 
+mod native;
+
+pub use native::{
+    CompilerExecutionServiceLifecycleLeaseV2, LifecycleLeaseErrorV2, LifecycleLeaseStorageV2,
+};
+
 use std::error::Error;
 use std::fmt;
 use std::fs::File;

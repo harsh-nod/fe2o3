@@ -13,6 +13,7 @@ test-support = []
 
 [dependencies]
 fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-kernel-ir.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
