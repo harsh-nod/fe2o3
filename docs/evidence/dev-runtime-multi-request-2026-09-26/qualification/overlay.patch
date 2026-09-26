@@ -1,0 +1,21 @@
+--- a/crates/fe2o3-runtime/src/kfd_backend/multi_admission.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/multi_admission.rs
+@@ -1,6 +1,8 @@
+ //! Complete, immutable request policy for the multi-device router.
+ 
+ use super::*;
++#[cfg(test)]
++mod qualification;
+ use fe2o3_kfd::{
+     Gfx942ComposedBackingDeviceBudgetV1, Gfx942ComposedBackingRootV1,
+     Gfx942ComposedBackingSessionBudgetV1,
+--- a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
+@@ -2,6 +2,7 @@
+     assert_terminal_retries_inert, discard_scripted_fixture, fixture, host_observation, snapshot,
+ };
+ use super::*;
++mod qualification;
+ use crate::kfd_backend::kfd_backend_sdma_seam::{SdmaAllocationFailureV1, SdmaOwnerDiagnosticV1};
+ use fe2o3_kfd::{Gfx942SdmaAllocationDispositionV1, Gfx942SdmaErrorV1, MemorySessionError};
+ use std::mem::ManuallyDrop;

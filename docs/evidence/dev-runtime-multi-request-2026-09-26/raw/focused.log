@@ -1,0 +1,34 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 57s
+     Running unittests src/lib.rs (/tmp/fe2o3-multi-request-20260926-target/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 26 tests
+test kfd_backend::multi_admission::tests::multi_admission_composed_constructor_rejects_invalid_roster_before_opening_kfd ... ok
+test kfd_backend::multi_admission::tests::multi_admission_legacy_roster_is_complete_and_stable_after_shutdown ... ok
+test kfd_backend::multi_admission::tests::multi_admission_rejects_invalid_device_counts_and_keys ... ok
+test kfd_backend::multi_allocation::tests::multi_allocation_duplicate_child_insertion_cannot_create_outer_alias ... ok
+test kfd_backend::multi_allocation::tests::multi_allocation_post_owner_panic_preserves_payload_and_hidden_custody ... ok
+test kfd_backend::multi_allocation::tests::multi_allocation_non_owner_outcomes_preserve_error_and_route_state ... ok
+test kfd_backend::multi_allocation::tests::multi_allocation_preflight_never_invokes_child_or_burns_id ... ok
+test kfd_backend::multi_allocation::tests::multi_allocation_success_routes_equal_child_handles_independently ... ok
+test kfd_backend::multi_allocation::tests::multi_allocation_zero_child_handle_seals_both_owners ... ok
+test kfd_backend::native_budget::host_backing_tests::multi_device_composition_cannot_erase_required_request_policy ... ok
+test kfd_backend::retained_release_tests::runtime_multi_device_shutdown_retries_after_a_child_rejection ... ok
+test kfd_backend::tests::multi_device_cancellation_before_destination_write_releases_exact_custody ... ok
+test kfd_backend::tests::multi_device_cancellation_is_too_late_after_first_destination_write ... ok
+test kfd_backend::tests::multi_device_poll_and_expired_wait_leave_cooperative_copy_for_explicit_flush ... ok
+test kfd_backend::tests::multi_device_route_exhaustion_precedes_child_mutation ... ok
+test kfd_backend::tests::multi_device_router_cooperatively_copies_on_one_device ... ok
+test kfd_backend::tests::multi_device_router_host_stages_peer_copy_and_preserves_event_custody ... ok
+test kfd_backend::tests::multi_device_router_latches_a_child_terminal_failure_globally ... ok
+test kfd_backend::tests::multi_device_router_rejects_invalid_peer_access_before_copy ... ok
+test kfd_backend::tests::multi_device_router_rejects_peer_copy_on_the_source_stream ... ok
+test kfd_backend::tests::runtime_context_composes_multi_device_peer_copy_and_cleanup ... ok
+test kfd_backend::tests::scripted_sdma_multi_packet_window_completes_as_one_owned_transition ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_multi_device_forwards_only_settled_no_owner_and_routes_retry ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_multi_device_legacy_api_preserves_cold_quiescent_failure ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_multi_device_terminal_preserves_selected_child_custody ... ok
+test kfd_backend::scale_capacity::tests::scaled_custody_multi_allocation_preflight_refunds_byte_and_record_failures ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 1502 filtered out; finished in 1.78s
+

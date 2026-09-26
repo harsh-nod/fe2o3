@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime v0.1.0 (/tmp/fe2o3-multi-request-20260926-source/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 1m 30s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 1 test
+test kfd_backend::multi_admission::qualification::qualification_multi_wrong_witness_rejects_before_routing_and_credit_mutation ... FAILED
+
+failures:
+
+---- kfd_backend::multi_admission::qualification::qualification_multi_wrong_witness_rejects_before_routing_and_credit_mutation stdout ----
+
+thread 'kfd_backend::multi_admission::qualification::qualification_multi_wrong_witness_rejects_before_routing_and_credit_mutation' (62) panicked at crates/fe2o3-runtime/src/kfd_backend/multi_admission/qualification.rs:116:9:
+assertion `left == right` failed
+  left: 3
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    kfd_backend::multi_admission::qualification::qualification_multi_wrong_witness_rejects_before_routing_and_credit_mutation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1548 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

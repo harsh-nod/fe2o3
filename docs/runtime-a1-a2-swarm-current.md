@@ -24,7 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest Runtime request-witness development (2026-09-26): the single-device KFD
+Latest multi-device request-witness development (2026-09-26): the ordinary KFD
+multi-device router now accepts complete composed request/N1/N2 profiles, with
+production and semantic-authority constructors and selected-child witness
+authentication. Allocation routes/outer IDs commit only on success; errors
+preserve their diagnostics and unwind seals child plus router. Required policy
+survives partial and complete shutdown. The
+[development packet](evidence/dev-runtime-multi-request-2026-09-26/README.md)
+records 26 focused production passes, 49 doctests, strict static checks and
+21 isolated typed-account groups. Broad Runtime tests report 1,497 passes,
+three known socket-environment failures and 28 ignores. Counts overlap; this
+is not full CPU or native qualification. Native XGMI and Worker transport,
+checked-constructor/native replay, formal composition and matched HIP/HSA
+performance remain open. No accepted milestone or parity claim changes.
+
+Earlier Runtime request-witness development (2026-09-26): the single-device KFD
 composed profile now installs its complete typed request roster into Context.
 Ordinary allocations require a private borrowed witness; generated shell commit
 requires a move-only authenticated plan. Legacy direct allocation cannot bypass
@@ -36,7 +50,7 @@ It records 14 composed fixture groups, 65 production focused passes, 69 selected
 construction passes, 108 doctests and passing static checks. Broad libraries
 report 3,938 passes with the same four socket-related failures; coverage overlaps
 and this is not full CPU qualification.
-Multi-device/XGMI and Worker witness forwarding, formal composition, native
+At that checkpoint, multi-device/XGMI and Worker witness forwarding, formal composition, native
 startup/adoption/shutdown replay and matched HIP/HSA performance remain open.
 No accepted milestone or full-parity claim changes.
 

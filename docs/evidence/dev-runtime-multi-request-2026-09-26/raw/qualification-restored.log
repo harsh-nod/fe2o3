@@ -1,0 +1,29 @@
+   Compiling fe2o3-runtime v0.1.0 (/tmp/fe2o3-multi-request-20260926-source/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 2m 07s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 21 tests
+test context::allocation_admission::tests::qualification::qualification_complete_roster_rejects_aliases_and_preserves_device_order ... ok
+test context::allocation_admission::tests::qualification::qualification_cold_context_and_returned_backend_preserve_root_custody ... ok
+test context::allocation_admission::tests::qualification::qualification_session_quarantine_blocks_profile_and_new_witnesses ... ok
+test context::allocation_admission::tests::qualification::qualification_kfd_context_retains_refunds_and_preserves_policy_after_shutdown ... ok
+test context::allocation_admission::tests::qualification::qualification_witness_rejects_wrong_context_brand_leaf_and_extent ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_bind_rejection_refunds_before_metadata_or_source_transfer ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_install_retire_has_exact_request_custody ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_journal_rejection_after_bind_refunds_unissued_requests ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_journal_unwind_quarantines_entire_uncommitted_roster ... ok
+test context::tests::allocation_outcome_tests::qualification::qualification_default_request_hook_never_calls_legacy_allocation ... ok
+test context::tests::qualification::qualification_context_outcomes_preserve_settlement_and_quarantine ... ok
+test context::tests::qualification::qualification_open_returns_original_backend_on_alias_roster ... ok
+test context::generated_preparation::tests::shell_tests::qualification::qualification_generated_pre_adoption_and_retirement_reject_swapped_request_extents ... ok
+test kfd_backend::multi_admission::qualification::qualification_multi_context_uses_exact_leaf_and_shared_root_through_disposal ... ok
+test kfd_backend::multi_admission::qualification::qualification_multi_quarantine_never_disappears_from_required_roster_or_root ... ok
+test kfd_backend::multi_admission::qualification::qualification_multi_root_lifetime_follows_context_and_returned_backend ... ok
+test kfd_backend::multi_admission::qualification::qualification_multi_roster_rejects_mixed_missing_alias_and_duplicate_bindings ... ok
+test kfd_backend::multi_admission::qualification::qualification_multi_shutdown_retry_preserves_exact_roster_and_policy ... ok
+test kfd_backend::multi_admission::qualification::qualification_multi_wrong_witness_rejects_before_routing_and_credit_mutation ... ok
+test kfd_backend::tests::sdma_allocation_tests::qualification::qualification_composed_multi_cold_settlement_refunds_only_selected_leaf_and_reuses_route ... ok
+test kfd_backend::generated_shells::tests::qualification::qualification_generated_binder_rejects_missing_extent_order_leaf_brand_and_tail ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 1528 filtered out; finished in 0.08s
+

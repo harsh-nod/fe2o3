@@ -218,14 +218,46 @@ The Context rechecks exact credits before generated adoption/issue/retirement.
 Later native DATA backing reuses those logical requests without charging them
 again. Session-health checks are snapshots, not concurrent quarantine exclusion.
 
+### Multi-Device Runtime Integration
+
+The [multi-device request packet](evidence/dev-runtime-multi-request-2026-09-26/README.md)
+extends the composed profile to `KfdMultiDeviceRuntimeBackendV1`, with production
+and semantic-authority constructors. Each input tuple binds a unique device ID,
+authority, device budget and session budget. The new composed constructor
+validates the complete ID roster and reserves checked-device, child and routing
+storage first; every checked device precedes any root session admission. Later
+failure drops unused sessions, not canonical device registrations. This is not
+a complete bootstrap-allocation preflight.
+
+Composition accepts only all-Legacy or all-Required children. Required account
+leaves are distinct and cover the complete immutable device index. Profile
+discovery uses persistent bindings, including after partial or complete child
+shutdown; it never omits unhealthy or retired children to form a smaller roster.
+Witnessed allocation authenticates the selected child's exact binding before
+routing storage, ID advancement or child effects. Legacy allocation cannot
+bypass the required policy.
+
+Both allocation APIs share a preflighted route transaction. Only a successful
+nonzero child allocation commits the outer ID and route. Unsupported, rejection,
+generic quiescence, settled-no-owner and terminal outcomes preserve their exact
+diagnostics and do not consume an outer ID. A child-effect panic seals both
+owners and resumes its original payload. Same-child local handle uniqueness
+remains enforced by the concrete child's allocation table, without a linear
+scan over live routes. Release removes the route only after child disposal.
+
+CPU fixtures cover actual Context/trait witness routing and typed account/root
+custody, not checked-device minting or native constructor execution. Generated
+shell APIs remain single-device; native XGMI is a separate backend.
+
 ### Remaining Integration Gates
 
-- Ordered XGMI and multi-device forwarding need complete account rosters and
+- Ordered XGMI forwarding needs complete account rosters and
   per-selected-endpoint witness checks before outer IDs or native effects.
   Both XGMI admissions precede either VM. Swapped endpoints, wrong routes and
   supplied witnesses for a legacy endpoint must reject, not silently fall back.
-- Multi-device construction currently rejects required-profile children. Native
-  XGMI remains native-only/legacy. Neither is a composed request-profile path.
+- Native XGMI remains native-only/legacy, not a composed request-profile path.
+  Multi-device checked construction, partial-admission cleanup and native
+  startup/shutdown still require hardware qualification.
 - Worker proxies do not transport borrowed request witnesses. Wrapping a
   composed backend fails closed at witness-free server allocation; this is an
   unsupported composition, not transparent profile transport.

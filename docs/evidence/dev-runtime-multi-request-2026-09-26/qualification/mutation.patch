@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-runtime/src/kfd_backend/multi_allocation.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/multi_allocation.rs
+@@ -29,7 +29,7 @@
+                 ))
+             })?;
+             let valid = backend.request_binding_v1()?.is_some_and(|binding| {
+-                binding.backend_device_v1() == device && witness.matches_v1(binding, byte_len)
++                binding.backend_device_v1() == device
+             });
+             if !valid {
+                 return Err(KfdRuntimeBackendV1::rejected(

@@ -443,6 +443,46 @@ fn cold_multi_fixture(kind: RuntimeMemoryKindV1) -> KfdMultiDeviceRuntimeBackend
 }
 
 #[test]
+fn sdma_allocation_multi_device_terminal_preserves_selected_child_custody() {
+    for kind in [
+        RuntimeMemoryKindV1::HostVisible,
+        RuntimeMemoryKindV1::DeviceLocal,
+    ] {
+        let mut backend = ManuallyDrop::new(cold_multi_fixture(kind));
+        backend.children[0].scripted_sdma =
+            Some(ScriptedSdmaDriverV1::new([reject(kind, 8, true)]));
+        let expected = format!(
+            "KFD persistent SDMA allocation: {}",
+            capacity(kind, true).detail
+        );
+        assert!(matches!(backend.allocate_with_outcome_v1(7, kind, 8, 8),
+            Err(RuntimeBackendFailureV1::Terminal(error)) if error.detail() == expected));
+        assert!(backend.terminal && backend.children[0].terminal);
+        assert!(!backend.children[1].terminal);
+        assert_eq!(backend.next_handle, 1);
+        assert!(backend.allocations.is_empty());
+        assert_eq!(backend.children[1].next_handle, 1);
+        assert!(backend.children[1].allocations.is_empty());
+        assert_eq!(
+            backend.children[0]
+                .scripted_sdma
+                .as_ref()
+                .unwrap()
+                .remaining_steps(),
+            0
+        );
+        assert!(matches!(
+            backend.allocate_v1(8, kind, 8, 8),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        for child in &mut backend.children {
+            disarm_scripted_drop_after_inspection_v1(child);
+        }
+        drop(ManuallyDrop::into_inner(backend));
+    }
+}
+
+#[test]
 fn sdma_allocation_multi_device_forwards_only_settled_no_owner_and_routes_retry() {
     for kind in [
         RuntimeMemoryKindV1::HostVisible,
@@ -479,7 +519,7 @@ fn sdma_allocation_multi_device_forwards_only_settled_no_owner_and_routes_retry(
         let backend = context.backend_mut_for_test_v1();
         assert!(!backend.terminal);
         assert!(backend.allocations.is_empty());
-        assert_eq!(backend.next_handle, route_id + 1);
+        assert_eq!(backend.next_handle, route_id);
         assert_eq!(backend.children[0].next_handle, local_id + 1);
         assert!(backend.children[0].allocations.is_empty());
         assert_eq!(
@@ -522,7 +562,7 @@ fn sdma_allocation_multi_device_forwards_only_settled_no_owner_and_routes_retry(
         );
         let backend = context.backend_mut_for_test_v1();
         assert_eq!(backend.allocations.len(), 1);
-        let route = backend.allocations.get(&(route_id + 1)).unwrap();
+        let route = backend.allocations.get(&route_id).unwrap();
         assert_eq!((route.child, route.local), (0, local_id + 1));
         assert_eq!(backend.children[0].allocations.len(), 1);
         let driver = backend.children[0].scripted_sdma.as_ref().unwrap();

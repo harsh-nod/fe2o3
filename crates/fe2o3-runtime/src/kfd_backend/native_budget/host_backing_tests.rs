@@ -4,10 +4,11 @@ use super::*;
 fn multi_device_composition_cannot_erase_required_request_policy() {
     let mut required = KfdRuntimeBackendV1::mock();
     required.rooted_backing = Some(RootedBackingV1::Composed(None));
-    let result =
-        KfdMultiDeviceRuntimeBackendV1::from_backends(vec![required, KfdRuntimeBackendV1::mock()]);
+    let mut other = KfdRuntimeBackendV1::mock();
+    other.description.backend_device = 8;
+    let result = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![required, other]);
     assert!(
-        matches!(result, Err(error) if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported)
+        matches!(result, Err(error) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch)
     );
 }
 

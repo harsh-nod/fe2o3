@@ -86,6 +86,8 @@ use crate::{
 
 mod allocation_request;
 mod allocation_table;
+mod multi_admission;
+mod multi_allocation;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_state;
@@ -6111,22 +6113,9 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         &self,
     ) -> Result<crate::RuntimeAllocationAdmissionProfileV1, RuntimeBackendFailureV1<Self::Error>>
     {
-        self.require_live()?;
-        match &self.composed_request_binding {
-            None if self.requires_request_witness_v1() => Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                "missing mandatory request binding",
-            )),
+        match self.request_binding_v1()? {
             None => Ok(crate::RuntimeAllocationAdmissionProfileV1::Legacy),
             Some(binding) => {
-                if binding.backend_device_v1() != self.description.backend_device
-                    || !binding.is_live()
-                {
-                    return Err(Self::rejected(
-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                        "invalid composed request binding",
-                    ));
-                }
                 let mut entries = Vec::new();
                 entries
                     .try_reserve_exact(1)
@@ -7189,6 +7178,7 @@ impl CooperativeCopySubmissionV1 {
 pub struct KfdMultiDeviceRuntimeBackendV1 {
     children: Vec<KfdRuntimeBackendV1>,
     device_children: HashMap<u64, usize>,
+    request_policy: multi_admission::MultiRequestPolicyV1,
     terminal: bool,
     next_handle: u64,
     streams: HashMap<u64, RoutedHandleV1>,
@@ -8100,39 +8090,31 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     // Composition stays private so a caller cannot hide already-live child
     // handles behind newly empty routing tables.
     fn from_backends(children: Vec<KfdRuntimeBackendV1>) -> Result<Self, KfdRuntimeBackendErrorV1> {
-        if children.len() < 2 {
-            return Err(KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                "multi-device KFD requires at least two child backends",
-            ));
-        }
-        let mut device_children = HashMap::new();
-        device_children.try_reserve(children.len()).map_err(|_| {
-            KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::Capacity,
-                "multi-device routing-table allocation failed",
-            )
-        })?;
+        let device_children = multi_admission::reserve_device_index_v1(children.len())?;
+        Self::from_backends_with_index_v1(children, device_children)
+    }
+
+    fn from_backends_with_index_v1(
+        children: Vec<KfdRuntimeBackendV1>,
+        mut device_children: HashMap<u64, usize>,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let request_policy = multi_admission::classify_children_v1(&children)?;
         for (index, child) in children.iter().enumerate() {
-            if child.requires_request_witness_v1() {
-                return Err(KfdRuntimeBackendErrorV1::new(
-                    KfdRuntimeBackendErrorKindV1::Unsupported,
-                    "multi-device composed request forwarding is not implemented",
-                ));
-            }
-            if device_children
-                .insert(child.description.backend_device, index)
-                .is_some()
+            if child.description.backend_device == 0
+                || device_children
+                    .insert(child.description.backend_device, index)
+                    .is_some()
             {
                 return Err(KfdRuntimeBackendErrorV1::new(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                    "multi-device child IDs must be distinct",
+                    "multi-device child IDs must be nonzero and distinct",
                 ));
             }
         }
         Ok(Self {
             children,
             device_children,
+            request_policy,
             terminal: false,
             next_handle: 1,
             streams: HashMap::new(),
@@ -11575,6 +11557,24 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
 impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     type Error = KfdRuntimeBackendErrorV1;
 
+    fn allocation_admission_profile_v1(
+        &self,
+    ) -> Result<crate::RuntimeAllocationAdmissionProfileV1, RuntimeBackendFailureV1<Self::Error>>
+    {
+        self.request_profile_v1()
+    }
+
+    fn allocate_with_request_v1(
+        &mut self,
+        device: u64,
+        kind: RuntimeMemoryKindV1,
+        byte_len: u64,
+        alignment: u64,
+        witness: crate::RuntimeAllocationRequestWitnessV1<'_>,
+    ) -> crate::RuntimeRequestAllocationResultV1<Self::Error> {
+        self.allocate_requested_v1(device, kind, byte_len, alignment, witness)
+    }
+
     fn execution_capabilities_v1(&self, device: u64) -> RuntimeExecutionCapabilitiesV1 {
         let Some(child) = self
             .device_children
@@ -11672,20 +11672,20 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     {
         self.require_live()?;
         let child = self.child_for_device(device)?;
-        Self::reserve_route(
-            &mut self.allocations,
-            "multi-device allocation route allocation failed",
-        )?;
-        let id = self.next_id()?;
-        let result =
-            self.children[child].allocate_with_outcome_v1(device, kind, byte_len, alignment);
-        match self.latch(result)? {
-            RuntimeBackendAllocationOutcomeV1::Allocated(local) => {
-                self.allocations.insert(id, RoutedHandleV1 { child, local });
-                Ok(RuntimeBackendAllocationOutcomeV1::Allocated(id))
-            }
-            RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error) => {
-                Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error))
+        if self.request_policy == multi_admission::MultiRequestPolicyV1::Required {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "composed multi-device allocation requires a Context request witness",
+            ));
+        }
+        match self.route_allocation_v1(child, |backend| {
+            crate::RuntimeRequestAllocationResultV1::Outcome(
+                backend.allocate_with_outcome_v1(device, kind, byte_len, alignment),
+            )
+        }) {
+            crate::RuntimeRequestAllocationResultV1::Outcome(result) => result,
+            crate::RuntimeRequestAllocationResultV1::Unsupported => {
+                unreachable!("legacy outcome hook")
             }
         }
     }

@@ -80,6 +80,22 @@ impl KfdRuntimeBackendV1 {
     where
         A: KfdRuntimeLaunchAuthorityV1 + 'static,
     {
+        Self::from_checked_device_with_composed_gate_v1(
+            device,
+            KfdRuntimeLaunchGateV1::Production(Box::new(authority)),
+            root,
+            device_budget,
+            session_budget,
+        )
+    }
+
+    pub(super) fn from_checked_device_with_composed_gate_v1(
+        device: CheckedGfx942XnackMinusDevice,
+        gate: KfdRuntimeLaunchGateV1,
+        root: &Gfx942ComposedBackingRootV1,
+        device_budget: Gfx942ComposedBackingDeviceBudgetV1,
+        session_budget: Gfx942ComposedBackingSessionBudgetV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
         let admission = root
             .admit_session_v1(&device, device_budget, session_budget)
             .map_err(rooted_host_backing_admission_error_v1)?;
@@ -89,7 +105,7 @@ impl KfdRuntimeBackendV1 {
             admission.request_account_v1().clone(),
         )
         .map_err(rooted_host_backing_admission_error_v1)?;
-        let mut backend = Self::from_checked_device(device, authority);
+        let mut backend = Self::from_checked_device_with_gate(device, gate);
         backend.host_visible_backing_budget = Some(session_budget.host_budget());
         backend.device_backing_budget = Some(session_budget.device_budget());
         backend.rooted_backing = Some(RootedBackingV1::Composed(Some(admission)));
@@ -100,6 +116,32 @@ impl KfdRuntimeBackendV1 {
     pub(super) fn requires_request_witness_v1(&self) -> bool {
         self.composed_request_binding.is_some()
             || matches!(self.rooted_backing, Some(RootedBackingV1::Composed(_)))
+    }
+
+    pub(super) fn request_binding_v1(
+        &self,
+    ) -> Result<
+        Option<&crate::RuntimeAllocationDeviceAdmissionV1>,
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        self.require_live()?;
+        let composed = matches!(self.rooted_backing, Some(RootedBackingV1::Composed(_)));
+        if composed != self.composed_request_binding.is_some() {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "composed request and native policy mismatch",
+            ));
+        }
+        if let Some(binding) = &self.composed_request_binding
+            && (binding.backend_device_v1() != self.description.backend_device
+                || !binding.is_live())
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "invalid composed request binding",
+            ));
+        }
+        Ok(self.composed_request_binding.as_ref())
     }
 
     /// Opens a backend requiring root-issued ordinary coherent GTT admission.
