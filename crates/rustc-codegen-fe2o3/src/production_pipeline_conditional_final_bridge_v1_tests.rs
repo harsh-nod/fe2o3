@@ -6,6 +6,47 @@ use fe2o3_kernel_opt::{
 };
 
 #[test]
+fn conditional_bridge_prefix_identity_is_raw_and_prepaid() {
+    let expected = [
+        0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22,
+        0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00,
+        0x15, 0xad,
+    ];
+    for (work_limit, storage_limit) in [
+        (131, 19 + IDENTITY_SCRATCH),
+        (130, 19 + IDENTITY_SCRATCH),
+        (131, 18 + IDENTITY_SCRATCH),
+    ] {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(19).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        let result = raw_identity(b"abc", &mut budget);
+        match (work_limit, storage_limit) {
+            (131, n) if n == 19 + IDENTITY_SCRATCH => {
+                let identity = result.unwrap();
+                assert_eq!(identity.sha256(), expected);
+                assert_eq!(identity.byte_len(), 3);
+                assert_eq!(budget.storage(), 19);
+                assert_eq!(budget.work(), 131);
+            }
+            (130, _) => {
+                assert!(matches!(result, Err(Error::Resource(Resource::Work(_)))));
+                assert_eq!(budget.storage(), 19 + IDENTITY_SCRATCH);
+                assert_eq!(budget.failed_work(), Some(131));
+            }
+            _ => {
+                assert!(matches!(result, Err(Error::Resource(Resource::Storage(_)))));
+                assert_eq!(budget.storage(), 19);
+                assert_eq!(budget.work(), 0);
+                assert_eq!(budget.failed_storage(), Some(19 + IDENTITY_SCRATCH));
+            }
+        }
+        assert!(budget.work_ledger_identity_v1() == account);
+    }
+}
+
+#[test]
 fn conditional_bridge_actual_chain_history_and_text_both_targets() {
     use crate::production_ranked_projection_v1::with_backend_checked_output_policy6_owned_with_storage_limit_v1;
     for profile in [Profile::Gfx942, Profile::Gfx950] {
@@ -76,6 +117,9 @@ fn conditional_bridge_actual_chain_history_and_text_both_targets() {
                 assert_eq!(budget.storage(), text_floor + text_storage);
                 assert!(text.contains(profile.device_target().split(':').next().unwrap()));
                 assert!(!text.contains(".fe2o3.kd."));
+                let identity = raw_identity(text.as_bytes(), budget).unwrap();
+                assert_eq!(identity.byte_len(), text.len() as u64);
+                assert_eq!(budget.storage(), text_floor + text_storage);
                 assert!(budget.work_ledger_identity_v1() == account);
                 // All owners/views die before releasing only this component delta.
                 drop(text);

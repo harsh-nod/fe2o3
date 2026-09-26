@@ -25,6 +25,7 @@ use fe2o3_compiler_ffi::{
     COMPILER_DESCRIPTOR_SOURCE_VALIDATION_STORAGE_V5, CompilerDescriptorSourceErrorV5,
     CompilerDescriptorSourceV5, compiler_descriptor_source_validation_storage_v5,
 };
+use fe2o3_compiler_lineage::{ProductionTargetLineageErrorV3, TargetLineageIdentityV3};
 use fe2o3_kernel_descriptor::{
     CONDITIONAL_INVOCATION_CODEC_STORAGE_V2, ConditionalInvocationContractV2,
     ConditionalInvocationWireErrorV1, decode_conditional_invocation_contract_v2,
@@ -58,6 +59,7 @@ pub(crate) enum Error {
     Layout(dialect_amdgcn::ProductionLlvmLayoutBindingErrorV1),
     Text(ConditionalModuleErrorV5),
     Composition(NativeConditionalFinalErrorV2),
+    Lineage(ProductionTargetLineageErrorV3),
     Mismatch(&'static str),
 }
 impl From<Resource> for Error {
@@ -85,6 +87,7 @@ impl fmt::Display for Error {
             Self::Layout(e) => ("LLVM layout", e),
             Self::Text(e) => ("text", e),
             Self::Composition(e) => ("composition", e),
+            Self::Lineage(e) => ("lowering identity", e),
             Self::Mismatch(e) => ("subjects", e),
         };
         write!(f, "conditional F/V5 producer {stage}: {cause}")
@@ -98,7 +101,23 @@ pub(super) struct RetainedFinalContentV5 {
     catalog: Catalog,
     descriptor: CompilerDescriptorSourceV5,
     module: InertCompilerModuleTextV1,
+    pre_descriptor_llvm: TargetLineageIdentityV3,
     retained: usize,
+}
+
+const IDENTITY_SCRATCH: usize = size_of::<sha2::Sha256>()
+    + 32
+    + size_of::<Result<TargetLineageIdentityV3, ProductionTargetLineageErrorV3>>();
+
+fn raw_identity(bytes: &[u8], budget: &mut Budget<'_>) -> Result<TargetLineageIdentityV3, Error> {
+    use sha2::{Digest, Sha256};
+    budget.reserve_storage(IDENTITY_SCRATCH)?;
+    budget.charge_work(bytes.len().checked_add(128).ok_or(Resource::Arithmetic)?)?;
+    let length = u64::try_from(bytes.len()).map_err(|_| Resource::Arithmetic)?;
+    let identity = TargetLineageIdentityV3::new(Sha256::digest(bytes).into(), length)
+        .map_err(Error::Lineage)?;
+    budget.release_storage(IDENTITY_SCRATCH)?;
+    Ok(identity)
 }
 
 #[cfg(test)]
@@ -343,6 +362,9 @@ pub(super) fn prepare(
             let descriptor = adopt_descriptor(bytes, budget)?;
             let (prefix, prefix_storage) =
                 emit_prefix(chain.output(), bindings.rustc_target.profile(), budget)?;
+            // Retain the actual producer preimage coordinate before its backing
+            // dies; recovery compares it with the same-visit checked relation.
+            let pre_descriptor_llvm = raw_identity(prefix.as_bytes(), budget)?;
             let (module, module_storage) = retain_conditional_compiler_module_text_v5(
                 chain.output(),
                 &prefix,
@@ -365,6 +387,7 @@ pub(super) fn prepare(
                 catalog,
                 descriptor,
                 module,
+                pre_descriptor_llvm,
                 retained,
             };
             let frame =
