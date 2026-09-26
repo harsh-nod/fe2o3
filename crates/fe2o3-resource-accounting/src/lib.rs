@@ -25,6 +25,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 mod batch;
 pub use batch::MAX_RESOURCE_CREDIT_BATCH_MEMBERS_V1;
+mod host_table;
+pub use host_table::{HostMetadataTableV1, host_metadata_table_payload_bytes_v1};
 
 pub use fe2o3_runtime_model::{
     R67ResourceKindV1 as ResourceKindV1, R67ResourceVectorV1 as ResourceVectorV1,
@@ -186,6 +188,11 @@ impl Account {
 pub struct ResourceCreditAccountV1(Arc<Account>);
 
 impl ResourceCreditAccountV1 {
+    /// Compares ledger identity, not current usage or equal capacity limits.
+    pub fn shares_ledger_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     /// Creates one bounded account without performing any native operation.
     pub fn new(
         capacity: ResourceVectorV1,

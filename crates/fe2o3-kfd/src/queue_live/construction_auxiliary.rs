@@ -69,6 +69,7 @@ impl ComputeAqlQueueSessionV1 {
     pub(super) fn take_for_terminal_auxiliary_construction_v1(&mut self) -> Self {
         self.poison_terminal();
         let shell = Self {
+            dispatch_capacity: self.dispatch_capacity.clone(),
             engine: None,
             key: self.key,
             compute_lane_session: self.compute_lane_session,
@@ -115,6 +116,7 @@ impl ComputeAqlQueueSessionV1 {
 }
 
 pub(super) struct AuxiliaryConstructionV1<const N: usize, E: PrimaryEnvironmentV1 = Platform> {
+    dispatch_capacity: Gfx942FixedDispatchCapacityV1,
     #[cfg(test)]
     pub(super) preparation_fault: Option<(
         crate::queue::dispatch_binding::preparation::PreparationStageV1,
@@ -150,8 +152,17 @@ pub(super) struct AuxiliaryConstructionScopeV1<const N: usize, P: AuxiliaryParen
 }
 
 impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
+    #[cfg(test)]
     pub(super) fn new(packets: [Gfx942FixedDispatchPacketV1; N]) -> Self {
+        Self::with_capacity(packets, Gfx942FixedDispatchCapacityV1::default())
+    }
+
+    pub(super) fn with_capacity(
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        dispatch_capacity: Gfx942FixedDispatchCapacityV1,
+    ) -> Self {
         Self {
+            dispatch_capacity,
             #[cfg(test)]
             preparation_fault: None,
             packets: Some(packets),
@@ -195,6 +206,7 @@ impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
     where
         E::Memory: PreparationMemoryV1,
     {
+        self.dispatch_capacity.validate_batch::<N>()?;
         capture_returned_preparation_v1(memory, &mut self.data, prepare_data)?;
         self.preparation = Some(FixedDispatchPreparationCustodyV1::new(
             self.packets.take().expect("fixed packets"),
@@ -205,10 +217,11 @@ impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
         if let Some((stage, panic)) = self.preparation_fault {
             preparation.primary_inject_stage_v1(stage, panic);
         }
-        super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_in_place(
+        super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_with_capacity_in_place(
             memory,
             programs,
             preparation,
+            &self.dispatch_capacity,
         )?;
         self.dispatch = Some(preparation.take_completed()?);
         self.prepare(memory, entry, geometry, ring_bytes)
@@ -453,9 +466,10 @@ pub(super) fn construct_auxiliary_compute_lane_v1<const N: usize>(
     )
         -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1>,
 ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
+    let dispatch_capacity = parent.dispatch_capacity.clone();
     let scope = Box::new(AuxiliaryConstructionScopeV1 {
         parent,
-        construction: AuxiliaryConstructionV1::new(packets),
+        construction: AuxiliaryConstructionV1::with_capacity(packets, dispatch_capacity),
         terminal_parent: None,
     });
     let scope = run_auxiliary_construction_with_v1(

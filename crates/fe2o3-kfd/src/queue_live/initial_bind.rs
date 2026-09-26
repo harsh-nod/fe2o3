@@ -5,7 +5,7 @@
 use super::*;
 use crate::queue::dispatch_binding::{
     GFX942_MAX_FIXED_DISPATCH_DATA_V1, preparation::PreparationMemoryV1,
-    prepare_public_fixed_dispatch_resources_in_place,
+    prepare_public_fixed_dispatch_resources_with_capacity_in_place,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
@@ -36,6 +36,8 @@ pub(super) fn initial_dispatch_state_admitted_v1(
 pub(super) trait InitialBindingParentV1 {
     type Memory: PreparationMemoryV1;
     type TerminalParent;
+
+    fn dispatch_capacity(&self) -> Gfx942FixedDispatchCapacityV1;
 
     fn preflight<const N: usize>(&self) -> Result<(), ComputeAqlQueueSessionErrorV1>;
     fn currentness(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1>;
@@ -101,6 +103,8 @@ where
 {
     let result = catch_unwind(AssertUnwindSafe(|| {
         parent.preflight::<N>()?;
+        let capacity = parent.dispatch_capacity();
+        capacity.validate_batch::<N>()?;
         if data_count > GFX942_MAX_FIXED_DISPATCH_DATA_V1 {
             return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
                 requested: data_count,
@@ -131,8 +135,13 @@ where
             if let Some((stage, panic)) = root.preparation_fault {
                 preparation.primary_inject_stage_v1(stage, panic);
             }
-            prepare_public_fixed_dispatch_resources_in_place(memory, &root.programs, preparation)
-                .map_err(Into::into)
+            prepare_public_fixed_dispatch_resources_with_capacity_in_place(
+                memory,
+                &root.programs,
+                preparation,
+                &capacity,
+            )
+            .map_err(Into::into)
         })?;
         retake?;
         operation?;
@@ -167,6 +176,10 @@ where
 impl InitialBindingParentV1 for &mut ComputeAqlQueueSessionV1 {
     type Memory = SharedGttMemorySessionV1;
     type TerminalParent = ComputeAqlQueueSessionV1;
+
+    fn dispatch_capacity(&self) -> Gfx942FixedDispatchCapacityV1 {
+        self.dispatch_capacity.clone()
+    }
 
     fn preflight<const N: usize>(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {

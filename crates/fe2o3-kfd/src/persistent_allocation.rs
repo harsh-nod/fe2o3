@@ -1632,7 +1632,11 @@ mod tests {
         assert!(std::mem::size_of::<Gfx942PersistentDeviceAllocationV1>() <= 512);
         assert!(std::mem::size_of::<PersistentComputeCancellationCustodyV1>() <= 8 * 1024);
         assert!(std::mem::size_of::<BoundedPersistentComputeAttachmentV1>() <= 32 * 1024);
-        assert!(std::mem::size_of::<crate::ComputeAqlQueueSessionV1>() <= 40 * 1024);
+        // Capacity configuration and table-credit custody add fixed metadata;
+        // neither the 64-slot nor the 1024-slot table may be inline here.
+        let bytes = std::mem::size_of::<crate::ComputeAqlQueueSessionV1>();
+        assert!(bytes <= 41 * 1024, "queue inline bytes: {bytes}");
+        assert!(std::mem::size_of::<fe2o3_resource_accounting::HostMetadataTableV1<u64>>() <= 64);
     }
 
     #[test]

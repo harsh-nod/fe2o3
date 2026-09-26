@@ -36,6 +36,7 @@ mod sdma_creation_cases;
 mod striped_sdma_cases;
 
 struct Parent {
+    dispatch_capacity: Gfx942FixedDispatchCapacityV1,
     engine: NativeQueueEngineV1<PrimaryQueueBackendV1<Memory>>,
     key: QueueKeyV1,
     queue_id: u32,
@@ -285,6 +286,7 @@ fn constructed_on_gate(
 
 fn parent_from_completed(complete: CompletedPrimaryV1<Fixture>) -> Parent {
     Parent {
+        dispatch_capacity: complete.dispatch_capacity,
         engine: complete.engine,
         key: complete.key,
         queue_id: complete.observation.queue_id,

@@ -21936,7 +21936,7 @@ mod tests {
         }
     }
 
-    fn pipelined_active_for_test_v1(id: u64) -> ActiveSubmissionV1 {
+    pub(super) fn pipelined_active_for_test_v1(id: u64) -> ActiveSubmissionV1 {
         ActiveSubmissionV1 {
             id,
             stream: 7,

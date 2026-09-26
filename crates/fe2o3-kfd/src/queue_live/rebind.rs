@@ -59,10 +59,11 @@ impl ComputeAqlQueueSessionV1 {
         self.settle_fixed_dispatch_rebind_with_v1(
             root,
             |session, programs, preparation, predecessor, continuation| {
+                let capacity = session.dispatch_capacity.clone();
                 session.with_live_queue_memory_model(|memory| {
                     match predecessor {
-                        Some(predecessor) => super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_after_detach_in_place(
-                            memory, programs, preparation, predecessor,
+                        Some(predecessor) => super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_after_detach_with_capacity_in_place(
+                            memory, programs, preparation, predecessor, &capacity,
                         ),
                         None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
                             memory, programs, preparation,
@@ -162,6 +163,15 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        self.dispatch_capacity.validate_batch::<N>()?;
+        if self
+            .unpublished_dispatch
+            .continuation
+            .as_ref()
+            .is_some_and(|continuation| !continuation.matches_capacity(&self.dispatch_capacity))
+        {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
         if self.dispatch.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());

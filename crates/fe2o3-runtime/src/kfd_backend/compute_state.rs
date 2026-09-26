@@ -1,4 +1,12 @@
 use super::*;
+use fe2o3_kfd::Gfx942FixedDispatchCapacityProfileV1;
+use fe2o3_resource_accounting::{
+    HostMetadataTableV1, ResourceCreditAccountV1, ResourceCreditErrorV1,
+};
+
+#[cfg(test)]
+#[path = "compute_state/capacity_tests.rs"]
+mod capacity_tests;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct NativeDirtyExtentV1 {
@@ -174,12 +182,13 @@ pub(super) struct PendingComputeSubmissionV1 {
     pub(super) dependency_depth: usize,
 }
 
+#[cfg(test)]
 pub(super) const RUNTIME_COMPUTE_PIPELINE_CAPACITY_V1: usize =
     fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RuntimeComputePipelineIdentityV1 {
-    slot: u8,
+    slot: u16,
     slot_generation: u64,
     logical_epoch: u64,
     submission: u64,
@@ -205,7 +214,7 @@ struct RuntimeComputePipelineSlotV1 {
 }
 
 pub(super) struct RuntimeComputePipelineV1 {
-    slots: Box<[RuntimeComputePipelineSlotV1; RUNTIME_COMPUTE_PIPELINE_CAPACITY_V1]>,
+    slots: HostMetadataTableV1<RuntimeComputePipelineSlotV1>,
     live: usize,
     next_logical_epoch: Option<u64>,
     commit_frontier: Option<u64>,
@@ -213,26 +222,29 @@ pub(super) struct RuntimeComputePipelineV1 {
 
 impl RuntimeComputePipelineV1 {
     pub(super) fn vacant() -> Self {
-        let mut slots = Vec::new();
-        slots
-            .try_reserve_exact(RUNTIME_COMPUTE_PIPELINE_CAPACITY_V1)
-            .expect("fixed runtime compute pipeline allocation");
-        slots.extend((0..RUNTIME_COMPUTE_PIPELINE_CAPACITY_V1).map(|_| {
+        Self::try_vacant(Gfx942FixedDispatchCapacityProfileV1::Default64, None)
+            .expect("fixed runtime compute pipeline allocation")
+    }
+
+    pub(super) fn try_vacant(
+        profile: Gfx942FixedDispatchCapacityProfileV1,
+        account: Option<&ResourceCreditAccountV1>,
+    ) -> Result<Self, ResourceCreditErrorV1> {
+        if profile == Gfx942FixedDispatchCapacityProfileV1::Qualification1024 && account.is_none() {
+            return Err(ResourceCreditErrorV1::Capacity);
+        }
+        let slots = HostMetadataTableV1::try_new(profile.slots(), account, || {
             RuntimeComputePipelineSlotV1 {
                 generation: 0,
                 entry: None,
             }
-        }));
-        let slots = slots
-            .into_boxed_slice()
-            .try_into()
-            .unwrap_or_else(|_| unreachable!("fixed runtime compute pipeline length"));
-        Self {
+        })?;
+        Ok(Self {
             slots,
             live: 0,
             next_logical_epoch: Some(1),
             commit_frontier: None,
-        }
+        })
     }
 
     pub(super) const fn len(&self) -> usize {
@@ -245,7 +257,7 @@ impl RuntimeComputePipelineV1 {
 
     pub(super) fn has_successor_capacity(&self) -> bool {
         // The logical frontier is retained separately in the lane's `active` slot.
-        self.live < RUNTIME_COMPUTE_PIPELINE_CAPACITY_V1 - 1
+        self.live < self.slots.len() - 1
             && self.next_logical_epoch.is_some()
             && self.slots.iter().any(|slot| {
                 slot.entry.is_none()
@@ -283,7 +295,7 @@ impl RuntimeComputePipelineV1 {
             return Err(active);
         };
         let identity = RuntimeComputePipelineIdentityV1 {
-            slot: u8::try_from(slot_index).expect("runtime compute pipeline has 64 slots"),
+            slot: u16::try_from(slot_index).expect("closed runtime compute pipeline capacity"),
             slot_generation,
             logical_epoch,
             submission: active.id,

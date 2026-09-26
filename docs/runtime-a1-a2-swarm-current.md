@@ -24,6 +24,23 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest capacity development (2026-09-25): the
+[accounted capacity foundation](runtime-scale-capacity-v1.md) adds fixed,
+fallibly allocated metadata tables and feature-gated native 1024-slot profile
+propagation through construction and rebinding. Default native and public
+runtime constructors remain at 64. Fourteen scaled-profile tests, 147 native
+dispatch-binding tests, 51 rebind tests, 29 accounting tests and three runtime
+capacity tests pass; these groups overlap. Strict Clippy, default-feature
+checking, formatting and 76 doctests pass. The full runtime run reports 1,425
+passed, the same three telemetry `InspectSocket(EPERM)` failures, and 27 ignores.
+[Development logs and limits](evidence/dev-scale-cap-storage-2026-09-25/README.md)
+do not establish full CPU qualification: the whole-KFD attempt hit its 900-second
+limit, and a separately scoped KFD subset had one socket-admission failure.
+Runtime opt-in, the 256-owner custody
+bottleneck, complete scaled joins, aggregate admission, new formal refinement,
+native depth and matched performance remain open. A1/A2 and the accepted lane
+checkpoints are unchanged.
+
 Latest observer/backpressure development (2026-09-25): signed `97b8d41fe` adds
 two CPU regressions for Pending timeout recovery/new-waker registration and
 frozen-launch QueueFull credit refunds, admission retry deadlines, and three

@@ -5,9 +5,27 @@ use crate::shared_memory::ControlCleanupCustodyV1;
 
 pub(crate) struct PristineDispatchContinuationV1 {
     next_generation: u64,
+    capacity_profile: FixedDispatchCapacityProfileV1,
+    account: Option<ResourceCreditAccountV1>,
 }
 
 impl PristineDispatchContinuationV1 {
+    #[cfg(test)]
+    pub(in crate::queue) fn from_fresh_capacity_for_test(
+        capacity: &Gfx942FixedDispatchCapacityV1,
+    ) -> Self {
+        DispatchGenerationOwnerV1::with_capacity(1, capacity.profile, capacity.account.as_ref())
+            .unwrap()
+            .into_pristine_continuation()
+    }
+
+    pub(in crate::queue) fn matches_capacity(
+        &self,
+        capacity: &Gfx942FixedDispatchCapacityV1,
+    ) -> bool {
+        capacity.matches(self.capacity_profile, self.account.as_ref())
+    }
+
     #[cfg(test)]
     pub(in crate::queue) fn next_generation_for_test(&self) -> u64 {
         self.next_generation
@@ -19,7 +37,11 @@ impl PristineDispatchContinuationV1 {
     }
 
     fn resume(self) -> Result<DispatchGenerationOwnerV1, Gfx942DispatchBindingErrorV1> {
-        DispatchGenerationOwnerV1::with_next_generation(self.next_generation)
+        DispatchGenerationOwnerV1::with_capacity(
+            self.next_generation,
+            self.capacity_profile,
+            self.account.as_ref(),
+        )
     }
 }
 
@@ -44,6 +66,8 @@ impl DispatchGenerationOwnerV1 {
     fn into_pristine_continuation(self) -> PristineDispatchContinuationV1 {
         PristineDispatchContinuationV1 {
             next_generation: self.next_generation,
+            capacity_profile: self.capacity_profile,
+            account: self.slots.account().cloned(),
         }
     }
 }
@@ -439,6 +463,61 @@ mod tests {
             owner.ensure_pristine(),
             Err(Gfx942DispatchBindingErrorV1::Poisoned)
         ));
+    }
+
+    #[test]
+    fn scaled_pristine_continuation_preserves_capacity_account_and_exact_generation() {
+        use fe2o3_resource_accounting::{
+            ResourceKindV1, ResourceVectorV1, host_metadata_table_payload_bytes_v1,
+        };
+        let bytes = host_metadata_table_payload_bytes_v1::<DispatchEpochSlotV1>(1024).unwrap();
+        let account = ResourceCreditAccountV1::new(
+            ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, bytes),
+            1,
+        )
+        .unwrap();
+        let mut owner = DispatchGenerationOwnerV1::with_capacity(
+            7,
+            FixedDispatchCapacityProfileV1::Qualification1024,
+            Some(&account),
+        )
+        .unwrap();
+        for _ in 0..3 {
+            owner.ensure_pristine().unwrap();
+            let occurrence = owner.recipe_occurrence;
+            let continuation = owner.into_pristine_continuation();
+            assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+            owner = continuation.resume().unwrap();
+            assert_eq!(
+                owner.capacity_profile,
+                FixedDispatchCapacityProfileV1::Qualification1024
+            );
+            assert_eq!(owner.slots.len(), 1024);
+            assert_eq!(owner.next_generation, 7);
+            assert_ne!(owner.recipe_occurrence, occurrence);
+            assert_eq!(
+                account
+                    .usage()
+                    .used
+                    .get(ResourceKindV1::ControlResidentBytes),
+                bytes
+            );
+            assert_eq!(account.usage().retained_records, 1);
+        }
+        for generation in 7..1031 {
+            owner
+                .reserve(
+                    test_dispatch_queue_v1(),
+                    test_completion_roster_v1(generation),
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            owner.reserve(test_dispatch_queue_v1(), test_completion_roster_v1(1031)),
+            Err(Gfx942DispatchBindingErrorV1::DispatchEpochCapacity { maximum: 1024 })
+        ));
+        drop(owner);
+        assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
     }
 
     #[test]

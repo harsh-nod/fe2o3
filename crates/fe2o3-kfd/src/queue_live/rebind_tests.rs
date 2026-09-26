@@ -27,6 +27,59 @@ mod recycled_detach;
 pub(super) mod persistent_cancel;
 
 #[test]
+fn scaled_pristine_rebind_rejects_equal_budget_wrong_ledger_before_consuming_continuation() {
+    use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceKindV1, ResourceVectorV1};
+    let account = || {
+        ResourceCreditAccountV1::new(
+            ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, 4 << 20),
+            2,
+        )
+        .unwrap()
+    };
+    let left = Gfx942FixedDispatchCapacityV1::qualification_1024(account());
+    let right = Gfx942FixedDispatchCapacityV1::qualification_1024(account());
+    let continuation = PristineDispatchContinuationV1::from_fresh_capacity_for_test(&left);
+    assert!(continuation.matches_capacity(&left.clone()));
+    assert!(!continuation.matches_capacity(&right));
+    let (mut session, _) = parent(false, false);
+    session.dispatch_capacity = right;
+    session.detached_dispatch_generation = None;
+    session.unpublished_dispatch.continuation = Some(continuation);
+    let packet = Gfx942FixedDispatchPacketV1::new(
+        0,
+        fe2o3_aql::AqlDispatchGeometryV1::new([1, 1, 1], [1, 1, 1]).unwrap(),
+        0,
+        Vec::new().into_boxed_slice(),
+        Vec::new().into_boxed_slice(),
+    );
+    let root = rebind::LiveRebindRootV1::new(Vec::new(), [packet], Vec::new(), None);
+    let mut retained = None;
+    let result = session.settle_fixed_dispatch_rebind_with_v1(
+        root,
+        |_, _, _, _, _| panic!("wrong ledger cannot enter preparation"),
+        |_, _| panic!("wrong ledger cannot enter validation"),
+        |root| retained = Some(root),
+    );
+    assert!(!result.transport);
+    assert!(matches!(
+        result.result,
+        Ok(Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
+            Gfx942DispatchBindingErrorV1::ResourcePhase
+        )))
+    ));
+    assert!(retained.unwrap().continuation.is_none());
+    assert!(
+        session
+            .unpublished_dispatch
+            .continuation
+            .as_ref()
+            .unwrap()
+            .matches_capacity(&left)
+    );
+    assert!(!session.terminal_poisoned);
+}
+
+#[test]
 fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_validation() {
     let source = include_str!("rebind.rs");
     let entry = source
@@ -42,7 +95,7 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
         .unwrap();
     let loan = entry.find("session.with_live_queue_memory_model(").unwrap();
     let prepare = entry
-        .find("prepare_public_fixed_dispatch_resources_after_detach_in_place(")
+        .find("prepare_public_fixed_dispatch_resources_after_detach_with_capacity_in_place(")
         .unwrap();
     let validation = entry
         .find("Self::validate_persistent_bind_preparation_v1")
@@ -89,18 +142,20 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
     );
     let binding = include_str!("../queue_dispatch_binding.rs");
     let forwarder = binding
-        .split("fn prepare_public_fixed_dispatch_resources_after_detach_in_place")
+        .split("fn prepare_public_fixed_dispatch_resources_after_detach_with_capacity_in_place")
         .nth(1)
         .unwrap()
         .split("\n}")
         .next()
         .unwrap();
     assert!(forwarder.contains("custody.prepare_in_place("));
-    assert!(
-        forwarder.contains("DispatchGenerationOwnerV1::after_detached(predecessor_generation),")
-    );
+    assert!(forwarder.contains("DispatchGenerationOwnerV1::after_detached_with_capacity("));
     assert!(!forwarder.contains("after_recycled"));
-    assert!(!forwarder.contains('?'));
+    assert!(
+        forwarder.find("capacity.validate_batch::<N>()?").unwrap()
+            < forwarder.find("custody.prepare_in_place(").unwrap()
+    );
+    assert!(forwarder.contains("capacity.account.as_ref()"));
     let facade = include_str!("../queue_live.rs")
         .split("impl ComputeAqlQueueLaneDispatchV1<'_>")
         .nth(1)

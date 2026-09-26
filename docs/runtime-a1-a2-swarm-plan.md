@@ -912,15 +912,17 @@ receipt inspection is insufficient: count every retained pipeline epoch too.
 Implementation review (2026-09-25): use a closed immutable default-64 versus
 qualification-1,024 profile, selected before native activity. Preserve it through
 primary/bootstrap construction, auxiliary lanes, replacement, persistent rebind,
-detached owners and pristine abort/resume. In particular, the current unpublished
-continuation retains only `next_generation`; recreating its default owner would
-silently lose the expanded profile. Both slot tables need fallible allocation
+detached owners and pristine abort/resume. The original unpublished continuation
+retained only `next_generation`; recreating its default owner would silently
+lose the expanded profile. Both slot tables need fallible allocation
 and explicit byte accounting, and both private slot indices need `u16`. Preserve
 the default occurrence encoding; a scaled encoding needs a distinct domain and
 the exact profile. Keep the R60 capacity-65 negative and 64-only proofs intact;
 add separate scaled arithmetic/refinement coverage and a capacity-1,025 negative.
-This review is an implementation constraint, not a capacity implementation or
-new formal/native result.
+The [accounted capacity foundation](runtime-scale-capacity-v1.md) now implements
+the tables and native configuration propagation behind a qualification feature.
+Public runtime opt-in, the runtime's 256-owner allocation-custody limit, aggregate
+admission, scaled formal refinement and native qualification remain open.
 
 Acceptance: checked generation arithmetic, exact reservations/rollback,
 wraparound and stale-slot rejection, signal-reader retention and no reuse before

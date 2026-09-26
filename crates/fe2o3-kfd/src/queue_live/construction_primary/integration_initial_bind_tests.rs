@@ -9,15 +9,126 @@ use crate::queue::live::initial_bind::{
 
 struct InitializerDrop;
 
+#[test]
+fn scaled_initial_binding_preserves_bootstrap_capacity_and_bounds_inputs_before_effects() {
+    let (memory, trace) = setup_memory();
+    trace.borrow_mut().local_gate = Some(LocalGateV1::new());
+    let (capacity, account) = super::super::capacity_cases::capacity();
+    let mut constructor = Root::<()>::new_with(memory, ());
+    constructor.dispatch_capacity = capacity.clone();
+    let (mut constructor, result) = run_with(
+        constructor,
+        QueueRingBackingV1::AqlSpecial,
+        None,
+        |_| Ok(()),
+    );
+    assert!(result.is_ok());
+    let mut parent = Some(parent_from_completed(constructor.completed.take().unwrap()));
+    let (programs, packets) = recipe();
+    let before = parent
+        .as_ref()
+        .unwrap()
+        .engine
+        .backend
+        .session
+        .observation();
+    let root = InitialBindingCustodyV1::new(programs, packets, |_: &mut Memory, _| {
+        panic!("multi-packet initializer must not run")
+    });
+    let mut retained = None;
+    assert!(bind_initial_with_v1(&mut parent, root, 1, |root| retained = Some(root)).is_err());
+    assert!(retained.unwrap().terminal_parent.is_none());
+    assert_eq!(
+        parent
+            .as_ref()
+            .unwrap()
+            .engine
+            .backend
+            .session
+            .observation(),
+        before
+    );
+    assert_eq!(account.usage().retained_records, 0);
+
+    let (programs, [packet, _, _]) = recipe();
+    let root = InitialBindingCustodyV1::new(programs, [packet], |memory: &mut Memory, _| {
+        Ok(memory.host(true))
+    });
+    bind_initial_with_v1(&mut parent, root, 1, |_| panic!("valid initial binding")).unwrap();
+    parent
+        .as_mut()
+        .unwrap()
+        .dispatch
+        .as_mut()
+        .unwrap()
+        .primary_fixture_exercise_capacity_v1(&capacity);
+    assert_eq!(account.usage().retained_records, 1);
+    drop(parent);
+    assert_eq!(account.usage().retained_records, 0);
+}
+
 impl Drop for InitializerDrop {
     fn drop(&mut self) {
         step("initial-initializer-drop").unwrap();
     }
 }
 
+#[test]
+fn scaled_initial_credit_exhaustion_retains_materialized_data_and_terminal_parent() {
+    use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceVectorV1};
+    let (memory, trace) = setup_memory();
+    trace.borrow_mut().local_gate = Some(LocalGateV1::new());
+    let account = ResourceCreditAccountV1::new(ResourceVectorV1::ZERO, 1).unwrap();
+    let mut constructor = Root::<()>::new_with(memory, ());
+    constructor.dispatch_capacity =
+        Gfx942FixedDispatchCapacityV1::qualification_1024(account.clone());
+    let (mut constructor, result) = run_with(
+        constructor,
+        QueueRingBackingV1::AqlSpecial,
+        None,
+        |_| Ok(()),
+    );
+    assert!(result.is_ok());
+    let mut parent = Some(parent_from_completed(constructor.completed.take().unwrap()));
+    let (programs, [packet, _, _]) = recipe();
+    let snapshot = RefCell::new(PrimaryPreparationSnapshotV1::packets(
+        core::slice::from_ref(&packet),
+    ));
+    let root = InitialBindingCustodyV1::new(programs, [packet], |memory: &mut Memory, _| {
+        let data = memory.host(true);
+        snapshot
+            .borrow_mut()
+            .capture_data(core::slice::from_ref(&data));
+        Ok(data)
+    });
+    let mut retained = None;
+    let result = bind_initial_with_v1(&mut parent, root, 1, |root| retained = Some(root));
+    assert!(matches!(
+        result,
+        Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
+            Gfx942DispatchBindingErrorV1::HostAllocationCapacity { .. }
+        ))
+    ));
+    assert!(parent.is_none());
+    let retained = retained.unwrap();
+    let terminal = retained.terminal_parent.as_ref().unwrap();
+    assert!(terminal.poisoned);
+    retained
+        .preparation
+        .as_ref()
+        .unwrap()
+        .primary_assert_descriptors_v1(&snapshot.borrow(), None);
+    assert!(!trace.borrow().calls.contains(&"initial-validation"));
+    assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+}
+
 impl InitialBindingParentV1 for Option<Parent> {
     type Memory = Memory;
     type TerminalParent = Parent;
+
+    fn dispatch_capacity(&self) -> Gfx942FixedDispatchCapacityV1 {
+        self.as_ref().unwrap().dispatch_capacity.clone()
+    }
 
     fn preflight<const N: usize>(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         let parent = self

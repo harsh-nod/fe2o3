@@ -1163,6 +1163,7 @@ pub struct Gfx942RecycledDispatchResourcesV1 {
     destroyed: ComputeAqlQueueDestroyedV1,
     memory: SharedGttMemorySessionV1,
     dispatch_generation: u64,
+    dispatch_capacity: Gfx942FixedDispatchCapacityV1,
     data: Vec<Gfx942FixedDispatchDataV1>,
 }
 
@@ -1233,9 +1234,10 @@ impl Gfx942RecycledDispatchResourcesV1 {
             destroyed,
             memory,
             dispatch_generation,
+            dispatch_capacity,
             data,
         } = self;
-        let root = PrimaryQueueConstructionV1::new(
+        let mut root = PrimaryQueueConstructionV1::new(
             memory,
             (
                 destroyed,
@@ -1244,6 +1246,7 @@ impl Gfx942RecycledDispatchResourcesV1 {
                 FixedDispatchPreparationCustodyV1::new(packets, data),
             ),
         );
+        root.dispatch_capacity = dispatch_capacity;
         let mut root = root.run(|root, entry| root.construct_replacement(entry, ring_bytes))?;
         Ok(root
             .completed
@@ -3718,6 +3721,7 @@ impl SdmaDevicePoolConfigurationV1 {
 
 #[must_use = "queue destruction and resource return are explicit"]
 pub struct ComputeAqlQueueSessionV1 {
+    dispatch_capacity: Gfx942FixedDispatchCapacityV1,
     engine: Option<NativeQueueEngineV1<LinuxNativeQueueBackendV1>>,
     key: QueueKeyV1,
     compute_lane_session: QueueKeyV1,
@@ -4790,12 +4794,30 @@ impl CheckedGfx942XnackMinusDevice {
         device_budget: Option<Gfx942DeviceBackingBudgetV1>,
         host_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with_backing_budgets_and_capacity_v1(
+            ring_bytes,
+            device_budget,
+            host_budget,
+            Gfx942FixedDispatchCapacityV1::default(),
+        )
+    }
+
+    /// Configures the immutable epoch capacity before any queue construction.
+    /// Metadata payload and native backing use separate accounting domains.
+    pub fn create_compute_aql_queue_with_backing_budgets_and_capacity_v1(
+        self,
+        ring_bytes: u32,
+        device_budget: Option<Gfx942DeviceBackingBudgetV1>,
+        host_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
+        capacity: Gfx942FixedDispatchCapacityV1,
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
         self.create_compute_aql_queue_with_runtime(
             ring_bytes,
             |_| Ok(()),
             None,
             device_budget,
             host_budget,
+            capacity,
         )
         .map(|(session, ())| session)
     }
@@ -4805,7 +4827,14 @@ impl CheckedGfx942XnackMinusDevice {
         ring_bytes: u32,
         prepare: impl FnOnce(&mut SharedGttMemorySessionV1) -> Result<T, ComputeAqlQueueSessionErrorV1>,
     ) -> Result<(ComputeAqlQueueSessionV1, T), ComputeAqlQueueSessionErrorV1> {
-        self.create_compute_aql_queue_with_runtime(ring_bytes, prepare, None, None, None)
+        self.create_compute_aql_queue_with_runtime(
+            ring_bytes,
+            prepare,
+            None,
+            None,
+            None,
+            Gfx942FixedDispatchCapacityV1::default(),
+        )
     }
 
     pub(crate) fn create_compute_aql_queue_for_debug_target(
@@ -4820,6 +4849,7 @@ impl CheckedGfx942XnackMinusDevice {
             Some((runtime, runtime_control)),
             None,
             None,
+            Gfx942FixedDispatchCapacityV1::default(),
         )
         .map(|(session, ())| session)
     }
@@ -4837,6 +4867,7 @@ impl CheckedGfx942XnackMinusDevice {
             Some((runtime, runtime_control)),
             None,
             None,
+            Gfx942FixedDispatchCapacityV1::default(),
         )
     }
 
@@ -4850,6 +4881,7 @@ impl CheckedGfx942XnackMinusDevice {
         )>,
         device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
         host_visible_backing_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
+        capacity: Gfx942FixedDispatchCapacityV1,
     ) -> Result<(ComputeAqlQueueSessionV1, T), ComputeAqlQueueSessionErrorV1> {
         let geometry = plan_gfx942_aql_queue_resources(
             self.topology_snapshot(),
@@ -4860,7 +4892,8 @@ impl CheckedGfx942XnackMinusDevice {
             device_backing_budget,
             host_visible_backing_budget,
         )?;
-        let root = PrimaryQueueConstructionV1::new(memory, None);
+        let mut root = PrimaryQueueConstructionV1::new(memory, None);
+        root.dispatch_capacity = capacity;
         let mut root = root.run(|root, entry| {
             capture_returned_preparation_v1(
                 root.memory.as_mut().expect("construction memory"),
@@ -11888,6 +11921,7 @@ impl ComputeAqlQueueSessionV1 {
                 destroyed,
                 memory: backend.session,
                 dispatch_generation,
+                dispatch_capacity: self.dispatch_capacity.clone(),
                 data,
             })),
             callback_result,
@@ -13952,9 +13986,21 @@ mod tests {
             .unwrap();
         let create = constructor.find("root.construct(").unwrap();
         assert!(acquire < root && root < prepare && prepare < create);
-        assert!(production.contains(
-            "self.create_compute_aql_queue_with_runtime(ring_bytes, prepare, None, None, None)"
-        ));
+        let default_wrapper = production
+            .split("pub(crate) fn create_compute_aql_queue_with<T>(")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) fn create_compute_aql_queue_for_debug_target")
+            .next()
+            .unwrap();
+        assert!(default_wrapper.contains("self.create_compute_aql_queue_with_runtime("));
+        assert!(default_wrapper.contains("Gfx942FixedDispatchCapacityV1::default()"));
+        assert!(
+            constructor
+                .find("root.dispatch_capacity = capacity")
+                .unwrap()
+                < prepare
+        );
         assert!(production.contains(
             "self.create_compute_aql_queue_with_backing_budgets_v1(ring_bytes, budget, None)"
         ));
@@ -15893,6 +15939,7 @@ mod tests {
         release: Option<(u64, Vec<Gfx942FixedDispatchDataV1>)>,
     ) -> ComputeAqlQueueSessionV1 {
         ComputeAqlQueueSessionV1 {
+            dispatch_capacity: Gfx942FixedDispatchCapacityV1::default(),
             engine: None,
             key: queue,
             compute_lane_session: queue,
@@ -15996,6 +16043,94 @@ mod tests {
             storage_identity: Some(storage_identity),
             effect,
         }
+    }
+
+    #[test]
+    fn scaled_persistent_bind_returns_exact_inputs_before_native_preparation() {
+        use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceVectorV1};
+        let queue = test_queue_key(710, 1);
+        let mut session = persistent_compute_cancellation_test_session(queue, None, None);
+        let account = ResourceCreditAccountV1::new(ResourceVectorV1::ZERO, 1).unwrap();
+        session.dispatch_capacity =
+            Gfx942FixedDispatchCapacityV1::qualification_1024(account.clone());
+        let packet = || {
+            Gfx942FixedDispatchPacketV1::new(
+                0,
+                fe2o3_aql::AqlDispatchGeometryV1::new([1, 1, 1], [1, 1, 1]).unwrap(),
+                0,
+                Vec::new().into_boxed_slice(),
+                Vec::new().into_boxed_slice(),
+            )
+        };
+        let role = Gfx942DeviceContentRoleV1::new([0x61; 32], 0).unwrap();
+        let input = |id| {
+            let allocation = persistent_compute_gate_test_allocation_v1(queue, id);
+            let identity = allocation
+                .owner
+                .local_native_for_sdma()
+                .unwrap()
+                .storage_identity();
+            (
+                Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation),
+                identity,
+            )
+        };
+        let (one, expected) = input(0x6100);
+        let failure = session
+            .bind_directional_persistent_fixed_dispatch_v1(Vec::new(), [packet()], one, role)
+            .expect_err("scaled persistent bind must reject");
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::Contract("scaled capacity excludes persistent compute")
+        ));
+        let (_, custody) = failure.into_parts();
+        let Gfx942PersistentComputeBindFailureCustodyV1::Retryable(one) = custody else {
+            panic!("exact retryable input")
+        };
+        assert_eq!(
+            one.into_parts()
+                .0
+                .owner
+                .local_native_for_sdma()
+                .unwrap()
+                .storage_identity(),
+            expected
+        );
+
+        let [(a, a_id), (b, b_id), (c, c_id)] = [0x6101, 0x6102, 0x6103].map(input);
+        let failure = session
+            .bind_three_binding_directional_persistent_fixed_dispatch_v1(
+                Vec::new(),
+                [packet()],
+                Gfx942ThreeBindingPersistentComputeInputsV1::new([a, b, c]),
+                [role; 3],
+            )
+            .expect_err("scaled three-binding persistent bind must reject");
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::Contract("scaled capacity excludes persistent compute")
+        ));
+        let (_, custody) = failure.into_parts();
+        let Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1::Retryable(inputs) = custody
+        else {
+            panic!("exact retryable inputs")
+        };
+        for (input, expected) in inputs.into_inputs().into_iter().zip([a_id, b_id, c_id]) {
+            assert_eq!(
+                input
+                    .into_parts()
+                    .0
+                    .owner
+                    .local_native_for_sdma()
+                    .unwrap()
+                    .storage_identity(),
+                expected
+            );
+        }
+        assert!(!session.terminal_poisoned);
+        assert!(session.persistent_compute.is_none());
+        assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+        assert_eq!(account.usage().retained_records, 0);
     }
 
     fn published_three_binding_test_entry_v1(

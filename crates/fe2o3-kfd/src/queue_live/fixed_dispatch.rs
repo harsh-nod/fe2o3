@@ -55,21 +55,44 @@ impl SharedGttMemorySessionV1 {
         packets: [Gfx942FixedDispatchPacketV1; N],
         data: Vec<Gfx942FixedDispatchDataV1>,
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
-        let root = PrimaryQueueConstructionV1::new(
+        self.create_compute_aql_queue_with_fixed_dispatch_and_capacity_v1(
+            ring_bytes,
+            programs,
+            packets,
+            data,
+            Gfx942FixedDispatchCapacityV1::default(),
+        )
+    }
+
+    /// Creates a queue with an immutable, explicitly accounted epoch capacity.
+    /// The qualification profile admits one-packet recipes only. Native ring,
+    /// signal, storage and currentness checks remain mandatory per publication.
+    pub fn create_compute_aql_queue_with_fixed_dispatch_and_capacity_v1<const N: usize>(
+        self,
+        ring_bytes: u32,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        data: Vec<Gfx942FixedDispatchDataV1>,
+        capacity: Gfx942FixedDispatchCapacityV1,
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        let mut root = PrimaryQueueConstructionV1::new(
             self,
             (
                 programs,
                 FixedDispatchPreparationCustodyV1::new(packets, data),
             ),
         );
+        root.dispatch_capacity = capacity;
         let mut root = root.run(|root, entry| {
+            root.dispatch_capacity.validate_batch::<N>()?;
             validate_fixed_batch_ring::<N>(ring_bytes)?;
             let memory = root.memory.as_mut().expect("construction memory");
             let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
-            super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_in_place(
+            super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_with_capacity_in_place(
                 memory,
                 &root.preparation.0,
                 &mut root.preparation.1,
+                &root.dispatch_capacity,
             )?;
             root.dispatch = Some(root.preparation.1.take_completed()?);
             root.construct(
@@ -787,6 +810,16 @@ impl ComputeAqlQueueSessionV1 {
             error,
             custody: Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1::Retryable(inputs),
         };
+        if !self.terminal_poisoned
+            && self.dispatch_capacity.profile() != Gfx942FixedDispatchCapacityProfileV1::Default64
+        {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "scaled capacity excludes persistent compute",
+                ),
+                inputs,
+            ));
+        }
         let test_validation_only = take_three_binding_bind_validation_only_v1();
         if self.terminal_poisoned {
             return Err(Gfx942ThreeBindingPersistentComputeBindFailureV1 {
@@ -1401,6 +1434,16 @@ impl ComputeAqlQueueSessionV1 {
             error,
             custody: Gfx942PersistentComputeBindFailureCustodyV1::Retryable(input),
         };
+        if !self.terminal_poisoned
+            && self.dispatch_capacity.profile() != Gfx942FixedDispatchCapacityProfileV1::Default64
+        {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "scaled capacity excludes persistent compute",
+                ),
+                input,
+            ));
+        }
         if !input.belongs_to(self.compute_lane_session) {
             return Err(recover(
                 if self.terminal_poisoned {

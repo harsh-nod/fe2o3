@@ -21,7 +21,12 @@ pub(super) use pristine_abort::{
     prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1,
 };
 
+#[cfg(test)]
+#[path = "queue_dispatch_binding/capacity_tests.rs"]
+mod capacity_tests;
+
 use core::fmt;
+use fe2o3_resource_accounting::{HostMetadataTableV1, ResourceCreditAccountV1};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrayvec::ArrayVec;
@@ -63,8 +68,79 @@ pub(crate) const MAX_DISPATCH_DATA_LEASES_V1: usize = GFX942_MAX_FIXED_DISPATCH_
 pub(crate) const MAX_DISPATCH_KERNARG_BYTES_V1: usize = 65_536;
 pub const GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1: usize = 32;
 pub const GFX942_MAX_FIXED_DISPATCH_PACKETS_V1: usize = AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize;
-/// Maximum simultaneous accepted dispatch epochs over one immutable lane recipe.
+/// Default-profile maximum simultaneous accepted epochs over one immutable lane recipe.
 pub const GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1: usize = 64;
+/// Closed epoch-table sizing profiles, not execution or admission authority.
+///
+/// Existing public queue constructors continue to select `Default64`.
+/// `Qualification1024` describes the separately accounted development profile;
+/// selecting this value alone cannot configure a queue or authorize a launch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Gfx942FixedDispatchCapacityProfileV1 {
+    #[default]
+    Default64,
+    Qualification1024,
+}
+
+pub(crate) use Gfx942FixedDispatchCapacityProfileV1 as FixedDispatchCapacityProfileV1;
+
+impl Gfx942FixedDispatchCapacityProfileV1 {
+    pub const fn slots(self) -> usize {
+        match self {
+            Self::Default64 => GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1,
+            Self::Qualification1024 => 1024,
+        }
+    }
+}
+
+/// Immutable queue-family metadata capacity. Cloning shares the account but
+/// never duplicates a table or a debit. Each table reserves its own payload.
+/// This is not native-memory accounting or evidence of hardware concurrency.
+#[derive(Clone, Default)]
+pub struct Gfx942FixedDispatchCapacityV1 {
+    profile: Gfx942FixedDispatchCapacityProfileV1,
+    account: Option<ResourceCreditAccountV1>,
+}
+
+impl Gfx942FixedDispatchCapacityV1 {
+    /// Opts into the one-packet, 1024-epoch qualification profile. Admission
+    /// charges ControlResidentBytes before allocating each epoch table.
+    /// Requires `scale-qualification`; aggregate/native qualification is separate.
+    #[cfg(any(test, feature = "scale-qualification"))]
+    pub fn qualification_1024(account: ResourceCreditAccountV1) -> Self {
+        Self {
+            profile: Gfx942FixedDispatchCapacityProfileV1::Qualification1024,
+            account: Some(account),
+        }
+    }
+
+    pub const fn profile(&self) -> Gfx942FixedDispatchCapacityProfileV1 {
+        self.profile
+    }
+
+    pub(super) fn validate_batch<const N: usize>(
+        &self,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        if self.profile == Gfx942FixedDispatchCapacityProfileV1::Qualification1024 && N != 1 {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        Ok(())
+    }
+
+    fn matches(
+        &self,
+        profile: Gfx942FixedDispatchCapacityProfileV1,
+        account: Option<&ResourceCreditAccountV1>,
+    ) -> bool {
+        self.profile == profile
+            && match (self.account.as_ref(), account) {
+                (None, None) => true,
+                (Some(left), Some(right)) => left.shares_ledger_with(right),
+                _ => false,
+            }
+    }
+}
+
 static NEXT_DISPATCH_RECIPE_OCCURRENCE_V1: AtomicU64 = AtomicU64::new(1);
 const KERNEL_DESCRIPTOR_BYTES_V1: u64 = 64;
 const COV6_IMPLICIT_ARGUMENT_BYTES_V1: usize = COV6_IMPLICIT_ARGUMENT_BYTES as usize;
@@ -1341,7 +1417,7 @@ impl DispatchEpochSlotV1 {
 pub(super) struct DispatchEpochIdentityV1 {
     queue: QueueKeyV1,
     recipe_occurrence: u64,
-    slot_index: u8,
+    slot_index: u16,
     slot_generation: u64,
     dispatch_generation: u64,
 }
@@ -1364,15 +1440,34 @@ impl DispatchEpochIdentityV1 {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-#[cfg_attr(test, derive(Clone))]
 struct DispatchGenerationOwnerV1 {
     next_generation: u64,
     recipe_occurrence: u64,
     recipe_queue: Option<QueueKeyV1>,
-    slots: Box<[DispatchEpochSlotV1; GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1]>,
+    capacity_profile: FixedDispatchCapacityProfileV1,
+    slots: HostMetadataTableV1<DispatchEpochSlotV1>,
     recycled_generation: Option<u64>,
     predecessor_detached_generation: Option<u64>,
     poisoned: bool,
+}
+
+#[cfg(test)]
+impl Clone for DispatchGenerationOwnerV1 {
+    fn clone(&self) -> Self {
+        Self {
+            next_generation: self.next_generation,
+            recipe_occurrence: self.recipe_occurrence,
+            recipe_queue: self.recipe_queue,
+            capacity_profile: self.capacity_profile,
+            slots: self
+                .slots
+                .try_clone()
+                .expect("independently reserved test snapshot"),
+            recycled_generation: self.recycled_generation,
+            predecessor_detached_generation: self.predecessor_detached_generation,
+            poisoned: self.poisoned,
+        }
+    }
 }
 
 fn mint_dispatch_recipe_occurrence_v1() -> Result<u64, Gfx942DispatchBindingErrorV1> {
@@ -1389,14 +1484,53 @@ impl DispatchGenerationOwnerV1 {
     }
 
     fn with_next_generation(next_generation: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        Self::with_capacity(
+            next_generation,
+            FixedDispatchCapacityProfileV1::Default64,
+            None,
+        )
+    }
+
+    fn with_capacity(
+        next_generation: u64,
+        capacity_profile: FixedDispatchCapacityProfileV1,
+        account: Option<&ResourceCreditAccountV1>,
+    ) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        Self::with_capacity_and_occurrence(
+            next_generation,
+            capacity_profile,
+            account,
+            mint_dispatch_recipe_occurrence_v1,
+        )
+    }
+
+    fn with_capacity_and_occurrence(
+        next_generation: u64,
+        capacity_profile: FixedDispatchCapacityProfileV1,
+        account: Option<&ResourceCreditAccountV1>,
+        mint_occurrence: impl FnOnce() -> Result<u64, Gfx942DispatchBindingErrorV1>,
+    ) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        if next_generation == 0
+            || (capacity_profile == FixedDispatchCapacityProfileV1::Qualification1024
+                && account.is_none())
+        {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
         next_generation
             .checked_add(1)
             .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
+        let slots = HostMetadataTableV1::try_new(capacity_profile.slots(), account, || {
+            DispatchEpochSlotV1::VACANT
+        })
+        .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {
+            operation: "fixed dispatch epoch table",
+        })?;
         Ok(Self {
             next_generation,
-            recipe_occurrence: mint_dispatch_recipe_occurrence_v1()?,
+            recipe_occurrence: mint_occurrence()?,
             recipe_queue: None,
-            slots: Box::new([DispatchEpochSlotV1::VACANT; GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1]),
+            capacity_profile,
+            slots,
             recycled_generation: None,
             predecessor_detached_generation: None,
             poisoned: false,
@@ -1404,15 +1538,39 @@ impl DispatchGenerationOwnerV1 {
     }
 
     fn after_recycled(predecessor: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        Self::after_recycled_with_capacity(
+            predecessor,
+            FixedDispatchCapacityProfileV1::Default64,
+            None,
+        )
+    }
+
+    fn after_recycled_with_capacity(
+        predecessor: u64,
+        capacity_profile: FixedDispatchCapacityProfileV1,
+        account: Option<&ResourceCreditAccountV1>,
+    ) -> Result<Self, Gfx942DispatchBindingErrorV1> {
         let next_generation = next_dispatch_generation_after_recycled_v1(predecessor)?;
-        Self::with_next_generation(next_generation)
+        Self::with_capacity(next_generation, capacity_profile, account)
     }
 
     fn after_detached(predecessor: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        Self::after_detached_with_capacity(
+            predecessor,
+            FixedDispatchCapacityProfileV1::Default64,
+            None,
+        )
+    }
+
+    fn after_detached_with_capacity(
+        predecessor: u64,
+        capacity_profile: FixedDispatchCapacityProfileV1,
+        account: Option<&ResourceCreditAccountV1>,
+    ) -> Result<Self, Gfx942DispatchBindingErrorV1> {
         if predecessor == 0 {
-            Self::new()
+            Self::with_capacity(1, capacity_profile, account)
         } else {
-            Self::after_recycled(predecessor)
+            Self::after_recycled_with_capacity(predecessor, capacity_profile, account)
         }
     }
 
@@ -1437,12 +1595,14 @@ impl DispatchGenerationOwnerV1 {
         if expected_roster.queue != queue
             || expected_roster.dispatch_generation != dispatch_generation
             || expected_roster.packet_count == 0
+            || (self.capacity_profile == FixedDispatchCapacityProfileV1::Qualification1024
+                && expected_roster.packet_count != 1)
         {
             return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
         }
         let next_generation = dispatch_generation + 1;
-        let slot_index_u8 =
-            u8::try_from(slot_index).map_err(|_| Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+        let slot_index_u16 =
+            u16::try_from(slot_index).map_err(|_| Gfx942DispatchBindingErrorV1::ResourcePhase)?;
 
         self.recipe_queue = Some(queue);
         self.next_generation = next_generation;
@@ -1456,7 +1616,7 @@ impl DispatchGenerationOwnerV1 {
         Ok(DispatchEpochIdentityV1 {
             queue,
             recipe_occurrence: self.recipe_occurrence,
-            slot_index: slot_index_u8,
+            slot_index: slot_index_u16,
             slot_generation,
             dispatch_generation,
         })
@@ -1488,7 +1648,7 @@ impl DispatchGenerationOwnerV1 {
             }
             None => {
                 return Err(Gfx942DispatchBindingErrorV1::DispatchEpochCapacity {
-                    maximum: GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1,
+                    maximum: self.capacity_profile.slots(),
                 });
             }
         };
@@ -2833,10 +2993,25 @@ fn r66_retained_published_occurrence_observation_v1(
 ) -> Option<[u8; 32]> {
     generation.validate_published(identity, occurrence).ok()?;
     let mut hash = Sha256::new();
-    hash.update(b"fe2o3.r66.retained-persistent-dispatch.v1\0");
+    match generation.capacity_profile {
+        FixedDispatchCapacityProfileV1::Default64 => {
+            hash.update(b"fe2o3.r66.retained-persistent-dispatch.v1\0");
+        }
+        FixedDispatchCapacityProfileV1::Qualification1024 => {
+            hash.update(b"fe2o3.qualification1024.retained-dispatch.v1\0");
+            hash.update(1024_u16.to_le_bytes());
+        }
+    }
     hash.update(occurrence.roster_sha256);
     hash.update(identity.recipe_occurrence.to_le_bytes());
-    hash.update([identity.slot_index]);
+    match generation.capacity_profile {
+        FixedDispatchCapacityProfileV1::Default64 => {
+            hash.update([u8::try_from(identity.slot_index).ok()?]);
+        }
+        FixedDispatchCapacityProfileV1::Qualification1024 => {
+            hash.update(identity.slot_index.to_le_bytes());
+        }
+    }
     hash.update(identity.slot_generation.to_le_bytes());
     hash.update(identity.dispatch_generation.to_le_bytes());
     Some(hash.finalize().into())
@@ -3892,20 +4067,29 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
     )
 }
 
-pub(super) fn prepare_public_fixed_dispatch_resources_after_recycle_in_place<const N: usize>(
+pub(super) fn prepare_public_fixed_dispatch_resources_after_recycle_with_capacity_in_place<
+    const N: usize,
+>(
     memory: &mut impl preparation::PreparationMemoryV1,
     programs: &[ValidatedKernelEnvelope<'_>],
     custody: &mut FixedDispatchPreparationCustodyV1<N>,
     predecessor_generation: u64,
+    capacity: &Gfx942FixedDispatchCapacityV1,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    capacity.validate_batch::<N>()?;
     custody.prepare_in_place(
         memory,
         programs,
-        DispatchGenerationOwnerV1::after_recycled(predecessor_generation),
+        DispatchGenerationOwnerV1::after_recycled_with_capacity(
+            predecessor_generation,
+            capacity.profile,
+            capacity.account.as_ref(),
+        ),
         PersistentFixedDispatchControlStateV1::Ordinary,
     )
 }
 
+#[cfg(test)]
 pub(super) fn prepare_public_fixed_dispatch_resources_after_detach_in_place<const N: usize>(
     memory: &mut impl preparation::PreparationMemoryV1,
     programs: &[ValidatedKernelEnvelope<'_>],
@@ -3916,6 +4100,28 @@ pub(super) fn prepare_public_fixed_dispatch_resources_after_detach_in_place<cons
         memory,
         programs,
         DispatchGenerationOwnerV1::after_detached(predecessor_generation),
+        PersistentFixedDispatchControlStateV1::Ordinary,
+    )
+}
+
+pub(super) fn prepare_public_fixed_dispatch_resources_after_detach_with_capacity_in_place<
+    const N: usize,
+>(
+    memory: &mut impl preparation::PreparationMemoryV1,
+    programs: &[ValidatedKernelEnvelope<'_>],
+    custody: &mut FixedDispatchPreparationCustodyV1<N>,
+    predecessor_generation: u64,
+    capacity: &Gfx942FixedDispatchCapacityV1,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    capacity.validate_batch::<N>()?;
+    custody.prepare_in_place(
+        memory,
+        programs,
+        DispatchGenerationOwnerV1::after_detached_with_capacity(
+            predecessor_generation,
+            capacity.profile,
+            capacity.account.as_ref(),
+        ),
         PersistentFixedDispatchControlStateV1::Ordinary,
     )
 }
@@ -3992,6 +4198,21 @@ pub(super) fn prepare_public_fixed_dispatch_resources_in_place<const N: usize>(
         memory,
         programs,
         DispatchGenerationOwnerV1::new(),
+        PersistentFixedDispatchControlStateV1::Ordinary,
+    )
+}
+
+pub(super) fn prepare_public_fixed_dispatch_resources_with_capacity_in_place<const N: usize>(
+    memory: &mut impl preparation::PreparationMemoryV1,
+    programs: &[ValidatedKernelEnvelope<'_>],
+    custody: &mut FixedDispatchPreparationCustodyV1<N>,
+    capacity: &Gfx942FixedDispatchCapacityV1,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    capacity.validate_batch::<N>()?;
+    custody.prepare_in_place(
+        memory,
+        programs,
+        DispatchGenerationOwnerV1::with_capacity(1, capacity.profile, capacity.account.as_ref()),
         PersistentFixedDispatchControlStateV1::Ordinary,
     )
 }
@@ -4973,6 +5194,36 @@ pub(super) use tests::actual_persistent_control_test_program;
 
 #[cfg(test)]
 impl DispatchResourceOwnerV1 {
+    // Exercises the real epoch table with fixture occurrences, not GPU publication.
+    pub(super) fn primary_fixture_exercise_capacity_v1(
+        &mut self,
+        capacity: &Gfx942FixedDispatchCapacityV1,
+    ) {
+        assert!(capacity.matches(
+            self.generation.capacity_profile,
+            self.generation.slots.account()
+        ));
+        let mut identities = Vec::new();
+        for slot in 0..capacity.profile().slots() {
+            let generation = self.generation.next_generation;
+            let identity = self
+                .generation
+                .reserve(
+                    test_dispatch_queue_v1(),
+                    test_completion_roster_v1(generation),
+                )
+                .unwrap();
+            assert_eq!(usize::from(identity.slot_index), slot);
+            identities.push(identity);
+        }
+        assert!(
+            matches!(self.generation.preflight_reservation(test_dispatch_queue_v1()), Err(Gfx942DispatchBindingErrorV1::DispatchEpochCapacity { maximum }) if maximum == capacity.profile().slots())
+        );
+        for identity in identities {
+            self.generation.cancel_epoch(identity).unwrap();
+        }
+    }
+
     pub(super) fn primary_fixture_recipe_occurrence_v1(&self) -> u64 {
         self.generation.recipe_occurrence
     }
@@ -5891,7 +6142,7 @@ mod tests {
                 ..identity
             },
             DispatchEpochIdentityV1 {
-                slot_index: u8::MAX,
+                slot_index: u16::MAX,
                 ..identity
             },
             DispatchEpochIdentityV1 {
@@ -6014,7 +6265,7 @@ mod tests {
         prior_hash.update(b"fe2o3.r66.retained-persistent-dispatch.v1\0");
         prior_hash.update(completion.roster_sha256);
         prior_hash.update(identity.recipe_occurrence.to_le_bytes());
-        prior_hash.update([identity.slot_index]);
+        prior_hash.update([u8::try_from(identity.slot_index).unwrap()]);
         prior_hash.update(identity.slot_generation.to_le_bytes());
         prior_hash.update(identity.dispatch_generation.to_le_bytes());
         let expected: [u8; 32] = prior_hash.finalize().into();
@@ -7346,13 +7597,13 @@ mod tests {
     fn exhaustion_and_poison_from_each_phase_are_terminal_and_fail_closed() {
         let mut exhausted = DispatchGenerationOwnerV1::new().unwrap();
         exhausted.next_generation = u64::MAX;
-        let before_slots = *exhausted.slots;
+        let before_slots = exhausted.slots.to_vec();
         let before_recycled = exhausted.recycled_generation;
         assert!(matches!(
             exhausted.next(),
             Err(Gfx942DispatchBindingErrorV1::GenerationExhausted)
         ));
-        assert_eq!(*exhausted.slots, before_slots);
+        assert_eq!(&*exhausted.slots, before_slots);
         assert_eq!(exhausted.recycled_generation, before_recycled);
 
         for phase in 0..3 {

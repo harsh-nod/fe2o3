@@ -21,6 +21,9 @@ mod preparation_cases;
 #[path = "integration_replacement_tests.rs"]
 mod replacement_cases;
 
+#[path = "integration_capacity_tests.rs"]
+mod capacity_cases;
+
 #[path = "integration_projection_tests.rs"]
 mod projection_cases;
 

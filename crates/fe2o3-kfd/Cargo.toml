@@ -17,6 +17,8 @@ default = []
 hardware-diagnostic = []
 # Process-forking hardware validation only. This is not runtime authority.
 live-validation = ["rustix/process", "rustix/runtime"]
+# Development-only accounted epoch capacity; not native qualification or authority.
+scale-qualification = []
 
 [[example]]
 name = "kfd-host-visible-memory"

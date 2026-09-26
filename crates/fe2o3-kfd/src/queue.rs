@@ -85,6 +85,7 @@ pub use dispatch_binding::{
     Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
     Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchBufferBindingV1,
     Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1,
+    Gfx942FixedDispatchCapacityProfileV1, Gfx942FixedDispatchCapacityV1,
     Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1,
     Gfx942FixedDispatchPacketV1, Gfx942RecycledDispatchWriteRequestV1,
     preflight_gfx942_fixed_dispatch_replacement, project_gfx942_fixed_host_packet_v1,

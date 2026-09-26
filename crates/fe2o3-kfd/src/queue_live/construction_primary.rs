@@ -112,6 +112,7 @@ pub(super) struct PrimaryQueueConstructionV1<P, E: PrimaryEnvironmentV1 = LinuxP
 {
     pub(super) memory: Option<E::Memory>,
     pub(super) preparation: P,
+    pub(super) dispatch_capacity: Gfx942FixedDispatchCapacityV1,
     pub(super) dispatch: Option<DispatchResourceOwnerV1>,
     pub(super) completed: Option<CompletedPrimaryV1<E>>,
     ring: Option<RingConstructionV1>,
@@ -158,15 +159,17 @@ where
         entry: &mut UserptrConstructionEntryV1,
         ring_bytes: u32,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.dispatch_capacity.validate_batch::<N>()?;
         validate_fixed_batch_ring::<N>(ring_bytes)?;
         let memory = self.memory.as_mut().expect("construction memory");
         let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
         let (_, predecessor, programs, preparation) = &mut self.preparation;
-        crate::queue::dispatch_binding::prepare_public_fixed_dispatch_resources_after_recycle_in_place(
+        crate::queue::dispatch_binding::prepare_public_fixed_dispatch_resources_after_recycle_with_capacity_in_place(
             memory,
             programs,
             preparation,
             *predecessor,
+            &self.dispatch_capacity,
         )?;
         self.dispatch = Some(preparation.take_completed()?);
         self.construct(
@@ -213,6 +216,7 @@ impl<P, E: PrimaryEnvironmentV1> PrimaryQueueConstructionV1<P, E> {
         Box::new(Self {
             memory: Some(memory),
             preparation,
+            dispatch_capacity: Gfx942FixedDispatchCapacityV1::default(),
             dispatch: None,
             completed: None,
             ring: None,
@@ -543,6 +547,7 @@ impl<P, E: PrimaryEnvironmentV1> PrimaryQueueConstructionV1<P, E> {
             completion_owner: self.completion_owner.take().expect("completion owner"),
             dependency_owner: self.dependency_owner.take().expect("dependency owner"),
             dispatch: self.dispatch.take(),
+            dispatch_capacity: self.dispatch_capacity.clone(),
             runtime: self.runtime.take().expect("runtime"),
             runtime_control: self.runtime_control.take(),
             event: self.event.take().expect("event"),
