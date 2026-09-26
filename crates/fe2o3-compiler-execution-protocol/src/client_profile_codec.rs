@@ -23,6 +23,11 @@ pub(crate) const V2: Schema = Schema {
     version: 2,
     domain: b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V2\0",
 };
+pub(crate) const V3: Schema = Schema {
+    magic: *b"F2O3CEP3",
+    version: 3,
+    domain: b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V3\0",
+};
 pub(crate) struct Parsed<'a> {
     pub uid: u32,
     pub gid: u32,

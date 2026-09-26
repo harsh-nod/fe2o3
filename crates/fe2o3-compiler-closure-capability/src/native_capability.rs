@@ -2,8 +2,8 @@
 use crate::sealed_image::{CapabilityRole, SealedCapabilityImage};
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationErrorV2, CompilerExecutionAttestationErrorV3,
-    CompilerExecutionClientProfileErrorV2, CompilerExecutionNativeJournalErrorV3,
-    CompilerExecutionServiceLaunchManifestErrorV2,
+    CompilerExecutionClientProfileErrorV2, CompilerExecutionClientProfileErrorV3,
+    CompilerExecutionNativeJournalErrorV3, CompilerExecutionServiceLaunchManifestErrorV2,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -35,6 +35,7 @@ pub enum CompilerExecutionCapabilityErrorV2 {
     PolicyV3(CompilerExecutionAttestationErrorV3),
     JournalV3(CompilerExecutionNativeJournalErrorV3),
     Profile(CompilerExecutionClientProfileErrorV2),
+    ProfileV3(CompilerExecutionClientProfileErrorV3),
     Launch(CompilerExecutionServiceLaunchManifestErrorV2),
     Io { operation: &'static str, errno: i32 },
     Rejected(&'static str),
@@ -75,6 +76,11 @@ impl From<CompilerExecutionAttestationErrorV3> for CompilerExecutionCapabilityEr
         Self::PolicyV3(value)
     }
 }
+impl From<CompilerExecutionClientProfileErrorV3> for CompilerExecutionCapabilityErrorV2 {
+    fn from(value: CompilerExecutionClientProfileErrorV3) -> Self {
+        Self::ProfileV3(value)
+    }
+}
 impl From<CompilerExecutionNativeJournalErrorV3> for CompilerExecutionCapabilityErrorV2 {
     fn from(value: CompilerExecutionNativeJournalErrorV3) -> Self {
         match value {
@@ -96,6 +102,7 @@ impl fmt::Display for CompilerExecutionCapabilityErrorV2 {
             Self::PolicyV3(e) => e.fmt(f),
             Self::JournalV3(e) => e.fmt(f),
             Self::Profile(e) => e.fmt(f),
+            Self::ProfileV3(e) => e.fmt(f),
             Self::Launch(e) => e.fmt(f),
             Self::Io { operation, errno } => {
                 write!(f, "native capability {operation}: errno {errno}")
@@ -112,6 +119,7 @@ impl Error for CompilerExecutionCapabilityErrorV2 {
             Self::PolicyV3(e) => Some(e),
             Self::JournalV3(e) => Some(e),
             Self::Profile(e) => Some(e),
+            Self::ProfileV3(e) => Some(e),
             Self::Launch(e) => Some(e),
             Self::Io { .. } | Self::Rejected(_) => None,
         }

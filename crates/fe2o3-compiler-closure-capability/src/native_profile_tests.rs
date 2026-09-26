@@ -1,13 +1,5 @@
 use super::*;
-use crate::native_capability::tests::{
-    failure, legacy_policy, legacy_profile, profile, run, sealed,
-};
-use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V2,
-    COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V2 as PROFILE_STORAGE,
-    COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V2 as PROFILE_WORK,
-    CompilerExecutionClientProfileErrorV2 as ProfileError,
-};
+use crate::native_capability::tests::{failure, legacy_policy, legacy_profile, run, sealed};
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 use sha2::{Digest, Sha256};
 use std::{
@@ -24,7 +16,7 @@ impl Tree {
     fn new(bytes: &[u8]) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "native-profile-{}-{}",
+            "native-{PROFILE_NAME}-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -60,8 +52,8 @@ impl Tree {
             budget.with_prepaid_scope(
                 0,
                 ENTRY_WORK,
-                CompilerExecutionClientProfileCapabilityV2::PRODUCTION_WORK,
-                CompilerExecutionClientProfileCapabilityV2::PRODUCTION_STORAGE,
+                Cap::PRODUCTION_WORK,
+                Cap::PRODUCTION_STORAGE,
                 |budget| {
                     let root = rustix::fs::open(&self.root, tree::DIRECTORY_FLAGS, Mode::empty())
                         .map(File::from)
@@ -121,17 +113,11 @@ fn native_profile_roundtrip_and_fixed_tree_match_the_strict_decoder() {
     let (admitted, charge) = result.unwrap();
     assert_eq!(admitted.record.canonical_bytes(), &bytes);
     assert_eq!(charge.additional_storage(), Capability::RETAINED);
-    assert_eq!(
-        work,
-        CompilerExecutionClientProfileCapabilityV2::PRODUCTION_WORK + PROFILE_WORK
-    );
+    assert_eq!(work, Cap::PRODUCTION_WORK + PROFILE_WORK);
     assert_eq!(floor, 13);
+    assert_eq!(peak, 13 + Cap::PRODUCTION_STORAGE + PROFILE_STORAGE);
     assert_eq!(
-        peak,
-        13 + CompilerExecutionClientProfileCapabilityV2::PRODUCTION_STORAGE + PROFILE_STORAGE
-    );
-    assert_eq!(
-        COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V2,
+        PROFILE_PATH,
         format!("/{}/{}", tree::COMPONENTS.join("/"), PROFILE_NAME)
     );
 }
@@ -139,8 +125,8 @@ fn native_profile_roundtrip_and_fixed_tree_match_the_strict_decoder() {
 #[test]
 fn trusted_root_resource_boundaries_include_native_decode_and_cleanup() {
     let tree = Tree::new(profile(7).canonical_bytes());
-    let outer = CompilerExecutionClientProfileCapabilityV2::PRODUCTION_WORK;
-    let scratch = CompilerExecutionClientProfileCapabilityV2::PRODUCTION_STORAGE;
+    let outer = Cap::PRODUCTION_WORK;
+    let scratch = Cap::PRODUCTION_STORAGE;
     for (work, storage, kind, accepted) in [
         (outer - 1, 1_000_000, 0, ENTRY_WORK),
         (outer, 13 + scratch - 1, 1, outer),
@@ -171,12 +157,12 @@ fn trusted_root_resource_boundaries_include_native_decode_and_cleanup() {
                 Error::Resource(Resource::Storage(_))
             )),
             2 => assert!(matches!(
-                failure(result),
-                Error::Profile(ProfileError::Resource(Resource::Work(_)))
+                profile_failure(result),
+                ProfileError::Resource(Resource::Work(_))
             )),
             3 => assert!(matches!(
-                failure(result),
-                Error::Profile(ProfileError::Resource(Resource::Storage(_)))
+                profile_failure(result),
+                ProfileError::Resource(Resource::Storage(_))
             )),
             _ => assert!(result.is_ok()),
         }
@@ -197,10 +183,7 @@ fn valid_legacy_profile_never_rescues_missing_or_malformed_native_file() {
     ));
     for bytes in [legacy_profile(7).canonical_bytes(), &[0; BYTES]] {
         tree.write(PROFILE_NAME, bytes);
-        assert!(matches!(
-            failure(tree.admit(1_000_000, 1_000_000).0),
-            Error::Profile(_)
-        ));
+        let _ = profile_failure(tree.admit(1_000_000, 1_000_000).0);
     }
 }
 
@@ -208,7 +191,7 @@ fn valid_legacy_profile_never_rescues_missing_or_malformed_native_file() {
 fn native_profile_rejects_a_legacy_nested_policy_even_with_correct_outer_hash() {
     let mut bytes = *profile(7).canonical_bytes();
     bytes[32..248].copy_from_slice(legacy_policy(7).canonical_bytes());
-    let domain = b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V2\0";
+    let domain = PROFILE_DOMAIN;
     let mut hash = Sha256::new();
     hash.update((domain.len() as u64).to_le_bytes());
     hash.update(domain);
@@ -219,14 +202,11 @@ fn native_profile_rejects_a_legacy_nested_policy_even_with_correct_outer_hash() 
         Capability::from_file(sealed(&bytes), b)
     })
     .0;
-    assert!(matches!(
-        failure(result),
-        Error::Profile(ProfileError::Policy(_))
-    ));
+    assert!(matches!(profile_failure(result), ProfileError::Policy(_)));
     let tree = Tree::new(&bytes);
     assert!(matches!(
-        failure(tree.admit(1_000_000, 1_000_000).0),
-        Error::Profile(ProfileError::Policy(_))
+        profile_failure(tree.admit(1_000_000, 1_000_000).0),
+        ProfileError::Policy(_)
     ));
 }
 
