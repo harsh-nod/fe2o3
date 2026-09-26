@@ -926,6 +926,11 @@ startup paths and both pipeline tables, and scaled custody reserves 1,024 owners
 per allocation. Generated, DeviceLocal and persistent scaled paths reject early;
 default capacity/dependency limits stay unchanged. Aggregate admission, scaled
 formal refinement and native qualification remain open.
+The scale-only ignored retained-depth canary now inspects all original native
+receipts, exact runtime/profile joins, separate runtime/native saturation
+rejections and the ten-to-two-to-zero metadata ledger lifecycle. Its
+[development packet](evidence/dev-scale-depth-2026-09-25/README.md) is CPU evidence
+only; native execution, repeated reuse/rebind and signed replay remain open.
 
 Acceptance: checked generation arithmetic, exact reservations/rollback,
 wraparound and stale-slot rejection, signal-reader retention and no reuse before

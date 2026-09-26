@@ -23,7 +23,7 @@ pub(super) fn reject_primary_teardown_shell() -> bool {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct PrimaryHostUsage {
+pub(super) struct PrimaryHostUsage {
     before: Option<Gfx942HostVisibleBackingUsageV1>,
     completed: Option<Gfx942HostVisibleBackingUsageV1>,
     device_before: Option<Gfx942DeviceBackingUsageV1>,
@@ -94,14 +94,14 @@ pub(super) fn observe_primary_host_usage(owner: &PrimaryQueueReleaseCustodyV1, c
     });
 }
 
-fn native_device() -> u64 {
+pub(super) fn native_device() -> u64 {
     let value = std::env::var("FE2O3_TEST_NATIVE_UNIQUE_ID").expect("explicit device unique ID");
     let device = u64::from_str_radix(value.strip_prefix("0x").unwrap_or(&value), 16).unwrap();
     assert_ne!(device, 0);
     device
 }
 
-fn observe_shutdown(backend: &mut KfdRuntimeBackendV1) -> PrimaryHostUsage {
+pub(super) fn observe_shutdown(backend: &mut KfdRuntimeBackendV1) -> PrimaryHostUsage {
     SELECTION.with(|selection| selection.set(Some(false)));
     PRIMARY_HOST_USAGE.with(|slot| slot.set(Some(PrimaryHostUsage::default())));
     backend.shutdown_owned_v1().unwrap();

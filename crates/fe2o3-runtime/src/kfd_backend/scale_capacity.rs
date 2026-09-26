@@ -219,3 +219,6 @@ impl KfdRuntimeBackendV1 {
 
 #[cfg(all(test, feature = "scale-qualification"))]
 pub(super) mod tests;
+
+#[cfg(all(test, feature = "scale-qualification"))]
+mod native_depth;

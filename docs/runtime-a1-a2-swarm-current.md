@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Latest scaled-depth development (2026-09-25): a separate scale-feature-only
+ignored native canary now inspects all 2,048 original retained receipts across
+two lanes, exact runtime and profiler joins, distinct runtime-custody and native
+epoch-table saturation, final buffer contents and complete table disposal.
+Unexpected accepted tokens remain owned through explicit cleanup before failing
+qualification. Nine synthetic checker tests cover receipt, ownership, accounting,
+ordering and publication-metadata mutations. See the
+[development packet](evidence/dev-scale-depth-2026-09-25/README.md) for validation
+results and limits. The final full runtime run reports 1,444 passed, the same
+three telemetry socket `EPERM` failures and 28 ignored. Strict Clippy, the exact
+scale-feature checker run, default-feature checking, formatting and all 46
+doctests pass. This cell has not executed on MI300X; retained is not
+unfinished or physically concurrent. Repeated reuse/rebind, async-owner high
+depth, aggregate admission, scaled refinement, signed native replay and matched
+performance remain open. No accepted checkpoint or A1/A2 status changes.
+
 Latest runtime capacity integration (2026-09-25): the separate
 `scale-qualification` exact-vecadd constructor preallocates both runtime tables
 before KFD startup and shares its account/profile with both native construction

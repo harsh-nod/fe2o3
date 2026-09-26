@@ -1,0 +1,18 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 57.97s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-scale-depth-target-20260925-YLX22UGi/debug/deps/fe2o3_runtime-dcc6ccea00c58f82)
+
+running 10 tests
+test kfd_backend::scale_capacity::native_depth::native_scaled_two_lane_2048_retained_receipts_and_cleanup ... ignored, requires an explicitly selected idle MI300X and isolated process; scale-qualification only
+test kfd_backend::scale_capacity::native_depth::tests::depth_checker_accepts_all_2048_rows_with_exact_runtime_joins ... ok
+test kfd_backend::scale_capacity::native_depth::tests::depth_checker_keeps_peak_runtime_only_and_disposed_accounting_distinct ... ok
+test kfd_backend::scale_capacity::native_depth::tests::depth_checker_rejects_bad_coordinates_phases_and_native_digest_aliases ... ok
+test kfd_backend::scale_capacity::native_depth::tests::depth_checker_rejects_corrupt_custody_and_runtime_indices ... ok
+test kfd_backend::scale_capacity::native_depth::tests::depth_membership_binds_each_opaque_receipt_to_its_owner_coordinates ... ok
+test kfd_backend::scale_capacity::native_depth::tests::depth_checker_rejects_frontier_only_missing_duplicate_and_cross_lane_rows ... ok
+test kfd_backend::scale_capacity::native_depth::tests::depth_profile_checker_accepts_independent_cross_lane_completion_order ... ok
+test kfd_backend::scale_capacity::native_depth::tests::depth_profile_checker_rejects_wrong_queue_prefix_order_and_early_cleanup ... ok
+test kfd_backend::scale_capacity::native_depth::tests::depth_profile_checker_binds_each_publication_to_the_retained_recipe ... ok
+
+test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 1465 filtered out; finished in 1.14s
+

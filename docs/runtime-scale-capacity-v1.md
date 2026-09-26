@@ -75,6 +75,11 @@ initial-binding admission or pristine-continuation consumption follows the
 existing terminal-custody policy; it does not restore the prior live queue.
 Budgeting must include replacement peaks. Moving this reservation ahead of all
 native preparation, with proved rollback, remains further admission work.
+That requires an owned preallocated table, not a transient budget check, before
+initial binding enters mutable work, auxiliary construction takes rooted custody,
+or pristine rebind consumes its continuation. Runtime classification after logical
+acceptance also needs review: a lower pre-entry rejection does not by itself prove
+a rejected/retryable Context launch.
 
 CPU tests use production construction/preparation sequencers with simulated
 native operations. Their epoch reservations are not GPU publication receipts.
@@ -84,13 +89,21 @@ formal refinement of the new allocator adapter or scaled queue composition.
 The [runtime integration results](evidence/dev-scale-runtime-2026-09-25/README.md)
 are a separate development packet; simulated lane occupancy is not native depth.
 
+The scale-only ignored [retained-depth canary](evidence/dev-scale-depth-2026-09-25/README.md)
+now inspects every original native receipt at 1,024 epochs per lane, joins exact
+runtime ownership and complete profiler metadata, and checks cleanup through
+backend destruction. It separately probes runtime custody saturation and actual
+native epoch-table saturation on both lanes. CPU mutation tests validate the
+typed consistency checker; the native cell has not executed. Reuse/rebind,
+async-owner high-depth integration and signed independent replay remain open.
+
 ## Remaining Work
 
 1. Finish aggregate backing/control/slot admission and scaled formal refinement;
    preserve the default capacity-65 negative and existing 64-only proofs.
-2. Extend the native qualification producer to the new opt-in and inspect every
-   retained epoch, not only each lane's frontier. Validate scaled joins/rebinds
-   and exact cleanup; keep the default qualification profile intact.
+2. Execute the new opt-in retained-depth canary; qualify scaled joins/rebinds,
+   repeated reuse, async-owner integration and exact cleanup with signed native
+   evidence. Keep the default qualification profile intact.
 3. Measure at least 2048 simultaneously native-published/retained epochs across
    two lanes with exact identities, negative saturation, complete cleanup and
    matched HIP/HSA baselines. Retained, incomplete and physically concurrent

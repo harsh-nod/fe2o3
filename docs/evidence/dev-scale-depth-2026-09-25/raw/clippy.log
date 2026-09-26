@@ -1,0 +1,100 @@
+    Checking typenum v1.20.1
+    Checking cpufeatures v0.3.1
+    Checking cfg-if v1.0.4
+    Checking fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+    Checking spin v0.12.3
+    Checking bitflags v2.13.1
+    Checking memchr v2.8.3
+    Checking itoa v1.0.18
+    Checking linux-raw-sys v0.12.1
+    Checking arrayvec v0.7.8
+    Checking zeroize v1.9.0
+    Checking pin-project-lite v0.2.17
+    Checking fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+    Checking fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+    Checking fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+    Checking futures-core v0.3.34
+    Checking slab v0.4.12
+    Checking fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+    Checking futures-task v0.3.34
+    Checking serde_core v1.0.229
+    Checking zmij v1.0.23
+    Checking libc v0.2.189
+    Checking num-traits v0.2.19
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Checking tokio v1.47.1
+    Checking fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+    Checking futures-util v0.3.34
+    Checking fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+    Checking rmp v0.8.15
+    Checking hybrid-array v0.4.14
+    Checking rmpv v1.3.1
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking rustix v1.1.4
+    Checking digest v0.11.3
+    Checking futures-executor v0.3.34
+    Checking sha2 v0.11.0
+    Checking serde v1.0.229
+    Checking serde_json v1.0.151
+    Checking fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+    Checking fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+    Checking fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+    Checking fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error: this `if` can be collapsed into the outer `match`
+   --> crates/fe2o3-runtime/src/kfd_backend/scale_capacity/native_depth/checker.rs:237:17
+    |
+237 | /                 if !index.contains_key(&dispatch)
+238 | |                     || completed != [DEPTH; LANES]
+239 | |                     || !released.insert(dispatch)
+...   |
+242 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_match
+    = note: `-D clippy::collapsible-match` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_match)]`
+help: collapse nested if block
+    |
+236 ~             KfdRuntimeProfileEventKindV1::SubmissionReleased { dispatch }
+237 ~                 if (!index.contains_key(&dispatch)
+238 |                     || completed != [DEPTH; LANES]
+239 ~                     || !released.insert(dispatch))
+240 ~                 => {
+241 |                     return Err("release before completion or duplicate release");
+242 ~                 }
+    |
+
+error: the `Err`-variant returned from this closure is very large
+  --> crates/fe2o3-runtime/src/kfd_backend/scale_capacity/native_depth/native_capacity.rs:63:41
+   |
+63 |               .with_compute_lane_v1(lane, |selected| {
+   |  _________________________________________^
+64 | |                 selected.recycle_fixed_dispatch(completed.take().unwrap())
+65 | |             })
+   | |_____________^ the `Err`-variant is at least 288 bytes
+   |
+   = help: try reducing the size of `fe2o3_kfd::Gfx942FixedDispatchRecycleFailureV1<1>`, for example by boxing large elements or replacing it with `Box<fe2o3_kfd::Gfx942FixedDispatchRecycleFailureV1<1>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+   = note: `-D clippy::result-large-err` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the loop variable `ordinal` is only used to index `ids`
+   --> crates/fe2o3-runtime/src/kfd_backend/scale_capacity/native_depth/tests.rs:304:20
+    |
+304 |     for ordinal in 0..DEPTH {
+    |                    ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_range_loop
+    = note: `-D clippy::needless-range-loop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_range_loop)]`
+help: consider using an iterator
+    |
+304 -     for ordinal in 0..DEPTH {
+304 +     for <item> in ids.iter().take(DEPTH) {
+    |
+
+error: could not compile `fe2o3-runtime` (lib test) due to 3 previous errors
