@@ -83,6 +83,16 @@ InvalidServicePeer. No fixture timeout, production check or sandbox restriction
 was removed to obtain a pass. Failed logs remain retained. The initial packet
 test compile failure was a new ambiguous integer literal, corrected to u16.
 
+At documentation snapshot `d66ea32b8`, locked offline `cargo check --all-targets`
+passed for the execution client, issuer, broker authority service, closure
+capabilities, Cargo driver and rustc backend. These are Cargo target kinds, not
+GPU targets. Existing warnings remain; this is not whole-workspace validation.
+The downstream log SHA256 is:
+
+```text
+1da48b8b8d3ec9ce16d11b9e87bb05e3a0a1381d130f5179af485d1ffc24b932
+```
+
 ## Remaining Integration
 
 1. Select the conditional family through independently pinned deployment,
@@ -105,7 +115,7 @@ The production backend and Cargo boundary still admit V1 execution custody.
 Conditional production entry still fails closed before publication. Successful
 component tests do not alter these boundaries.
 
-Both public mains were last observed at `ebc14db4b`. Normal Git fetch still
+Both public mains were last observed at `1d8ef2462`. Normal Git fetch still
 fails DNS, so concurrent public work has not been merged and this batch has not
 been pushed. All three GPU SSH aliases also fail DNS resolution. No new remote
 job or scratch directory was created.
