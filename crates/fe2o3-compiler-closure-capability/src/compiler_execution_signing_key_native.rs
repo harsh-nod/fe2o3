@@ -200,6 +200,28 @@ macro_rules! signing_key_capability {
                 seed: &mut [u8; KEY_BYTES],
                 budget: &mut Budget<'_>,
             ) -> Result<(Self, Storage)> {
+                Self::reissue_template_for_current_service_with(
+                    image,
+                    deployment,
+                    policy,
+                    template_owner,
+                    seed,
+                    budget,
+                    |_| Ok(()),
+                )
+            }
+
+            // A private observation point lets tests fail or unwind after allocation
+            // inside the real scope. Production always uses the no-op above.
+            fn reissue_template_for_current_service_with(
+                image: File,
+                deployment: &Deployment,
+                policy: &Policy,
+                template_owner: (u32, u32),
+                seed: &mut [u8; KEY_BYTES],
+                budget: &mut Budget<'_>,
+                after_image: impl FnOnce(&Self) -> Result<()>,
+            ) -> Result<(Self, Storage)> {
                 let seed = SeedGuard(seed);
                 let floor = Self::FILE_STORAGE
                     .checked_add(deployment.retained_storage())
@@ -233,6 +255,7 @@ macro_rules! signing_key_capability {
                             image,
                             policy: policy.identity(),
                         };
+                        after_image(&admitted)?;
                         admitted.check_image()?;
                         template.validate_secret_owner_fixed(template_owner.0, template_owner.1)?;
                         admitted.image.validate_secret_owner_fixed(

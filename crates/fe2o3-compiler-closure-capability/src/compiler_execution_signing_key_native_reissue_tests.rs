@@ -296,6 +296,108 @@ fn private_reissue_boundaries_wipe_staging_close_input_and_preserve_both_scope_f
 }
 
 #[test]
+fn private_reissue_late_refusals_and_unwind_retire_both_images_and_restore_the_ledger() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let (uid, gid) = rootless_service();
+    let mut setup_work = Work::new(LIMIT);
+    let mut setup = Budget::new(&mut setup_work, LIMIT);
+    let policy = policy(0, &mut setup);
+    let deployment = deployment(&policy, uid, gid, &mut setup);
+    let input = Cap::FILE_STORAGE + deployment.retained_storage() + policy.retained_storage();
+    for case in 0..3 {
+        let image = template(7);
+        let source_witness = image.try_clone().unwrap();
+        let mut output_witness = None;
+        let mut visits = 0;
+        let mut seed = [0xa5; KEY_BYTES];
+        // Prepay both test witnesses separately from the consumed source descriptor.
+        let floor = input + EXTRA + 2 * Cap::FILE_STORAGE;
+        let work_limit = EXTRA + Cap::REISSUE_WORK;
+        let storage_limit = floor + Cap::REISSUE_STORAGE;
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(floor).unwrap();
+        budget.charge_work(EXTRA).unwrap();
+        assert!(budget.charge_work(Cap::REISSUE_WORK + 1).is_err());
+        assert!(budget.reserve_storage(Cap::REISSUE_STORAGE + 1).is_err());
+        assert_eq!(budget.failed_work(), Some(work_limit + 1));
+        assert_eq!(budget.failed_storage(), Some(storage_limit + 1));
+        assert_eq!(budget.peak_storage(), floor);
+        let before = budget.work();
+        let ledger = budget.work_ledger_identity_v1();
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            Cap::reissue_template_for_current_service_with(
+                image,
+                &deployment,
+                &policy,
+                (uid, gid),
+                &mut seed,
+                &mut budget,
+                |admitted| {
+                    visits += 1;
+                    let output = admitted.image.as_file();
+                    let witness = output.try_clone().unwrap();
+                    let source = source_witness.metadata().unwrap();
+                    let fresh = witness.metadata().unwrap();
+                    assert_ne!((fresh.dev(), fresh.ino()), (source.dev(), source.ino()));
+                    assert_eq!(references(&source_witness), 2);
+                    assert_eq!(references(&witness), 2);
+                    assert_eq!(
+                        rustix::io::fcntl_getfd(output).unwrap(),
+                        rustix::io::FdFlags::CLOEXEC
+                    );
+                    output_witness = Some(witness);
+                    // Return normally after mutation so the real postchecks reject it.
+                    match case {
+                        0 => rustix::io::fcntl_setfd(output, rustix::io::FdFlags::empty()).unwrap(),
+                        1 => rustix::fs::fchmod(&source_witness, Mode::RUSR | Mode::WUSR).unwrap(),
+                        2 => panic!("native reissue after-image unwind"),
+                        _ => unreachable!(),
+                    }
+                    Ok(())
+                },
+            )
+        }));
+
+        assert_eq!(visits, 1, "case {case}");
+        assert_eq!(seed, [0; KEY_BYTES], "case {case}");
+        assert_eq!(budget.storage(), floor, "case {case}");
+        assert_eq!(budget.work(), before + Cap::REISSUE_WORK, "case {case}");
+        assert_eq!(
+            budget.peak_storage(),
+            floor + Cap::REISSUE_STORAGE,
+            "case {case}"
+        );
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.failed_work(), Some(work_limit + 1));
+        assert_eq!(budget.failed_storage(), Some(storage_limit + 1));
+        match case {
+            0 => assert_rejected(result.unwrap(), " descriptor is unexpectedly inheritable"),
+            1 => assert_rejected(result.unwrap(), " is not an exact regular mode-0400 file"),
+            2 => {
+                let panic = result.unwrap_err();
+                assert_eq!(
+                    panic.downcast_ref::<&str>().copied(),
+                    Some("native reissue after-image unwind")
+                );
+            }
+            _ => unreachable!(),
+        }
+        let output_witness = output_witness.expect("fresh output was not observed");
+        assert_eq!(references(&source_witness), 1, "case {case}");
+        assert_eq!(references(&output_witness), 1, "case {case}");
+        drop((source_witness, output_witness));
+        budget.release_storage(3 * Cap::FILE_STORAGE).unwrap();
+        assert_eq!(
+            budget.storage(),
+            deployment.retained_storage() + policy.retained_storage() + EXTRA
+        );
+    }
+}
+
+#[test]
 fn reissue_checks_current_uid_gid_and_the_complete_policy_before_reading_the_seed() {
     let (uid, gid) = rootless_service();
     let mut setup_work = Work::new(LIMIT);

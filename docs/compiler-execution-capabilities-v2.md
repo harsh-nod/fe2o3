@@ -174,14 +174,14 @@ formula with `File`, and `P` be the borrowed native policy's retained charge:
 Key `IO_WORK` is 66568 logical units, allowing at most 64 descriptor, credential
 and cleanup calls plus fixed byte processing. Fresh admission prepays one named
 65536-unit crypto derivation allowance, for `ADMISSION_WORK = 132104`.
-All methods prepay `IO_STORAGE` for fixed owners, guarded seed buffers, metadata,
+These methods prepay `IO_STORAGE` for fixed owners, guarded seed buffers, metadata,
 control frames and crypto scratch. These are named logical admission quotas,
 not instruction, generated-stack or physical-memory bounds. Returned deltas
 and consumed inputs follow the same ledger discipline as public capabilities.
 The raw seed wire and destination slot 7 remain unchanged; custody alone does
 not authenticate an issuer service or activate a native launch.
 
-## Native Supervisor Binding
+### Root Template Reissue
 
 Both native key families also provide `reissue_root_template_for_current_service`.
 This consumes an anonymous mode-0400, exactly sealed, read-only CLOEXEC template
@@ -200,7 +200,13 @@ The deployment record remains inert: this operation does not establish trusted
 parent provenance, a protected process profile, startup/recovery or execution.
 Rootless tests use a private expected-template-owner helper for positive mechanics
 and the public API for rejecting non-root-owned templates. They are not successful
-protected-root reissue evidence. The inherited production entry point remains V1.
+protected-root reissue evidence. A private observation point in the real reissue
+scope also exercises late image/template refusal and unwind after fresh-image
+allocation. It checks seed wiping, both descriptors' retirement, restored storage,
+and preserved cumulative work and denial history. The inherited production entry
+point remains V1.
+
+## Native Supervisor Binding
 
 `ProtectedIssuerSupervisorV2` consumes a fresh native program, policy-bound key,
 strict native anchor transport, credential profile and root File. It preserves
