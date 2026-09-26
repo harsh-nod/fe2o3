@@ -261,8 +261,8 @@ fn shared_child_and_staging_errors_preserve_fixed_reason_operation_and_errno() {
 #[test]
 fn wrapped_errors_keep_their_concrete_source_and_display() {
     assert_wrapped_source(Resource::Arithmetic);
-    assert_wrapped_source(crate::ProtectedIssuerSupervisorErrorV2::RootChanged);
-    assert_wrapped_source(crate::ProtectedIssuerLaunchPreparationErrorV2::ParentChanged);
+    assert_wrapped_source(SupervisorError::RootChanged);
+    assert_wrapped_source(PreparationError::ParentChanged);
     assert_wrapped_source(
         fe2o3_protected_service_profile::ProtectedServiceProfileErrorV2::Resource(
             Resource::Allocation,
@@ -274,16 +274,8 @@ fn wrapped_errors_keep_their_concrete_source_and_display() {
             "fake capability",
         ),
     );
-    assert_wrapped_source(
-        fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyErrorV2::Resource(
-            Resource::Arithmetic,
-        ),
-    );
-    let error = Error::from(
-        fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyErrorV2::Resource(
-            Resource::Allocation,
-        ),
-    );
+    assert_wrapped_source(ReadyError::Resource(Resource::Arithmetic));
+    let error = Error::from(ReadyError::Resource(Resource::Allocation));
     assert_eq!(
         error
             .source()

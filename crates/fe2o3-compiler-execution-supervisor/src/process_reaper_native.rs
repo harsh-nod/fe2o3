@@ -118,8 +118,8 @@ pub struct ProtectedIssuerCleanupReportV2 {
 /// background thread. Drop returns control, not custody: the same account and
 /// records remain in the pool for `recover`. Work limits are never renewed.
 ///
-/// This is cleanup funding only. Native consuming launch and service deployment
-/// are not yet connected. Logical quotas do not bound syscall or mutex latency.
+/// This is policy-neutral cleanup funding, shared by native V2 and V3 consuming
+/// launch, not deployment authority. Logical quotas do not bound syscall or mutex latency.
 ///
 /// ```compile_fail
 /// use fe2o3_compiler_execution_supervisor::ProtectedIssuerCleanupServiceV2;

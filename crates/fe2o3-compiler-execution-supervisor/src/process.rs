@@ -3,6 +3,9 @@
 #[path = "process_native.rs"]
 mod native;
 pub use native::*;
+#[path = "process_native_v3.rs"]
+mod native_v3;
+pub use native_v3::*;
 
 #[path = "process_profile_report.rs"]
 mod profile_report;

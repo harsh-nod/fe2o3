@@ -38,6 +38,7 @@ mod handoff_v3;
 mod launch;
 mod launch_checks;
 mod launch_v2;
+mod launch_v3;
 mod listener;
 #[cfg(test)]
 mod native_consuming_test_process;
@@ -96,6 +97,10 @@ pub use launch_v2::{
     PreparedProtectedIssuerLaunchV2, ProtectedIssuerLaunchPreparationErrorV2,
     ProtectedIssuerLaunchStorageV2,
 };
+pub use launch_v3::{
+    PreparedProtectedIssuerLaunchV3, ProtectedIssuerLaunchPreparationErrorV3,
+    ProtectedIssuerLaunchStorageV3,
+};
 pub use listener::{
     ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceReportV1,
     ProtectedIssuerServiceShutdownV1, ProtectedIssuerServiceV1,
@@ -110,6 +115,11 @@ pub use process::{
     ExitedProtectedIssuerV2, LaunchedProtectedIssuerV2, PROTECTED_ISSUER_LAUNCH_SCRATCH_V2,
     PROTECTED_ISSUER_LAUNCH_WORK_V2, ProtectedIssuerBoundaryV2, ProtectedIssuerLaunchErrorV2,
     ProtectedIssuerWaitV2, ReadyProtectedIssuerV2, ServingProtectedIssuerV2,
+};
+pub use process::{
+    ExitedProtectedIssuerV3, LaunchedProtectedIssuerV3, PROTECTED_ISSUER_LAUNCH_SCRATCH_V3,
+    PROTECTED_ISSUER_LAUNCH_WORK_V3, ProtectedIssuerBoundaryV3, ProtectedIssuerLaunchErrorV3,
+    ProtectedIssuerWaitV3, ReadyProtectedIssuerV3, ServingProtectedIssuerV3,
 };
 pub use process_reaper::{
     ProtectedIssuerCleanupAdmissionErrorV2, ProtectedIssuerCleanupErrorV2,
