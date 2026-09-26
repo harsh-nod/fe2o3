@@ -180,8 +180,12 @@ impl StagedProtectedServiceExecV2 {
     /// # Safety
     /// `source_storage` must conservatively cover ALL borrowed sources, including
     /// full executable/other image bytes and the binding slice. Caller-controlled
-    /// small charges are not evidence. Retain the original input owners and
-    /// exclusive transfer custody; do not mutate their shared flags/locks/content.
+    /// small charges are not evidence. Retain the admitted native source owners
+    /// and actual contexts through final validation and spawn. Redundant temporary
+    /// transfer Files may close after successful final contextual validation;
+    /// retire their charges only after closure. Preserve exclusive transfer custody
+    /// and do not mutate shared flags, locks or content. Control-channel closure
+    /// and EOF obligations remain separate.
     /// Before spawning, use each native owner's contextual validator on the final
     /// Files returned by `executable`/`binding`, not only their original aliases.
     #[allow(clippy::too_many_arguments)]

@@ -35,14 +35,14 @@ images as the invoking user, crosses only the qualification invocation through `
 signed durable exchange, requires exactly-once pidfd shutdown/reaping, and then requires a second
 launch against the same root to report `Existing`.
 
-## Native Preparation
+## Native Coordinator
 
-`PreparedExternalAnchorOccurrenceV2/V3` implement preparation and revalidation
-only, with actual same-family policy/supervisor capabilities borrowed on every
+`PreparedExternalAnchorOccurrenceV2/V3` implement preparation, revalidation and
+consuming launch, with actual same-family policy/supervisor capabilities borrowed on every
 operation. They own native deployment, provisioning, root-owned key template,
 lifecycle lease, measured sealed helper/daemon images and a pinned state root.
 Exact root credentials and the preparing PID are checked. No V1 upgrade, raw
-key/descriptor extractor, provider interface or native launch method is exposed.
+key/descriptor extractor or provider interface is exposed.
 
 Prepay `prepare_input_storage`, including both full source images and borrowed
 contexts, on the original resource ledger. Reserve returned growth before
@@ -52,9 +52,23 @@ closes owned descriptors; the caller then retires full `retained_storage`.
 Quota queries include nested native checks and overlapping image storage; they
 are logical bounds, not RSS or syscall-time guarantees.
 
-The shared spawn crate now supplies unsafe native staging, prepaid child setup,
-atomic pidfd adoption and finite cleanup custody. This coordinator does not yet
-call those primitives. Final staged-file validation, readiness/exec admission,
-managed lifetime and compiler coordinator integration remain outstanding.
-Rootless tests do not qualify a protected deployment or a GPU kernel. See the
-[spawn checkpoint](../../docs/evidence/conditional-native-root-spawn-20260926.md).
+Launch derives full source charges, stages the exact nine native inputs, and
+validates final Files through the actual native owners before calling the shared
+spawn primitive. The original ledger funds staging, child setup and all readiness
+attempts; the shared cleanup controller funds deferred cleanup. Profile and
+namespace checks gate release. Canonical readiness, exact endpoint transfer,
+exec EOF, live pidfd and native endpoint admission precede a managed result.
+The V1 and native paths share one finite readiness scheduler. Late successful
+reads and unbounded gate retries no longer bypass deadlines.
+
+`RootManagedExternalAnchorV2/V3` retain preparation, child and endpoint custody.
+Launch returns growth above the consumed prepared owner; retain its existing
+reservation and reserve the growth. Continuity requires actual contexts again.
+Cancellation/Drop take one prepaid cleanup step and may defer or quarantine;
+they do not guarantee eventual reaping or artifact-lock release.
+
+Native supervisor transfer and compiler coordinator integration remain pending.
+Adapter-level post-clone failure/unwind coverage and genuine protected startup
+are still validation gaps. Rootless tests do not qualify a protected deployment
+or a GPU kernel. See the
+[launch checkpoint](../../docs/evidence/conditional-native-root-launch-20260926.md).

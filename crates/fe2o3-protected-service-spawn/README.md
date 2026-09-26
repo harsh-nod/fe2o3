@@ -35,9 +35,8 @@ slot. Pending and quarantined records retain capacity, descriptors and any
 unverified inherited artifact-spawn lease. `ECHILD` never counts as success.
 
 Controller loss preserves the original account and records. Recovery does not
-reset limits or denial history. Native issuer launch and the trusted native root
-spawn primitive use this pool. The root coordinator does not yet call that
-primitive. The V1 root child above retains its synchronous Drop semantics.
+reset limits or denial history. Native issuer and external-anchor root coordinator
+launches use this pool. The V1 root child above retains its synchronous Drop semantics.
 
 The shared pre-exec gate reader permits at most 64 attempts, retrying only EINTR.
 Capability-ceiling observation uses a fixed buffer and finite reads. These bound
@@ -48,9 +47,11 @@ deployment or execution authority.
 
 `native_spawn` exposes unsafe mechanical staging and spawning, not an admitted
 deployment API. The trusted caller must derive full source charges from the
-actual owners, retain all original inputs, and validate the final staged Files
+actual owners, retain the admitted source owners, and validate the final staged Files
 against native image, context, key and lifecycle owners before spawning. Inert
 descriptor bindings and caller-supplied storage numbers establish no authority.
+Redundant temporary transfer Files may close after final validation; retire their
+charges only after closure. Keep native owners and contexts through spawn.
 
 Staging duplicates the bounded table at or above FD 400 using fallible allocation.
 The original ledger prepays parent and bounded child setup, then reserves cleanup
@@ -62,7 +63,9 @@ Only verified exec or exact consuming terminal disposal releases the spawn lease
 Deferred or quarantined leases can delay artifact-lock descriptor release
 indefinitely; finite cleanup funding does not guarantee eventual reaping.
 
-Final staged-file validation, gated readiness/exec/endpoint admission and managed
-native lifetime still need integration in the root coordinator. Rootless clone
-and cleanup tests do not establish successful protected startup. See the
-[checkpoint](../../docs/evidence/conditional-native-root-spawn-20260926.md).
+The native external-anchor coordinator now calls these primitives after deriving
+full charges and validating staged Files, and owns gated readiness/exec/endpoint
+admission and managed lifetime. Protected startup remains unvalidated; compiler
+coordinator integration is still pending. Rootless clone and cleanup tests do not
+establish successful protected startup. See the
+[launch checkpoint](../../docs/evidence/conditional-native-root-launch-20260926.md).

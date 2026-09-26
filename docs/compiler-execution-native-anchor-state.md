@@ -14,8 +14,8 @@ The dedicated native V2/V3 inherited daemon entrypoints now compose these APIs
 with native process/namespace admission, measured sealed executable admission and
 lifecycle custody. Dedicated native provisioning helpers now reissue native keys,
 open-or-initialize state and exec the matching native daemon. The root coordinator
-now has native preparation/revalidation, but still launches only the V1 helper;
-native launch and lifetime integration are outstanding. Successful
+now has native preparation, revalidation, launch and managed lifetime. Native
+supervisor transfer and compiler coordinator integration remain outstanding. Successful
 protected startup and trusted parent provenance remain unvalidated. Neither these APIs nor their
 tests complete M0-M7, prove kernel semantics, or qualify another end-to-end GPU
 kernel.
@@ -284,8 +284,8 @@ context binding, seals helper and daemon for the exact service, pins root
 identity/metadata and records the preparing PID. Revalidation repeats context,
 root, key, lease and image checks under exact root credentials.
 
-The public APIs expose no launch method, V1 conversion, raw key, descriptor
-accessor or generic provider. Preparation performs no persistence or process
+The public APIs expose no V1 conversion, raw key, descriptor accessor or generic
+provider. Preparation performs no persistence or process
 creation and grants no compiler or GPU authority. Configuration custody does
 not authenticate provisioning provenance.
 
@@ -316,7 +316,7 @@ for preparation evidence; the next section describes the newer spawn primitives.
 The shared spawn crate now provides `StagedProtectedServiceExecV2` and
 `RootOwnedProtectedServiceChildV2` through an explicitly unsafe mechanical bridge.
 It does not turn raw inputs, V1 owners or storage numbers into native deployment
-authority. The trusted caller must derive full source charges, retain originals,
+authority. The trusted caller must derive full source charges, retain native owners,
 and validate every final staged File against the actual native owners and context.
 Staging charges the full duplicate owner, including overlapping image bytes;
 returned storage is a full unreserved charge, not growth over borrowed sources.
@@ -339,10 +339,49 @@ and `0 <= c <= 63`. Its maximum is 424576. The maximum full spawn work is
 These bounds exclude the executed program and coordinator readiness. They are
 not instruction-count, syscall/mutex latency, generated-stack or RSS bounds.
 
-`PreparedExternalAnchorOccurrenceV2/V3` still have no launch method. The root
-coordinator must integrate final staged-file validation, independently observed
-profile/namespaces, bounded readiness and exec EOF, exact endpoint admission and
-managed native lifetime. Rootless atomic-clone/cleanup probes do not establish a
-successful protected credential transition or helper startup. See the
+The root coordinator now integrates these primitives as described below. Rootless
+atomic-clone/cleanup probes do not establish a successful protected credential
+transition or helper startup. See the historical
 [spawn checkpoint](evidence/conditional-native-root-spawn-20260926.md) for exact
-test results and the remaining compiler/GPU gates.
+primitive test results.
+
+## Native Root Launch
+
+`PreparedExternalAnchorOccurrenceV2/V3::launch` consumes preparation while
+borrowing actual same-family policy and supervisor capabilities, the funded
+cleanup controller and the original request ledger. `launch_input_storage`
+includes those borrowed contexts; `launch_quota` includes every finite readiness
+attempt, nested native operation and full overlapping image charge. It is a
+conservative logical envelope, not a time, stack or RSS promise.
+
+The helper descriptor table is exactly `3, 4, 5, 6, 202, 220, 221, 222, 223`,
+checked against the inherited helper ABI at compile time. The coordinator checks
+the final helper/daemon Files, lifecycle lock, policy, supervisor, deployment,
+provisioning, signing-key template, pinned root and private bootstrap identity.
+Only then may the shared primitive create the guarded child. Namespace/profile
+observation and input revalidation precede gate release. The same readiness
+engine serves V1 and native callers, with native attempt/liveness charges on
+the original account. It has 120001 attempts per polling phase and 64 gate-write
+attempts, plus one shared deadline of at most 120 seconds.
+
+Ready transfer requires the exact canonical record and one CLOEXEC descriptor.
+The receiver owns all disclosed SCM_RIGHTS/SCM_PIDFD descriptors before any
+fallible check; excess rights, unknown control and truncation are rejected with
+cleanup. Even successful I/O must meet the deadline. Exec EOF, continued exact
+child liveness and native protected endpoint admission precede artifact-lease
+confirmation and a managed result.
+
+`RootManagedExternalAnchorV2/V3` retain preparation, endpoint admission and child
+custody. Returned launch storage is growth above the consumed prepared owner,
+not its full retained charge. Continuity rechecks actual contexts and retained
+inputs. Cancellation/Drop use the prepaid finite child cleanup path; pending or
+quarantined custody is not successful termination. Callers retire full retained
+storage only after dropping the managed owner. Deferred artifact leases may
+delay lock release indefinitely.
+
+Native supervisor transfer and compiler coordinator integration remain pending.
+Current tests cover actual staged Files and rootless transport/refusal mechanics,
+not a successful native root deployment. Adapter-level post-clone failures and
+unwinds, including child-storage refusal and failure after endpoint receipt,
+still need direct coverage. See the
+[launch checkpoint](evidence/conditional-native-root-launch-20260926.md).
