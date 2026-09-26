@@ -2,11 +2,17 @@
 #![doc = include_str!("../README.md")]
 
 mod attestation;
+mod attestation_challenge_adapter;
 mod attestation_challenge_v2;
+mod attestation_challenge_v3;
+mod attestation_receipt_adapter;
 mod attestation_receipt_codec;
 mod attestation_receipt_v2;
+mod attestation_receipt_v3;
+mod attestation_request_adapter;
 mod attestation_request_codec;
 mod attestation_request_v2;
+mod attestation_request_v3;
 mod attestation_resources;
 mod client_profile;
 mod client_profile_codec;
@@ -22,8 +28,10 @@ pub use external_anchor_transaction_v2::{
     CompilerExecutionExternalAnchorTransactionIdentityV2,
     CompilerExecutionExternalAnchorTransactionV2, CompilerExecutionNativeJournalErrorV2,
 };
+mod issuer_policy_adapter;
 mod issuer_policy_codec;
 mod issuer_policy_v2;
+mod issuer_policy_v3;
 mod launch_manifest;
 mod launch_manifest_codec;
 mod launch_manifest_v2;
@@ -103,6 +111,13 @@ pub use attestation_challenge_v2::{
     CompilerExecutionAttestationChallengeIdentityV2, CompilerExecutionAttestationChallengeV2,
     CompilerExecutionSubjectBindingV2,
 };
+pub use attestation_challenge_v3::{
+    COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V3,
+    COMPILER_EXECUTION_ATTESTATION_CHALLENGE_STORAGE_V3,
+    COMPILER_EXECUTION_ATTESTATION_CHALLENGE_WORK_V3,
+    CompilerExecutionAttestationChallengeIdentityV3, CompilerExecutionAttestationChallengeV3,
+    CompilerExecutionSubjectBindingV3,
+};
 pub use attestation_receipt_v2::{
     COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V2,
     COMPILER_EXECUTION_ATTESTATION_RECEIPT_DECODE_WORK_V2,
@@ -113,6 +128,16 @@ pub use attestation_receipt_v2::{
     CompilerExecutionAttestationReceiptIdentityV2, CompilerExecutionAttestationReceiptV2,
     VerifiedCompilerExecutionAttestationV2,
 };
+pub use attestation_receipt_v3::{
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V3,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_DECODE_WORK_V3,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_IDENTITY_WORK_V3,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_ISSUE_WORK_V3,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_STORAGE_V3,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_VERIFY_WORK_V3,
+    CompilerExecutionAttestationReceiptIdentityV3, CompilerExecutionAttestationReceiptV3,
+    VerifiedCompilerExecutionAttestationV3,
+};
 pub use attestation_request_v2::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V2,
     COMPILER_EXECUTION_ATTESTATION_REQUEST_DECODE_STORAGE_V2,
@@ -121,7 +146,16 @@ pub use attestation_request_v2::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_WORK_V2, CompilerExecutionAttestationRequestIdentityV2,
     CompilerExecutionAttestationRequestV2,
 };
+pub use attestation_request_v3::{
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V3,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_DECODE_STORAGE_V3,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_DECODE_WORK_V3,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_STORAGE_V3,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_WORK_V3, CompilerExecutionAttestationRequestIdentityV3,
+    CompilerExecutionAttestationRequestV3,
+};
 pub use attestation_resources::CompilerExecutionAttestationStorageV2;
+pub use attestation_resources::CompilerExecutionAttestationStorageV3;
 pub use client_profile::{
     COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1, CompilerExecutionClientProfileErrorV1,
     CompilerExecutionClientProfileIdentityV1, CompilerExecutionClientProfileV1,
@@ -166,6 +200,11 @@ pub use issuer_policy_v2::{
     COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V2, COMPILER_EXECUTION_ISSUER_POLICY_STORAGE_V2,
     COMPILER_EXECUTION_ISSUER_POLICY_WORK_V2, CompilerExecutionAttestationErrorV2,
     CompilerExecutionIssuerPolicyIdentityV2, CompilerExecutionIssuerPolicyV2,
+};
+pub use issuer_policy_v3::{
+    COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V3, COMPILER_EXECUTION_ISSUER_POLICY_STORAGE_V3,
+    COMPILER_EXECUTION_ISSUER_POLICY_WORK_V3, CompilerExecutionAttestationErrorV3,
+    CompilerExecutionIssuerPolicyIdentityV3, CompilerExecutionIssuerPolicyV3,
 };
 pub use launch_manifest::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,

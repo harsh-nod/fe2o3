@@ -34,6 +34,13 @@ pub(crate) const V2: Schema = Schema {
     signature_domain: b"FE2O3/COMPILER-EXECUTION-RECEIPT-SIGNATURE/V2\0",
     rollback_domain: b"FE2O3/COMPILER-EXECUTION-ROLLBACK-ANCHOR/V2\0",
 };
+pub(crate) const V3: Schema = Schema {
+    magic: *b"F2O3CER3",
+    version: 3,
+    identity_domain: b"FE2O3/COMPILER-EXECUTION-RECEIPT/V3\0",
+    signature_domain: b"FE2O3/COMPILER-EXECUTION-RECEIPT-SIGNATURE/V3\0",
+    rollback_domain: b"FE2O3/COMPILER-EXECUTION-ROLLBACK-ANCHOR/V3\0",
+};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) struct Fields {

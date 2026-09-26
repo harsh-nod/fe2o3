@@ -22,9 +22,17 @@ pub(crate) const V2: Schema = Schema {
     challenge_domain: b"FE2O3/COMPILER-EXECUTION-CHALLENGE/V2\0",
     request_domain: b"FE2O3/COMPILER-EXECUTION-REQUEST/V2\0",
 };
+pub(crate) const V3: Schema = Schema {
+    version: 3,
+    challenge_magic: *b"F2O3CEC3",
+    request_magic: *b"F2O3CEQ3",
+    challenge_domain: b"FE2O3/COMPILER-EXECUTION-CHALLENGE/V3\0",
+    request_domain: b"FE2O3/COMPILER-EXECUTION-REQUEST/V3\0",
+};
 const _: () = {
     assert!(SUBJECT_BYTES == fe2o3_artifact_transaction::INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1);
     assert!(SUBJECT_BYTES == fe2o3_artifact_transaction::INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V2);
+    assert!(SUBJECT_BYTES == fe2o3_artifact_transaction::INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V3);
 };
 pub(crate) struct Schema {
     version: u16,
