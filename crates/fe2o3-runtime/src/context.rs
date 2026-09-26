@@ -1350,6 +1350,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self.backend
     }
 
+    #[cfg(all(test, feature = "hardware-qualification"))]
+    pub(crate) fn backend_submission_for_test_v1<A>(
+        &self,
+        submission: &RuntimeSubmissionV1<A>,
+    ) -> Result<u64, RuntimeValidationErrorV1> {
+        Ok(self.submission_record(submission)?.backend_submission)
+    }
+
     /// Performs one deterministic cleanup pass without discarding retained handles.
     ///
     /// Streams are destroyed first because a successful destroy, or a

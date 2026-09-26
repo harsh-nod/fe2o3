@@ -553,6 +553,10 @@ enum KfdRuntimeLaunchGateV1 {
     ExactGfx942InplaceTransform(
         crate::qualification_gfx942_inplace_transform_v1::AdmittedGfx942InplaceTransformQualificationV1,
     ),
+    #[cfg(feature = "hardware-qualification")]
+    ExactGfx942MixedDuration(
+        crate::qualification_gfx942_mixed_duration_v1::AdmittedGfx942MixedDurationQualificationV1,
+    ),
 }
 
 impl fmt::Debug for KfdRuntimeLaunchGateV1 {
@@ -576,6 +580,8 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
             Self::ExactGfx942InplaceTransform(_) => {
                 formatter.write_str("ExactGfx942InplaceTransform")
             }
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942MixedDuration(_) => formatter.write_str("ExactGfx942MixedDuration"),
         }
     }
 }
@@ -596,6 +602,8 @@ impl KfdRuntimeLaunchGateV1 {
             Self::ExactGfx942InplaceTransform(admitted) => {
                 admitted.authorizes_kfd_request_v1(request)
             }
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942MixedDuration(admitted) => admitted.authorizes_kfd_request_v1(request),
         })
         .unwrap_or(false)
     }
@@ -1499,6 +1507,23 @@ impl KfdRuntimeBackendV1 {
         Self::open_default_with_gate(
             device_unique_id,
             KfdRuntimeLaunchGateV1::ExactGfx942InplaceTransform(admitted),
+        )
+    }
+
+    #[cfg(feature = "hardware-qualification")]
+    /// Opens only the two exact fixed-work HostVisible scheduling fixtures.
+    ///
+    /// This grants no production, generated, atomic or collective authority.
+    /// Work bounds, guarded input bytes, ABI, effects and geometry are fixed.
+    pub fn open_gfx942_mixed_duration_qualification_v1(
+        device_unique_id: u64,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let admitted = crate::qualification_gfx942_mixed_duration_v1::admit_gfx942_mixed_duration_qualification_v1()
+            .map_err(|error| KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch, error.to_string()))?;
+        Self::open_default_with_gate(
+            device_unique_id,
+            KfdRuntimeLaunchGateV1::ExactGfx942MixedDuration(admitted),
         )
     }
 

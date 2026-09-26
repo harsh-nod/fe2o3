@@ -8,6 +8,8 @@ use std::cell::Cell;
 mod cold_allocation;
 #[cfg(feature = "hardware-qualification")]
 mod copy_accounting;
+#[cfg(feature = "hardware-qualification")]
+mod mixed_duration;
 #[cfg(all(test, feature = "hardware-qualification"))]
 pub(super) mod primary_envelope;
 #[cfg(feature = "hardware-qualification")]

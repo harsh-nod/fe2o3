@@ -14,6 +14,8 @@ mod persistent_projection;
 #[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_inplace_transform_v1;
 #[cfg(feature = "hardware-qualification")]
+pub mod qualification_gfx942_mixed_duration_v1;
+#[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_r57_n3_v1;
 #[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_vecadd_v1;
