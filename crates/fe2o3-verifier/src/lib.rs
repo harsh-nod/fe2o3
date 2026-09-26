@@ -50,6 +50,13 @@ mod result;
 mod retained_functional_refinement_runtime_v1;
 mod static_view_proof;
 
+pub mod compiler_native_conditional_source_proof_v2;
+pub use compiler_native_conditional_source_proof_v2::{
+    NativeConditionalRootPolicyV2, NativeConditionalSourceProofErrorV2,
+    NativeConditionalSourceStorageV2, ReplayedNativeConditionalSourceV2,
+    select_native_conditional_ownership_site_v2, validate_native_conditional_source_packet_v2,
+};
+
 pub use artifact_record::{
     ArtifactProofEvidenceV1, ArtifactRecordConversionError, ReviewedInvocationIdentityV1,
     canonical_invocation_digest, convert_to_artifact_proof_record,

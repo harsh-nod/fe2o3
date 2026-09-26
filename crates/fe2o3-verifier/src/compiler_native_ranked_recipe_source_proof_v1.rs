@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::InertFunctionalRefinementReceiptSignatureV2;
-use fe2o3_functional_proof::VerusToolchainIdentityV2;
+use fe2o3_functional_proof::{ImportedFunctionalRefinementProofV2, VerusToolchainIdentityV2};
 use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
 use fe2o3_lower_mir_kernel::{
     NativeRankedSourceCandidateV1, ProductionRankedSourceRowsV1,
@@ -42,17 +42,21 @@ pub struct NativeCompilerUnitLocalErasedRecipeSourceProofInputsV1<'a> {
     pub erased: &'a VerifiedCanonicalKernelIrModuleV12,
 }
 
-struct OrderedResolver<'a> {
+struct OrderedResolver<'a, Accept, Retain> {
     signatures: &'a [InertFunctionalRefinementReceiptSignatureV2],
     expected: &'a [NativeCompilerStagingCommitmentV1],
     toolchain: VerusToolchainIdentityV2,
     cursor: usize,
+    accept: Accept,
+    retain: Retain,
 }
-impl<'a> OrderedResolver<'a> {
+impl<'a, Accept, Retain> OrderedResolver<'a, Accept, Retain> {
     fn new(
         signatures: &'a [InertFunctionalRefinementReceiptSignatureV2],
         expected: &'a [NativeCompilerStagingCommitmentV1],
         toolchain: VerusToolchainIdentityV2,
+        accept: Accept,
+        retain: Retain,
     ) -> Result<Self, E> {
         if signatures.len() != expected.len() || expected.is_empty() {
             return Err(E::Mismatch("complete nonempty signed effect roster"));
@@ -62,10 +66,20 @@ impl<'a> OrderedResolver<'a> {
             expected,
             toolchain,
             cursor: 0,
+            accept,
+            retain,
         })
     }
 }
-impl ProductionRankedRecipeProofResolverV1 for OrderedResolver<'_> {
+impl<Accept, Retain> ProductionRankedRecipeProofResolverV1 for OrderedResolver<'_, Accept, Retain>
+where
+    Accept: FnMut(
+        &InertFunctionalRefinementReceiptSignatureV2,
+        &NativeCompilerStagingCommitmentV1,
+        &mut ProductionRankedRecipeResolverWorkV1<'_, '_>,
+    ) -> Result<(), E>,
+    Retain: FnMut(ImportedFunctionalRefinementProofV2),
+{
     type Error = E;
 
     fn resolve(
@@ -84,6 +98,7 @@ impl ProductionRankedRecipeProofResolverV1 for OrderedResolver<'_> {
             .expected
             .get(self.cursor)
             .ok_or(E::Mismatch("missing ordered staging commitment"))?;
+        (self.accept)(signature, expected, work)?;
         let proof = ranked_source::import_ordered_effect_v1(
             claim.receipt_digest,
             claim.binding,
@@ -93,10 +108,10 @@ impl ProductionRankedRecipeProofResolverV1 for OrderedResolver<'_> {
             |amount| work.charge_work(amount),
         )?;
         self.cursor = self.cursor.checked_add(1).ok_or(Resource::Arithmetic)?;
-        Ok(ProductionReferenceProofV2::request_exact(
-            proof.receipt_identity(),
-            proof.binding(),
-        ))
+        let request =
+            ProductionReferenceProofV2::request_exact(proof.receipt_identity(), proof.binding());
+        (self.retain)(proof);
+        Ok(request)
     }
 
     fn finish(
@@ -132,12 +147,43 @@ pub(super) fn decode_signed_recipe_v1(
     toolchain: VerusToolchainIdentityV2,
     budget: &mut Budget<'_>,
 ) -> Result<(ProductionRankedKernelV1, ProductionRankedRecipeStorageV1), E> {
-    let mut resolver = OrderedResolver::new(signatures, expected, toolchain)?;
+    decode_signed_recipe_with_import_hooks_v1(
+        bytes,
+        signatures,
+        expected,
+        toolchain,
+        budget,
+        |_, _, _| Ok(()),
+        drop,
+    )
+}
+
+// V1 has no extra policy or retention work. Conditional replay uses these hooks
+// to require externally accepted signers BEFORE import and move each proof once.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn decode_signed_recipe_with_import_hooks_v1(
+    bytes: &[u8],
+    signatures: &[InertFunctionalRefinementReceiptSignatureV2],
+    expected: &[NativeCompilerStagingCommitmentV1],
+    toolchain: VerusToolchainIdentityV2,
+    budget: &mut Budget<'_>,
+    accept: impl FnMut(
+        &InertFunctionalRefinementReceiptSignatureV2,
+        &NativeCompilerStagingCommitmentV1,
+        &mut ProductionRankedRecipeResolverWorkV1<'_, '_>,
+    ) -> Result<(), E>,
+    retain: impl FnMut(ImportedFunctionalRefinementProofV2),
+) -> Result<(ProductionRankedKernelV1, ProductionRankedRecipeStorageV1), E> {
+    let mut resolver = OrderedResolver::new(signatures, expected, toolchain, accept, retain)?;
     decode_production_ranked_recipe_v1(bytes, &mut resolver, budget).map_err(|error| match error {
         ProductionRankedRecipeDecodeErrorV1::Wire(error) => E::RankedRecipeWire(error),
         ProductionRankedRecipeDecodeErrorV1::Resolver(error) => error,
     })
 }
+
+#[cfg(test)]
+#[path = "compiler_native_ordered_resolver_v1_tests.rs"]
+mod ordered_resolver_tests;
 
 impl DecodedRecipes {
     fn new(
