@@ -1,5 +1,8 @@
 use std::{error::Error, fmt};
 
+mod current_thread;
+pub use current_thread::*;
+
 use fe2o3_kernel_descriptor::KernelId;
 
 use crate::{

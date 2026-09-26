@@ -60,9 +60,12 @@ deadline: uncertain process-retained custody can remain pending indefinitely.
 ## Heterogeneous Bundles
 
 `GeneratedRuntimeTypedOutputBundleV1` is sealed and implemented for tuples of
-2 through 64 `GeneratedRuntimeChargedResultV1<T>` observers, covering the current
+0 through 64 `GeneratedRuntimeChargedResultV1<T>` observers, covering the current
 `MAX_ABI_FIELDS` bound. Each element may have a different supported scalar type.
-The existing scalar API remains available for one output. A compile-time check
+`()` selects no outputs but still awaits the original completion receipt; it
+does not assert a zero-output invocation or waive result accounting. `(output,)`
+uses the same slot/gate rules as larger tuples. The existing scalar API remains
+available for one output. A compile-time check
 forces tuple coverage to be revisited if the ABI bound changes.
 
 `(words, halves).bind_completion_bundle_v1(completion)` consumes the provided
@@ -159,6 +162,28 @@ has no protected native execution or proof claim. The current-thread owner's
 [CPU development evidence](evidence/dev-current-thread-owner-2026-09-18/README.md)
 is separate from native, sandbox-composition, formal-refinement and performance
 acceptance. Public protected typed bundle execution remains open.
+
+`run_inherited_worker_v3_current_thread_v1` now composes these lower APIs into a
+one-shot application transaction. Its verifier parameter must be the refining
+adapter. Authentication and protected-evidence checks precede the argument
+constructor and generated-only backend startup. It creates exactly one stream,
+drives prepare/reserve/activate and original bundle completion, destroys the
+stream before admission-closing drain, and explicitly shuts down the owner.
+Finite stage futures are consumed promptly so they do not keep bounded reply
+cells occupied; the minimum reply capacity is two.
+
+The report separately preserves completed outputs, the primary failure, drain
+and shutdown. `is_success()` requires original completion, no stage error,
+quiescent drain and released native custody. Cooperative deadline expiry selects
+Stop/shutdown and is not cancellation, rollback or a resumable timeout. Failure
+before a complete engine exists has no invented owned-shutdown report; returned
+Context-construction errors retain their backend until process exit. Constructor
+and unwind behavior remain subject to the lower APIs' contracts.
+
+The [application development packet](evidence/dev-worker-current-thread-application-2026-09-26/README.md)
+separates real-engine command/reply tests and charged-output tests from the still
+unqualified public protected/native application path. Ordinary examples remain
+disabled pending reviewed providers, proof artifacts and native sandbox evidence.
 
 ## Cancellation Boundary
 

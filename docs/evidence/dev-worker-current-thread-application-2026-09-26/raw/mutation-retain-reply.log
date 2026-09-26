@@ -1,0 +1,24 @@
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 40.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-fee15e70660320e5)
+
+running 1 test
+test production_application::current_thread::tests::application_stage_driver_releases_replies_with_only_two_cells ... FAILED
+
+failures:
+
+---- production_application::current_thread::tests::application_stage_driver_releases_replies_with_only_two_cells stdout ----
+
+thread 'production_application::current_thread::tests::application_stage_driver_releases_replies_with_only_two_cells' (62) panicked at crates/fe2o3-host/src/production_application/current_thread/tests.rs:131:9:
+assertion `left == right` failed
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    production_application::current_thread::tests::application_stage_driver_releases_replies_with_only_two_cells
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 184 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-host --lib`

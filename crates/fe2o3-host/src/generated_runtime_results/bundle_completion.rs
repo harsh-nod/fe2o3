@@ -30,9 +30,11 @@ mod private {
     }
 }
 
-/// A sealed tuple of 2 through 64 move-only output observers from one invocation.
+/// A sealed tuple of 0 through 64 move-only output observers from one invocation.
 /// The result tuple has the same order and scalar types, with each element
 /// retaining its original storage and individual result-peak credit.
+/// The empty tuple collects no outputs; it does not assert that the invocation
+/// declares no outputs. It still awaits the original completion and receipt.
 ///
 /// ```compile_fail,E0277
 /// use fe2o3_host::{GeneratedRuntimeChargedResultV1, GeneratedRuntimeTypedOutputBundleV1};
@@ -349,7 +351,27 @@ macro_rules! bundle_prefixes {
     };
 }
 
-bundle_prefixes!([T0: 0, T1: 1]; T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7,
+impl GeneratedRuntimeTypedOutputBundleV1 for () {
+    type Results = ();
+}
+
+impl private::Sealed for () {
+    fn check_binding(
+        &self,
+        _completion: &RuntimeAsyncGeneratedCompletionV1,
+    ) -> Result<(), GeneratedRuntimeTypedBindErrorV1> {
+        Ok(())
+    }
+
+    fn take_completed(
+        &mut self,
+        _receipt: &RuntimeGeneratedCompletionReceiptV1,
+    ) -> Result<(), GeneratedRuntimeTypedOutputErrorV1> {
+        Ok(())
+    }
+}
+
+bundle_prefixes!([T0: 0]; T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7,
     T8: 8, T9: 9, T10: 10, T11: 11, T12: 12, T13: 13, T14: 14, T15: 15,
     T16: 16, T17: 17, T18: 18, T19: 19, T20: 20, T21: 21, T22: 22, T23: 23,
     T24: 24, T25: 25, T26: 26, T27: 27, T28: 28, T29: 29, T30: 30, T31: 31,

@@ -368,7 +368,9 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         Ok(GeneratedWorkerV3ContextInvocationV1 { prepared })
     }
 
-    fn require_runtime_evidence(&self) -> Result<(), GeneratedWorkerV3RuntimeInvocationErrorV1> {
+    pub(crate) fn require_runtime_evidence(
+        &self,
+    ) -> Result<(), GeneratedWorkerV3RuntimeInvocationErrorV1> {
         if self
             .verification()
             .retains_protected_application_execution_evidence()

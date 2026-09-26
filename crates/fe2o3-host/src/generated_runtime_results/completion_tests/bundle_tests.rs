@@ -486,10 +486,151 @@ fn bundle_completion_public_observers_and_results_are_send() {
         GeneratedRuntimeChargedResultV1<u16>,
     );
     send::<GeneratedRuntimeTypedBundleCompletionV1<Bundle>>();
+    send::<GeneratedRuntimeTypedBundleCompletionV1<()>>();
+    send::<GeneratedRuntimeTypedBundleCompletionV1<(GeneratedRuntimeChargedResultV1<u32>,)>>();
     send::<GeneratedRuntimeTypedBundleBindFailureV1<Bundle>>();
     send::<GeneratedRuntimeTypedBundleFailureV1<Bundle>>();
     send::<GeneratedRuntimeTypedBundleJoinFailureV1<Bundle>>();
     send::<
         GeneratedRuntimeCompletedBundleV1<<Bundle as GeneratedRuntimeTypedOutputBundleV1>::Results>,
     >();
+}
+
+#[test]
+fn singleton_bundle_moves_original_storage_and_keeps_its_charge_until_disposal() {
+    let outputs = outputs();
+    let mut bundle = (outputs.word_result,);
+    let before = word_snapshot(&bundle.0);
+    let usage = outputs.budget.usage();
+    let matches = |gate: &Arc<ResultReadyGateV1>| Arc::ptr_eq(gate, &outputs.gate);
+    assert!(bundle.check_binding_matching_v1(matches).is_ok());
+    assert!(matches!(
+        bundle.take_completed_matching_v1(matches),
+        Err(GeneratedRuntimeTypedOutputErrorV1::BindingMismatch)
+    ));
+    assert_eq!(word_snapshot(&bundle.0), before);
+    outputs
+        .words
+        .decode(&[10, 0, 0, 0, 20, 0, 0, 0], &outputs.gate)
+        .unwrap();
+    outputs.gate.commit();
+    let (result,) = bundle.take_completed_matching_v1(matches).unwrap();
+    assert_eq!(result.as_slice().as_ptr() as usize, before.0);
+    assert_eq!(result.as_slice(), &[10, 20]);
+    assert_eq!(outputs.budget.usage(), usage);
+    assert!(matches!(
+        bundle.take_completed_matching_v1(matches),
+        Err(GeneratedRuntimeTypedOutputErrorV1::OutputUnavailable)
+    ));
+    drop(result);
+    assert_eq!(outputs.budget.usage().reserved_peak_bytes, 12);
+    assert_eq!(outputs.budget.usage().retained_members, 1);
+}
+
+#[test]
+fn singleton_bundle_busy_foreign_and_poisoned_states_do_not_consume_storage() {
+    let outputs = outputs();
+    let bundle = (outputs.word_result,);
+    let before = word_snapshot(&bundle.0);
+    let usage = outputs.budget.usage();
+    let lock = bundle.0.slot.state.lock().unwrap();
+    assert!(matches!(
+        bundle.check_binding_matching_v1(|_| true),
+        Err(GeneratedRuntimeTypedBindErrorV1::Busy)
+    ));
+    drop(lock);
+    assert!(matches!(
+        bundle.check_binding_matching_v1(|_| false),
+        Err(GeneratedRuntimeTypedBindErrorV1::Output(
+            GeneratedRuntimeTypedOutputErrorV1::BindingMismatch
+        ))
+    ));
+    assert_eq!(word_snapshot(&bundle.0), before);
+    assert_eq!(outputs.budget.usage(), usage);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _lock = bundle.0.slot.state.lock().unwrap();
+            panic!("scripted singleton slot poison");
+        }))
+        .is_err()
+    );
+    assert!(matches!(
+        bundle.check_binding_matching_v1(|_| true),
+        Err(GeneratedRuntimeTypedBindErrorV1::Output(
+            GeneratedRuntimeTypedOutputErrorV1::Custody
+        ))
+    ));
+    assert_eq!(outputs.budget.usage(), usage);
+    drop(bundle);
+    assert_eq!(outputs.budget.usage(), usage);
+}
+
+#[test]
+fn empty_bundle_shared_poll_driver_waits_without_touching_uncollected_outputs() {
+    // Scripted metadata tests observer plumbing, not receipt construction or a
+    // successful protected/native invocation.
+    let outputs = outputs();
+    let before = word_snapshot(&outputs.word_result);
+    let usage = outputs.budget.usage();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut completion = Some(scripted(&outputs.gate, &drops));
+    let mut bundle = Some(());
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..2 {
+        assert!(
+            typed_completion::poll_with(&mut completion, &mut bundle, &mut cx, |(), _| panic!(
+                "pending empty bundle cannot finish"
+            ))
+            .is_pending()
+        );
+        assert!(bundle.is_some());
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+    }
+    completion.as_mut().unwrap().ready = true;
+    assert!(
+        typed_completion::poll_with(&mut completion, &mut bundle, &mut cx, |(), domain| assert!(
+            domain.matches_owner(&outputs.gate)
+        ))
+        .is_ready()
+    );
+    assert!(completion.is_none() && bundle.is_none());
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(word_snapshot(&outputs.word_result), before);
+    assert_eq!(outputs.budget.usage(), usage);
+}
+
+#[test]
+fn empty_bundle_errors_do_not_fabricate_receipts_or_refund_uncollected_outputs() {
+    let outputs = outputs();
+    let usage = outputs.budget.usage();
+    let before = word_snapshot(&outputs.word_result);
+    for outcome in [
+        Err(RuntimeAsyncEngineCallErrorV1::EngineStopped),
+        Ok(Err(RuntimeGfx942ReadbackErrorV1::InvalidStorage)),
+    ] {
+        let failure = bundle_completion::finish((), outcome).err().unwrap();
+        assert!(failure.receipt.is_none());
+        assert_eq!(word_snapshot(&outputs.word_result), before);
+        assert_eq!(outputs.budget.usage(), usage);
+    }
+}
+
+#[test]
+fn empty_bundle_shared_join_rejection_preserves_original_observer() {
+    let outputs = outputs();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let future = scripted(&outputs.gate, &drops);
+    let (future, (), error) = typed_completion::join_with(
+        future,
+        (),
+        |future| Err::<(), _>((future, RuntimeAsyncEngineCallErrorV1::ReentrantCall)),
+        |(), ()| panic!("rejected join cannot finish"),
+    )
+    .unwrap_err();
+    assert_eq!(error, RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert!(future.domain.as_ref().unwrap().matches_owner(&outputs.gate));
+    let usage = outputs.budget.usage();
+    drop(future);
+    assert_eq!(outputs.budget.usage(), usage);
 }

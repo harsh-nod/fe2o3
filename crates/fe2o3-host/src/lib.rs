@@ -251,9 +251,12 @@ pub use production_application::{
 };
 #[cfg(target_os = "linux")]
 pub use production_application::{
-    ProductionWorkerV3AuthenticationErrorV1, ProductionWorkerV3KfdApplicationErrorV1,
-    ProductionWorkerV3KfdPreparationErrorV1, authenticate_inherited_worker_v3_application_v1,
-    prepare_inherited_worker_v3_kfd_application_v1,
+    ProductionWorkerV3ApplicationStageV1, ProductionWorkerV3AuthenticationErrorV1,
+    ProductionWorkerV3CurrentThreadConfigV1, ProductionWorkerV3CurrentThreadErrorV1,
+    ProductionWorkerV3CurrentThreadReportV1, ProductionWorkerV3KfdApplicationErrorV1,
+    ProductionWorkerV3KfdPreparationErrorV1, ProductionWorkerV3RuntimeInitializationErrorV1,
+    authenticate_inherited_worker_v3_application_v1,
+    prepare_inherited_worker_v3_kfd_application_v1, run_inherited_worker_v3_current_thread_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use published_direct_link::{

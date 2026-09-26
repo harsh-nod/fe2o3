@@ -1,0 +1,13 @@
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 46.23s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-fee15e70660320e5)
+
+running 5 tests
+test production_application::current_thread::tests::application_command_panic_keeps_primary_error_and_quarantines_owner ... ok
+test production_application::current_thread::tests::application_expired_stage_stops_without_running_queued_command ... ok
+test production_application::current_thread::tests::application_preflight_rejects_invalid_bounds_and_expired_deadline ... ok
+test production_application::current_thread::tests::application_report_without_original_completion_is_never_success ... ok
+test production_application::current_thread::tests::application_stage_driver_releases_replies_with_only_two_cells ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 180 filtered out; finished in 0.00s
+

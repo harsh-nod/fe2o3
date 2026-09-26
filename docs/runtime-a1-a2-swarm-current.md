@@ -24,7 +24,20 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
-Latest accounted Context fail-stop development (2026-09-26): one constant-time
+Latest Worker V3 application development (2026-09-26): a one-shot current-thread
+helper now composes authenticated startup, generated-only KFD, journal Context,
+generated preparation/reservation/activation, selected typed outputs, stream
+disposal, drain and explicit shutdown. Its public signature requires the refining
+verifier adapter; no provider or proof authority is manufactured. Bundles cover
+zero through 64 selected outputs without skipping original completion or
+accounting. Deadline failure selects Stop and reports shutdown separately.
+The [development packet](evidence/dev-worker-current-thread-application-2026-09-26/README.md)
+distinguishes CPU command/reply and charged-storage coverage from the still
+unqualified protected/native application path. The production providers, proof
+artifacts, native sandbox replay and matched performance remain open. Ordinary
+examples stay disabled, and accepted milestones, A1/A2 and parity are unchanged.
+
+Earlier accounted Context fail-stop development (2026-09-26): one constant-time
 predicate covers configured request accounts even without a version journal,
 with no live allocations, or when the selected device is unconfigured. Terminal
 sealing quarantines all Context-local retained credits while preserving handles,

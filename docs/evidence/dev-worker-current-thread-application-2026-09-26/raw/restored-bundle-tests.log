@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-fee15e70660320e5)
+
+running 16 tests
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_binding_accepts_unready_and_ready_then_moves_original_storage ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_busy_second_binding_preserves_every_slot_and_credit ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_duplicate_slots_reject_before_any_lock_or_callback ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_failure_and_observer_loss_preserve_producer_owned_storage ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_join_rejection_preserves_complete_tuple_for_retry ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_late_foreign_unready_unbound_and_stale_states_preserve_prefix ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_late_poison_never_consumes_an_earlier_result ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_maximum_abi_tuple_preserves_every_original_slot ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_poll_preserves_pending_and_panicking_observers_then_extracts_once ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_public_observers_and_results_are_send ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_three_members_never_commit_before_middle_or_last_validation ... ok
+test generated_runtime_results::completion_tests::bundle_tests::empty_bundle_errors_do_not_fabricate_receipts_or_refund_uncollected_outputs ... ok
+test generated_runtime_results::completion_tests::bundle_tests::empty_bundle_shared_join_rejection_preserves_original_observer ... ok
+test generated_runtime_results::completion_tests::bundle_tests::empty_bundle_shared_poll_driver_waits_without_touching_uncollected_outputs ... ok
+test generated_runtime_results::completion_tests::bundle_tests::singleton_bundle_busy_foreign_and_poisoned_states_do_not_consume_storage ... ok
+test generated_runtime_results::completion_tests::bundle_tests::singleton_bundle_moves_original_storage_and_keeps_its_charge_until_disposal ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 169 filtered out; finished in 0.01s
+
