@@ -142,3 +142,53 @@ fn conditional_preparation_unwind_preserves_payload_and_terminal_charges() {
         assert!(budget.work_ledger_identity_v1() == account);
     }
 }
+
+#[test]
+fn conditional_preparation_consuming_refusal_error_and_panic_stay_charged() {
+    for unwind in [false, true] {
+        let drops = Cell::new(0);
+        let continued = Cell::new(false);
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 100);
+        budget.reserve_storage(19).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            conditional_refusal(
+                &mut budget,
+                |budget| {
+                    budget.reserve_storage(23).map_err(resource)?;
+                    budget.charge_work(7).map_err(resource)?;
+                    Ok(DropCount(&drops))
+                },
+                |_owner, budget| {
+                    continued.set(true);
+                    assert_eq!(drops.get(), 0);
+                    assert_eq!(budget.storage(), 42);
+                    if unwind {
+                        panic!("original consuming refusal panic");
+                    }
+                    resource(Resource::Accounting)
+                },
+            )
+        }));
+        if unwind {
+            assert_eq!(
+                result.unwrap_err().downcast_ref::<&str>(),
+                Some(&"original consuming refusal panic")
+            );
+        } else {
+            assert!(matches!(
+                result.unwrap(),
+                ProductionPipelineError::CheckedOutputPolicy6Stage(
+                    crate::production_pipeline::checked_output_policy6_v1::CheckedOutputPolicy6StageErrorV1::Resource(Resource::Accounting)
+                )
+            ));
+        }
+        assert!(continued.get());
+        assert_eq!(drops.get(), 1);
+        assert_eq!(budget.storage(), 42);
+        assert_eq!(budget.peak_storage(), 42);
+        assert_eq!(budget.work(), 7);
+        assert!(budget.work_ledger_identity_v1() == account);
+    }
+}
