@@ -214,6 +214,37 @@ impl InertFunctionalRefinementReceiptSignatureV2 {
     }
 }
 
+/// Strictly imports this signature under an independently accepted policy.
+/// The transport key is checked, never used to select the import policy. This
+/// constructor accepts neither a pre-imported proof nor unrelated receipt bytes.
+/// Callers reserve this fixed-size owner and charge import work before entry.
+pub(crate) fn import_and_retain_functional_refinement_receipt_v2(
+    binding: FunctionalRefinementBindingV2,
+    signature: &InertFunctionalRefinementReceiptSignatureV2,
+    accepted: &FunctionalRefinementImportPolicyV2,
+) -> Result<RetainedImportedFunctionalRefinementReceiptV2, FunctionalRefinementImportErrorV2> {
+    // Existing policy construction derives the key identity without exposing a
+    // second hash implementation. Only `accepted` is passed to the importer.
+    let transport = FunctionalRefinementImportPolicyV2::new(
+        *signature.verifying_key(),
+        accepted.toolchain(),
+        accepted.boundary(),
+    )?;
+    if transport.signer_identity() != accepted.signer_identity() {
+        return Err(FunctionalRefinementImportErrorV2::WrongSigner);
+    }
+    let mut importer = FunctionalRefinementReceiptImporterV2::new(accepted.clone(), 1)?;
+    let proof = importer.import(
+        FunctionalRefinementImportExpectationV2::new(binding),
+        signature.wire(),
+    )?;
+    Ok(RetainedImportedFunctionalRefinementReceiptV2 {
+        proof,
+        verifying_key: *signature.verifying_key(),
+        wire: *signature.wire(),
+    })
+}
+
 impl PreparedFunctionalRefinementReceiptV2 {
     pub const fn binding(&self) -> FunctionalRefinementBindingV2 {
         self.binding

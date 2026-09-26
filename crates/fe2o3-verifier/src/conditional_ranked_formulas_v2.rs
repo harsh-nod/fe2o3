@@ -4,7 +4,9 @@ use crate::conditional_reference_v1::{
     ConditionalReferenceErrorV1, ConditionalReferenceInputV1,
     with_source_bound_cpu_correspondence_v1,
 };
-use crate::functional_refinement_receipt_v2::InertFunctionalRefinementReceiptSignatureV2;
+use crate::functional_refinement_receipt_v2::{
+    InertFunctionalRefinementReceiptSignatureV2, import_and_retain_functional_refinement_receipt_v2,
+};
 use crate::portable_reference_v1::{
     ReferenceReplayInputV1,
     codec::{
@@ -44,6 +46,11 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Copyable diagnostic identities, not a proof or a V1 report conversion.
+///
+/// ```compile_fail
+/// use fe2o3_verifier::{ProductionConditionalFormulaReportV2, RetainedProductionConditionalFormulaV2};
+/// fn install(report: ProductionConditionalFormulaReportV2) -> RetainedProductionConditionalFormulaV2 { report.into() }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionConditionalFormulaReportV2 {
     formula: ProductionConditionalFormulaReportV1,
@@ -73,18 +80,17 @@ impl ProductionConditionalFormulaReportV2 {
 /// Lent only after fresh CPU/source/statement replay and strict receipt import.
 pub struct ProductionConditionalFormulaExecutionV2 {
     report: ProductionConditionalFormulaReportV2,
-    _proof: ImportedFunctionalRefinementProofV2,
-    signature: InertFunctionalRefinementReceiptSignatureV2,
+    retained: RetainedImportedFunctionalRefinementReceiptV2,
 }
 impl ProductionConditionalFormulaExecutionV2 {
     pub const fn report(&self) -> ProductionConditionalFormulaReportV2 {
         self.report
     }
     pub const fn signed_receipt_wire(&self) -> &[u8] {
-        self.signature.wire()
+        self.retained.wire()
     }
     pub const fn receipt_verifying_key(&self) -> &[u8; 32] {
-        self.signature.verifying_key()
+        self.retained.verifying_key()
     }
 }
 
@@ -99,6 +105,10 @@ impl ProductionConditionalFormulaExecutionV2 {
 /// ```compile_fail
 /// use fe2o3_verifier::{RetainedProductionConditionalFormulaV1, RetainedProductionConditionalFormulaV2};
 /// fn upgrade(p: RetainedProductionConditionalFormulaV1) -> RetainedProductionConditionalFormulaV2 { p.into() }
+/// ```
+/// ```compile_fail
+/// use fe2o3_verifier::{RetainedProductionConditionalFormulaV1, RetainedProductionConditionalFormulaV2};
+/// fn downgrade(p: RetainedProductionConditionalFormulaV2) -> RetainedProductionConditionalFormulaV1 { p.into() }
 /// ```
 /// ```compile_fail
 /// use fe2o3_verifier::RetainedProductionConditionalFormulaV2;
@@ -128,10 +138,7 @@ pub fn execute_and_retain_conditional_ranked_formula_v2(
                 let (formula, retained, policy) =
                     execute_prepared(runtime, request, prepared, budget, timeout_seconds)?;
                 require_policy(request, &policy, budget)?;
-                let (proof, signature) = retained.into_parts();
-                Ok(retain(
-                    request, formula, cpu_input, proof, signature, policy,
-                ))
+                Ok(retain(request, formula, cpu_input, retained, policy))
             })
         })
     })
@@ -141,6 +148,16 @@ pub fn execute_and_retain_conditional_ranked_formula_v2(
 /// Accepted policy is external; the signature's embedded key cannot select it.
 /// This runs no protected execution and constructs no source-origin authority.
 /// The enclosing B1 decode/lower callbacks must also finish before installation.
+///
+/// ```compile_fail
+/// use fe2o3_verifier::{import_and_retain_conditional_ranked_formula_v2 as import, InertFunctionalRefinementReceiptSignatureV2 as Signature};
+/// use fe2o3_functional_proof::FunctionalRefinementImportPolicyV2 as Policy;
+/// use fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1 as Request;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn raw_digest(r: &Request<'_>, hash: &[u8; 32], s: &Signature, p: &Policy, b: &mut Budget<'_>) {
+///     let _ = import(r, hash, s, p, b);
+/// }
+/// ```
 pub fn import_and_retain_conditional_ranked_formula_v2(
     request: &Request<'_>,
     input: &DecodedNativeCpuInputV1,
@@ -154,18 +171,21 @@ pub fn import_and_retain_conditional_ranked_formula_v2(
                 let prepared = prepare_v2(request, cpu_input, budget)?;
                 require_policy(request, accepted, budget)?;
                 budget.charge_work(signature.wire().len())?;
-                let proof =
-                    retention::import_expected(prepared.binding, accepted, signature.wire())?;
-                let formula = report_for_proof(prepared.binding, prepared.generated_source, &proof);
-                retention::require_imported_identity(formula, accepted, &proof)?;
-                require_signature_key(signature, accepted)?;
+                let retained = import_and_retain_functional_refinement_receipt_v2(
+                    prepared.binding,
+                    signature,
+                    accepted,
+                )
+                .map_err(|_| Error::Subject("conditional V2 signature/policy"))?;
+                let proof = retained.proof();
+                let formula = report_for_proof(prepared.binding, prepared.generated_source, proof);
+                retention::require_imported_identity(formula, accepted, proof)?;
                 current(request.pliron_input(), budget)?;
                 Ok(retain(
                     request,
                     formula,
                     cpu_input,
-                    proof,
-                    *signature,
+                    retained,
                     accepted.clone(),
                 ))
             })
@@ -214,6 +234,17 @@ impl RetainedProductionConditionalFormulaV2 {
     }
 
     /// Uses this decoded owner's input and commitment together, without a clone.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_verifier::{RetainedProductionConditionalFormulaV2, ProductionConditionalFormulaExecutionV2};
+    /// use fe2o3_verifier::portable_reference_v1::codec::DecodedNativeCpuInputV1;
+    /// use fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1 as Request;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn escape<'a>(p: &RetainedProductionConditionalFormulaV2, r: &Request<'_>,
+    ///     input: &DecodedNativeCpuInputV1, b: &mut Budget<'_>) -> &'a ProductionConditionalFormulaExecutionV2 {
+    ///     p.with_replayed_decoded_request_v2(r, input, b, |proof, _| Ok(proof)).unwrap()
+    /// }
+    /// ```
     pub fn with_replayed_decoded_request_v2<R>(
         &self,
         request: &Request<'_>,
@@ -276,36 +307,17 @@ fn retain(
     request: &Request<'_>,
     formula: ProductionConditionalFormulaReportV1,
     cpu_input: DigestV1,
-    proof: ImportedFunctionalRefinementProofV2,
-    signature: InertFunctionalRefinementReceiptSignatureV2,
+    retained: RetainedImportedFunctionalRefinementReceiptV2,
     policy: FunctionalRefinementImportPolicyV2,
 ) -> RetainedProductionConditionalFormulaV2 {
     RetainedProductionConditionalFormulaV2 {
         execution: ProductionConditionalFormulaExecutionV2 {
             report: ProductionConditionalFormulaReportV2 { formula, cpu_input },
-            _proof: proof,
-            signature,
+            retained,
         },
         policy,
         subject: retention::RetainedSubjectV1::from_request(request),
     }
-}
-
-fn require_signature_key(
-    signature: &InertFunctionalRefinementReceiptSignatureV2,
-    accepted: &FunctionalRefinementImportPolicyV2,
-) -> Result<(), Error> {
-    // This policy is used ONLY to compare key identity, never to import a proof.
-    let transport = FunctionalRefinementImportPolicyV2::new(
-        *signature.verifying_key(),
-        accepted.toolchain(),
-        accepted.boundary(),
-    )
-    .map_err(|_| Error::Subject("conditional V2 signature key"))?;
-    if transport.signer_identity() != accepted.signer_identity() {
-        return Err(Error::Subject("conditional V2 signature key substitution"));
-    }
-    Ok(())
 }
 
 fn require_policy(
@@ -452,3 +464,16 @@ fn obligation_identity_v2(commitments: [DigestV1; 6], cpu_input: DigestV1) -> Di
     }
     DigestV1::from_untrusted_bytes(hash.finalize().into())
 }
+
+#[cfg(test)]
+#[path = "conditional_ranked_formula_cpu_v2_tests.rs"]
+mod cpu_tests;
+#[cfg(test)]
+#[path = "conditional_ranked_formula_fixture_v2_tests.rs"]
+mod fixtures;
+#[cfg(test)]
+#[path = "conditional_ranked_formula_import_v2_tests.rs"]
+mod import_tests;
+#[cfg(test)]
+#[path = "conditional_ranked_formula_resources_v2_tests.rs"]
+mod resource_tests;
