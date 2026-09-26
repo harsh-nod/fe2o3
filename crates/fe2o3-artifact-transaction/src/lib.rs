@@ -2160,24 +2160,37 @@ mod tests {
             command.arg("30");
             let ready_fd = ready_child.as_raw_fd();
             let release_fd = release_child.as_raw_fd();
-            // SAFETY: the callback performs only async-signal-safe single-byte descriptor I/O.
+            // SAFETY: the callback uses only async-signal-safe poll and single-byte I/O.
             unsafe {
                 command.pre_exec(move || {
                     let ready = [1_u8];
                     if libc::write(ready_fd, ready.as_ptr().cast(), ready.len()) != 1 {
                         return Err(io::Error::last_os_error());
                     }
+                    // The child also inherited the peer descriptor, so a parent panic/drop
+                    // cannot guarantee EOF. Bound cleanup without releasing the spawn lease
+                    // before exec or terminal child disposal. EINTR fails, never resets time.
+                    let mut readiness = libc::pollfd {
+                        fd: release_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    match libc::poll(&mut readiness, 1, 10_000) {
+                        -1 => return Err(io::Error::last_os_error()),
+                        0 => return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT)),
+                        _ => {}
+                    }
+                    if readiness.revents & libc::POLLNVAL != 0 {
+                        return Err(io::Error::from_raw_os_error(libc::EBADF));
+                    }
+                    if readiness.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
+                        return Err(io::Error::from_raw_os_error(libc::EIO));
+                    }
                     let mut release = [0_u8];
-                    loop {
-                        let read =
-                            libc::read(release_fd, release.as_mut_ptr().cast(), release.len());
-                        if read == 1 {
-                            return Ok(());
-                        }
-                        let error = io::Error::last_os_error();
-                        if error.kind() != io::ErrorKind::Interrupted {
-                            return Err(error);
-                        }
+                    match libc::read(release_fd, release.as_mut_ptr().cast(), release.len()) {
+                        1 => Ok(()),
+                        0 => Err(io::Error::from_raw_os_error(libc::EPIPE)),
+                        _ => Err(io::Error::last_os_error()),
                     }
                 });
             }
